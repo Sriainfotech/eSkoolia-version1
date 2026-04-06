@@ -6,6 +6,8 @@ from .views import (
     StudentGroupViewSet,
     StudentMultiClassRecordViewSet,
     StudentPromotionHistoryViewSet,
+    StudentRecordAuditViewSet,
+    StudentSubjectAssignmentViewSet,
     StudentTransferHistoryViewSet,
     StudentViewSet,
 )
@@ -19,5 +21,7 @@ router.register("promotions", StudentPromotionHistoryViewSet, basename="student-
 router.register("documents", StudentDocumentViewSet, basename="student-document")
 router.register("transfers", StudentTransferHistoryViewSet, basename="student-transfer")
 router.register("multi-class-records", StudentMultiClassRecordViewSet, basename="student-multi-class-record")
+router.register("subject-assignments", StudentSubjectAssignmentViewSet, basename="student-subject-assignment")
+router.register("record-audits", StudentRecordAuditViewSet, basename="student-record-audit")
 
 urlpatterns = router.urls

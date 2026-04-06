@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { API_BASE_URL } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
-import { TimeSpinnerPicker } from "@/components/common/TimeSpinnerPicker";
 
 type SchoolClass = { id: number; class_name?: string; name?: string };
 type Section = { id: number; section_name?: string; name?: string; class_id?: number };
@@ -11,6 +10,7 @@ type ExamType = { id: number; title: string };
 type Subject = { id: number; subject_name?: string; name?: string };
 type Teacher = { id: number; full_name: string };
 type ExamPeriod = { id: number; period: string };
+type ClassRoom = { id: number; room_no: string };
 
 type RoutineRow = {
   section: number | null;
@@ -87,6 +87,7 @@ export default function ExamSchedulePanel() {
   const [examTypes, setExamTypes] = useState<ExamType[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [periods, setPeriods] = useState<ExamPeriod[]>([]);
+  const [rooms, setRooms] = useState<ClassRoom[]>([]);
 
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
@@ -112,12 +113,14 @@ export default function ExamSchedulePanel() {
         const data = await apiGet<{
           classes: SchoolClass[];
           sections: Section[];
+          rooms: ClassRoom[];
           exam_types: ExamType[];
           teachers: Teacher[];
           exam_periods: ExamPeriod[];
         }>("/api/v1/exams/exam-schedule/index/");
         setClasses(data.classes || []);
         setSections(data.sections || []);
+        setRooms(data.rooms || []);
         setExamTypes(data.exam_types || []);
         setTeachers(data.teachers || []);
         setPeriods(data.exam_periods || []);
@@ -283,16 +286,20 @@ export default function ExamSchedulePanel() {
                         </select>
                       </td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <label style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4, fontWeight: 600 }}>Start</label>
-                          <TimeSpinnerPicker value={row.start_time} onChange={(v) => updateRow(index, { start_time: v })} />
-                        </div>
+                        <input
+                          type="time"
+                          value={toTimeHHMM(row.start_time)}
+                          onChange={(e) => updateRow(index, { start_time: e.target.value })}
+                          style={fieldStyle()}
+                        />
                       </td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                        <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <label style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4, fontWeight: 600 }}>End</label>
-                          <TimeSpinnerPicker value={row.end_time} onChange={(v) => updateRow(index, { end_time: v })} />
-                        </div>
+                        <input
+                          type="time"
+                          value={toTimeHHMM(row.end_time)}
+                          onChange={(e) => updateRow(index, { end_time: e.target.value })}
+                          style={fieldStyle()}
+                        />
                       </td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
                         <select value={row.teacher_id ?? 0} onChange={(e) => updateRow(index, { teacher_id: Number(e.target.value) || null })} style={fieldStyle()}>
@@ -301,7 +308,21 @@ export default function ExamSchedulePanel() {
                         </select>
                       </td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                        <input value={row.room} onChange={(e) => updateRow(index, { room: e.target.value })} style={fieldStyle()} placeholder="Room" />
+                        <select
+                          value={row.room}
+                          onChange={(e) => updateRow(index, { room: e.target.value })}
+                          style={fieldStyle()}
+                        >
+                          <option value="">Select Room</option>
+                          {row.room && !rooms.some((item) => item.room_no === row.room) ? (
+                            <option value={row.room}>{row.room}</option>
+                          ) : null}
+                          {rooms.map((item) => (
+                            <option key={item.id} value={item.room_no}>
+                              {item.room_no}
+                            </option>
+                          ))}
+                        </select>
                       </td>
                     </tr>
                   ))}

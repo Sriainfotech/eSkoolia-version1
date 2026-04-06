@@ -2123,6 +2123,17 @@ export function HrStaffDirectoryPanel() {
     }
   };
 
+  const refreshStaffList = async () => {
+    setSearchQuery("");
+    setFilterDepartment("");
+    setFilterRole("");
+    setFilterDesignation("");
+    setFilterStatus("all");
+    setCurrentPage(1);
+    setSuccess("");
+    await load();
+  };
+
   return (
     <div className="legacy-panel">
       {breadcrumb("Staff Directory")}
@@ -2130,7 +2141,7 @@ export function HrStaffDirectoryPanel() {
         <div className="white-box" style={boxStyle()}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
             <h3 style={{ margin: 0 }}>Staff List</h3>
-            <button type="button" style={buttonStyle("#334155")} onClick={() => void load()} disabled={loading}>
+            <button type="button" style={buttonStyle("#334155")} onClick={() => void refreshStaffList()} disabled={loading}>
               {loading ? "Loading..." : "Refresh"}
             </button>
           </div>
@@ -2423,7 +2434,7 @@ export function HrStaffDirectoryPanel() {
 export function HrLeaveTypesPanel() {
   const [rows, setRows] = useState<LeaveType[]>([]);
   const [name, setName] = useState("");
-  const [maxDays, setMaxDays] = useState("0");
+  const [maxDays, setMaxDays] = useState("1");
   const [isPaid, setIsPaid] = useState(true);
   const [isActive, setIsActive] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -2531,7 +2542,7 @@ export function HrLeaveTypesPanel() {
       }
       setEditingId(null);
       setName("");
-      setMaxDays("0");
+      setMaxDays("1");
       setIsPaid(true);
       setIsActive(true);
       await load();
@@ -2577,7 +2588,7 @@ export function HrLeaveTypesPanel() {
               <button type="button" style={buttonStyle("#6b7280")} onClick={() => {
                 setEditingId(null);
                 setName("");
-                setMaxDays("0");
+                setMaxDays("1");
                 setIsPaid(true);
                 setIsActive(true);
                 setFieldErrors({});
@@ -3817,7 +3828,7 @@ export function HrLeaveRequestsPanel() {
     attachment?: string;
   }>({});
   
-  const minReasonLength = 20;
+  const minReasonLength = 1;
   const maxReasonLength = 500;
   const maxFileSize = 5 * 1024 * 1024; // 5MB
   const allowedFileTypes = ["application/pdf", "image/jpeg", "image/png"];
@@ -3893,8 +3904,8 @@ export function HrLeaveRequestsPanel() {
       }
     }
     
-    if (reason.trim() && reason.trim().length < minReasonLength) {
-      nextErrors.reason = `Reason must be at least ${minReasonLength} characters.`;
+    if (!reason.trim()) {
+      nextErrors.reason = "Reason is required.";
     }
     if (reason.trim() && reason.trim().length > maxReasonLength) {
       nextErrors.reason = `Reason cannot exceed ${maxReasonLength} characters.`;
@@ -4143,6 +4154,7 @@ export function HrLeaveRequestsPanel() {
                     type="date" 
                     value={fromDate}
                     onChange={(e) => { setFromDate(e.target.value); clearFieldError("fromDate"); }}
+                    min={new Date().toISOString().slice(0, 10)}
                     style={{ ...fieldStyle(), borderColor: fieldErrors.fromDate ? "#dc2626" : "var(--line)" }}
                   />
                   {fieldErrors.fromDate && <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.fromDate}</span>}
@@ -4155,6 +4167,7 @@ export function HrLeaveRequestsPanel() {
                     type="date"
                     value={toDate}
                     onChange={(e) => { setToDate(e.target.value); clearFieldError("toDate"); }}
+                    min={fromDate || new Date().toISOString().slice(0, 10)}
                     style={{ ...fieldStyle(), borderColor: fieldErrors.toDate ? "#dc2626" : "var(--line)" }}
                   />
                   {fieldErrors.toDate && <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.toDate}</span>}
@@ -4169,12 +4182,12 @@ export function HrLeaveRequestsPanel() {
               
               <div style={{ display: "grid", gap: 4 }}>
                 <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-                  Reason {reason.trim().length === 0 ? "(Optional)" : `(${reason.trim().length} / ${maxReasonLength} characters)`}
+                  Reason for Leave * {reason.trim().length > 0 ? `(${reason.trim().length} / ${maxReasonLength} characters)` : ""}
                 </label>
                 <textarea 
                   value={reason}
                   onChange={(e) => { setReason(e.target.value); clearFieldError("reason"); }}
-                  placeholder="Enter your reason for leave (20-500 characters)"
+                  placeholder="Enter your reason for leave"
                   style={{ 
                     width: "100%", 
                     minHeight: 100, 
@@ -4186,7 +4199,7 @@ export function HrLeaveRequestsPanel() {
                 />
                 {fieldErrors.reason && <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.reason}</span>}
                 <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                  {reason.trim().length === 0 ? "Optional field" : reason.trim().length < minReasonLength ? `Add ${minReasonLength - reason.trim().length} more characters` : "Γ£ô Valid length"}
+                  {reason.trim().length === 0 ? "Required field" : "Valid length"}
                 </span>
               </div>
             </div>
@@ -4219,7 +4232,7 @@ export function HrLeaveRequestsPanel() {
 
             {/* Submit Section */}
             <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button type="button" style={buttonStyle("#6b7280")} onClick={cancelEdit} disabled={saving}>Reset</button>
+              <button type="button" style={buttonStyle("#6b7280")} onClick={cancelEdit}>Reset</button>
               <button type="submit" style={buttonStyle()} disabled={saving || loading}>{saving ? "Saving..." : editingId ? "Update" : "Submit Leave Request"}</button>
             </div>
           </form>
@@ -4299,14 +4312,29 @@ export function HrPayrollPanel() {
   const [allowance, setAllowance] = useState("0.00");
   const [deduction, setDeduction] = useState("0.00");
   const [statusFilter, setStatusFilter] = useState<"" | "draft" | "processed" | "paid">("");
+  const [searchStaffId, setSearchStaffId] = useState("");
+  const [searchMonth, setSearchMonth] = useState("");
+  const [searchYear, setSearchYear] = useState("");
 
-  const load = async () => {
+  const load = async (overrides?: Partial<{ statusFilter: string; searchStaffId: string; searchMonth: string; searchYear: string }>) => {
     try {
       setError("");
+      const effectiveStatus = overrides?.statusFilter ?? statusFilter;
+      const effectiveStaff = overrides?.searchStaffId ?? searchStaffId;
+      const effectiveMonth = overrides?.searchMonth ?? searchMonth;
+      const effectiveYear = overrides?.searchYear ?? searchYear;
+
+      const params = new URLSearchParams();
+      if (effectiveStatus) params.set("status", effectiveStatus);
+      if (effectiveStaff) params.set("staff", effectiveStaff);
+      if (effectiveMonth) params.set("payroll_month", effectiveMonth);
+      if (effectiveYear) params.set("payroll_year", effectiveYear);
+      const suffix = params.toString() ? `?${params.toString()}` : "";
+
       const [payrollData, staffData, summaryData] = await Promise.all([
-        apiGet<ApiList<PayrollRecord>>(`/api/v1/hr/payroll/${statusFilter ? `?status=${statusFilter}` : ""}`),
+        apiGet<ApiList<PayrollRecord>>(`/api/v1/hr/payroll/${suffix}`),
         apiGet<ApiList<Staff>>("/api/v1/hr/staff/?status=active"),
-        apiGet<PayrollSummary>("/api/v1/hr/payroll/summary/"),
+        apiGet<PayrollSummary>(`/api/v1/hr/payroll/summary/${suffix}`),
       ]);
       setRows(listData(payrollData));
       setStaffRows(listData(staffData));
@@ -4318,7 +4346,20 @@ export function HrPayrollPanel() {
 
   useEffect(() => {
     void load();
-  }, [statusFilter]);
+  }, []);
+
+  const runSearch = async () => {
+    await load();
+  };
+
+  const resetSearch = async () => {
+    const cleared = { statusFilter: "", searchStaffId: "", searchMonth: "", searchYear: "" };
+    setStatusFilter(cleared.statusFilter as "" | "draft" | "processed" | "paid");
+    setSearchStaffId(cleared.searchStaffId);
+    setSearchMonth(cleared.searchMonth);
+    setSearchYear(cleared.searchYear);
+    await load(cleared);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -4378,14 +4419,21 @@ export function HrPayrollPanel() {
 
         <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
           <h3 style={{ marginTop: 0, marginBottom: 10 }}>Search Criteria</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "180px auto", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px 180px auto auto", gap: 8 }}>
+            <select value={searchStaffId} onChange={(e) => setSearchStaffId(e.target.value)} style={fieldStyle()}>
+              <option value="">All Staff</option>
+              {staffRows.map((item) => <option key={item.id} value={item.id}>{item.first_name} {item.last_name} ({item.staff_no})</option>)}
+            </select>
+            <input type="number" min="1" max="12" value={searchMonth} onChange={(e) => setSearchMonth(e.target.value)} placeholder="Month" style={fieldStyle()} />
+            <input type="number" min="2000" max="2100" value={searchYear} onChange={(e) => setSearchYear(e.target.value)} placeholder="Year" style={fieldStyle()} />
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "" | "draft" | "processed" | "paid")} style={fieldStyle()}>
               <option value="">All Status</option>
               <option value="draft">Draft</option>
               <option value="processed">Processed</option>
               <option value="paid">Paid</option>
             </select>
-            <button type="button" style={buttonStyle("#0ea5e9")} onClick={() => void load()}>Search</button>
+            <button type="button" style={buttonStyle("#0ea5e9")} onClick={() => void runSearch()}>Search</button>
+            <button type="button" style={buttonStyle("#6b7280")} onClick={() => void resetSearch()}>Reset</button>
           </div>
         </div>
 
@@ -4404,12 +4452,13 @@ export function HrPayrollPanel() {
 
         <div className="white-box" style={boxStyle()}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Staff</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Month</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Year</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Basic</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Allowance</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Deduction</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Net</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Status</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th></tr></thead>
+            <thead><tr><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>No</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Staff</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Month</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Year</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Basic</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Allowance</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Deduction</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Net</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Status</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th></tr></thead>
             <tbody>
-              {rows.map((row) => {
+              {rows.map((row, index) => {
                 const staff = staffRows.find((item) => item.id === row.staff);
                 return (
                   <tr key={row.id}>
+                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{rows.length - index}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{staff ? `${staff.first_name} ${staff.last_name}` : row.staff}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.payroll_month}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.payroll_year}</td>

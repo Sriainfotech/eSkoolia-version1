@@ -23,6 +23,11 @@ type SchoolClass = {
   name: string;
 };
 
+type AcademicYear = {
+  id: number;
+  name: string;
+};
+
 type Section = {
   id: number;
   school_class: number;
@@ -35,14 +40,31 @@ type StudentCreatePayload = {
   first_name: string;
   last_name: string;
   date_of_birth?: string;
+  academic_year: number;
   gender: string;
+  custom_gender?: string;
   blood_group?: string;
+  phone?: string;
+  email?: string;
+  address_line?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  photo?: string;
+  status: "active" | "inactive" | "transferred" | "dropped";
   category?: number;
   guardian?: number;
-  current_class?: number;
-  current_section?: number;
+  current_class: number;
+  current_section: number;
   is_disabled: boolean;
   is_active: boolean;
+};
+
+type ApiError = Error & {
+  details?: {
+    field_errors?: Record<string, string | string[]>;
+    message?: string;
+  };
 };
 
 function listData<T>(value: ApiList<T>): T[] {
@@ -95,6 +117,11 @@ function buttonStyle(color = "var(--primary)") {
 }
 
 function parseError(error: unknown) {
+  const apiError = error as ApiError;
+  const message = apiError?.details?.message;
+  if (message) {
+    return message;
+  }
   if (error instanceof Error && error.message) {
     return error.message;
   }
@@ -102,6 +129,7 @@ function parseError(error: unknown) {
 }
 
 export function StudentAddPanel() {
+  const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
   const [categories, setCategories] = useState<StudentCategory[]>([]);
   const [guardians, setGuardians] = useState<Guardian[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
@@ -112,8 +140,18 @@ export function StudentAddPanel() {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
+  const [academicYearId, setAcademicYearId] = useState("");
   const [gender, setGender] = useState("male");
+  const [customGender, setCustomGender] = useState("");
   const [bloodGroup, setBloodGroup] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [addressLine, setAddressLine] = useState("");
+  const [city, setCity] = useState("");
+  const [stateName, setStateName] = useState("");
+  const [pincode, setPincode] = useState("");
+  const [photo, setPhoto] = useState("");
+  const [statusValue, setStatusValue] = useState<"active" | "inactive" | "transferred" | "dropped">("active");
   const [religion, setReligion] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [guardianId, setGuardianId] = useState("");
@@ -131,6 +169,7 @@ export function StudentAddPanel() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const filteredSections = useMemo(() => {
     if (!classId) return [];
@@ -141,12 +180,14 @@ export function StudentAddPanel() {
     try {
       setLoading(true);
       setError("");
-      const [categoryData, guardianData, classData, sectionData] = await Promise.all([
+      const [yearData, categoryData, guardianData, classData, sectionData] = await Promise.all([
+        apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
         apiGet<ApiList<StudentCategory>>("/api/v1/students/categories/"),
         apiGet<ApiList<Guardian>>("/api/v1/students/guardians/"),
         apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
         apiGet<ApiList<Section>>("/api/v1/core/sections/"),
       ]);
+      setAcademicYears(listData(yearData));
       setCategories(listData(categoryData));
       setGuardians(listData(guardianData));
       setClasses(listData(classData));
@@ -179,8 +220,18 @@ export function StudentAddPanel() {
     setFirstName("");
     setLastName("");
     setDateOfBirth("");
+    setAcademicYearId("");
     setGender("male");
+    setCustomGender("");
     setBloodGroup("");
+    setPhone("");
+    setEmail("");
+    setAddressLine("");
+    setCity("");
+    setStateName("");
+    setPincode("");
+    setPhoto("");
+    setStatusValue("active");
     setReligion("");
     setCategoryId("");
     setGuardianId("");
@@ -188,6 +239,68 @@ export function StudentAddPanel() {
     setSectionId("");
     setIsDisabled(false);
     setIsActive(true);
+    setFieldErrors({});
+  };
+
+  const validateClient = () => {
+    const nextErrors: Record<string, string> = {};
+    if (!admissionNo.trim()) {
+      nextErrors.admission_no = "Admission number is required";
+    }
+    if (!firstName.trim()) {
+      nextErrors.first_name = "First name is required";
+    } else if (!/^[A-Za-z ]+$/.test(firstName.trim())) {
+      nextErrors.first_name = "First name can only contain letters and spaces";
+    }
+    if (lastName.trim() && !/^[A-Za-z ]+$/.test(lastName.trim())) {
+      nextErrors.last_name = "Last name can only contain letters and spaces";
+    }
+    if (!dateOfBirth) {
+      nextErrors.dob = "Date of birth is required";
+    } else {
+      const dobDate = new Date(dateOfBirth);
+      const now = new Date();
+      if (dobDate > now) {
+        nextErrors.dob = "Date of birth cannot be in the future";
+      } else {
+        const age = (now.getTime() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+        if (age < 3) {
+          nextErrors.dob = "Student must be at least 3 years old";
+        }
+      }
+    }
+    if (!academicYearId) {
+      nextErrors.academic_year = "Academic year is required";
+    }
+    if (!classId) {
+      nextErrors.class = "Please select a class";
+    }
+    if (!sectionId) {
+      nextErrors.section = "Section is required";
+    } else if (!filteredSections.some((item) => String(item.id) === sectionId)) {
+      nextErrors.section = "Selected section does not belong to selected class";
+    }
+    if (gender === "other" && !customGender.trim()) {
+      nextErrors.custom_gender = "Custom gender is required";
+    }
+    if (!phone.trim() && !email.trim()) {
+      nextErrors.phone = "At least one contact method (phone or email) is required";
+    }
+    if (phone.trim() && !/^\+?\d{7,15}$/.test(phone.trim())) {
+      nextErrors.phone = "Please enter a valid phone number";
+    }
+    return nextErrors;
+  };
+
+  const isFormValid = !loading && Object.keys(validateClient()).length === 0;
+
+  const syncApiFieldErrors = (apiError: ApiError) => {
+    const source = apiError.details?.field_errors || {};
+    const mapped: Record<string, string> = {};
+    for (const [field, value] of Object.entries(source)) {
+      mapped[field] = Array.isArray(value) ? String(value[0] || "") : String(value || "");
+    }
+    setFieldErrors(mapped);
   };
 
   const addGuardianInline = async () => {
@@ -224,9 +337,10 @@ export function StudentAddPanel() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSuccess("");
-
-    if (!admissionNo.trim() || !firstName.trim() || !lastName.trim() || !gender) {
-      setError("Admission No, First Name, Last Name, and Gender are required.");
+    const nextErrors = validateClient();
+    setFieldErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      setError("Validation failed");
       return;
     }
 
@@ -237,21 +351,32 @@ export function StudentAddPanel() {
         admission_no: admissionNo.trim(),
         roll_no: rollNo.trim() || undefined,
         first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        date_of_birth: dateOfBirth || undefined,
+        last_name: lastName.trim() || "",
+        date_of_birth: dateOfBirth,
+        academic_year: Number(academicYearId),
         gender,
+        custom_gender: gender === "other" ? customGender.trim() : undefined,
         blood_group: bloodGroup.trim() || undefined,
+        phone: phone.trim() || undefined,
+        email: email.trim() || undefined,
+        address_line: addressLine.trim() || undefined,
+        city: city.trim() || undefined,
+        state: stateName.trim() || undefined,
+        pincode: pincode.trim() || undefined,
+        photo: photo.trim() || undefined,
+        status: statusValue,
         category: categoryId ? Number(categoryId) : undefined,
         guardian: guardianId ? Number(guardianId) : undefined,
-        current_class: classId ? Number(classId) : undefined,
-        current_section: sectionId ? Number(sectionId) : undefined,
+        current_class: Number(classId),
+        current_section: Number(sectionId),
         is_disabled: isDisabled,
         is_active: isActive,
       };
-      await apiPost("/api/v1/students/students/", payload);
-      setSuccess("Student added successfully.");
+      const response = await apiPost<{ message?: string; warning?: string }>("/api/v1/students/students/", payload);
+      setSuccess(response?.warning ? `Student added successfully. ${response.warning}` : "Student added successfully");
       resetStudentForm();
     } catch (submitError) {
+      syncApiFieldErrors(submitError as ApiError);
       setError(parseError(submitError));
     } finally {
       setSaving(false);
@@ -270,7 +395,7 @@ export function StudentAddPanel() {
                   Student List
                 </Link>
                 <Link href="/students/multi-class" style={{ ...buttonStyle("#16a34a"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-                  Multi Class Student
+                  Student Subject Assignment
                 </Link>
               </div>
               <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
@@ -294,6 +419,7 @@ export function StudentAddPanel() {
                 <div>
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Admission No *</label>
                   <input value={admissionNo} onChange={(e) => setAdmissionNo(e.target.value)} style={fieldStyle()} />
+                  {fieldErrors.admission_no && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.admission_no}</p>}
                 </div>
                 <div>
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Roll No</label>
@@ -302,15 +428,30 @@ export function StudentAddPanel() {
                 <div>
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>First Name *</label>
                   <input value={firstName} onChange={(e) => setFirstName(e.target.value)} style={fieldStyle()} />
+                  {fieldErrors.first_name && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.first_name}</p>}
                 </div>
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Last Name *</label>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Last Name</label>
                   <input value={lastName} onChange={(e) => setLastName(e.target.value)} style={fieldStyle()} />
+                  {fieldErrors.last_name && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.last_name}</p>}
                 </div>
 
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Date Of Birth</label>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Date Of Birth *</label>
                   <input type="date" value={dateOfBirth} onChange={(e) => setDateOfBirth(e.target.value)} style={fieldStyle()} />
+                  {fieldErrors.dob && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.dob}</p>}
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Academic Year *</label>
+                  <select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={fieldStyle()}>
+                    <option value="">Select Academic Year</option>
+                    {academicYears.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                  {fieldErrors.academic_year && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.academic_year}</p>}
                 </div>
                 <div>
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Gender *</label>
@@ -320,6 +461,13 @@ export function StudentAddPanel() {
                     <option value="other">Other</option>
                   </select>
                 </div>
+                {gender === "other" && (
+                  <div>
+                    <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Custom Gender *</label>
+                    <input value={customGender} onChange={(e) => setCustomGender(e.target.value)} style={fieldStyle()} />
+                    {fieldErrors.custom_gender && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.custom_gender}</p>}
+                  </div>
+                )}
                 <div>
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Blood Group</label>
                   <select value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)} style={fieldStyle()}>
@@ -360,7 +508,7 @@ export function StudentAddPanel() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Class</label>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Class *</label>
                   <select value={classId} onChange={(e) => setClassId(e.target.value)} style={fieldStyle()}>
                     <option value="">Select Class</option>
                     {classes.map((item) => (
@@ -369,9 +517,10 @@ export function StudentAddPanel() {
                       </option>
                     ))}
                   </select>
+                  {fieldErrors.class && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.class}</p>}
                 </div>
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Section</label>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Section *</label>
                   <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={fieldStyle()} disabled={!classId}>
                     <option value="">Select Section</option>
                     {filteredSections.map((item) => (
@@ -379,6 +528,45 @@ export function StudentAddPanel() {
                         {item.name}
                       </option>
                     ))}
+                  </select>
+                  {fieldErrors.section && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.section}</p>}
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Phone</label>
+                  <input value={phone} onChange={(e) => setPhone(e.target.value)} style={fieldStyle()} />
+                  {fieldErrors.phone && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.phone}</p>}
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Email</label>
+                  <input value={email} onChange={(e) => setEmail(e.target.value)} style={fieldStyle()} />
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Address Line</label>
+                  <input value={addressLine} onChange={(e) => setAddressLine(e.target.value)} style={fieldStyle()} />
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>City</label>
+                  <input value={city} onChange={(e) => setCity(e.target.value)} style={fieldStyle()} />
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>State</label>
+                  <input value={stateName} onChange={(e) => setStateName(e.target.value)} style={fieldStyle()} />
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Pincode</label>
+                  <input value={pincode} onChange={(e) => setPincode(e.target.value)} style={fieldStyle()} />
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Photo URL</label>
+                  <input value={photo} onChange={(e) => setPhoto(e.target.value)} style={fieldStyle()} />
+                </div>
+                <div>
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Status</label>
+                  <select value={statusValue} onChange={(e) => setStatusValue(e.target.value as "active" | "inactive" | "transferred" | "dropped")} style={fieldStyle()}>
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                    <option value="transferred">Transferred</option>
+                    <option value="dropped">Dropped</option>
                   </select>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 12, paddingTop: 24 }}>
@@ -426,7 +614,7 @@ export function StudentAddPanel() {
             </div>
 
             <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
-              <button type="submit" disabled={saving || loading} style={buttonStyle()}>
+              <button type="submit" disabled={saving || !isFormValid} style={buttonStyle()}>
                 {saving ? "Saving..." : "Save Student"}
               </button>
             </div>

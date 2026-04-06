@@ -11,7 +11,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.models import AcademicYear, Class, Section, Subject
+from apps.core.models import AcademicYear, Class, ClassRoom, Section, Subject
 from apps.hr.models import Staff
 from apps.students.models import Student
 
@@ -460,6 +460,7 @@ class ExamScheduleIndexAPIView(ExamTenantMixin, APIView):
     def get(self, request):
         classes = Class.objects.filter(**self.school_filter(request)).order_by("numeric_order", "name")
         sections = Section.objects.filter(school_class_id__in=classes.values_list("id", flat=True)).order_by("name")
+        rooms = ClassRoom.objects.filter(**self.school_filter(request), active_status=True).order_by("room_no")
         exam_types = ExamType.objects.filter(**self.school_filter(request), active_status=True).order_by("id")
         periods = request.user.school.class_periods.filter(period_type="exam").order_by("start_time", "period") if request.user.school_id else []
         teachers = self.get_teachers(request)
@@ -468,6 +469,7 @@ class ExamScheduleIndexAPIView(ExamTenantMixin, APIView):
             {
                 "classes": [{"id": c.id, "class_name": c.name} for c in classes],
                 "sections": [{"id": s.id, "section_name": s.name, "class_id": s.school_class_id} for s in sections],
+                "rooms": [{"id": r.id, "room_no": r.room_no} for r in rooms],
                 "exam_types": [{"id": e.id, "title": e.title} for e in exam_types],
                 "exam_periods": [{"id": p.id, "period": p.period} for p in periods],
                 "teachers": [
@@ -739,7 +741,7 @@ class ExamAttendanceCreateSearchAPIView(ExamTenantMixin, APIView):
             current_class_id=class_id,
             is_active=True,
             **self.school_filter(request),
-        )
+        ).values("id", "admission_no", "first_name", "last_name", "roll_no", "current_section_id")
         if section_id:
             students_qs = students_qs.filter(current_section_id=section_id)
         students_qs = students_qs.order_by("id")
@@ -758,22 +760,25 @@ class ExamAttendanceCreateSearchAPIView(ExamTenantMixin, APIView):
         attendance = attendance_qs.first()
         child_map = {}
         if attendance:
-            child_map = {child.student_id: child for child in attendance.children.all()}
+            child_map = {
+                row["student_id"]: row["attendance_type"]
+                for row in attendance.children.values("student_id", "attendance_type")
+            }
 
         student_rows = []
         for student in students_qs:
-            child = child_map.get(student.id)
+            child_attendance_type = child_map.get(student["id"])
             student_rows.append(
                 {
-                    "student_record_id": student.id,
-                    "student": student.id,
+                    "student_record_id": student["id"],
+                    "student": student["id"],
                     "class": class_id,
-                    "section": section_id or student.current_section_id,
-                    "admission_no": student.admission_no,
-                    "first_name": student.first_name,
-                    "last_name": student.last_name,
-                    "roll_no": student.roll_no,
-                    "attendance_type": child.attendance_type if child else "P",
+                    "section": section_id or student["current_section_id"],
+                    "admission_no": student["admission_no"],
+                    "first_name": student["first_name"],
+                    "last_name": student["last_name"],
+                    "roll_no": student["roll_no"],
+                    "attendance_type": child_attendance_type or "P",
                 }
             )
 
@@ -781,10 +786,42 @@ class ExamAttendanceCreateSearchAPIView(ExamTenantMixin, APIView):
         section_obj = Section.objects.filter(id=section_id).first() if section_id else None
         subject_obj = Subject.objects.filter(id=subject_id, **self.school_filter(request)).first()
 
+        exam_attendance_childs = []
+        if attendance:
+            exam_attendance_childs = list(
+                attendance.children.values(
+                    "id",
+                    "student_id",
+                    "student_record_id",
+                    "school_class_id",
+                    "section_id",
+                    "attendance_type",
+                    "student__admission_no",
+                    "student__first_name",
+                    "student__last_name",
+                    "student__roll_no",
+                )
+            )
+            exam_attendance_childs = [
+                {
+                    "id": row["id"],
+                    "student": row["student_id"],
+                    "student_record_id": row["student_record_id"],
+                    "admission_no": row["student__admission_no"],
+                    "first_name": row["student__first_name"],
+                    "last_name": row["student__last_name"],
+                    "roll_no": row["student__roll_no"],
+                    "school_class": row["school_class_id"],
+                    "section": row["section_id"],
+                    "attendance_type": row["attendance_type"],
+                }
+                for row in exam_attendance_childs
+            ]
+
         return Response(
             {
                 "students": student_rows,
-                "exam_attendance_childs": ExamAttendanceChildSerializer(attendance.children.all(), many=True).data if attendance else [],
+                "exam_attendance_childs": exam_attendance_childs,
                 "search_info": {
                     "class_name": class_obj.name if class_obj else "",
                     "section_name": section_obj.name if section_obj else "All Sections",
@@ -837,6 +874,20 @@ class ExamAttendanceStoreAPIView(ExamTenantMixin, APIView):
 
         attendance.children.all().delete()
 
+        requested_student_ids = []
+        for _, attendance_data in data["attendance"].items():
+            if not isinstance(attendance_data, dict):
+                continue
+            student_id = attendance_data.get("student")
+            if student_id:
+                requested_student_ids.append(student_id)
+
+        student_rows = Student.objects.filter(
+            id__in=requested_student_ids,
+            **self.school_filter(request),
+        ).values("id", "current_section_id")
+        valid_students = {row["id"]: row["current_section_id"] for row in student_rows}
+
         children = []
         for record_id, attendance_data in data["attendance"].items():
             if not isinstance(attendance_data, dict):
@@ -845,12 +896,12 @@ class ExamAttendanceStoreAPIView(ExamTenantMixin, APIView):
             if not student_id:
                 continue
 
-            student = Student.objects.filter(id=student_id, **self.school_filter(request)).first()
-            if not student:
+            student_section_id = valid_students.get(student_id)
+            if student_section_id is None and student_id not in valid_students:
                 continue
 
             row_class_id = attendance_data.get("class") or class_id
-            row_section_id = attendance_data.get("section") or section_id or student.current_section_id
+            row_section_id = attendance_data.get("section") or section_id or student_section_id
             attendance_type = attendance_data.get("attendance_type") or "P"
             if attendance_type not in {"P", "A"}:
                 attendance_type = "P"

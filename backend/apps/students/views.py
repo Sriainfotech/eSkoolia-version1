@@ -1,6 +1,10 @@
 from django.db import IntegrityError, transaction
+import csv
+import io
+import re
+from django.utils import timezone
 from django.db.models.deletion import ProtectedError
-from django.db.models import Count
+from django.db.models import Count, Q
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -12,6 +16,8 @@ from .models import (
     StudentDocument,
     StudentGroup,
     StudentMultiClassRecord,
+    StudentRecordAudit,
+    StudentSubjectAssignment,
     StudentPromotionHistory,
     StudentTransferHistory,
 )
@@ -22,6 +28,9 @@ from .serializers import (
     StudentGroupSerializer,
     StudentMultiClassBulkSaveSerializer,
     StudentMultiClassRecordSerializer,
+    StudentRecordAuditSerializer,
+    StudentSubjectAssignmentRequestSerializer,
+    StudentSubjectAssignmentSerializer,
     StudentPromoteRequestSerializer,
     StudentPromotionHistorySerializer,
     StudentSerializer,
@@ -94,6 +103,103 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
     serializer_class = StudentCategorySerializer
     permission_codes = {"*": "student_info.student_category.view"}
 
+    def _build_validation_error_response(self, field_errors=None, message="Validation failed"):
+        return Response(
+            {
+                "success": False,
+                "error_code": "VALIDATION_ERROR",
+                "message": message,
+                "field_errors": field_errors or {},
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def _normalize_field_errors(self, serializer_errors):
+        normalized = {}
+        for field, errors in serializer_errors.items():
+            if isinstance(errors, (list, tuple)):
+                normalized[field] = [str(error) for error in errors]
+            else:
+                normalized[field] = [str(errors)]
+        return normalized
+
+    def _first_error_message(self, field_errors):
+        for errors in field_errors.values():
+            if isinstance(errors, list) and errors:
+                return str(errors[0])
+        return "Validation failed"
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._build_validation_error_response(field_errors, self._first_error_message(field_errors))
+
+        try:
+            self.perform_create(serializer)
+        except IntegrityError:
+            return self._build_validation_error_response(
+                {"name": ["Category name already exists."]},
+                "Category name already exists.",
+            )
+
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            {
+                "success": True,
+                "message": "Student category created successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        if not serializer.is_valid():
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._build_validation_error_response(field_errors, self._first_error_message(field_errors))
+
+        try:
+            self.perform_update(serializer)
+        except IntegrityError:
+            return self._build_validation_error_response(
+                {"name": ["Category name already exists."]},
+                "Category name already exists.",
+            )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Student category updated successfully.",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.students.exists():
+            return self._build_validation_error_response(
+                {},
+                "Cannot delete category as it is assigned to students",
+            )
+
+        self.perform_destroy(instance)
+        return Response(
+            {
+                "success": True,
+                "message": "Student category deleted successfully.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 class StudentGroupViewSet(TenantScopedModelViewSet):
     model = StudentGroup
@@ -126,6 +232,9 @@ class StudentViewSet(TenantScopedModelViewSet):
         "update": "student_info.add_student.view",
         "partial_update": "student_info.add_student.view",
         "destroy": "student_info.delete_student_record.view",
+        "soft_delete": "student_info.delete_student_record.view",
+        "restore": "student_info.delete_student_record.view",
+        "permanent_delete": "student_info.delete_student_record.view",
         "promote": "student_info.student_promote.view",
     }
 
@@ -133,6 +242,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         user = self.request.user
         qs = Student.objects.select_related(
             "school",
+            "academic_year",
             "category",
             "student_group",
             "guardian",
@@ -140,11 +250,137 @@ class StudentViewSet(TenantScopedModelViewSet):
             "current_section",
             "admission_inquiry",
         ).prefetch_related("documents")
+
+        search = (self.request.query_params.get("search") or "").strip()
+        class_id = self.request.query_params.get("class")
+        section_id = self.request.query_params.get("section")
+        academic_year_id = self.request.query_params.get("academic_year")
+        include_deleted = (self.request.query_params.get("include_deleted") or "").strip().lower() in {"1", "true", "yes"}
+        deleted_only = (self.request.query_params.get("deleted_only") or "").strip().lower() in {"1", "true", "yes"}
+
+        if deleted_only:
+            qs = qs.filter(is_deleted=True)
+        elif not include_deleted:
+            qs = qs.filter(is_deleted=False)
+
+        if search and not re.fullmatch(r"[A-Za-z0-9 ]+", search):
+            raise ValidationError({"search": "Please enter valid search text"})
+
+        if class_id:
+            qs = qs.filter(current_class_id=class_id)
+        if section_id:
+            qs = qs.filter(current_section_id=section_id)
+        if academic_year_id:
+            qs = qs.filter(academic_year_id=academic_year_id)
+        if search:
+            qs = qs.filter(
+                Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+                | Q(admission_no__icontains=search)
+                | Q(roll_no__icontains=search)
+            )
+
         if user.is_superuser:
             return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
+
+    def _field_alias(self, field):
+        aliases = {
+            "current_class": "class",
+            "current_section": "section",
+            "date_of_birth": "dob",
+        }
+        return aliases.get(field, field)
+
+    def _normalize_field_errors(self, serializer_errors):
+        normalized = {}
+        for field, errors in serializer_errors.items():
+            key = self._field_alias(str(field))
+            if isinstance(errors, (list, tuple)):
+                normalized[key] = str(errors[0]) if errors else "Validation failed"
+            else:
+                normalized[key] = str(errors)
+        return normalized
+
+    def _validation_response(self, serializer_errors=None, message="Validation failed"):
+        return Response(
+            {
+                "success": False,
+                "message": message,
+                "field_errors": self._normalize_field_errors(serializer_errors or {}),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def _duplicate_warning(self, validated_data):
+        first_name = (validated_data.get("first_name") or "").strip()
+        last_name = (validated_data.get("last_name") or "").strip()
+        dob = validated_data.get("date_of_birth")
+        phone = (validated_data.get("phone") or "").strip()
+        if not (first_name and dob and phone):
+            return None
+
+        queryset = Student.objects.filter(
+            school_id=self.request.user.school_id,
+            first_name__iexact=first_name,
+            last_name__iexact=last_name,
+            date_of_birth=dob,
+            phone=phone,
+        )
+        if queryset.exists():
+            return "Possible duplicate found: same name, DOB and phone already exists"
+        return None
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return self._validation_response(serializer.errors)
+
+        warning = self._duplicate_warning(serializer.validated_data)
+
+        try:
+            self.perform_create(serializer)
+        except IntegrityError:
+            return self._validation_response({"admission_no": ["Admission number already exists"]})
+
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            {
+                "success": True,
+                "message": "Student added successfully",
+                "warning": warning,
+                "data": serializer.data,
+            },
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        if not serializer.is_valid():
+            return self._validation_response(serializer.errors)
+
+        try:
+            self.perform_update(serializer)
+        except IntegrityError:
+            return self._validation_response({"admission_no": ["Admission number already exists"]})
+
+        return Response(
+            {
+                "success": True,
+                "message": "Student updated successfully",
+                "data": serializer.data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
 
     @action(detail=False, methods=["post"], url_path="promote")
     def promote(self, request):
@@ -210,17 +446,176 @@ class StudentViewSet(TenantScopedModelViewSet):
         return Response({"promoted": promoted_count}, status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
-        try:
-            return super().destroy(request, *args, **kwargs)
-        except (ProtectedError, IntegrityError):
-            raise ValidationError(
-                {
-                    "detail": (
-                        "This student cannot be deleted because related records exist "
-                        "(attendance, exam, fees, or other dependent data)."
-                    )
-                }
+        return self.soft_delete(request, *args, **kwargs)
+
+    def _linked_record_exists(self, student):
+        from apps.attendance.models import StudentAttendance, SubjectAttendance
+        from apps.exams.models import ExamAttendanceChild, ExamMark, ExamMarkRegister, OnlineExamTake
+        from apps.fees.models import FeesAssignment, FeesPayment
+
+        return (
+            StudentAttendance.objects.filter(student=student).exists()
+            or SubjectAttendance.objects.filter(student=student).exists()
+            or ExamMark.objects.filter(student=student).exists()
+            or ExamAttendanceChild.objects.filter(student=student).exists()
+            or ExamMarkRegister.objects.filter(student=student).exists()
+            or OnlineExamTake.objects.filter(student=student).exists()
+            or FeesAssignment.objects.filter(student=student).exists()
+            or FeesPayment.objects.filter(student=student).exists()
+        )
+
+    def _audit_log(self, *, action, student, request, note="", metadata=None):
+        school = student.school or getattr(request.user, "school", None)
+        if not school:
+            return
+        StudentRecordAudit.objects.create(
+            school=school,
+            student=student,
+            action=action,
+            performed_by=request.user,
+            note=note,
+            metadata=metadata or {},
+        )
+
+    @action(detail=True, methods=["post"], url_path="soft-delete")
+    def soft_delete(self, request, *args, **kwargs):
+        student = self.get_object()
+        if student.is_deleted:
+            return Response(
+                {"success": False, "message": "Student record already deleted", "field_errors": {}},
+                status=status.HTTP_400_BAD_REQUEST,
             )
+
+        if self._linked_record_exists(student):
+            return Response(
+                {"success": False, "message": "Cannot delete student. Linked records exist", "field_errors": {}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        student.is_deleted = True
+        student.is_active = False
+        student.is_disabled = True
+        student.status = "deleted"
+        student.deleted_at = timezone.now()
+        student.deleted_by = request.user
+        student.save(update_fields=["is_deleted", "is_active", "is_disabled", "status", "deleted_at", "deleted_by", "updated_at"])
+
+        self._audit_log(
+            action=StudentRecordAudit.ACTION_SOFT_DELETE,
+            student=student,
+            request=request,
+            note="Student soft-deleted",
+            metadata={"student_id": student.id, "admission_no": student.admission_no},
+        )
+
+        return Response({"success": True, "message": "Student deleted successfully"}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="restore")
+    def restore(self, request, *args, **kwargs):
+        student = self.get_object()
+        if not student.is_deleted:
+            return Response(
+                {"success": False, "message": "Student is not deleted", "field_errors": {}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        student.is_deleted = False
+        student.is_disabled = False
+        student.is_active = True
+        student.status = "active"
+        student.deleted_at = None
+        student.deleted_by = None
+        student.save(update_fields=["is_deleted", "is_disabled", "is_active", "status", "deleted_at", "deleted_by", "updated_at"])
+
+        self._audit_log(
+            action=StudentRecordAudit.ACTION_RESTORE,
+            student=student,
+            request=request,
+            note="Student restored",
+            metadata={"student_id": student.id, "admission_no": student.admission_no},
+        )
+
+        return Response({"success": True, "message": "Student restored successfully"}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["delete"], url_path="permanent-delete")
+    def permanent_delete(self, request, *args, **kwargs):
+        if not request.user.is_superuser:
+            return Response(
+                {"success": False, "message": "You do not have permission to delete student records", "field_errors": {}},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        student = self.get_object()
+        if self._linked_record_exists(student):
+            return Response(
+                {
+                    "success": False,
+                    "message": "Unable to permanently delete student due to linked records",
+                    "field_errors": {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        self._audit_log(
+            action=StudentRecordAudit.ACTION_PERMANENT_DELETE,
+            student=student,
+            request=request,
+            note="Student permanently deleted",
+            metadata={"student_id": student.id, "admission_no": student.admission_no},
+        )
+
+        student.delete()
+        return Response({"success": True, "message": "Student permanently deleted successfully"}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="bulk-import")
+    def bulk_import(self, request):
+        upload = request.FILES.get("file")
+        if not upload:
+            return self._validation_response({"file": ["Please upload a file"]})
+
+        filename = (upload.name or "").lower()
+        if not filename.endswith((".csv", ".xlsx")):
+            return self._validation_response({"file": ["Only CSV or XLSX files are supported"]})
+
+        rows = []
+        if filename.endswith(".csv"):
+            decoded = upload.read().decode("utf-8", errors="ignore")
+            reader = csv.DictReader(io.StringIO(decoded))
+            rows = list(reader)
+        else:
+            try:
+                from openpyxl import load_workbook
+            except Exception:
+                return self._validation_response({"file": ["XLSX import requires openpyxl installation"]})
+            workbook = load_workbook(upload, read_only=True)
+            worksheet = workbook.active
+            header = [str(cell.value or "").strip() for cell in next(worksheet.iter_rows(min_row=1, max_row=1))]
+            for data_row in worksheet.iter_rows(min_row=2, values_only=True):
+                rows.append({header[index]: value for index, value in enumerate(data_row)})
+
+        created = 0
+        errors = []
+        for index, row in enumerate(rows, start=2):
+            serializer = self.get_serializer(data=row)
+            if serializer.is_valid():
+                try:
+                    self.perform_create(serializer)
+                    created += 1
+                except IntegrityError:
+                    errors.append({"row": index, "field_errors": {"admission_no": "Admission number already exists"}})
+            else:
+                errors.append({"row": index, "field_errors": self._normalize_field_errors(serializer.errors)})
+
+        return Response(
+            {
+                "success": len(errors) == 0,
+                "message": "Bulk import completed",
+                "created": created,
+                "failed": len(errors),
+                "errors": errors,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class StudentDocumentViewSet(TenantScopedModelViewSet):
@@ -387,3 +782,193 @@ class StudentMultiClassRecordViewSet(TenantScopedModelViewSet):
             many=True,
         ).data
         return Response({"student_id": student.id, "records": response_data}, status=status.HTTP_200_OK)
+
+
+class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
+    serializer_class = StudentSubjectAssignmentSerializer
+    model = StudentSubjectAssignment
+    permission_codes = {
+        "*": "student_info.multi_class_student.view",
+        "assign_individual": "student_info.multi_class_student.view",
+        "assign_bulk": "student_info.multi_class_student.view",
+    }
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = StudentSubjectAssignment.objects.select_related(
+            "student",
+            "subject",
+            "academic_year",
+            "school_class",
+            "section",
+            "assigned_by",
+        )
+        student_id = self.request.query_params.get("student_id")
+        if student_id:
+            qs = qs.filter(student_id=student_id)
+        if user.is_superuser:
+            return qs
+        if user.school_id:
+            return qs.filter(student__school_id=user.school_id)
+        return qs.none()
+
+    def _validation_response(self, field_errors=None, message="Validation failed"):
+        normalized = {}
+        for key, value in (field_errors or {}).items():
+            if isinstance(value, (list, tuple)):
+                normalized[key] = str(value[0]) if value else "Validation failed"
+            else:
+                normalized[key] = str(value)
+        return Response(
+            {
+                "success": False,
+                "message": message,
+                "field_errors": normalized,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def _resolve_students(self, *, student_ids, class_id, section_id, user):
+        queryset = Student.objects.filter(id__in=student_ids, current_class_id=class_id, current_section_id=section_id)
+        if not user.is_superuser:
+            queryset = queryset.filter(school_id=user.school_id)
+        return list(queryset)
+
+    def _create_assignments(self, *, students, subject_ids, academic_year_id, class_id, section_id, is_optional, user):
+        existing = StudentSubjectAssignment.objects.filter(
+            student_id__in=[row.id for row in students],
+            subject_id__in=subject_ids,
+            academic_year_id=academic_year_id,
+        )
+        if existing.exists():
+            return self._validation_response({"subject_ids": "Subject already assigned to this student"})
+
+        payload = [
+            StudentSubjectAssignment(
+                student_id=student.id,
+                subject_id=subject_id,
+                academic_year_id=academic_year_id,
+                school_class_id=class_id,
+                section_id=section_id,
+                is_optional=is_optional,
+                assigned_by=user,
+            )
+            for student in students
+            for subject_id in subject_ids
+        ]
+        StudentSubjectAssignment.objects.bulk_create(payload)
+        return None
+
+    @action(detail=False, methods=["post"], url_path="assign-individual")
+    def assign_individual(self, request):
+        serializer = StudentSubjectAssignmentRequestSerializer(data=request.data, context={"request": request})
+        if not serializer.is_valid():
+            return self._validation_response(serializer.errors)
+
+        data = serializer.validated_data
+        student_id = request.data.get("student_id")
+        if not student_id:
+            return self._validation_response({"student_id": "Please select a student"})
+
+        students = self._resolve_students(
+            student_ids=[int(student_id)],
+            class_id=data["school_class"],
+            section_id=data["section"],
+            user=request.user,
+        )
+        if not students:
+            return self._validation_response({"student_id": "Unable to load students. Please try again"})
+
+        with transaction.atomic():
+            error = self._create_assignments(
+                students=students,
+                subject_ids=data["subject_ids"],
+                academic_year_id=data["academic_year"],
+                class_id=data["school_class"],
+                section_id=data["section"],
+                is_optional=data.get("is_optional", False),
+                user=request.user,
+            )
+            if error:
+                return error
+
+        return Response({"success": True, "message": "Subjects assigned successfully"}, status=status.HTTP_200_OK)
+
+
+class StudentRecordAuditViewSet(TenantScopedModelViewSet):
+    serializer_class = StudentRecordAuditSerializer
+    model = StudentRecordAudit
+    permission_codes = {"*": "student_info.delete_student_record.view"}
+    http_method_names = ["get", "head", "options"]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = StudentRecordAudit.objects.select_related("student", "performed_by", "school", "student__current_class", "student__current_section")
+
+        student_id = self.request.query_params.get("student_id")
+        action = (self.request.query_params.get("action") or "").strip()
+        search = (self.request.query_params.get("search") or "").strip()
+        class_id = self.request.query_params.get("class")
+        section_id = self.request.query_params.get("section")
+
+        if student_id:
+            qs = qs.filter(student_id=student_id)
+        if action:
+            qs = qs.filter(action=action)
+        if class_id:
+            qs = qs.filter(student__current_class_id=class_id)
+        if section_id:
+            qs = qs.filter(student__current_section_id=section_id)
+        if search:
+            qs = qs.filter(
+                Q(student__first_name__icontains=search)
+                | Q(student__last_name__icontains=search)
+                | Q(student__admission_no__icontains=search)
+                | Q(note__icontains=search)
+            )
+
+        if user.is_superuser:
+            return qs
+        if user.school_id:
+            return qs.filter(school_id=user.school_id)
+        return qs.none()
+
+    @action(detail=False, methods=["post"], url_path="assign-bulk")
+    def assign_bulk(self, request):
+        serializer = StudentSubjectAssignmentRequestSerializer(data=request.data, context={"request": request})
+        if not serializer.is_valid():
+            return self._validation_response(serializer.errors)
+
+        data = serializer.validated_data
+        student_ids = data.get("student_ids") or request.data.get("student_ids") or []
+
+        if student_ids:
+            students = self._resolve_students(
+                student_ids=student_ids,
+                class_id=data["school_class"],
+                section_id=data["section"],
+                user=request.user,
+            )
+        else:
+            students_qs = Student.objects.filter(current_class_id=data["school_class"], current_section_id=data["section"])
+            if not request.user.is_superuser:
+                students_qs = students_qs.filter(school_id=request.user.school_id)
+            students = list(students_qs)
+
+        if not students:
+            return self._validation_response({"students": "Unable to load students. Please try again"})
+
+        with transaction.atomic():
+            error = self._create_assignments(
+                students=students,
+                subject_ids=data["subject_ids"],
+                academic_year_id=data["academic_year"],
+                class_id=data["school_class"],
+                section_id=data["section"],
+                is_optional=data.get("is_optional", False),
+                user=request.user,
+            )
+            if error:
+                return error
+
+        return Response({"success": True, "message": "Subjects assigned successfully"}, status=status.HTTP_200_OK)

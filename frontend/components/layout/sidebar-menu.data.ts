@@ -45,7 +45,7 @@ export const sidebarMenu: SidebarItem[] = [
       { id: "student-category", name: "Student Category", route: "/students/category" },
       { id: "add-student", name: "Add Student", route: "/students/add" },
       { id: "student-list", name: "Student List", route: "/students/list" },
-      { id: "multi-class-student", name: "Multi Class Student", route: "/students/multi-class" },
+      { id: "student-subject-assignment", name: "Student Subject Assignment", route: "/students/multi-class" },
       { id: "delete-student-record", name: "Delete Student Record", route: "/students/delete-record" },
       { id: "unassigned-student", name: "Unassigned Student", route: "/students/unassigned" },
       { id: "student-attendance", name: "Student Attendance", route: "/attendance/student" },
