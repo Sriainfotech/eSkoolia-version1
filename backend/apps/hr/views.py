@@ -11,6 +11,7 @@ from django.utils import timezone
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated, NotFound, PermissionDenied, ValidationError
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, Section
@@ -30,7 +31,13 @@ from .serializers import (
 
 
 class SchoolScopedModelViewSet(viewsets.ModelViewSet):
+    class HRPagination(PageNumberPagination):
+        page_size = 25
+        page_size_query_param = "page_size"
+        max_page_size = 100
+
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = HRPagination
     permission_codes = {}
 
     def get_required_permission_code(self):

@@ -123,7 +123,7 @@ class Staff(models.Model):
     eleventh_certificate = models.CharField(max_length=300, blank=True)
     aadhar_card = models.CharField(max_length=300, blank=True)
     driving_license_doc = models.CharField(max_length=300, blank=True)
-    other_document = models.CharField(max_length=300, blank=True)
+    other_document = models.JSONField(default=list, blank=True)
     join_date = models.DateField()
     basic_salary = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
