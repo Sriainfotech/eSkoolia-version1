@@ -1,3 +1,4 @@
+import json
 from django.db.models import Sum
 import re
 from django.utils import timezone
@@ -115,6 +116,12 @@ class DesignationSerializer(serializers.ModelSerializer):
 
 
 class StaffSerializer(serializers.ModelSerializer):
+    other_document = serializers.ListField(
+        child=serializers.CharField(allow_blank=False, trim_whitespace=True, max_length=300),
+        required=False,
+        allow_empty=True,
+    )
+
     role = serializers.PrimaryKeyRelatedField(
         queryset=Role.objects.all(),
         required=False,
@@ -203,6 +210,39 @@ class StaffSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+    @staticmethod
+    def _normalize_other_documents(value):
+        if value is None:
+            return []
+
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+            return [text]
+
+        return [str(value).strip()] if str(value).strip() else []
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["other_document"] = self._normalize_other_documents(getattr(instance, "other_document", []))
+        return data
+
+    def to_internal_value(self, data):
+        mutable_data = data.copy() if hasattr(data, "copy") else dict(data)
+        if "other_document" in mutable_data:
+            mutable_data["other_document"] = self._normalize_other_documents(mutable_data.get("other_document"))
+        return super().to_internal_value(mutable_data)
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -769,8 +809,24 @@ class PayrollRecordSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         school_id = request.user.school_id if request else None
         staff = attrs.get("staff") or getattr(self.instance, "staff", None)
+        basic_salary = attrs.get("basic_salary") if "basic_salary" in attrs else getattr(self.instance, "basic_salary", None)
+        allowance = attrs.get("allowance") if "allowance" in attrs else getattr(self.instance, "allowance", None)
+        deduction = attrs.get("deduction") if "deduction" in attrs else getattr(self.instance, "deduction", None)
         if school_id and staff and staff.school_id != school_id:
             raise serializers.ValidationError({"staff": "Selected staff member does not belong to your school."})
+
+        try:
+            basic_value = Decimal(str(basic_salary or 0))
+            allowance_value = Decimal(str(allowance or 0))
+            deduction_value = Decimal(str(deduction or 0))
+        except (InvalidOperation, TypeError, ValueError):
+            raise serializers.ValidationError({"deduction": "Enter valid salary values."})
+
+        net_salary = basic_value + allowance_value - deduction_value
+        if net_salary < 0:
+            raise serializers.ValidationError({
+                "deduction": "Deduction cannot be greater than basic salary plus allowance.",
+            })
         return attrs
 
 
