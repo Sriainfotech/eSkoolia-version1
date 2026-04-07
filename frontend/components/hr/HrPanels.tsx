@@ -55,6 +55,35 @@ async function apiDelete(path: string): Promise<void> {
   await apiRequestWithRefresh<void>(path, { method: "DELETE", headers: { "Content-Type": "application/json" } });
 }
 
+async function fetchAllPages<T>(path: string): Promise<T[]> {
+  const merged: T[] = [];
+  let nextPath = path;
+
+  for (let i = 0; i < 80 && nextPath; i += 1) {
+    const data = await apiGet<ApiList<T> & { next?: string | null }>(nextPath);
+    merged.push(...listData<T>(data));
+
+    const nextRaw = (data as { next?: string | null }).next;
+    if (!nextRaw) {
+      nextPath = "";
+      continue;
+    }
+
+    if (nextRaw.startsWith("http")) {
+      try {
+        const nextUrl = new URL(nextRaw);
+        nextPath = `${nextUrl.pathname}${nextUrl.search}`;
+      } catch {
+        nextPath = "";
+      }
+    } else {
+      nextPath = nextRaw;
+    }
+  }
+
+  return merged;
+}
+
 function fieldStyle() {
   return { width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 8, padding: "0 10px" } as const;
 }
@@ -841,8 +870,11 @@ export function HrStaffPanel() {
     join_date?: string;
     date_of_birth?: string;
     phone?: string;
+    current_address?: string;
+    permanent_address?: string;
     emergency_mobile?: string;
     staff_photo?: string;
+    other_document?: string;
     epf_no?: string;
     basic_salary?: string;
     contract_type?: string;
@@ -851,6 +883,7 @@ export function HrStaffPanel() {
     bank_mobile_no?: string;
     bank_name?: string;
     bank_branch?: string;
+    ifsc_code?: string;
     facebook_url?: string;
     twitter_url?: string;
     linkedin_url?: string;
@@ -956,6 +989,8 @@ export function HrStaffPanel() {
       bank_account_no: "bank",
       bank_name: "bank",
       bank_branch: "bank",
+      bank_mobile_no: "bank",
+      ifsc_code: "bank",
       facebook_url: "social",
       twitter_url: "social",
       linkedin_url: "social",
@@ -1041,7 +1076,12 @@ export function HrStaffPanel() {
       }
     }
     if (!validateMobile(phone)) nextErrors.phone = phone.trim().length > 12 ? "Mobile number must not exceed 12 digits." : "Mobile number must contain digits only.";
+    if (!phone.trim()) nextErrors.phone = "Mobile number is required.";
     if (!validateMobile(emergencyMobile)) nextErrors.emergency_mobile = emergencyMobile.trim().length > 12 ? "Mobile number must not exceed 12 digits." : "Mobile number must contain digits only.";
+    if (!staffPhoto.trim()) nextErrors.staff_photo = "Staff photo is required.";
+    if (!currentAddress.trim()) nextErrors.current_address = "Current address is required.";
+    if (!permanentAddress.trim()) nextErrors.permanent_address = "Permanent address is required.";
+    if (!otherDocument.trim()) nextErrors.other_document = "Signature upload is required.";
 
     if (!bankAccountName.trim()) nextErrors.bank_account_name = "Account holder name is required";
     if (!bankAccountNo.trim()) {
@@ -1052,9 +1092,9 @@ export function HrStaffPanel() {
     if (!bankName.trim()) nextErrors.bank_name = "Bank name is required";
     if (!bankBranch.trim()) nextErrors.bank_branch = "Branch name is required";
     if (!ifscCode.trim()) {
-      nextErrors.bank_branch = "IFSC code is required.";
+      nextErrors.ifsc_code = "IFSC code is required.";
     } else if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode.trim().toUpperCase())) {
-      nextErrors.bank_branch = "Enter a valid IFSC code (e.g., HDFC0001234).";
+      nextErrors.ifsc_code = "Enter a valid IFSC code (e.g., HDFC0001234).";
     }
 
     if (!basicSalary.trim()) {
@@ -1105,6 +1145,18 @@ export function HrStaffPanel() {
       setFieldErrors((prev) => ({ ...prev, phone: message }));
       return "phone";
     }
+    if (lowered.includes("current address")) {
+      setFieldErrors((prev) => ({ ...prev, current_address: message }));
+      return "current_address";
+    }
+    if (lowered.includes("permanent address")) {
+      setFieldErrors((prev) => ({ ...prev, permanent_address: message }));
+      return "permanent_address";
+    }
+    if (lowered.includes("signature") || lowered.includes("other document")) {
+      setFieldErrors((prev) => ({ ...prev, other_document: message }));
+      return "other_document";
+    }
     if (lowered.includes("account holder")) {
       setFieldErrors((prev) => ({ ...prev, bank_account_name: message }));
       return "bank_account_name";
@@ -1120,6 +1172,10 @@ export function HrStaffPanel() {
     if (lowered.includes("branch")) {
       setFieldErrors((prev) => ({ ...prev, bank_branch: message }));
       return "bank_branch";
+    }
+    if (lowered.includes("ifsc")) {
+      setFieldErrors((prev) => ({ ...prev, ifsc_code: message }));
+      return "ifsc_code";
     }
     if (lowered.includes("salary")) {
       setFieldErrors((prev) => ({ ...prev, basic_salary: message }));
@@ -1655,7 +1711,7 @@ export function HrStaffPanel() {
 
                     {/* 3) Contact Details */}
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Email *</span><input type="email" value={email} onChange={(e) => { setEmail(e.target.value); clearFieldError("email"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.email ? "#dc2626" : "var(--line)" }} />{fieldErrors.email ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.email}</span> : null}</label>
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Mobile</span><input value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 12)); clearFieldError("phone"); }} maxLength={12} style={{ ...fieldStyle(), borderColor: fieldErrors.phone ? "#dc2626" : "var(--line)" }} />{fieldErrors.phone ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.phone}</span> : null}</label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Mobile *</span><input value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 12)); clearFieldError("phone"); }} maxLength={12} style={{ ...fieldStyle(), borderColor: fieldErrors.phone ? "#dc2626" : "var(--line)" }} />{fieldErrors.phone ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.phone}</span> : null}</label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Emergency Mobile</span><input value={emergencyMobile} onChange={(e) => { setEmergencyMobile(e.target.value.replace(/\D/g, "").slice(0, 12)); clearFieldError("emergency_mobile"); }} maxLength={12} style={{ ...fieldStyle(), borderColor: fieldErrors.emergency_mobile ? "#dc2626" : "var(--line)" }} />{fieldErrors.emergency_mobile ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.emergency_mobile}</span> : null}</label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Marital Status</span><select value={maritalStatus} onChange={(e) => setMaritalStatus(e.target.value as "" | "single" | "married")} style={fieldStyle()}><option value="">Marital Status</option><option value="single">Single</option><option value="married">Married</option></select></label>
 
@@ -1673,7 +1729,7 @@ export function HrStaffPanel() {
 
                     {/* 7) File Upload */}
                     <div style={{ display: "grid", gap: 6 }}>
-                      <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Staff Photo</span>
+                      <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Staff Photo *</span>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
                         <input readOnly value={staffPhoto || "Staff Photo"} style={{ ...fieldStyle(), borderColor: fieldErrors.staff_photo ? "#dc2626" : "var(--line)" }} />
                         <button type="button" style={buttonStyle("#7c3aed")} onClick={() => staffPhotoRef.current?.click()}>Browse</button>
@@ -1743,8 +1799,8 @@ export function HrStaffPanel() {
                 <section style={{ ...boxStyle(), padding: 12 }}>
                   <h4 style={{ margin: "0 0 10px 0", fontSize: 14, textTransform: "uppercase", color: "var(--text-muted)" }}>Additional Information</h4>
                   <div style={sectionGrid}>
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Current Address</span><textarea value={currentAddress} onChange={(e) => setCurrentAddress(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Permanent Address</span><textarea value={permanentAddress} onChange={(e) => setPermanentAddress(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Current Address *</span><textarea value={currentAddress} onChange={(e) => { setCurrentAddress(e.target.value); clearFieldError("current_address"); }} style={{ width: "100%", minHeight: 84, border: `1px solid ${fieldErrors.current_address ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: 10 }} />{fieldErrors.current_address ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.current_address}</span> : null}</label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Permanent Address *</span><textarea value={permanentAddress} onChange={(e) => { setPermanentAddress(e.target.value); clearFieldError("permanent_address"); }} style={{ width: "100%", minHeight: 84, border: `1px solid ${fieldErrors.permanent_address ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: 10 }} />{fieldErrors.permanent_address ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.permanent_address}</span> : null}</label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Qualifications</span><textarea value={qualification} onChange={(e) => setQualification(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Experience</span><textarea value={experience} onChange={(e) => setExperience(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
                   </div>
@@ -1917,14 +1973,15 @@ export function HrStaffPanel() {
                 </div>
 
                 <div style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Other Documents</span>
+                  <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Signature Upload *</span>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
-                    <input readOnly value={otherDocument || "Other Document"} style={fieldStyle()} />
+                    <input readOnly value={otherDocument || "Signature Upload"} style={{ ...fieldStyle(), borderColor: fieldErrors.other_document ? "#dc2626" : "var(--line)" }} />
                     <button type="button" style={buttonStyle("#7c3aed")} onClick={() => otherDocRef.current?.click()}>Browse</button>
-                    <input ref={otherDocRef} type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; if (file) { setOtherDocFile(file); setOtherDocument(file.name); } }} />
+                    <input ref={otherDocRef} type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; if (file) { setOtherDocFile(file); setOtherDocument(file.name); clearFieldError("other_document"); } }} />
                   </div>
                   <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, DOC, DOCX, JPG, PNG</span>
                   {otherDocFile && <a href={URL.createObjectURL(otherDocFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a>}
+                  {fieldErrors.other_document ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.other_document}</span> : null}
                 </div>
               </div>
             )}
@@ -1972,7 +2029,7 @@ export function HrStaffDirectoryPanel() {
         apiGet<ApiList<Role>>("/api/v1/access-control/roles/"),
         apiGet<ApiList<Department>>("/api/v1/hr/departments/?is_active=true"),
         apiGet<ApiList<Designation>>("/api/v1/hr/designations/?is_active=true"),
-        apiGet<ApiList<Staff>>("/api/v1/hr/staff/"),
+        fetchAllPages<Staff>("/api/v1/hr/staff/"),
       ]);
 
       // Process roles
@@ -2004,7 +2061,7 @@ export function HrStaffDirectoryPanel() {
 
       // Process staff
       if (staffResult.status === "fulfilled") {
-        setRows(listData(staffResult.value));
+        setRows(staffResult.value);
       } else {
         setRows([]);
       }
@@ -2090,10 +2147,16 @@ export function HrStaffDirectoryPanel() {
   }, [rows, searchQuery, filterDepartment, filterRole, filterDesignation, filterStatus, departments]);
 
   // Pagination
-  const totalPages = Math.ceil(filteredRows.length / itemsPerPage);
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / itemsPerPage));
   const startIdx = (currentPage - 1) * itemsPerPage;
   const endIdx = startIdx + itemsPerPage;
   const paginatedRows = filteredRows.slice(startIdx, endIdx);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const toggleStaffStatus = async (staffId: number, currentStatus: string) => {
     const newStatus = currentStatus === "active" ? "inactive" : "active";
@@ -2109,11 +2172,12 @@ export function HrStaffDirectoryPanel() {
     }
   };
 
-  const deleteStaff = async (staffId: number) => {
-    if (!window.confirm("Are you sure you want to delete this staff member?")) return;
+  const deleteStaff = async (row: Staff) => {
+    const fullName = [row.first_name, row.last_name].filter(Boolean).join(" ").trim() || row.staff_no || `#${row.id}`;
+    if (!window.confirm(`Delete staff member \"${fullName}\" (${row.staff_no || "no staff no"})?`)) return;
     try {
       setLoading(true);
-      await apiDelete(`/api/v1/hr/staff/${staffId}/`);
+      await apiDelete(`/api/v1/hr/staff/${row.id}/`);
       setSuccess("Staff has been deleted successfully.");
       await load();
     } catch (err) {
@@ -2362,7 +2426,7 @@ export function HrStaffDirectoryPanel() {
                                 alignItems: "center",
                                 justifyContent: "center",
                               }}
-                              onClick={() => void deleteStaff(row.id)}
+                              onClick={() => void deleteStaff(row)}
                               disabled={loading}
                             >
                               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -2566,7 +2630,7 @@ export function HrLeaveTypesPanel() {
           <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Leave Type" : "Add Different Types of Leaves"}</h3>
           <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1.2fr 180px auto auto auto", gap: 8, alignItems: "start" }}>
             <div style={{ display: "grid", gap: 4 }}>
-              <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Leave Type Name *</label>
+              <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Leave Reason *</label>
               <input value={name} onChange={(e) => { setName(e.target.value); clearFieldError("name"); }} placeholder="e.g. Casual Leave" style={{ ...fieldStyle(), borderColor: fieldErrors.name ? "#dc2626" : "var(--line)" }} />
               {fieldErrors.name ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.name}</span> : null}
             </div>
@@ -3400,7 +3464,12 @@ export function HrLeaveDefinePanel() {
                         Edit
                       </button>
                       <button type="button" style={buttonStyle("#dc2626")} onClick={() => {
-                        if (!window.confirm("Delete this leave policy?")) return;
+                        const scopeLabel = row.student_name
+                          ? row.student_name
+                          : row.staff_name
+                            ? row.staff_name
+                            : row.role_name || "rule";
+                        if (!window.confirm(`Delete leave policy for \"${scopeLabel}\" (${row.leave_type_name || row.leave_type})?`)) return;
                         void apiDelete(`/api/v1/hr/leave-defines/${row.id}/`).then(async () => {
                           setToast("Leave policy deleted successfully.");
                           await load();
@@ -3828,7 +3897,7 @@ export function HrLeaveRequestsPanel() {
     attachment?: string;
   }>({});
   
-  const minReasonLength = 1;
+  const minReasonLength = 20;
   const maxReasonLength = 500;
   const maxFileSize = 5 * 1024 * 1024; // 5MB
   const allowedFileTypes = ["application/pdf", "image/jpeg", "image/png"];
@@ -3906,6 +3975,8 @@ export function HrLeaveRequestsPanel() {
     
     if (!reason.trim()) {
       nextErrors.reason = "Reason is required.";
+    } else if (reason.trim().length < minReasonLength) {
+      nextErrors.reason = `Reason must be at least ${minReasonLength} characters.`;
     }
     if (reason.trim() && reason.trim().length > maxReasonLength) {
       nextErrors.reason = `Reason cannot exceed ${maxReasonLength} characters.`;
@@ -3955,6 +4026,16 @@ export function HrLeaveRequestsPanel() {
     
     try {
       setSaving(true);
+      const selectedLeaveType = leaveTypes.find((item) => item.id === Number(leaveTypeId));
+      if (selectedLeaveType && fromDate && toDate) {
+        const requestedDays = Math.floor((new Date(`${toDate}T00:00:00`).getTime() - new Date(`${fromDate}T00:00:00`).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+        if (requestedDays > selectedLeaveType.max_days_per_year) {
+          const message = "Leave limit exceeded";
+          setFieldErrors((prev) => ({ ...prev, toDate: message }));
+          setError(message);
+          return;
+        }
+      }
       const payload = {
         ...(canSelectStaff && staffId ? { staff: Number(staffId) } : {}),
         leave_type: Number(leaveTypeId),
@@ -3987,10 +4068,12 @@ export function HrLeaveRequestsPanel() {
     }
   };
 
-  const deletePending = async (id: number) => {
+  const deletePending = async (row: LeaveRequest) => {
+    const leaveTypeName = leaveTypes.find((item) => item.id === row.leave_type)?.name || `#${row.leave_type}`;
+    if (!window.confirm(`Delete pending leave request for ${leaveTypeName} (${row.from_date} to ${row.to_date})?`)) return;
     try {
       setError("");
-      await apiDelete(`/api/v1/hr/leave-requests/${id}/`);
+      await apiDelete(`/api/v1/hr/leave-requests/${row.id}/`);
       await load();
     } catch {
       setError("Unable to delete leave request.");
@@ -4022,7 +4105,7 @@ export function HrLeaveRequestsPanel() {
       return;
     }
     if (action === "delete" && row.status === "pending") {
-      await deletePending(row.id);
+      await deletePending(row);
       return;
     }
     if (action === "approve" && row.status === "pending" && canModerateLeave) {
@@ -4304,6 +4387,7 @@ export function HrPayrollPanel() {
   const [staffRows, setStaffRows] = useState<Staff[]>([]);
   const [summary, setSummary] = useState<PayrollSummary | null>(null);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
   const [staffId, setStaffId] = useState("");
   const [month, setMonth] = useState(String(new Date().getMonth() + 1));
@@ -4336,8 +4420,19 @@ export function HrPayrollPanel() {
         apiGet<ApiList<Staff>>("/api/v1/hr/staff/?status=active"),
         apiGet<PayrollSummary>(`/api/v1/hr/payroll/summary/${suffix}`),
       ]);
-      setRows(listData(payrollData));
-      setStaffRows(listData(staffData));
+      const loadedStaffRows = listData(staffData);
+      const loadedRows = listData(payrollData);
+      loadedRows.sort((a, b) => {
+        if (a.payroll_year !== b.payroll_year) return a.payroll_year - b.payroll_year;
+        if (a.payroll_month !== b.payroll_month) return a.payroll_month - b.payroll_month;
+        const staffA = loadedStaffRows.find((item) => item.id === a.staff);
+        const staffB = loadedStaffRows.find((item) => item.id === b.staff);
+        const nameA = `${staffA?.first_name || ""} ${staffA?.last_name || ""}`.trim();
+        const nameB = `${staffB?.first_name || ""} ${staffB?.last_name || ""}`.trim();
+        return nameA.localeCompare(nameB, undefined, { sensitivity: "base", numeric: true });
+      });
+      setRows(loadedRows);
+      setStaffRows(loadedStaffRows);
       setSummary(summaryData);
     } catch {
       setError("Unable to load payroll records.");
@@ -4369,6 +4464,7 @@ export function HrPayrollPanel() {
     }
     try {
       setError("");
+      setSuccess("");
       await apiPost("/api/v1/hr/payroll/", {
         staff: Number(staffId),
         payroll_month: Number(month),
@@ -4381,6 +4477,7 @@ export function HrPayrollPanel() {
       setBasicSalary("0.00");
       setAllowance("0.00");
       setDeduction("0.00");
+      setSuccess("Payroll record saved successfully.");
       await load();
     } catch {
       setError("Unable to save payroll record.");
@@ -4389,7 +4486,10 @@ export function HrPayrollPanel() {
 
   const markPaid = async (id: number) => {
     try {
+      setError("");
+      setSuccess("");
       await apiPost(`/api/v1/hr/payroll/${id}/mark-paid/`, {});
+      setSuccess("Payroll marked as paid.");
       await load();
     } catch {
       setError("Unable to mark payroll as paid.");
@@ -4415,6 +4515,7 @@ export function HrPayrollPanel() {
             <button type="submit" style={buttonStyle()}>Save</button>
           </form>
           {error && <p style={{ color: "var(--warning)", marginTop: 8 }}>{error}</p>}
+          {success && <p style={{ color: "#16a34a", marginTop: 8 }}>{success}</p>}
         </div>
 
         <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
@@ -4458,7 +4559,7 @@ export function HrPayrollPanel() {
                 const staff = staffRows.find((item) => item.id === row.staff);
                 return (
                   <tr key={row.id}>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{rows.length - index}</td>
+                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{index + 1}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{staff ? `${staff.first_name} ${staff.last_name}` : row.staff}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.payroll_month}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.payroll_year}</td>

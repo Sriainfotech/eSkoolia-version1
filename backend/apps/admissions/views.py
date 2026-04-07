@@ -1,5 +1,6 @@
 from django.db import IntegrityError, transaction
 from rest_framework import mixins, permissions, status, viewsets
+from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -90,6 +91,7 @@ class DuplicateSafeWriteMixin:
 
 class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = AdmissionInquirySerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     permission_codes = {
         "list": "admin_section.admission_query.view",
@@ -209,6 +211,7 @@ class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
 
 class VisitorBookEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = VisitorBookEntrySerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     permission_codes = {
@@ -270,6 +273,7 @@ class VisitorBookEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
 
 class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = ComplaintEntrySerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     permission_codes = {
@@ -300,6 +304,7 @@ class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
 
 class PostalReceiveEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = PostalReceiveEntrySerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     permission_codes = {
@@ -330,6 +335,7 @@ class PostalReceiveEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, 
 
 class PostalDispatchEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = PostalDispatchEntrySerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     permission_codes = {

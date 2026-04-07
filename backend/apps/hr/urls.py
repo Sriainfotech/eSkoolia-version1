@@ -9,12 +9,14 @@ from .views import (
     PayrollRecordViewSet,
     StaffAttendanceViewSet,
     StaffViewSet,
+    StaffDocumentViewSet,
 )
 
 router = DefaultRouter()
 router.register("departments", DepartmentViewSet, basename="hr-department")
 router.register("designations", DesignationViewSet, basename="hr-designation")
 router.register("staff", StaffViewSet, basename="hr-staff")
+router.register("staff-documents", StaffDocumentViewSet, basename="hr-staff-document")
 router.register("leave-types", LeaveTypeViewSet, basename="hr-leave-type")
 router.register("leave-defines", LeaveDefineViewSet, basename="hr-leave-define")
 router.register("leave-requests", LeaveRequestViewSet, basename="hr-leave-request")

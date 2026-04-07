@@ -65,7 +65,7 @@ class AcademicYearSerializer(serializers.ModelSerializer):
             if self.instance:
                 duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
             if duplicate_qs.exists():
-                errors.setdefault("year_name", []).append("Academic year already exists for this school.")
+                errors.setdefault("year_name", []).append("Academic year already exists")
 
             overlap_qs = AcademicYear.objects.filter(
                 school_id=school_id,
@@ -93,10 +93,17 @@ class AcademicYearSerializer(serializers.ModelSerializer):
 
 
 class SectionSerializer(serializers.ModelSerializer):
+    NAME_REGEX = re.compile(r"^[A-Za-z0-9 ]+$")
+    MAX_CAPACITY = 200
+    MIN_CAPACITY = 1
+    MAX_SECTIONS_PER_CLASS = 26
+
     def validate_name(self, value):
         cleaned = (value or "").strip()
         if not cleaned:
             raise serializers.ValidationError("Section name is required.")
+        if not self.NAME_REGEX.fullmatch(cleaned):
+            raise serializers.ValidationError("Section name can contain only alphanumeric characters.")
         return cleaned
 
     def validate(self, attrs):
@@ -104,6 +111,18 @@ class SectionSerializer(serializers.ModelSerializer):
 
         school_class = attrs.get("school_class") or getattr(self.instance, "school_class", None)
         name = (attrs.get("name") or getattr(self.instance, "name", "") or "").strip()
+        capacity = attrs.get("capacity", getattr(self.instance, "capacity", None))
+
+        if capacity in (None, ""):
+            raise serializers.ValidationError({"capacity": "Enter valid section capacity"})
+        try:
+            capacity_value = int(capacity)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError({"capacity": "Enter valid section capacity"})
+
+        if capacity_value < self.MIN_CAPACITY or capacity_value > self.MAX_CAPACITY:
+            raise serializers.ValidationError({"capacity": "Enter valid section capacity"})
+        attrs["capacity"] = capacity_value
 
         # Updates should always target one normalized section value.
         if self.instance is not None and "," in name:
@@ -115,6 +134,11 @@ class SectionSerializer(serializers.ModelSerializer):
                 qs = qs.exclude(pk=self.instance.pk)
             if qs.exists():
                 raise serializers.ValidationError({"name": "Section name already exists"})
+
+        if school_class and self.instance is None:
+            current_count = Section.objects.filter(school_class=school_class).count()
+            if current_count >= self.MAX_SECTIONS_PER_CLASS:
+                raise serializers.ValidationError({"name": "Section limit reached for this class."})
 
         return attrs
 
@@ -137,11 +161,6 @@ class ClassSerializer(serializers.ModelSerializer):
 
     def validate_name(self, value):
         cleaned = (value or "").strip()
-        if re.fullmatch(r"\d+", cleaned):
-            if int(cleaned) > 12:
-                raise serializers.ValidationError(
-                    "Numeric class names above 12 are not allowed. Use 1-12 or names like Nursery/LKG/UKG."
-                )
 
         school_id = self._school_id()
         if school_id and cleaned:
@@ -154,8 +173,6 @@ class ClassSerializer(serializers.ModelSerializer):
         return cleaned
 
     def validate_numeric_order(self, value):
-        if value is not None and value > 12:
-            raise serializers.ValidationError("Class order cannot be greater than 12.")
         return value
 
     class Meta:
@@ -209,9 +226,9 @@ class SubjectSerializer(serializers.ModelSerializer):
         elif len(code) < 3 or len(code) > 10:
             errors.setdefault("code", []).append("Subject code length must be between 3 and 10 characters.")
 
-        # Type rules: only Compulsory or Optional.
-        if subject_type not in {"compulsory", "optional"}:
-            errors.setdefault("subject_type", []).append("Subject type must be either Compulsory or Optional.")
+        # Type rules: Compulsory, Optional, or Elective.
+        if subject_type not in {"compulsory", "optional", "elective"}:
+            errors.setdefault("subject_type", []).append("Subject type must be Compulsory, Optional, or Elective.")
 
         if school_id and name:
             name_qs = Subject.objects.filter(school_id=school_id, name__iexact=name)
@@ -249,7 +266,7 @@ class ClassPeriodSerializer(serializers.ModelSerializer):
 
 
 class ClassRoomSerializer(serializers.ModelSerializer):
-    ROOM_NO_REGEX = re.compile(r"^[A-Z]{1,5}-\d{1,4}$")
+    ROOM_NO_REGEX = re.compile(r"^[A-Z0-9][A-Z0-9\- ]{0,49}$")
 
     def _school_id(self):
         request = self.context.get("request")
@@ -271,7 +288,7 @@ class ClassRoomSerializer(serializers.ModelSerializer):
         if not room_no:
             errors.setdefault("room_no", []).append("Room no is required")
         elif not self.ROOM_NO_REGEX.fullmatch(room_no):
-            errors.setdefault("message", []).append("Invalid room number format")
+            errors.setdefault("room_no", []).append("Enter a valid room number.")
 
         if capacity in (None, ""):
             errors.setdefault("capacity", []).append("Capacity is required")

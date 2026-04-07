@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { PaginationControls } from "@/components/common/PaginationControls";
+import { usePersistentPagination } from "@/hooks/usePersistentPagination";
 
 type Option = { id: number; name: string };
 type SectionOption = { id: number; name: string; class_id: number };
@@ -31,6 +33,8 @@ type UserResponse = {
 };
 
 export function DueFeesLoginPermissionPanel() {
+  const { page, pageSize, setPage, setPageSize } = usePersistentPagination("roles.due-fees-login-permission", 1, 10);
+
   const [classes, setClasses] = useState<Option[]>([]);
   const [sections, setSections] = useState<SectionOption[]>([]);
 
@@ -50,6 +54,19 @@ export function DueFeesLoginPermissionPanel() {
     if (!classId) return [];
     return sections.filter((s) => String(s.class_id) === classId);
   }, [sections, classId]);
+
+  const totalCount = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const pagedRows = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return rows.slice(start, start + pageSize);
+  }, [rows, page, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages, setPage]);
 
   const loadCriteria = async () => {
     setLoadingCriteria(true);
@@ -82,6 +99,7 @@ export function DueFeesLoginPermissionPanel() {
     }
 
     setLoading(true);
+    setPage(1);
     setError("");
     setMessage("");
     try {
@@ -216,7 +234,7 @@ export function DueFeesLoginPermissionPanel() {
                 <td colSpan={8} style={{ padding: 10, color: "var(--text-muted)" }}>Loading...</td>
               </tr>
             )}
-            {!loading && rows.map((row) => (
+            {!loading && pagedRows.map((row) => (
               <tr key={`${row.admission_no}-${row.roll_no || ""}`}>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.admission_no || "-"}</td>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.roll_no || "-"}</td>
@@ -255,6 +273,19 @@ export function DueFeesLoginPermissionPanel() {
           </tbody>
         </table>
       </div>
+
+      <PaginationControls
+        currentPage={page}
+        totalPages={totalPages}
+        pageSize={pageSize}
+        totalItems={totalCount}
+        loading={loading}
+        onPageChange={(nextPage) => setPage(nextPage)}
+        onPageSizeChange={(nextSize) => {
+          setPageSize(nextSize);
+          setPage(1);
+        }}
+      />
     </section>
   );
 }

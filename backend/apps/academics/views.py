@@ -2,11 +2,14 @@ from datetime import datetime, timedelta
 
 from django.db import transaction
 from django.db.models import Q
+from django.core.files.storage import default_storage
 from rest_framework import permissions, status, viewsets
+from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser, JSONParser
 from rest_framework.response import Response
+from apps.access_control.models import UserRole
 from apps.hr.models import Staff
 from apps.users.models import User
 from .models import (
@@ -93,6 +96,7 @@ class TenantScopedModelViewSet(viewsets.ModelViewSet):
 
 class ClassSubjectAssignmentViewSet(TenantScopedModelViewSet):
     model = ClassSubjectAssignment
+    pagination_class = ApiPageNumberPagination
     serializer_class = ClassSubjectAssignmentSerializer
     permission_codes = {"*": "academics.core_setup.view"}
 
@@ -169,6 +173,7 @@ class ClassSubjectAssignmentViewSet(TenantScopedModelViewSet):
 
 class ClassTeacherAssignmentViewSet(TenantScopedModelViewSet):
     model = ClassTeacherAssignment
+    pagination_class = ApiPageNumberPagination
     serializer_class = ClassTeacherAssignmentSerializer
     permission_codes = {"*": "academics.core_setup.view"}
 
@@ -509,11 +514,10 @@ class UploadedContentViewSet(TenantScopedModelViewSet):
         content_type = self.request.query_params.get("content_type")
 
         if class_id not in (None, ""):
-            queryset = queryset.filter(Q(class_id_ref_id=class_id) | Q(available_for_all_classes=True))
+            queryset = queryset.filter(class_id_ref_id=class_id)
 
         if section_id not in (None, ""):
-            # Include class-level rows (no specific section) so section searches can still see them.
-            queryset = queryset.filter(Q(section_id_ref_id=section_id) | Q(section_id_ref__isnull=True))
+            queryset = queryset.filter(section_id_ref_id=section_id)
 
         if content_type not in (None, ""):
             queryset = queryset.filter(content_type=content_type)
@@ -523,6 +527,18 @@ class UploadedContentViewSet(TenantScopedModelViewSet):
     def perform_create(self, serializer):
         school = self.request.user.school or getattr(self.request, "school", None)
         serializer.save(school=school, created_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        file_path = (instance.upload_file or "").strip()
+        super().perform_destroy(instance)
+        if not file_path:
+            return
+        normalized = file_path.lstrip("/")
+        try:
+            if default_storage.exists(normalized):
+                default_storage.delete(normalized)
+        except Exception:
+            pass
 
     def _normalized_errors(self, serializer_errors):
         if isinstance(serializer_errors, dict):
@@ -674,8 +690,11 @@ class LessonViewSet(TenantScopedModelViewSet):
             groups.append(
                 {
                     "class_id": lesson.school_class_id,
+                    "class_name": getattr(lesson.school_class, "name", ""),
                     "section_id": lesson.section_id,
+                    "section_name": getattr(lesson.section, "name", "") if lesson.section_id else "",
                     "subject_id": lesson.subject_id,
+                    "subject_name": getattr(lesson.subject, "name", ""),
                     "items": self.get_serializer(group_rows, many=True).data,
                 }
             )
@@ -1049,11 +1068,20 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
                 return Response([])
             school_id = user.school_id
 
-        # Resolve teacher users from role mapping and staff directory (PHP-style source).
-        role_teacher_qs = queryset.filter(user_roles__role__name__icontains="teacher")
+        # Resolve teacher users from explicit teacher role mapping and staff directory.
+        teacher_role_names = {"teacher", "active teacher", "class teacher", "subject teacher", "assistant teacher"}
+
+        def normalize_role_name(value):
+            return " ".join((value or "").strip().lower().replace("_", " ").replace("-", " ").split())
+
+        role_links = UserRole.objects.select_related("role", "user")
         if school_id:
-            role_teacher_qs = role_teacher_qs.filter(Q(school_id=school_id) | Q(staff_profile__school_id=school_id))
-        teacher_user_ids = set(role_teacher_qs.values_list("id", flat=True))
+            role_links = role_links.filter(Q(user__school_id=school_id) | Q(user__staff_profile__school_id=school_id))
+
+        teacher_user_ids = set()
+        for link in role_links:
+            if normalize_role_name(getattr(link.role, "name", "")) in teacher_role_names:
+                teacher_user_ids.add(link.user_id)
 
         staff_qs = Staff.objects.filter(status=Staff.STATUS_ACTIVE).filter(
             Q(role__name__icontains="teacher") | Q(designation__name__icontains="teacher")

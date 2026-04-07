@@ -5,6 +5,7 @@ from django.db.models import Sum
 from django.db.models.functions import Coalesce
 from django.utils.dateparse import parse_date
 from rest_framework import permissions, viewsets
+from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
@@ -54,6 +55,7 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
 class ChartOfAccountViewSet(SchoolScopedModelViewSet):
     queryset = ChartOfAccount.objects.select_related("school").all()
     serializer_class = ChartOfAccountSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["account_type", "is_active"]
     search_fields = ["code", "name", "description"]
     ordering_fields = ["code", "name", "created_at"]
@@ -63,6 +65,7 @@ class ChartOfAccountViewSet(SchoolScopedModelViewSet):
 class BankAccountViewSet(SchoolScopedModelViewSet):
     queryset = BankAccount.objects.select_related("school").all()
     serializer_class = BankAccountSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["is_active", "bank_name"]
     search_fields = ["name", "account_number", "bank_name", "branch"]
     ordering_fields = ["name", "current_balance", "created_at"]

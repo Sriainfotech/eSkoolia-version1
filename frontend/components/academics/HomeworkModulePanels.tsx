@@ -1,7 +1,10 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { API_BASE_URL } from "@/lib/api";
+import { sortAcademicsClasses } from "@/lib/classOrdering";
 
 type AcademicYear = { id: number; name: string; is_current: boolean };
 type SchoolClass = { id: number; name: string };
@@ -64,8 +67,23 @@ function isPaginated<T>(value: unknown): value is PaginatedResponse<T> {
   return !!value && typeof value === "object" && "results" in value && "count" in value;
 }
 
+function constructFileUrl(filePath: string | undefined): string {
+  if (!filePath) return "";
+  // If already a full URL, return as-is
+  if (filePath.startsWith("http://") || filePath.startsWith("https://")) {
+    return filePath;
+  }
+  // If starts with /, prepend API_BASE_URL
+  if (filePath.startsWith("/")) {
+    return `${API_BASE_URL}${filePath}`;
+  }
+  // Otherwise prepend API_BASE_URL/media/ for uploaded files
+  return `${API_BASE_URL}/media/${filePath}`;
+}
+
 function extractHomeworkFieldErrors(details: unknown, fallbackMessage: string): Record<string, string> {
   const errors: Record<string, string> = {};
+
   if (!details || typeof details !== "object") return errors;
 
   const payload = details as Record<string, unknown>;
@@ -182,7 +200,7 @@ function useHomeworkLookups() {
         apiGet<ApiList<Student>>("/api/v1/students/students/"),
       ]);
       setYears(listData(yearData));
-      setClasses(listData(classData));
+      setClasses(sortAcademicsClasses(listData(classData)));
       setSections(listData(sectionData));
       setSubjects(listData(subjectData));
       setStudents(listData(studentData));
@@ -194,6 +212,7 @@ function useHomeworkLookups() {
 }
 
 export function HomeworkAddPagePanel() {
+  const router = useRouter();
   const { years, classes, sections, subjects } = useHomeworkLookups();
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -272,9 +291,9 @@ export function HomeworkAddPagePanel() {
         });
       }
       setSuccess("Homework created successfully.");
-      setDescription("");
-      setFile("");
-      setUploadFile(null);
+      setTimeout(() => {
+        router.push("/academics/homework-list");
+      }, 1000);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unable to create homework.";
       const details = err && typeof err === "object" && "details" in err ? (err as { details?: unknown }).details : undefined;
@@ -411,6 +430,7 @@ export function HomeworkListPagePanel() {
   const [subjectId, setSubjectId] = useState("");
 
   const [selectedHomework, setSelectedHomework] = useState<Homework | null>(null);
+  const [viewingHomework, setViewingHomework] = useState<Homework | null>(null);
   const [evaluationDate, setEvaluationDate] = useState(new Date().toISOString().slice(0, 10));
   const [drafts, setDrafts] = useState<Record<number, EvalDraft>>({});
   const [savingEval, setSavingEval] = useState(false);
@@ -550,6 +570,10 @@ export function HomeworkListPagePanel() {
     }
   };
 
+  const openViewHomework = (homework: Homework) => {
+    setViewingHomework(homework);
+  };
+
   return (
     <div className="legacy-panel">
       <LegacyBreadcrumb title="Homework List" pageLabel="Homework List" />
@@ -614,7 +638,8 @@ export function HomeworkListPagePanel() {
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.evaluation_date || "-"}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.description}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" }}>
-                      <button type="button" onClick={() => void openEvaluation(row)} style={buttonStyle("#2563eb")}>Evaluation</button>
+                      <button type="button" onClick={() => void openViewHomework(row)} style={buttonStyle("#059669")}>View</button>
+                      <button type="button" onClick={() => void openEvaluation(row)} style={{ ...buttonStyle("#2563eb"), marginLeft: 8 }}>Evaluation</button>
                       <button type="button" onClick={() => void deleteHomework(row.id)} style={{ ...buttonStyle("#dc2626"), marginLeft: 8 }}>Delete</button>
                     </td>
                   </tr>
@@ -633,6 +658,102 @@ export function HomeworkListPagePanel() {
               </div>
             ) : null}
           </div>
+
+          {viewingHomework && (
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: "rgba(0, 0, 0, 0.5)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1000,
+              }}
+              onClick={(e) => {
+                if (e.target === e.currentTarget) setViewingHomework(null);
+              }}
+            >
+              <div
+                style={{
+                  background: "#fff",
+                  borderRadius: "var(--radius)",
+                  padding: 24,
+                  maxWidth: 600,
+                  maxHeight: "90vh",
+                  overflowY: "auto",
+                  boxShadow: "0 20px 25px rgba(0, 0, 0, 0.15)",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                  <h3 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>📚 Homework Details</h3>
+                  <button
+                    type="button"
+                    onClick={() => setViewingHomework(null)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      fontSize: 24,
+                      cursor: "pointer",
+                      padding: 0,
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 16, marginBottom: 16 }}>
+                  <div>
+                    <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginBottom: 6, fontWeight: 500 }}>Homework Date</label>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{viewingHomework.homework_date}</div>
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginBottom: 6, fontWeight: 500 }}>Submission Date</label>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{viewingHomework.submission_date}</div>
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginBottom: 6, fontWeight: 500 }}>Marks</label>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{viewingHomework.marks}</div>
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginBottom: 6, fontWeight: 500 }}>Evaluation Date</label>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{viewingHomework.evaluation_date || "-"}</div>
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginBottom: 6, fontWeight: 500 }}>Description</label>
+                  <div style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word", background: "#f8fafc", padding: 12, borderRadius: 6, maxHeight: 200, overflowY: "auto" }}>
+                    {viewingHomework.description}
+                  </div>
+                </div>
+
+                {viewingHomework.file && (
+                  <div style={{ marginBottom: 16 }}>
+                    <label style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginBottom: 6, fontWeight: 500 }}>Attachment</label>
+                    <a
+                      href={constructFileUrl(viewingHomework.file)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: "var(--primary)", textDecoration: "underline", fontSize: 13 }}
+                    >
+                      📎 {viewingHomework.file}
+                    </a>
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
+                  <button type="button" onClick={() => setViewingHomework(null)} style={buttonStyle("#6b7280")}>
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {selectedHomework && (
             <div className="white-box" style={{ ...boxStyle(), marginTop: 12 }}>

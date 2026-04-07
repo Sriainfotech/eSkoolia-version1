@@ -314,33 +314,117 @@ class StudentSerializer(serializers.ModelSerializer):
         "current_section": "Section is required",
     }
 
+    CLASS_AGE_RULES = {
+        1: (5, 7),
+        2: (6, 8),
+        3: (7, 9),
+        4: (8, 10),
+        5: (9, 11),
+        6: (10, 12),
+        7: (11, 13),
+        8: (12, 14),
+        9: (13, 15),
+        10: (14, 16),
+        11: (15, 17),
+        12: (16, 18),
+    }
+
     def _validate_plain_text_name(self, value, field_label):
         cleaned = strip_tags((value or "").strip())
         if cleaned != (value or "").strip():
             raise serializers.ValidationError(f"{field_label} cannot contain HTML tags.")
         return value
 
+    def _extract_class_grade(self, selected_class):
+        if not selected_class:
+            return None
+        class_name = str(getattr(selected_class, "name", "") or "")
+        match = re.search(r"\d+", class_name)
+        if not match:
+            return None
+        return int(match.group())
+
+    def _validate_dob_for_class(self, dob, selected_class):
+        if not dob:
+            return None
+        age_years = (date.today() - dob).days / 365.25
+        if age_years < 3:
+            return "Student must be at least 3 years old"
+
+        grade = self._extract_class_grade(selected_class)
+        if grade and grade in self.CLASS_AGE_RULES:
+            min_age, max_age = self.CLASS_AGE_RULES[grade]
+            if age_years < min_age or age_years > max_age:
+                return f"Selected DOB does not match the required age for the selected class (Expected age: {min_age}-{max_age} years)"
+        return None
+
     def validate_first_name(self, value):
         first_name = self._validate_plain_text_name(value, "First name").strip()
-        if not re.fullmatch(r"[A-Za-z ]+", first_name):
-            raise serializers.ValidationError("First name can only contain letters and spaces")
+        if not re.fullmatch(r"[A-Za-z\s'-]+", first_name):
+            raise serializers.ValidationError("First name can only contain letters, spaces, and hyphens")
         return first_name
 
     def validate_last_name(self, value):
         cleaned = self._validate_plain_text_name(value, "Last name")
         if not cleaned:
             return ""
-        if not re.fullmatch(r"[A-Za-z ]+", cleaned.strip()):
-            raise serializers.ValidationError("Last name can only contain letters and spaces")
+        if not re.fullmatch(r"[A-Za-z\s'-]+", cleaned.strip()):
+            raise serializers.ValidationError("Last name can only contain letters, spaces, and hyphens")
         return cleaned.strip()
+
+    def validate_admission_no(self, value):
+        admission_no = str(value or "").strip()
+        if not admission_no:
+            raise serializers.ValidationError("Admission number is required")
+        if not re.fullmatch(r"[A-Za-z0-9]+", admission_no):
+            raise serializers.ValidationError("Admission/Roll number should contain only numbers (or alphanumeric if needed)")
+
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        if school_id:
+            queryset = Student.objects.filter(school_id=school_id, admission_no__iexact=admission_no)
+            if self.instance:
+                queryset = queryset.exclude(id=self.instance.id)
+            if queryset.exists():
+                raise serializers.ValidationError("Admission number already exists")
+        return admission_no
+
+    def validate_roll_no(self, value):
+        roll_no = str(value or "").strip()
+        if not roll_no:
+            return ""
+        if not re.fullmatch(r"\d+", roll_no):
+            raise serializers.ValidationError("Roll number must contain numbers only")
+        return roll_no
 
     def validate_phone(self, value):
         phone = str(value or "").strip()
         if not phone:
             return ""
-        if not re.fullmatch(r"\+?\d{7,15}", phone):
-            raise serializers.ValidationError("Please enter a valid phone number")
+        if not re.fullmatch(r"\d{10}", phone):
+            raise serializers.ValidationError("Phone number must be exactly 10 digits")
         return phone
+
+    def validate_pincode(self, value):
+        pincode = str(value or "").strip()
+        if not pincode:
+            return ""
+        if not re.fullmatch(r"\d{6}", pincode):
+            raise serializers.ValidationError("Pincode must be exactly 6 digits")
+        return pincode
+
+    def validate_date_of_birth(self, value):
+        if value and value > date.today():
+            raise serializers.ValidationError("Date of birth cannot be in the future")
+        return value
+
+    def validate_dob(self, value, selected_class=None):
+        if value and value > date.today():
+            raise serializers.ValidationError("Date of birth cannot be in the future")
+        dob_error = self._validate_dob_for_class(value, selected_class)
+        if dob_error:
+            raise serializers.ValidationError(dob_error)
+        return value
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
@@ -354,12 +438,11 @@ class StudentSerializer(serializers.ModelSerializer):
 
         dob = attrs.get("date_of_birth") or getattr(self.instance, "date_of_birth", None)
         if dob:
-            if dob > date.today():
-                errors["dob"] = "Date of birth cannot be in the future"
-            else:
-                age_years = (date.today() - dob).days / 365.25
-                if age_years < 3:
-                    errors["dob"] = "Student must be at least 3 years old"
+            selected_class = attrs.get("current_class") or getattr(self.instance, "current_class", None)
+            try:
+                self.validate_dob(dob, selected_class=selected_class)
+            except serializers.ValidationError as exc:
+                errors["dob"] = str(exc.detail[0]) if isinstance(exc.detail, list) else str(exc.detail)
 
         selected_class = attrs.get("current_class") or getattr(self.instance, "current_class", None)
         selected_section = attrs.get("current_section") or getattr(self.instance, "current_section", None)
@@ -386,28 +469,12 @@ class StudentSerializer(serializers.ModelSerializer):
             errors["custom_gender"] = "Custom gender is required"
 
         phone = (attrs.get("phone") or getattr(self.instance, "phone", "")).strip()
-        email = (attrs.get("email") or getattr(self.instance, "email", "")).strip()
-        if not phone and not email:
-            errors["phone"] = "At least one contact method (phone or email) is required"
+        if not phone:
+            errors["phone"] = "Phone number is required"
 
         if errors:
             raise serializers.ValidationError(errors)
         return attrs
-
-    def validate_admission_no(self, value):
-        admission_no = value.strip()
-        if not admission_no:
-            raise serializers.ValidationError("Admission number is required")
-
-        request = self.context.get("request")
-        school_id = getattr(getattr(request, "user", None), "school_id", None)
-        if school_id:
-            queryset = Student.objects.filter(school_id=school_id, admission_no__iexact=admission_no)
-            if self.instance:
-                queryset = queryset.exclude(id=self.instance.id)
-            if queryset.exists():
-                raise serializers.ValidationError("Admission number already exists")
-        return admission_no
 
     def to_internal_value(self, data):
         mutable = dict(data)

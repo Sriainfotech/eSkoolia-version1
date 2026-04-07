@@ -1,8 +1,26 @@
 from rest_framework import serializers
-from .models import StudentAttendance, SubjectAttendance
+from django.utils.timezone import now
+from datetime import date
+from .models import StudentAttendance, SubjectAttendance, ATTENDANCE_TYPE_CHOICES
 
 
 class StudentAttendanceSerializer(serializers.ModelSerializer):
+    def validate_attendance_type(self, value):
+        valid_types = [choice[0] for choice in ATTENDANCE_TYPE_CHOICES]
+        if value not in valid_types:
+            raise serializers.ValidationError(f"Invalid attendance status. Must be one of {valid_types}")
+        return value
+
+    def validate_notes(self, value):
+        if len(value) > 250:
+            raise serializers.ValidationError("Note cannot exceed 250 characters")
+        return value
+
+    def validate_attendance_date(self, value):
+        if value > date.today():
+            raise serializers.ValidationError("Attendance cannot be marked for future dates")
+        return value
+
     def validate(self, attrs):
         request = self.context.get("request")
         school = attrs.get("school") or getattr(getattr(request, "user", None), "school", None)
@@ -23,7 +41,14 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
                 queryset = queryset.exclude(id=self.instance.id)
             if queryset.exists():
                 raise serializers.ValidationError(
-                    {"detail": "Attendance already exists for this student on the selected date."}
+                    {"detail": "Attendance already exists for this student on the selected date. You can update the existing attendance record."}
+                )
+
+        # Check if trying to edit locked attendance
+        if self.instance and getattr(self.instance, 'is_locked', False):
+            if not (hasattr(request, 'user') and request.user.is_superuser):
+                raise serializers.ValidationError(
+                    {"detail": "This attendance record is locked and cannot be edited."}
                 )
 
         return attrs
@@ -40,10 +65,13 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
             "attendance_date",
             "attendance_type",
             "notes",
-            "created_at",
+            "is_locked",
+            "marked_by",
+            "marked_at",
+            "updated_by",
             "updated_at",
         ]
-        read_only_fields = ["id", "school", "created_at", "updated_at"]
+        read_only_fields = ["id", "school", "marked_by", "marked_at", "updated_by", "updated_at"]
 
 
 class BulkAttendanceItemSerializer(serializers.Serializer):

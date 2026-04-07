@@ -1,228 +1,313 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card } from "@/components/ui/card";
+import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
+import { PaginationControls } from "@/components/common/PaginationControls";
+import { ConfirmationModal } from "@/components/common/ConfirmationModal";
+import { usePersistentPagination } from "@/hooks/usePersistentPagination";
 
 type ItemCategory = {
   id: number;
   title: string;
-  description?: string;
-  is_active: boolean;
+  name?: string;
   created_at: string;
 };
 
-export function ItemCategoryPanel() {
-  const [categories, setCategories] = useState<ItemCategory[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
-  const [showForm, setShowForm] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [formData, setFormData] = useState({ title: "", description: "" });
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(10);
+function boxStyle() {
+  return {
+    background: "var(--surface)",
+    border: "1px solid var(--line)",
+    borderRadius: "var(--radius)",
+    padding: 14,
+  } as const;
+}
 
-  const loadCategories = async () => {
+function inputStyle(error = false) {
+  return {
+    width: "100%",
+    height: 40,
+    border: `1px solid ${error ? "#dc2626" : "var(--line)"}`,
+    borderRadius: 8,
+    padding: "0 10px",
+    boxShadow: error ? "0 0 0 2px rgba(220, 38, 38, 0.15)" : "none",
+  } as const;
+}
+
+function buttonStyle(color = "var(--primary)") {
+  return {
+    height: 36,
+    border: `1px solid ${color}`,
+    background: color,
+    color: "#fff",
+    borderRadius: 8,
+    padding: "0 12px",
+    cursor: "pointer",
+    fontSize: 13,
+    textDecoration: "none",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+  } as const;
+}
+
+export function ItemCategoryPanel() {
+  const { page, pageSize, setPage, setPageSize } = usePersistentPagination("item-categories.list", 1, 10);
+  const [itemCategories, setItemCategories] = useState<ItemCategory[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [fieldError, setFieldError] = useState("");
+  const [deleteCandidate, setDeleteCandidate] = useState<ItemCategory | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [search, setSearch] = useState("");
+
+  const [formTitle, setFormTitle] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  const loadItemCategories = async (targetPage = page, targetPageSize = pageSize) => {
+    setLoading(true);
+    setError("");
     try {
-      setLoading(true);
-      setError("");
-      const data = await apiRequestWithRefresh<any>("/api/v1/core/item-categories/", {
-        headers: { "Content-Type": "application/json" },
-      });
-      const list = Array.isArray(data) ? data : (data?.results || []);
-      setCategories(list);
-    } catch (err) {
-      setError("Unable to load categories. " + (err instanceof Error ? err.message : ""));
-      console.error(err);
+      const query = buildPaginationQuery(targetPage, targetPageSize, { search: search.trim() || undefined });
+      const data = await apiRequestWithRefresh<ListApiResponse<ItemCategory>>(`/api/v1/core/item-categories/?${query}`);
+      const items = extractListData(data);
+      const meta = extractPaginationMeta(data);
+      setItemCategories(items);
+      setTotalCount(meta?.count ?? items.length);
+    } catch {
+      setError("Unable to load item categories.");
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    void loadCategories();
-  }, []);
+    const handle = window.setTimeout(() => {
+      void loadItemCategories();
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [page, pageSize, search]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+
+  const validateForm = (): boolean => {
+    const trimmedTitle = formTitle.trim();
+    if (!trimmedTitle) {
+      setFieldError("Item category name is required.");
+      return false;
+    }
+    if (trimmedTitle.length > 100) {
+      setFieldError("Item category name must not exceed 100 characters.");
+      return false;
+    }
+    return true;
+  };
+
+  const resetForm = () => {
+    setEditingId(null);
+    setFormTitle("");
+    setFieldError("");
+  };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+
+    if (!validateForm()) {
+      setError("Please fix the highlighted field.");
+      setSuccess("");
+      return;
+    }
+
     try {
-      const method = editingId ? "PUT" : "POST";
-      const url = editingId ? `/api/v1/core/item-categories/${editingId}/` : "/api/v1/core/item-categories/";
-      
-      await apiRequestWithRefresh(url, {
-        method,
+      setSaving(true);
+      setError("");
+      setSuccess("");
+      setFieldError("");
+
+      const payload = {
+        title: formTitle.trim(),
+      };
+
+      const isUpdate = editingId !== null;
+      await apiRequestWithRefresh(`/api/v1/core/item-categories/${isUpdate ? `${editingId}/` : ""}`, {
+        method: isUpdate ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: formData.title,
-          description: formData.description,
-          is_active: true,
-        }),
+        body: JSON.stringify(payload),
       });
 
-      setFormData({ title: "", description: "" });
-      setEditingId(null);
-      setShowForm(false);
-      await loadCategories();
+      resetForm();
+      setSuccess(isUpdate ? "Item category updated successfully." : "Item category created successfully.");
+      await loadItemCategories(page, pageSize);
     } catch (err) {
-      setError("Unable to save category.");
+      const message = err instanceof Error ? err.message : "Unable to save item category.";
+      setError(message);
+      setSuccess("");
+      if (message.toLowerCase().includes("title") || message.toLowerCase().includes("name")) {
+        setFieldError(message);
+      }
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm("Are you sure?")) return;
+  const startEdit = (row: ItemCategory) => {
+    setEditingId(row.id);
+    setFormTitle(row.title || row.name || "");
+    setFieldError("");
+    setSuccess("");
+  };
+
+  const remove = async (id: number) => {
     try {
+      setDeletingId(id);
+      setError("");
+      setSuccess("");
       await apiRequestWithRefresh(`/api/v1/core/item-categories/${id}/`, { method: "DELETE" });
-      await loadCategories();
+      if (editingId === id) resetForm();
+      setSuccess("Item category deleted successfully.");
+      const nextRows = itemCategories.filter((row) => row.id !== id);
+      if (nextRows.length === 0 && page > 1) {
+        setPage(page - 1);
+      }
+      await loadItemCategories(nextRows.length === 0 && page > 1 ? page - 1 : page, pageSize);
     } catch (err) {
-      setError("Unable to delete category.");
+      setError("Unable to delete item category.");
+    } finally {
+      setDeletingId(null);
+      setDeleteCandidate(null);
     }
   };
-
-  const filtered = categories.filter((c) => c.title.toLowerCase().includes(search.toLowerCase()));
-  const totalPages = Math.ceil(filtered.length / itemsPerPage);
-  const paginatedData = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
-
-  if (loading) return <div style={{ padding: "16px" }}>Loading...</div>;
 
   return (
-    <div style={{ display: "grid", gap: "24px" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1 style={{ margin: 0, fontSize: "28px", fontWeight: "bold" }}>Item Categories</h1>
-        <Button onClick={() => { setShowForm(!showForm); setEditingId(null); setFormData({ title: "", description: "" }); }}>
-          {showForm ? "Cancel" : "Add Category"}
-        </Button>
+    <section className="admin-visitor-area up_st_admin_visitor">
+      <div style={{ marginBottom: 14 }}>
+        <h1 style={{ margin: 0, fontSize: 24 }}>Item Categories Management</h1>
       </div>
 
-      {error && <div style={{ color: "red", padding: "8px", backgroundColor: "#ffe6e6", borderRadius: "4px" }}>{error}</div>}
+      {error && <div style={{ color: "var(--warning)", marginBottom: 10 }}>{error}</div>}
+      {success && <div style={{ color: "#16a34a", marginBottom: 10 }}>{success}</div>}
 
-      {showForm && (
-        <Card>
-          <form onSubmit={handleSubmit} style={{ display: "grid", gap: "16px" }}>
-            <div>
-              <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>Title *</label>
-              <Input
-                required
-                value={formData.title}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFormData({ ...formData, title: e.target.value })}
-                placeholder="e.g. Stationery"
-              />
-            </div>
-            <div>
-              <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>Description</label>
-              <textarea
-                value={formData.description}
-                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setFormData({ ...formData, description: e.target.value })}
-                placeholder="Category description"
-                style={{
-                  width: "100%",
-                  border: "1px solid var(--line)",
-                  borderRadius: "6px",
-                  padding: "8px 12px",
-                  fontSize: "14px",
-                  fontFamily: "inherit",
-                  boxSizing: "border-box",
+      <div style={{ display: "grid", gridTemplateColumns: "330px 1fr", gap: 12 }}>
+        <div style={boxStyle()}>
+          <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Item Category" : "Add Item Category"}</h3>
+          <form onSubmit={submit} style={{ display: "grid", gap: 10 }}>
+            <label style={{ display: "grid", gap: 6 }}>
+              <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>NAME *</span>
+              <input
+                type="text"
+                value={formTitle}
+                onChange={(e) => {
+                  setFormTitle(e.target.value);
+                  if (fieldError) setFieldError("");
+                  if (error) setError("");
                 }}
-                rows={3}
+                maxLength={100}
+                style={{
+                  ...inputStyle(!!fieldError),
+                }}
               />
+              {fieldError ? (
+                <span style={{ fontSize: 12, color: "#dc2626" }}>{fieldError}</span>
+              ) : null}
+            </label>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="submit" disabled={saving} style={buttonStyle()}>
+                {saving ? "Saving..." : "Save"}
+              </button>
+              {editingId ? (
+                <button type="button" onClick={resetForm} style={buttonStyle("#6b7280")}>
+                  Cancel
+                </button>
+              ) : null}
             </div>
-            <Button type="submit">{editingId ? "Update" : "Save"}</Button>
           </form>
-        </Card>
-      )}
+        </div>
 
-      <div>
-        <Input
-          placeholder="Search categories..."
-          value={search}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-            setSearch(e.target.value);
-            setCurrentPage(1);
-          }}
-          style={{ marginBottom: "16px" }}
-        />
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ backgroundColor: "var(--surface-secondary)" }}>
-              <th style={{ border: "1px solid var(--line)", padding: "12px", textAlign: "left", fontWeight: "600" }}>Title</th>
-              <th style={{ border: "1px solid var(--line)", padding: "12px", textAlign: "left", fontWeight: "600" }}>Status</th>
-              <th style={{ border: "1px solid var(--line)", padding: "12px", textAlign: "left", fontWeight: "600" }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paginatedData.map((c) => (
-              <tr key={c.id}>
-                <td style={{ border: "1px solid var(--line)", padding: "12px" }}>{c.title}</td>
-                <td style={{ border: "1px solid var(--line)", padding: "12px" }}>{c.is_active ? "Active" : "Inactive"}</td>
-                <td style={{ border: "1px solid var(--line)", padding: "12px", display: "flex", gap: "8px" }}>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      setEditingId(c.id);
-                      setFormData({ title: c.title, description: c.description || "" });
-                      setShowForm(true);
-                    }}
-                  >
-                    Edit
-                  </Button>
-                  <Button size="sm" variant="destructive" onClick={() => handleDelete(c.id)}>
-                    Delete
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div style={boxStyle()}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <h3 style={{ margin: 0 }}>Item Categories List</h3>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search"
+              style={{ ...inputStyle(), width: 280, height: 36 }}
+            />
+          </div>
 
-        {/* Pagination Controls */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "16px", padding: "12px", backgroundColor: "var(--surface-secondary)", borderRadius: "4px" }}>
-          <div style={{ fontSize: "14px", color: "var(--text-secondary)" }}>
-            Showing {paginatedData.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} to {Math.min(currentPage * itemsPerPage, filtered.length)} of {filtered.length} entries
-          </div>
-          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-            <select
-              value={itemsPerPage}
-              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
-                setItemsPerPage(parseInt(e.target.value));
-                setCurrentPage(1);
-              }}
-              style={{
-                border: "1px solid var(--line)",
-                borderRadius: "4px",
-                padding: "6px 12px",
-                fontSize: "14px",
-                cursor: "pointer",
-              }}
-            >
-              <option value="10">10 per page</option>
-              <option value="25">25 per page</option>
-              <option value="50">50 per page</option>
-            </select>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={currentPage === 1}
-              onClick={() => setCurrentPage(currentPage - 1)}
-            >
-              Previous
-            </Button>
-            <span style={{ fontSize: "14px", minWidth: "100px", textAlign: "center" }}>
-              Page {totalPages === 0 ? 0 : currentPage} of {totalPages}
-            </span>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage(currentPage + 1)}
-            >
-              Next
-            </Button>
-          </div>
+          {loading ? <div style={{ color: "var(--text-muted)" }}>Loading...</div> : null}
+
+          {!loading && (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
+                  <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Name</th>
+                  <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Created</th>
+                  <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {itemCategories.map((row) => (
+                  <tr key={row.id}>
+                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.title || row.name || "-"}</td>
+                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)", fontSize: 12, color: "var(--text-muted)" }}>
+                      {new Date(row.created_at).toLocaleDateString()}
+                    </td>
+                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button type="button" onClick={() => startEdit(row)} style={buttonStyle("#0ea5e9")}>
+                          Edit
+                        </button>
+                        <button type="button" onClick={() => setDeleteCandidate(row)} style={buttonStyle("#dc2626")}>
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {itemCategories.length === 0 ? (
+                  <tr>
+                    <td colSpan={3} style={{ padding: 12, borderBottom: "1px solid var(--line)", color: "var(--text-muted)" }}>
+                      No Data Available.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          )}
+
+          <PaginationControls
+            currentPage={page}
+            totalPages={totalPages}
+            totalItems={totalCount}
+            pageSize={pageSize}
+            loading={loading}
+            onPageChange={(nextPage) => setPage(nextPage)}
+            onPageSizeChange={(nextSize) => {
+              setPageSize(nextSize);
+              setPage(1);
+            }}
+          />
         </div>
       </div>
-    </div>
+
+      <ConfirmationModal
+        isOpen={deleteCandidate !== null}
+        title="Delete Item Category"
+        message="Are you sure you want to delete this item category? This action cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        isConfirming={deletingId !== null}
+        onConfirm={() => (deleteCandidate ? void remove(deleteCandidate.id) : undefined)}
+        onCancel={() => setDeleteCandidate(null)}
+      />
+    </section>
   );
 }

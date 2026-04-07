@@ -112,7 +112,11 @@ class Staff(models.Model):
     medical_leave = models.PositiveSmallIntegerField(default=0)
     maternity_leave = models.PositiveSmallIntegerField(default=0)
     show_public = models.BooleanField(default=False)
-    custom_field = models.JSONField(default=dict, blank=True)
+    custom_field = models.JSONField(
+        default=dict, 
+        blank=True,
+        help_text="JSON field for extensible data. Current supported fields: {'ifsc_code': 'string', 'allowance': 'decimal', 'deduction': 'decimal'}"
+    )
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members")
     designation = models.ForeignKey(Designation, on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members")
     contract_type = models.CharField(max_length=20, choices=CONTRACT_CHOICES, blank=True)
@@ -319,3 +323,45 @@ class PayrollRecord(models.Model):
     def save(self, *args, **kwargs):
         self.net_salary = (self.basic_salary + self.allowance) - self.deduction
         super().save(*args, **kwargs)
+
+
+class StaffDocument(models.Model):
+    """
+    Model for storing multiple document uploads per staff member.
+    Replaces the single file path storage with proper file management.
+    
+    Examples:
+    - Resume, joining letter, educational certificates, etc.
+    """
+    DOCUMENT_TYPE_CHOICES = [
+        ("resume", "Resume"),
+        ("joining_letter", "Joining Letter"),
+        ("tenth_certificate", "10th Certificate"),
+        ("eleventh_certificate", "11th Certificate"),
+        ("aadhar_card", "Aadhar Card"),
+        ("driving_license", "Driving License"),
+        ("other", "Other Document"),
+    ]
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="staff_documents")
+    staff = models.ForeignKey(Staff, on_delete=models.CASCADE, related_name="documents")
+    document_type = models.CharField(max_length=50, choices=DOCUMENT_TYPE_CHOICES, default="other")
+    file_path = models.CharField(max_length=500, help_text="S3 or file storage path")
+    file_name = models.CharField(max_length=255)
+    file_size = models.PositiveIntegerField(help_text="File size in bytes")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "hr_staff_documents"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["staff", "document_type"]),
+            models.Index(fields=["school", "created_at"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(fields=["staff", "document_type", "file_name"], name="uq_staff_doc_scope"),
+        ]
+
+    def __str__(self):
+        return f"{self.staff} - {self.get_document_type_display()}"

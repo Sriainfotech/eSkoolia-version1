@@ -128,7 +128,50 @@ function parseError(error: unknown) {
   return "Unable to save student.";
 }
 
+// Validation helpers
+function isValidEmail(email: string): boolean {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email.trim());
+}
+
+function isValidPhone(phone: string): boolean {
+  const phoneRegex = /^\d{10}$/; // Exactly 10 digits
+  return phoneRegex.test(phone.trim().replace(/\D/g, ""));
+}
+
+function isValidPincode(pincode: string): boolean {
+  const pincodeRegex = /^\d{6}$/; // Exactly 6 digits
+  return pincodeRegex.test(pincode.trim().replace(/\D/g, ""));
+}
+
+function isAlphabetsOnly(value: string): boolean {
+  return /^[A-Za-z\s'-]*$/.test(value);
+}
+
+function isValidAdmissionOrRoll(value: string): boolean {
+  return /^[A-Za-z0-9]+$/.test(value.trim());
+}
+
+function isValidNumericRoll(value: string): boolean {
+  return /^\d+$/.test(value.trim());
+}
+
 export function StudentAddPanel() {
+  const CLASS_AGE_RULES: Record<number, [number, number]> = {
+    1: [5, 7],
+    2: [6, 8],
+    3: [7, 9],
+    4: [8, 10],
+    5: [9, 11],
+    6: [10, 12],
+    7: [11, 13],
+    8: [12, 14],
+    9: [13, 15],
+    10: [14, 16],
+    11: [15, 17],
+    12: [16, 18],
+  };
+
   const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
   const [categories, setCategories] = useState<StudentCategory[]>([]);
   const [guardians, setGuardians] = useState<Guardian[]>([]);
@@ -158,7 +201,6 @@ export function StudentAddPanel() {
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
   const [isDisabled, setIsDisabled] = useState(false);
-  const [isActive, setIsActive] = useState(true);
 
   const [newGuardianName, setNewGuardianName] = useState("");
   const [newGuardianRelation, setNewGuardianRelation] = useState("Father");
@@ -170,6 +212,7 @@ export function StudentAddPanel() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [guardianValidationError, setGuardianValidationError] = useState("");
 
   const filteredSections = useMemo(() => {
     if (!classId) return [];
@@ -238,23 +281,41 @@ export function StudentAddPanel() {
     setClassId("");
     setSectionId("");
     setIsDisabled(false);
-    setIsActive(true);
     setFieldErrors({});
   };
 
   const validateClient = () => {
     const nextErrors: Record<string, string> = {};
+
+    // Admission number validation
     if (!admissionNo.trim()) {
       nextErrors.admission_no = "Admission number is required";
+    } else if (!isValidAdmissionOrRoll(admissionNo)) {
+      nextErrors.admission_no = "Admission/Roll number should contain only numbers (or alphanumeric if needed)";
     }
+
+    // Roll number validation
+    if (rollNo.trim() && !isValidNumericRoll(rollNo)) {
+      nextErrors.roll_no = "Roll number must contain numbers only";
+    }
+
+    // First name validation
     if (!firstName.trim()) {
       nextErrors.first_name = "First name is required";
-    } else if (!/^[A-Za-z ]+$/.test(firstName.trim())) {
-      nextErrors.first_name = "First name can only contain letters and spaces";
+    } else if (!isAlphabetsOnly(firstName.trim())) {
+      nextErrors.first_name = "First name can only contain letters, spaces, and hyphens";
+    } else if (firstName.trim().length < 2) {
+      nextErrors.first_name = "First name must be at least 2 characters";
     }
-    if (lastName.trim() && !/^[A-Za-z ]+$/.test(lastName.trim())) {
-      nextErrors.last_name = "Last name can only contain letters and spaces";
+
+    // Last name validation
+    if (!lastName.trim()) {
+      nextErrors.last_name = "Last name is required";
+    } else if (!isAlphabetsOnly(lastName.trim())) {
+      nextErrors.last_name = "Last name can only contain letters, spaces, and hyphens";
     }
+
+    // Date of birth validation
     if (!dateOfBirth) {
       nextErrors.dob = "Date of birth is required";
     } else {
@@ -265,30 +326,71 @@ export function StudentAddPanel() {
       } else {
         const age = (now.getTime() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
         if (age < 3) {
-          nextErrors.dob = "Student must be at least 3 years old";
+          const years = Math.floor(age);
+          const months = Math.round((age - years) * 12);
+          nextErrors.dob = `Student must be at least 3 years old (Currently ${years} years ${months} months old)`;
+        } else if (age > 25) {
+          nextErrors.dob = "Student age should not exceed 25 years";
+        } else if (classId) {
+          const selectedClass = classes.find((item) => String(item.id) === classId);
+          const className = String(selectedClass?.name || "");
+          const classMatch = className.match(/\d+/);
+          const classNumber = classMatch ? Number(classMatch[0]) : null;
+          if (classNumber && CLASS_AGE_RULES[classNumber]) {
+            const [minAge, maxAge] = CLASS_AGE_RULES[classNumber];
+            if (age < minAge || age > maxAge) {
+              nextErrors.dob = `Selected DOB does not match the required age for the selected class (Expected age: ${minAge}-${maxAge} years)`;
+            }
+          }
         }
       }
     }
+
+    // Academic year validation
     if (!academicYearId) {
       nextErrors.academic_year = "Academic year is required";
     }
-    if (!classId) {
-      nextErrors.class = "Please select a class";
+
+    // Gender validation
+    if (!gender) {
+      nextErrors.gender = "Gender is required";
+    } else if (gender === "other" && !customGender.trim()) {
+      nextErrors.custom_gender = "Please specify custom gender";
     }
+
+    // Class validation
+    if (!classId) {
+      nextErrors.class = "Class is required";
+    }
+
+    // Section validation
     if (!sectionId) {
       nextErrors.section = "Section is required";
     } else if (!filteredSections.some((item) => String(item.id) === sectionId)) {
       nextErrors.section = "Selected section does not belong to selected class";
     }
-    if (gender === "other" && !customGender.trim()) {
-      nextErrors.custom_gender = "Custom gender is required";
+
+    // Phone validation
+    if (!phone.trim()) {
+      nextErrors.phone = "Phone number is required";
+    } else if (!isValidPhone(phone.trim())) {
+      nextErrors.phone = "Phone number must be exactly 10 digits";
     }
-    if (!phone.trim() && !email.trim()) {
-      nextErrors.phone = "At least one contact method (phone or email) is required";
+
+    // Email validation
+    if (email.trim()) {
+      if (!isValidEmail(email.trim())) {
+        nextErrors.email = "Invalid email format";
+      }
     }
-    if (phone.trim() && !/^\+?\d{7,15}$/.test(phone.trim())) {
-      nextErrors.phone = "Please enter a valid phone number";
+
+    // Pincode validation
+    if (pincode.trim()) {
+      if (!isValidPincode(pincode.trim())) {
+        nextErrors.pincode = "Pincode must be exactly 6 digits";
+      }
     }
+
     return nextErrors;
   };
 
@@ -298,22 +400,159 @@ export function StudentAddPanel() {
     const source = apiError.details?.field_errors || {};
     const mapped: Record<string, string> = {};
     for (const [field, value] of Object.entries(source)) {
-      mapped[field] = Array.isArray(value) ? String(value[0] || "") : String(value || "");
+      const mappedField = field === "date_of_birth" ? "dob" : field === "current_class" ? "class" : field === "current_section" ? "section" : field;
+      mapped[mappedField] = Array.isArray(value) ? String(value[0] || "") : String(value || "");
     }
     setFieldErrors(mapped);
   };
 
+  const setSingleFieldError = (field: string, message: string) => {
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      if (message) {
+        next[field] = message;
+      } else {
+        delete next[field];
+      }
+      return next;
+    });
+  };
+
+  const runLiveValidation = (
+    field: "admission_no" | "roll_no" | "first_name" | "last_name" | "dob" | "phone" | "pincode",
+    valueOverride?: string,
+  ) => {
+    if (field === "admission_no") {
+      const value = typeof valueOverride === "string" ? valueOverride : admissionNo;
+      if (!value.trim()) {
+        setSingleFieldError("admission_no", "Admission number is required");
+      } else if (!isValidAdmissionOrRoll(value)) {
+        setSingleFieldError("admission_no", "Admission/Roll number should contain only numbers (or alphanumeric if needed)");
+      } else {
+        setSingleFieldError("admission_no", "");
+      }
+      return;
+    }
+
+    if (field === "roll_no") {
+      const value = typeof valueOverride === "string" ? valueOverride : rollNo;
+      if (value.trim() && !isValidNumericRoll(value)) {
+        setSingleFieldError("roll_no", "Roll number must contain numbers only");
+      } else {
+        setSingleFieldError("roll_no", "");
+      }
+      return;
+    }
+
+    if (field === "first_name") {
+      const value = typeof valueOverride === "string" ? valueOverride : firstName;
+      if (!value.trim()) {
+        setSingleFieldError("first_name", "First name is required");
+      } else if (!isAlphabetsOnly(value.trim())) {
+        setSingleFieldError("first_name", "First name can only contain letters, spaces, and hyphens");
+      } else if (value.trim().length < 2) {
+        setSingleFieldError("first_name", "First name must be at least 2 characters");
+      } else {
+        setSingleFieldError("first_name", "");
+      }
+      return;
+    }
+
+    if (field === "last_name") {
+      const value = typeof valueOverride === "string" ? valueOverride : lastName;
+      if (!value.trim()) {
+        setSingleFieldError("last_name", "Last name is required");
+      } else if (!isAlphabetsOnly(value.trim())) {
+        setSingleFieldError("last_name", "Last name can only contain letters, spaces, and hyphens");
+      } else {
+        setSingleFieldError("last_name", "");
+      }
+      return;
+    }
+
+    if (field === "dob") {
+      const value = typeof valueOverride === "string" ? valueOverride : dateOfBirth;
+      if (!value) {
+        setSingleFieldError("dob", "Date of birth is required");
+        return;
+      }
+      const dobDate = new Date(value);
+      const now = new Date();
+      if (dobDate > now) {
+        setSingleFieldError("dob", "Date of birth cannot be in the future");
+        return;
+      }
+      const age = (now.getTime() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+      if (age < 3) {
+        setSingleFieldError("dob", "Student must be at least 3 years old");
+        return;
+      }
+      const selectedClass = classes.find((item) => String(item.id) === classId);
+      const className = String(selectedClass?.name || "");
+      const classMatch = className.match(/\d+/);
+      const classNumber = classMatch ? Number(classMatch[0]) : null;
+      if (classNumber && CLASS_AGE_RULES[classNumber]) {
+        const [minAge, maxAge] = CLASS_AGE_RULES[classNumber];
+        if (age < minAge || age > maxAge) {
+          setSingleFieldError("dob", `Selected DOB does not match the required age for the selected class (Expected age: ${minAge}-${maxAge} years)`);
+          return;
+        }
+      }
+      setSingleFieldError("dob", "");
+      return;
+    }
+
+    if (field === "phone") {
+      const value = typeof valueOverride === "string" ? valueOverride : phone;
+      if (!value.trim()) {
+        setSingleFieldError("phone", "Phone number is required");
+      } else if (!isValidPhone(value.trim())) {
+        setSingleFieldError("phone", "Phone number must be exactly 10 digits");
+      } else {
+        setSingleFieldError("phone", "");
+      }
+      return;
+    }
+
+    if (field === "pincode") {
+      const value = typeof valueOverride === "string" ? valueOverride : pincode;
+      if (value.trim() && !isValidPincode(value.trim())) {
+        setSingleFieldError("pincode", "Pincode must be exactly 6 digits");
+      } else {
+        setSingleFieldError("pincode", "");
+      }
+    }
+  };
+
   const addGuardianInline = async () => {
-    if (!newGuardianName.trim() || !newGuardianRelation.trim() || !newGuardianPhone.trim()) {
-      setError("Guardian name, relation, and phone are required.");
+    setGuardianValidationError("");
+    
+    // Validation
+    if (!newGuardianName.trim()) {
+      setGuardianValidationError("Guardian name is required");
       return;
     }
-    if (!/^\d{1,12}$/.test(newGuardianPhone.trim())) {
-      setError(newGuardianPhone.trim().length > 12
-        ? "Phone number must not exceed 12 digits."
-        : "Phone number must contain digits only.");
+    if (!isAlphabetsOnly(newGuardianName.trim())) {
+      setGuardianValidationError("Guardian name can only contain letters and spaces");
       return;
     }
+    if (newGuardianName.trim().length < 2) {
+      setGuardianValidationError("Guardian name must be at least 2 characters");
+      return;
+    }
+    if (!newGuardianPhone.trim()) {
+      setGuardianValidationError("Guardian phone is required");
+      return;
+    }
+    if (!isValidPhone(newGuardianPhone.trim())) {
+      setGuardianValidationError("Guardian phone must be exactly 10 digits");
+      return;
+    }
+    if (newGuardianEmail.trim() && !isValidEmail(newGuardianEmail.trim())) {
+      setGuardianValidationError("Guardian email format is invalid");
+      return;
+    }
+
     try {
       setError("");
       const created = await apiPost<Guardian>("/api/v1/students/guardians/", {
@@ -328,25 +567,72 @@ export function StudentAddPanel() {
       setNewGuardianRelation("Father");
       setNewGuardianPhone("");
       setNewGuardianEmail("");
-      setSuccess("Guardian added and selected.");
+      setGuardianValidationError("");
+      setSuccess("Guardian added and selected successfully.");
     } catch (createError) {
-      setError(parseError(createError));
+      setGuardianValidationError(parseError(createError));
     }
   };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSuccess("");
+    setError("");
+    setGuardianValidationError("");
+
+    // Validate all fields
     const nextErrors = validateClient();
     setFieldErrors(nextErrors);
+
+    // Check guardian quick-add validation: if any field is filled, all must be valid
+    const hasGuardianData = newGuardianName.trim() || newGuardianPhone.trim() || newGuardianEmail.trim();
+    if (hasGuardianData) {
+      if (!newGuardianName.trim()) {
+        setGuardianValidationError("Guardian name is required if filling guardian details");
+      } else if (!isAlphabetsOnly(newGuardianName.trim())) {
+        setGuardianValidationError("Guardian name can only contain letters and spaces");
+      } else if (newGuardianName.trim().length < 2) {
+        setGuardianValidationError("Guardian name must be at least 2 characters");
+      } else if (!newGuardianPhone.trim()) {
+        setGuardianValidationError("Guardian phone is required if filling guardian details");
+      } else if (!isValidPhone(newGuardianPhone.trim())) {
+        setGuardianValidationError("Guardian phone must be exactly 10 digits");
+      } else if (newGuardianEmail.trim() && !isValidEmail(newGuardianEmail.trim())) {
+        setGuardianValidationError("Guardian email format is invalid");
+      }
+    }
+
+    // Check if guardian validation failed
+    if (hasGuardianData && (
+      !newGuardianName.trim() ||
+      !isAlphabetsOnly(newGuardianName.trim()) ||
+      newGuardianName.trim().length < 2 ||
+      !newGuardianPhone.trim() ||
+      !isValidPhone(newGuardianPhone.trim()) ||
+      (newGuardianEmail.trim() && !isValidEmail(newGuardianEmail.trim()))
+    )) {
+      return;
+    }
+
     if (Object.keys(nextErrors).length > 0) {
-      setError("Validation failed");
+      setError(`Please fix ${Object.keys(nextErrors).length} validation error(s)`);
+      // Scroll to first error with small delay to ensure DOM is ready
+      setTimeout(() => {
+        const firstErrorKey = Object.keys(nextErrors)[0];
+        const errorElement = document.querySelector(`[data-field="${firstErrorKey}"]`) as HTMLElement;
+        if (errorElement) {
+          errorElement.scrollIntoView({ behavior: "smooth", block: "center" });
+          const input = errorElement.querySelector("input, select, textarea") as HTMLElement;
+          if (input) input.focus();
+        }
+      }, 100);
       return;
     }
 
     try {
       setSaving(true);
       setError("");
+      const isStudentActive = !isDisabled && statusValue === "active";
       const payload: StudentCreatePayload = {
         admission_no: admissionNo.trim(),
         roll_no: rollNo.trim() || undefined,
@@ -370,14 +656,27 @@ export function StudentAddPanel() {
         current_class: Number(classId),
         current_section: Number(sectionId),
         is_disabled: isDisabled,
-        is_active: isActive,
+        is_active: isStudentActive,
       };
       const response = await apiPost<{ message?: string; warning?: string }>("/api/v1/students/students/", payload);
       setSuccess(response?.warning ? `Student added successfully. ${response.warning}` : "Student added successfully");
       resetStudentForm();
+      
+      // Redirect to student list after 1.5 seconds
+      setTimeout(() => {
+        if (typeof window !== "undefined") {
+          window.location.href = "/students/list";
+        }
+      }, 1500);
     } catch (submitError) {
       syncApiFieldErrors(submitError as ApiError);
-      setError(parseError(submitError));
+      const errorMsg = parseError(submitError);
+      setError(errorMsg);
+      
+      // Handle specific errors
+      if (errorMsg.includes("Admission number already exists") || errorMsg.includes("admission")) {
+        setFieldErrors(prev => ({ ...prev, admission_no: "Admission number already exists" }));
+      }
     } finally {
       setSaving(false);
     }
@@ -413,35 +712,92 @@ export function StudentAddPanel() {
       <section className="admin-visitor-area up_st_admin_visitor">
         <div className="container-fluid p-0" style={{ display: "grid", gap: 12 }}>
           <form onSubmit={submit}>
+            {/* Helper text for required fields */}
+            <div style={{ marginBottom: 12, padding: "8px 12px", backgroundColor: "#fef3c7", borderRadius: 8, fontSize: 12, color: "#92400e" }}>
+              <strong>*</strong> Fields marked with asterisk are required
+            </div>
+
             <div className="white-box" style={boxStyle()}>
               <h3 style={{ marginTop: 0, marginBottom: 12 }}>Student Details</h3>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(160px, 1fr))", gap: 10 }}>
-                <div>
+                <div data-field="admission_no">
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Admission No *</label>
-                  <input value={admissionNo} onChange={(e) => setAdmissionNo(e.target.value)} style={fieldStyle()} />
-                  {fieldErrors.admission_no && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.admission_no}</p>}
+                  <input 
+                    value={admissionNo} 
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setAdmissionNo(value);
+                      runLiveValidation("admission_no", value);
+                    }} 
+                    onBlur={() => runLiveValidation("admission_no")}
+                    style={fieldStyle()} 
+                    placeholder="e.g., ADM001"
+                  />
+                  {fieldErrors.admission_no && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.admission_no}</p>}
                 </div>
-                <div>
+                <div data-field="roll_no">
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Roll No</label>
-                  <input value={rollNo} onChange={(e) => setRollNo(e.target.value)} style={fieldStyle()} />
+                  <input 
+                    value={rollNo} 
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/\D/g, "");
+                      setRollNo(value);
+                      runLiveValidation("roll_no", value);
+                    }} 
+                    onBlur={() => runLiveValidation("roll_no")}
+                    style={fieldStyle()} 
+                    placeholder="Roll number"
+                    inputMode="numeric"
+                  />
+                  {fieldErrors.roll_no && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.roll_no}</p>}
                 </div>
-                <div>
+                <div data-field="first_name">
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>First Name *</label>
-                  <input value={firstName} onChange={(e) => setFirstName(e.target.value)} style={fieldStyle()} />
-                  {fieldErrors.first_name && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.first_name}</p>}
+                  <input 
+                    value={firstName} 
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setFirstName(value);
+                      runLiveValidation("first_name", value);
+                    }} 
+                    onBlur={() => runLiveValidation("first_name")}
+                    style={fieldStyle()} 
+                    placeholder="John"
+                  />
+                  {fieldErrors.first_name && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.first_name}</p>}
                 </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Last Name</label>
-                  <input value={lastName} onChange={(e) => setLastName(e.target.value)} style={fieldStyle()} />
-                  {fieldErrors.last_name && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.last_name}</p>}
+                <div data-field="last_name">
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Last Name *</label>
+                  <input 
+                    value={lastName} 
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setLastName(value);
+                      runLiveValidation("last_name", value);
+                    }} 
+                    onBlur={() => runLiveValidation("last_name")}
+                    style={fieldStyle()} 
+                    placeholder="Doe"
+                  />
+                  {fieldErrors.last_name && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.last_name}</p>}
                 </div>
 
-                <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Date Of Birth *</label>
-                  <input type="date" value={dateOfBirth} onChange={(e) => setDateOfBirth(e.target.value)} style={fieldStyle()} />
-                  {fieldErrors.dob && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.dob}</p>}
+                <div data-field="dob">
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Date of Birth *</label>
+                  <input 
+                    type="date" 
+                    value={dateOfBirth} 
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setDateOfBirth(value);
+                      runLiveValidation("dob", value);
+                    }} 
+                    onBlur={() => runLiveValidation("dob")}
+                    style={fieldStyle()} 
+                  />
+                  {fieldErrors.dob && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.dob}</p>}
                 </div>
-                <div>
+                <div data-field="academic_year">
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Academic Year *</label>
                   <select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={fieldStyle()}>
                     <option value="">Select Academic Year</option>
@@ -451,21 +807,28 @@ export function StudentAddPanel() {
                       </option>
                     ))}
                   </select>
-                  {fieldErrors.academic_year && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.academic_year}</p>}
+                  {fieldErrors.academic_year && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.academic_year}</p>}
                 </div>
-                <div>
+                <div data-field="gender">
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Gender *</label>
                   <select value={gender} onChange={(e) => setGender(e.target.value)} style={fieldStyle()}>
+                    <option value="">Select Gender</option>
                     <option value="male">Male</option>
                     <option value="female">Female</option>
                     <option value="other">Other</option>
                   </select>
+                  {fieldErrors.gender && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.gender}</p>}
                 </div>
                 {gender === "other" && (
-                  <div>
+                  <div data-field="custom_gender">
                     <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Custom Gender *</label>
-                    <input value={customGender} onChange={(e) => setCustomGender(e.target.value)} style={fieldStyle()} />
-                    {fieldErrors.custom_gender && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.custom_gender}</p>}
+                    <input 
+                      value={customGender} 
+                      onChange={(e) => setCustomGender(e.target.value)} 
+                      style={fieldStyle()} 
+                      placeholder="Please specify"
+                    />
+                    {fieldErrors.custom_gender && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.custom_gender}</p>}
                   </div>
                 )}
                 <div>
@@ -507,9 +870,15 @@ export function StudentAddPanel() {
                   </select>
                 </div>
 
-                <div>
+                <div data-field="class">
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Class *</label>
-                  <select value={classId} onChange={(e) => setClassId(e.target.value)} style={fieldStyle()}>
+                  <select value={classId} onChange={(e) => {
+                    const value = e.target.value;
+                    setClassId(value);
+                    if (dateOfBirth) {
+                      setTimeout(() => runLiveValidation("dob"), 0);
+                    }
+                  }} style={fieldStyle()}>
                     <option value="">Select Class</option>
                     {classes.map((item) => (
                       <option key={item.id} value={item.id}>
@@ -517,28 +886,46 @@ export function StudentAddPanel() {
                       </option>
                     ))}
                   </select>
-                  {fieldErrors.class && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.class}</p>}
+                  {fieldErrors.class && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.class}</p>}
                 </div>
-                <div>
+                <div data-field="section">
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Section *</label>
                   <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={fieldStyle()} disabled={!classId}>
-                    <option value="">Select Section</option>
+                    <option value="">{classId ? "Select Section" : "Select class first"}</option>
                     {filteredSections.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name}
                       </option>
                     ))}
                   </select>
-                  {fieldErrors.section && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.section}</p>}
+                  {fieldErrors.section && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.section}</p>}
                 </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Phone</label>
-                  <input value={phone} onChange={(e) => setPhone(e.target.value)} style={fieldStyle()} />
-                  {fieldErrors.phone && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.phone}</p>}
+                <div data-field="phone">
+                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Phone *</label>
+                  <input 
+                    value={phone} 
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/[^0-9]/g, "").slice(0, 10);
+                      setPhone(value);
+                      runLiveValidation("phone", value);
+                    }} 
+                    onBlur={() => runLiveValidation("phone")}
+                    style={fieldStyle()} 
+                    placeholder="10-digit number"
+                    maxLength={10}
+                  />
+                  {fieldErrors.phone && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.phone}</p>}
                 </div>
-                <div>
+                <div data-field="email">
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Email</label>
-                  <input value={email} onChange={(e) => setEmail(e.target.value)} style={fieldStyle()} />
+                  <input 
+                    value={email} 
+                    onChange={(e) => setEmail(e.target.value)} 
+                    style={fieldStyle()} 
+                    placeholder="student@example.com"
+                    type="email"
+                  />
+                  {fieldErrors.email && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.email}</p>}
                 </div>
                 <div>
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Address Line</label>
@@ -552,9 +939,21 @@ export function StudentAddPanel() {
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>State</label>
                   <input value={stateName} onChange={(e) => setStateName(e.target.value)} style={fieldStyle()} />
                 </div>
-                <div>
+                <div data-field="pincode">
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Pincode</label>
-                  <input value={pincode} onChange={(e) => setPincode(e.target.value)} style={fieldStyle()} />
+                  <input 
+                    value={pincode} 
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/[^0-9]/g, "").slice(0, 6);
+                      setPincode(value);
+                      runLiveValidation("pincode", value);
+                    }} 
+                    onBlur={() => runLiveValidation("pincode")}
+                    style={fieldStyle()} 
+                    placeholder="6-digit pincode"
+                    maxLength={6}
+                  />
+                  {fieldErrors.pincode && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.pincode}</p>}
                 </div>
                 <div>
                   <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Photo URL</label>
@@ -573,10 +972,6 @@ export function StudentAddPanel() {
                   <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
                     <input type="checkbox" checked={isDisabled} onChange={(e) => setIsDisabled(e.target.checked)} />
                     Disabled
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-                    <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />
-                    Active
                   </label>
                 </div>
               </div>
@@ -613,16 +1008,60 @@ export function StudentAddPanel() {
               </div>
             </div>
 
-            <div style={{ display: "flex", justifyContent: "center", marginTop: 12 }}>
-              <button type="submit" disabled={saving || !isFormValid} style={buttonStyle()}>
-                {saving ? "Saving..." : "Save Student"}
+            <div style={{ display: "flex", justifyContent: "center", marginTop: 20, gap: 12 }}>
+              <button 
+                type="submit" 
+                disabled={saving || loading} 
+                style={{
+                  ...buttonStyle(),
+                  opacity: saving || loading ? 0.6 : 1,
+                  cursor: saving || loading ? "not-allowed" : "pointer"
+                } as React.CSSProperties}
+              >
+                {saving ? "🔄 Saving student..." : "✓ Save Student"}
               </button>
+              <Link 
+                href="/students/list" 
+                style={{ ...buttonStyle("#6b7280"), display: "inline-flex", alignItems: "center", textDecoration: "none" } as React.CSSProperties}
+              >
+                Cancel
+              </Link>
             </div>
           </form>
 
-          {loading && <p style={{ margin: 0, color: "var(--text-muted)" }}>Loading form data...</p>}
-          {error && <p style={{ margin: 0, color: "var(--warning)" }}>{error}</p>}
-          {success && <p style={{ margin: 0, color: "#0f766e" }}>{success}</p>}
+          {loading && (
+            <div style={{ margin: 0, color: "var(--text-muted)", fontSize: 14, textAlign: "center", padding: "12px" }}>
+              <span>⏳ Loading form data...</span>
+            </div>
+          )}
+          {error && (
+            <div style={{ 
+              margin: 0, 
+              color: "#dc2626", 
+              fontSize: 13,
+              backgroundColor: "#fee2e2",
+              padding: "12px",
+              borderRadius: 8,
+              border: "1px solid #fecaca",
+              fontWeight: 500
+            }}>
+              ✕ {error}
+            </div>
+          )}
+          {success && (
+            <div style={{ 
+              margin: 0, 
+              color: "#065f46", 
+              fontSize: 13,
+              backgroundColor: "#d1fae5",
+              padding: "12px",
+              borderRadius: 8,
+              border: "1px solid #a7f3d0",
+              fontWeight: 500
+            }}>
+              ✓ {success}
+            </div>
+          )}
         </div>
       </section>
     </div>

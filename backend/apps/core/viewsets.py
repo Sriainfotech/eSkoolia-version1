@@ -141,15 +141,24 @@ class PaginatedModelViewSet(APIResponseMixin, viewsets.ModelViewSet):
         """Override to provide standardized paginated response on list."""
         try:
             response = super().list(request, *args, **kwargs)
+            if isinstance(response.data, dict) and "results" in response.data:
+                payload = dict(response.data)
+                payload.update(
+                    {
+                        "success": True,
+                        "message": "Data retrieved successfully",
+                        "data": payload.get("results", []),
+                    }
+                )
+                return Response(payload, status=status.HTTP_200_OK)
             return Response(
                 {
                     "success": True,
                     "message": "Data retrieved successfully",
-                    "pagination": {
-                        "count": response.data.get('count', 0) if isinstance(response.data, dict) else len(response.data),
-                        "next": response.data.get('next') if isinstance(response.data, dict) else None,
-                        "previous": response.data.get('previous') if isinstance(response.data, dict) else None,
-                    },
+                    "count": response.data.get('count', 0) if isinstance(response.data, dict) else len(response.data),
+                    "next": response.data.get('next') if isinstance(response.data, dict) else None,
+                    "previous": response.data.get('previous') if isinstance(response.data, dict) else None,
+                    "results": response.data.get('results', response.data) if isinstance(response.data, dict) else response.data,
                     "data": response.data.get('results', response.data) if isinstance(response.data, dict) else response.data,
                 },
                 status=status.HTTP_200_OK,

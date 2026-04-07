@@ -3,6 +3,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
+import { PaginationControls } from "@/components/common/PaginationControls";
+import { ConfirmationModal } from "@/components/common/ConfirmationModal";
+import { usePersistentPagination } from "@/hooks/usePersistentPagination";
 
 type RoleItem = {
   id: number;
@@ -10,22 +14,6 @@ type RoleItem = {
   is_system: boolean;
   created_at: string;
 };
-
-type RoleApiResult = {
-  results?: RoleItem[];
-  data?: RoleItem[];
-};
-
-function listData<T>(payload: T[] | { results?: T[]; data?: T[] }): T[] {
-  if (Array.isArray(payload)) {
-    return payload;
-  }
-  // Support standardized API wrapper: { success, message, data: [...] }.
-  if (Array.isArray(payload.data)) {
-    return payload.data;
-  }
-  return payload.results || [];
-}
 
 function boxStyle() {
   return {
@@ -64,25 +52,31 @@ function buttonStyle(color = "var(--primary)") {
 }
 
 export function RoleManagementPanel() {
+  const { page, pageSize, setPage, setPageSize } = usePersistentPagination("roles.list", 1, 10);
   const [roles, setRoles] = useState<RoleItem[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [fieldError, setFieldError] = useState("");
+  const [deleteCandidate, setDeleteCandidate] = useState<RoleItem | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const [roleName, setRoleName] = useState("");
   const [editingRoleId, setEditingRoleId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
 
-  const loadRoles = async () => {
+  const loadRoles = async (targetPage = page, targetPageSize = pageSize) => {
     setLoading(true);
     setError("");
     try {
-      const data = await apiRequestWithRefresh<RoleApiResult | RoleItem[]>("/api/v1/access-control/roles/");
-      setRoles(listData(data));
+      const query = buildPaginationQuery(targetPage, targetPageSize, { search: search.trim() || undefined });
+      const data = await apiRequestWithRefresh<ListApiResponse<RoleItem>>(`/api/v1/access-control/roles/?${query}`);
+      const items = extractListData(data);
+      const meta = extractPaginationMeta(data);
+      setRoles(items);
+      setTotalCount(meta?.count ?? items.length);
     } catch {
       setError("Unable to load role list.");
     } finally {
@@ -91,27 +85,13 @@ export function RoleManagementPanel() {
   };
 
   useEffect(() => {
-    void loadRoles();
-  }, []);
+    const handle = window.setTimeout(() => {
+      void loadRoles();
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [page, pageSize, search]);
 
-  const filteredRoles = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return roles;
-    return roles.filter((row) => row.name.toLowerCase().includes(q));
-  }, [roles, search]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredRoles.length / pageSize));
-
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
-
-  const pagedRoles = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredRoles.slice(start, start + pageSize);
-  }, [filteredRoles, currentPage]);
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   const resetForm = () => {
     setEditingRoleId(null);
@@ -150,8 +130,7 @@ export function RoleManagementPanel() {
       });
       resetForm();
       setSuccess(isUpdate ? "Role updated successfully." : "Role created successfully.");
-      await loadRoles();
-      setCurrentPage(1);
+      await loadRoles(page, pageSize);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to save role.";
       setError(message);
@@ -172,17 +151,23 @@ export function RoleManagementPanel() {
   };
 
   const remove = async (id: number) => {
-    if (!window.confirm("Delete this role?")) return;
     try {
+      setDeletingId(id);
       setError("");
       setSuccess("");
       await apiRequestWithRefresh(`/api/v1/access-control/roles/${id}/`, { method: "DELETE" });
       if (editingRoleId === id) resetForm();
       setSuccess("Role deleted successfully.");
-      await loadRoles();
-      setCurrentPage(1);
-    } catch {
+      const nextRoles = roles.filter((row) => row.id !== id);
+      if (nextRoles.length === 0 && page > 1) {
+        setPage(page - 1);
+      }
+      await loadRoles(nextRoles.length === 0 && page > 1 ? page - 1 : page, pageSize);
+    } catch (err) {
       setError("Unable to delete role.");
+    } finally {
+      setDeletingId(null);
+      setDeleteCandidate(null);
     }
   };
 
@@ -238,31 +223,11 @@ export function RoleManagementPanel() {
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
-                setCurrentPage(1);
+                  setPage(1);
               }}
               placeholder="Search"
               style={{ ...inputStyle(), width: 280, height: 36 }}
             />
-          </div>
-
-          <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <label htmlFor="roles-page-size" style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>
-              Per page
-            </label>
-            <select
-              id="roles-page-size"
-              value={String(pageSize)}
-              onChange={(e) => {
-                setPageSize(Number(e.target.value));
-                setCurrentPage(1);
-              }}
-              style={{ ...inputStyle(), width: 90, height: 34 }}
-            >
-              <option value="10">10</option>
-              <option value="25">25</option>
-              <option value="50">50</option>
-              <option value="100">100</option>
-            </select>
           </div>
 
           {loading ? <div style={{ color: "var(--text-muted)" }}>Loading...</div> : null}
@@ -277,7 +242,7 @@ export function RoleManagementPanel() {
                 </tr>
               </thead>
               <tbody>
-                {pagedRoles.map((row) => (
+                {roles.map((row) => (
                   <tr key={row.id}>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.name}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.is_system ? "System" : "Custom"}</td>
@@ -286,16 +251,16 @@ export function RoleManagementPanel() {
                         <Link href={`/roles/assign-permission/${row.id}`} style={buttonStyle("#7c3aed")}>Assign Permission</Link>
                         <button type="button" onClick={() => startEdit(row)} style={buttonStyle("#0ea5e9")}>Edit</button>
                         {!row.is_system ? (
-                          <button type="button" onClick={() => void remove(row.id)} style={buttonStyle("#dc2626")}>Delete</button>
+                          <button type="button" onClick={() => setDeleteCandidate(row)} style={buttonStyle("#dc2626")}>Delete</button>
                         ) : null}
                       </div>
                     </td>
                   </tr>
                 ))}
-                {pagedRoles.length === 0 ? (
+                {roles.length === 0 ? (
                   <tr>
                     <td colSpan={3} style={{ padding: 12, borderBottom: "1px solid var(--line)", color: "var(--text-muted)" }}>
-                      No roles found.
+                      No Data Available.
                     </td>
                   </tr>
                 ) : null}
@@ -303,43 +268,31 @@ export function RoleManagementPanel() {
             </table>
           )}
 
-          {!loading && filteredRoles.length > 0 ? (
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, gap: 10, flexWrap: "wrap" }}>
-              <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filteredRoles.length)} of {filteredRoles.length}
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                  style={buttonStyle("#64748b")}
-                >
-                  Previous
-                </button>
-                {Array.from({ length: totalPages }, (_, idx) => idx + 1).map((page) => (
-                  <button
-                    key={page}
-                    type="button"
-                    onClick={() => setCurrentPage(page)}
-                    style={buttonStyle(page === currentPage ? "var(--primary)" : "#94a3b8")}
-                  >
-                    {page}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                  style={buttonStyle("#64748b")}
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          ) : null}
+          <PaginationControls
+            currentPage={page}
+            totalPages={totalPages}
+            totalItems={totalCount}
+            pageSize={pageSize}
+            loading={loading}
+            onPageChange={(nextPage) => setPage(nextPage)}
+            onPageSizeChange={(nextSize) => {
+              setPageSize(nextSize);
+              setPage(1);
+            }}
+          />
         </div>
       </div>
+
+      <ConfirmationModal
+        isOpen={deleteCandidate !== null}
+        title="Delete Role"
+        message="Are you sure you want to delete this record?"
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        isConfirming={deletingId !== null}
+        onConfirm={() => deleteCandidate ? void remove(deleteCandidate.id) : undefined}
+        onCancel={() => setDeleteCandidate(null)}
+      />
     </section>
   );
 }

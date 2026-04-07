@@ -1,13 +1,14 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL } from "@/lib/api";
 import { getAccessToken, getRefreshToken, setAuthTokens, clearAuthTokens } from "@/lib/auth";
+import { sortAcademicsClasses } from "@/lib/classOrdering";
 
 type AcademicYear = { id: number; name: string; is_current: boolean };
-type SchoolClass = { id: number; name: string };
-type Section = { id: number; school_class: number; name: string };
-type Subject = { id: number; name: string };
+type SchoolClass = { id: number; name: string; class_name?: string };
+type Section = { id: number; school_class: number; name: string; section_name?: string };
+type Subject = { id: number; name: string; subject_name?: string };
 type ClassPeriod = { id: number; period: string; start_time: string; end_time: string; period_type: string; is_break: boolean };
 
 type Lesson = {
@@ -17,6 +18,10 @@ type Lesson = {
   section_id?: number | null;
   subject_id?: number;
   lesson_title: string;
+  class_name?: string;
+  section_name?: string;
+  subject_name?: string;
+  lesson_name?: string;
 };
 
 type LessonTopicDetail = {
@@ -24,6 +29,7 @@ type LessonTopicDetail = {
   topic: number;
   lesson: number;
   topic_title: string;
+  lesson_name?: string;
 };
 
 type LessonTopicGroup = {
@@ -32,6 +38,10 @@ type LessonTopicGroup = {
   section_id?: number;
   subject_id?: number;
   lesson_id?: number;
+  class_name?: string;
+  section_name?: string;
+  subject_name?: string;
+  lesson_name?: string;
   topics?: LessonTopicDetail[];
 };
 
@@ -51,6 +61,14 @@ type PlannerRow = {
   routine_id: number | null;
   class_period_id?: number | null;
   academic_year_id?: number | null;
+  class_name?: string;
+  section_name?: string;
+  subject_name?: string;
+  lesson_name?: string;
+  topic_name?: string;
+  lesson_detail_name?: string;
+  topic_detail_name?: string;
+  teacher_name?: string;
   topics: PlannerTopicRow[];
 };
 
@@ -64,6 +82,10 @@ type LessonGroup = {
   class_id: number;
   section_id: number | null;
   subject_id: number;
+  class_name?: string;
+  section_name?: string;
+  subject_name?: string;
+  lesson_name?: string;
   items: Lesson[];
 };
 
@@ -74,6 +96,8 @@ type WeeklyPlanner = {
 };
 
 type ApiList<T> = T[] | { results?: T[] };
+
+type PagedList<T> = ApiList<T> & { next?: string | null };
 
 type ApiErrorPayload = {
   success?: boolean;
@@ -284,6 +308,38 @@ function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
 }
 
+async function fetchAllPages<T>(path: string): Promise<T[]> {
+  const merged: T[] = [];
+  let nextPath = path;
+
+  for (let index = 0; index < 50 && nextPath; index += 1) {
+    const response = await apiGet<PagedList<T>>(nextPath);
+    merged.push(...listData(response));
+
+    const nextRaw = response.next;
+    if (!nextRaw) {
+      break;
+    }
+
+    if (nextRaw.startsWith("http")) {
+      try {
+        const nextUrl = new URL(nextRaw);
+        nextPath = `${nextUrl.pathname}${nextUrl.search}`;
+      } catch {
+        break;
+      }
+    } else {
+      nextPath = nextRaw;
+    }
+  }
+
+  return merged;
+}
+
+function fallbackLabel(primary: string | undefined, secondary: string | undefined, fallback: string) {
+  return primary || secondary || fallback;
+}
+
 function useAcademicLookups() {
   const [years, setYears] = useState<AcademicYear[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
@@ -299,7 +355,7 @@ function useAcademicLookups() {
         apiGet<ApiList<Subject>>("/api/v1/core/subjects/"),
       ]);
       setYears(listData(yearData));
-      setClasses(listData(classData));
+      setClasses(sortAcademicsClasses(listData(classData)));
       setSections(listData(sectionData));
       setSubjects(listData(subjectData));
     };
@@ -372,7 +428,16 @@ export function LessonPagePanel() {
   const [items, setItems] = useState<Lesson[]>([]);
   const [groups, setGroups] = useState<LessonGroup[]>([]);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [groupPage, setGroupPage] = useState(1);
+  const [groupPageSize, setGroupPageSize] = useState(10);
+  const [lessonPage, setLessonPage] = useState(1);
+  const [lessonPageSize, setLessonPageSize] = useState(10);
+  const [selectedLessonIds, setSelectedLessonIds] = useState<number[]>([]);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteMode, setDeleteMode] = useState<"selected" | "group" | null>(null);
 
   const [academicYearId, setAcademicYearId] = useState("");
   const [classId, setClassId] = useState("");
@@ -389,20 +454,37 @@ export function LessonPagePanel() {
     return sections.filter((section) => section.school_class === id);
   }, [classId, sections]);
 
+  const classMap = useMemo(() => new Map(classes.map((item) => [item.id, item.name])), [classes]);
+  const sectionMap = useMemo(() => new Map(sections.map((item) => [item.id, item.name])), [sections]);
+  const subjectMap = useMemo(() => new Map(subjects.map((item) => [item.id, item.name])), [subjects]);
+  const lessonMap = useMemo(() => new Map(items.map((item) => [item.id, fallbackLabel(item.lesson_name, undefined, item.lesson_title)])), [items]);
+
   const loadLessons = async () => {
-    const query = classId ? `?class_id=${classId}` : "";
-    const data = await apiGet<ApiList<Lesson>>(`/api/v1/academics/lessons/${query}`);
-    setItems(listData(data));
+    const params = new URLSearchParams();
+    if (classId) params.set("class_id", classId);
+    params.set("page_size", "100");
+    const data = await fetchAllPages<Lesson>(`/api/v1/academics/lessons/?${params.toString()}`);
+    setItems(data);
   };
 
   const loadGroups = async () => {
-    const data = await apiGet<LessonGroup[]>("/api/v1/academics/lessons/grouped/");
+    const data = await fetchAllPages<LessonGroup>("/api/v1/academics/lessons/grouped/?page_size=100");
     setGroups(data);
   };
 
   useEffect(() => {
-    void loadLessons();
-    void loadGroups();
+    const loadAll = async () => {
+      try {
+        setLoading(true);
+        setError("");
+        await Promise.all([loadLessons(), loadGroups()]);
+      } catch {
+        setError("Unable to load lesson data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    void loadAll();
   }, []);
 
   const submit = async (event: FormEvent) => {
@@ -418,6 +500,7 @@ export function LessonPagePanel() {
     try {
       setSaving(true);
       setError("");
+      setSuccess("");
       await apiPost("/api/v1/academics/lessons/", {
         academic_year_id: academicYearId ? Number(academicYearId) : undefined,
         class_id: Number(classId),
@@ -426,7 +509,9 @@ export function LessonPagePanel() {
         lesson: lessonLines,
       });
       setLessonText("");
+      setSelectedLessonIds([]);
       await Promise.all([loadLessons(), loadGroups()]);
+      setSuccess("Lesson added successfully.");
     } catch {
       setError("Unable to save lesson rows.");
     } finally {
@@ -442,6 +527,7 @@ export function LessonPagePanel() {
   const saveEdit = async (item: Lesson) => {
     if (!editingTitle.trim()) return;
     try {
+      setSuccess("");
       await apiPut(`/api/v1/academics/lessons/${item.id}/`, {
         academic_year_id: item.academic_year_id,
         class_id: item.class_id,
@@ -451,66 +537,135 @@ export function LessonPagePanel() {
       });
       setEditingId(null);
       setEditingTitle("");
+      setSelectedLessonIds([]);
       await Promise.all([loadLessons(), loadGroups()]);
+      setSuccess("Lesson row updated successfully.");
     } catch {
       setError("Unable to update lesson row.");
     }
   };
 
   const deleteLesson = async (id: number) => {
+    if (!window.confirm("Are you sure you want to delete this item?")) return;
     try {
+      setSuccess("");
       await apiDelete(`/api/v1/academics/lessons/${id}/`);
+      setSelectedLessonIds([]);
       await Promise.all([loadLessons(), loadGroups()]);
+      setSuccess("Lesson row deleted successfully.");
     } catch {
       setError("Unable to delete lesson row.");
     }
   };
 
   const deleteGroup = async () => {
+    if (selectedLessonIds.length > 0) {
+      setDeleteMode("selected");
+      setDeleteDialogOpen(true);
+      return;
+    }
     if (!classId || !sectionId || !subjectId) {
       setError("Select class, section and subject before group delete.");
       return;
     }
+    setDeleteMode("group");
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = async () => {
     try {
-      await apiDelete(`/api/v1/academics/lessons/delete-group/?class_id=${classId}&section_id=${sectionId}&subject_id=${subjectId}`);
+      setSuccess("");
+      if (deleteMode === "selected") {
+        await Promise.all(selectedLessonIds.map((lessonId) => apiDelete(`/api/v1/academics/lessons/${lessonId}/`)));
+        setSelectedLessonIds([]);
+        setSuccess("Selected lesson rows deleted successfully.");
+      } else if (deleteMode === "group") {
+        await apiDelete(`/api/v1/academics/lessons/delete-group/?class_id=${classId}&section_id=${sectionId}&subject_id=${subjectId}`);
+        setSuccess("Lesson group deleted successfully.");
+      }
       await Promise.all([loadLessons(), loadGroups()]);
     } catch {
-      setError("Unable to delete lesson group.");
+      setError(deleteMode === "selected" ? "Unable to delete selected lessons." : "Unable to delete lesson group.");
+    } finally {
+      setDeleteDialogOpen(false);
+      setDeleteMode(null);
     }
   };
+
+  const groupRows = useMemo(() => groups, [groups]);
+  const totalGroupPages = Math.max(1, Math.ceil(groupRows.length / groupPageSize));
+  const paginatedGroups = useMemo(() => {
+    const start = (groupPage - 1) * groupPageSize;
+    return groupRows.slice(start, start + groupPageSize);
+  }, [groupRows, groupPage, groupPageSize]);
+
+  const totalLessonPages = Math.max(1, Math.ceil(items.length / lessonPageSize));
+  const paginatedLessons = useMemo(() => {
+    const start = (lessonPage - 1) * lessonPageSize;
+    return items.slice(start, start + lessonPageSize);
+  }, [items, lessonPage, lessonPageSize]);
+
+  useEffect(() => {
+    if (groupPage > totalGroupPages) {
+      setGroupPage(totalGroupPages);
+    }
+  }, [groupPage, totalGroupPages]);
+
+  useEffect(() => {
+    if (lessonPage > totalLessonPages) {
+      setLessonPage(totalLessonPages);
+    }
+  }, [lessonPage, totalLessonPages]);
 
   return (
     <div className="legacy-panel">
       <LegacyBreadcrumb title="Add Lesson" moduleLabel="Lesson" pageLabel="Add Lesson" />
       <LegacyPageFrame>
       <div style={{ marginBottom: 14, color: "var(--text-muted)", fontSize: 13 }}>Grouped create, row edit/delete, and group delete flow matching the PHP lesson screen.</div>
+      {loading && <div style={{ marginBottom: 12, color: "var(--text-muted)", fontSize: 13 }}>Loading lesson data...</div>}
+      {success && <div style={{ marginBottom: 12, color: "#15803d", fontSize: 13 }}>{success}</div>}
 
       <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
         <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
-          <select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={fieldStyle()}>
-            <option value="">Academic year (optional)</option>
-            {years.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}
-          </select>
-          <select value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); }} style={fieldStyle()}>
-            <option value="">Class</option>
-            {classes.map((schoolClass) => <option key={schoolClass.id} value={schoolClass.id}>{schoolClass.name}</option>)}
-          </select>
-          <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={fieldStyle()}>
-            <option value="">Section</option>
-            {filteredSections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
-          </select>
-          <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={fieldStyle()}>
-            <option value="">Subject</option>
-            {subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}
-          </select>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Academic Year</label>
+            <select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={fieldStyle()}>
+              <option value="">Academic year (optional)</option>
+              {years.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Class</label>
+            <select value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); }} style={fieldStyle()}>
+              <option value="">Class</option>
+              {classes.map((schoolClass) => <option key={schoolClass.id} value={schoolClass.id}>{schoolClass.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Section</label>
+            <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={fieldStyle()}>
+              <option value="">Section</option>
+              {filteredSections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Subject</label>
+            <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={fieldStyle()}>
+              <option value="">Subject</option>
+              {subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}
+            </select>
+          </div>
 
-          <textarea
-            value={lessonText}
-            onChange={(e) => setLessonText(e.target.value)}
-            rows={4}
-            placeholder="One lesson title per line"
-            style={{ gridColumn: "1 / -1", border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px" }}
-          />
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Lesson Titles</label>
+            <textarea
+              value={lessonText}
+              onChange={(e) => setLessonText(e.target.value)}
+              rows={4}
+              placeholder="One lesson title per line"
+              style={{ width: "100%", border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px" }}
+            />
+          </div>
 
           <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "space-between" }}>
             <button type="button" onClick={deleteGroup} style={{ ...buttonStyle(), background: "#dc2626", borderColor: "#dc2626" }}>
@@ -527,20 +682,42 @@ export function LessonPagePanel() {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
+              <th style={{ padding: 8, borderBottom: "1px solid var(--line)", width: 42 }}>
+                <input
+                  type="checkbox"
+                  checked={paginatedLessons.length > 0 && paginatedLessons.every((item) => selectedLessonIds.includes(item.id))}
+                  onChange={(event) => {
+                    if (event.target.checked) {
+                      setSelectedLessonIds(Array.from(new Set([...selectedLessonIds, ...paginatedLessons.map((item) => item.id)])));
+                    } else {
+                      setSelectedLessonIds((prev) => prev.filter((lessonId) => !paginatedLessons.some((item) => item.id === lessonId)));
+                    }
+                  }}
+                />
+              </th>
               <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>ID</th>
               <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Lesson Title</th>
               <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Actions</th>
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
+            {paginatedLessons.map((item) => (
               <tr key={item.id}>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)", width: 42 }}>
+                  <input
+                    type="checkbox"
+                    checked={selectedLessonIds.includes(item.id)}
+                    onChange={(event) => {
+                      setSelectedLessonIds((prev) => event.target.checked ? [...prev, item.id] : prev.filter((lessonId) => lessonId !== item.id));
+                    }}
+                  />
+                </td>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)", width: 80 }}>{item.id}</td>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
                   {editingId === item.id ? (
                     <input value={editingTitle} onChange={(e) => setEditingTitle(e.target.value)} style={{ ...fieldStyle(), height: 32 }} />
                   ) : (
-                    item.lesson_title
+                    item.lesson_name || item.lesson_title
                   )}
                 </td>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)", width: 220 }}>
@@ -558,11 +735,47 @@ export function LessonPagePanel() {
                 </td>
               </tr>
             ))}
-            {items.length === 0 && (
-              <tr><td colSpan={3} style={{ padding: 8, color: "var(--text-muted)" }}>No lessons yet.</td></tr>
+            {items.length === 0 && !loading && (
+              <tr><td colSpan={4} style={{ padding: 8, color: "var(--text-muted)" }}>No lessons yet.</td></tr>
             )}
           </tbody>
         </table>
+        {items.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Rows per page</span>
+              <select
+                value={lessonPageSize}
+                onChange={(e) => {
+                  setLessonPageSize(Number(e.target.value));
+                  setLessonPage(1);
+                }}
+                style={fieldStyle()}
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setLessonPage(1)} disabled={lessonPage <= 1} style={{ ...buttonStyle(), background: "#6b7280", borderColor: "#6b7280", opacity: lessonPage <= 1 ? 0.6 : 1 }}>
+                First
+              </button>
+              <button type="button" onClick={() => setLessonPage(Math.max(1, lessonPage - 1))} disabled={lessonPage <= 1} style={{ ...buttonStyle(), background: "#6b7280", borderColor: "#6b7280", opacity: lessonPage <= 1 ? 0.6 : 1 }}>
+                Previous
+              </button>
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Page {lessonPage} of {totalLessonPages}</span>
+              <button type="button" onClick={() => setLessonPage(Math.min(totalLessonPages, lessonPage + 1))} disabled={lessonPage >= totalLessonPages} style={{ ...buttonStyle(), background: "#6b7280", borderColor: "#6b7280", opacity: lessonPage >= totalLessonPages ? 0.6 : 1 }}>
+                Next
+              </button>
+              <button type="button" onClick={() => setLessonPage(totalLessonPages)} disabled={lessonPage >= totalLessonPages} style={{ ...buttonStyle(), background: "#6b7280", borderColor: "#6b7280", opacity: lessonPage >= totalLessonPages ? 0.6 : 1 }}>
+                Last
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="white-box" style={boxStyle()}>
@@ -577,18 +790,67 @@ export function LessonPagePanel() {
             </tr>
           </thead>
           <tbody>
-            {groups.map((group, index) => (
+            {paginatedGroups.map((group, index) => (
               <tr key={`${group.class_id}-${group.section_id}-${group.subject_id}-${index}`}>
-                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{group.class_id}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{group.section_id ?? "-"}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{group.subject_id}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{group.items.map((row) => row.lesson_title).join(", ")}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{fallbackLabel(group.class_name, classMap.get(group.class_id), String(group.class_id))}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{group.section_id ? fallbackLabel(group.section_name, sectionMap.get(group.section_id), String(group.section_id)) : "-"}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{fallbackLabel(group.subject_name, subjectMap.get(group.subject_id), String(group.subject_id))}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{group.items.map((row) => row.lesson_name || row.lesson_title).join(", ")}</td>
               </tr>
             ))}
-            {groups.length === 0 && <tr><td colSpan={4} style={{ padding: 8, color: "var(--text-muted)" }}>No grouped lessons.</td></tr>}
+            {groups.length === 0 && !loading && <tr><td colSpan={4} style={{ padding: 8, color: "var(--text-muted)" }}>No grouped lessons.</td></tr>}
           </tbody>
         </table>
+        {groups.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Rows per page</span>
+              <select value={groupPageSize} onChange={(e) => { setGroupPageSize(Number(e.target.value)); setGroupPage(1); }} style={fieldStyle()}>
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setGroupPage(1)} disabled={groupPage <= 1} style={{ ...buttonStyle(), background: "#6b7280", borderColor: "#6b7280", opacity: groupPage <= 1 ? 0.6 : 1 }}>
+                First
+              </button>
+              <button type="button" onClick={() => setGroupPage(Math.max(1, groupPage - 1))} disabled={groupPage <= 1} style={{ ...buttonStyle(), background: "#6b7280", borderColor: "#6b7280", opacity: groupPage <= 1 ? 0.6 : 1 }}>
+                Previous
+              </button>
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Page {groupPage} of {totalGroupPages}</span>
+              <button type="button" onClick={() => setGroupPage(Math.min(totalGroupPages, groupPage + 1))} disabled={groupPage >= totalGroupPages} style={{ ...buttonStyle(), background: "#6b7280", borderColor: "#6b7280", opacity: groupPage >= totalGroupPages ? 0.6 : 1 }}>
+                Next
+              </button>
+              <button type="button" onClick={() => setGroupPage(totalGroupPages)} disabled={groupPage >= totalGroupPages} style={{ ...buttonStyle(), background: "#6b7280", borderColor: "#6b7280", opacity: groupPage >= totalGroupPages ? 0.6 : 1 }}>
+                Last
+              </button>
+            </div>
+          </div>
+        )}
       </div>
+
+      {deleteDialogOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ width: "min(460px, calc(100vw - 24px))", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 12, padding: 16, boxShadow: "0 12px 30px rgba(0,0,0,.18)" }}>
+            <h3 style={{ margin: 0, fontSize: 18 }}>Delete Lessons</h3>
+            <p style={{ marginTop: 10, marginBottom: 14, color: "var(--text-muted)" }}>
+              {deleteMode === "selected"
+                ? `Delete ${selectedLessonIds.length} selected lesson row${selectedLessonIds.length === 1 ? "" : "s"}?`
+                : "Delete the selected lesson group?"}
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={() => { setDeleteDialogOpen(false); setDeleteMode(null); }} style={{ height: 36, padding: "0 14px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>
+                Cancel
+              </button>
+              <button type="button" onClick={() => void confirmDelete()} style={{ height: 36, padding: "0 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </LegacyPageFrame>
     </div>
   );
@@ -599,6 +861,8 @@ export function TopicPagePanel() {
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [topicGroups, setTopicGroups] = useState<LessonTopicGroup[]>([]);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [loading, setLoading] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
@@ -618,19 +882,34 @@ export function TopicPagePanel() {
     return sections.filter((section) => section.school_class === id);
   }, [classId, sections]);
 
+  const classMap = useMemo(() => new Map(classes.map((item) => [item.id, fallbackLabel(item.class_name, item.name, `Class ${item.id}`)])), [classes]);
+  const sectionMap = useMemo(() => new Map(sections.map((item) => [item.id, fallbackLabel(item.section_name, item.name, `Section ${item.id}`)])), [sections]);
+  const subjectMap = useMemo(() => new Map(subjects.map((item) => [item.id, fallbackLabel(item.subject_name, item.name, `Subject ${item.id}`)])), [subjects]);
+  const lessonMap = useMemo(() => new Map(lessons.map((item) => [item.id, fallbackLabel(item.lesson_name, item.lesson_title, `Lesson ${item.id}`)])), [lessons]);
+
   const loadLessons = async () => {
-    const data = await apiGet<ApiList<Lesson>>("/api/v1/academics/lessons/");
-    setLessons(listData(data));
+    const data = await fetchAllPages<Lesson>("/api/v1/academics/lessons/?page_size=100");
+    setLessons(data);
   };
 
   const loadTopicGroups = async () => {
-    const data = await apiGet<ApiList<LessonTopicGroup>>("/api/v1/academics/lesson-topics/");
-    setTopicGroups(listData(data));
+    const data = await fetchAllPages<LessonTopicGroup>("/api/v1/academics/lesson-topics/?page_size=100");
+    setTopicGroups(data);
   };
 
   useEffect(() => {
-    void loadLessons();
-    void loadTopicGroups();
+    const loadAll = async () => {
+      try {
+        setLoading(true);
+        setError("");
+        await Promise.all([loadLessons(), loadTopicGroups()]);
+      } catch {
+        setError("Unable to load topic data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    void loadAll();
   }, []);
 
   const filteredLessons = useMemo(() => {
@@ -659,6 +938,7 @@ export function TopicPagePanel() {
     try {
       setSaving(true);
       setError("");
+      setSuccess("");
       await apiPost("/api/v1/academics/lesson-topics/", {
         academic_year_id: academicYearId ? Number(academicYearId) : undefined,
         class_id: Number(classId),
@@ -670,6 +950,7 @@ export function TopicPagePanel() {
       setTopicText("");
       setFieldErrors({});
       await loadTopicGroups();
+      setSuccess("Topic added successfully.");
     } catch (err) {
       const apiError = getApiError(err);
       setError(apiError.message || "Unable to save topics.");
@@ -687,28 +968,36 @@ export function TopicPagePanel() {
   const saveTopicTitle = async () => {
     if (!editingTopicId || !editingTopicTitle.trim()) return;
     try {
+      setSuccess("");
       await apiPatch(`/api/v1/academics/lesson-topic-details/${editingTopicId}/`, { topic_title: editingTopicTitle.trim() });
       setEditingTopicId(null);
       setEditingTopicTitle("");
       await loadTopicGroups();
+      setSuccess("Topic title updated successfully.");
     } catch {
       setError("Unable to update topic title.");
     }
   };
 
   const deleteTopicDetail = async (topicId: number) => {
+    if (!window.confirm("Are you sure you want to delete this item?")) return;
     try {
+      setSuccess("");
       await apiDelete(`/api/v1/academics/lesson-topic-details/${topicId}/`);
       await loadTopicGroups();
+      setSuccess("Topic deleted successfully.");
     } catch {
       setError("Unable to delete topic detail.");
     }
   };
 
   const deleteTopicGroup = async (groupId: number) => {
+    if (!window.confirm("Are you sure you want to delete this item?")) return;
     try {
+      setSuccess("");
       await apiDelete(`/api/v1/academics/lesson-topics/delete-group/?id=${groupId}`);
       await loadTopicGroups();
+      setSuccess("Topic group deleted successfully.");
     } catch {
       setError("Unable to delete topic group.");
     }
@@ -719,37 +1008,58 @@ export function TopicPagePanel() {
       <LegacyBreadcrumb title="Add Topic" moduleLabel="Lesson Plan" pageLabel="Topic" />
       <LegacyPageFrame>
       <div style={{ marginBottom: 14, color: "var(--text-muted)", fontSize: 13 }}>Topic group create, topic-title edit, and group delete flow aligned with PHP behavior.</div>
+      {loading && <div style={{ marginBottom: 12, color: "var(--text-muted)", fontSize: 13 }}>Loading topic data...</div>}
+      {success && <div style={{ marginBottom: 12, color: "#15803d", fontSize: 13 }}>{success}</div>}
 
       <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
         <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 8 }}>
-          <select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.academic_year_id ? "#dc2626" : undefined }}>
-            <option value="">Academic year (optional)</option>
-            {years.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}
-          </select>
-          <select value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); }} style={{ ...fieldStyle(), borderColor: fieldErrors.class_id ? "#dc2626" : undefined }}>
-            <option value="">Class</option>
-            {classes.map((schoolClass) => <option key={schoolClass.id} value={schoolClass.id}>{schoolClass.name}</option>)}
-          </select>
-          <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.section_id ? "#dc2626" : undefined }}>
-            <option value="">Section</option>
-            {filteredSections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
-          </select>
-          <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.subject_id ? "#dc2626" : undefined }}>
-            <option value="">Subject</option>
-            {subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}
-          </select>
-          <select value={lessonId} onChange={(e) => setLessonId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.lesson_id ? "#dc2626" : undefined }}>
-            <option value="">Lesson</option>
-            {filteredLessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.lesson_title}</option>)}
-          </select>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Academic Year</label>
+            <select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.academic_year_id ? "#dc2626" : undefined }}>
+              <option value="">Academic year (optional)</option>
+              {years.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Class</label>
+            <select value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); }} style={{ ...fieldStyle(), borderColor: fieldErrors.class_id ? "#dc2626" : undefined }}>
+              <option value="">Class</option>
+              {classes.map((schoolClass) => <option key={schoolClass.id} value={schoolClass.id}>{fallbackLabel(schoolClass.class_name, schoolClass.name, `Class ${schoolClass.id}`)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Section</label>
+            <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.section_id ? "#dc2626" : undefined }}>
+              <option value="">Section</option>
+              {filteredSections.map((section) => <option key={section.id} value={section.id}>{fallbackLabel(section.section_name, section.name, `Section ${section.id}`)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Subject</label>
+            <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.subject_id ? "#dc2626" : undefined }}>
+              <option value="">Subject</option>
+              {subjects.map((subject) => <option key={subject.id} value={subject.id}>{fallbackLabel(subject.subject_name, subject.name, `Subject ${subject.id}`)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Lesson</label>
+            <select value={lessonId} onChange={(e) => setLessonId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.lesson_id ? "#dc2626" : undefined }}>
+              <option value="">{filteredLessons.length ? "Lesson" : "No lessons available"}</option>
+              {filteredLessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.lesson_name || lesson.lesson_title}</option>)}
+            </select>
+            {!filteredLessons.length ? <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>No lessons available</span> : null}
+          </div>
 
-          <textarea
-            value={topicText}
-            onChange={(e) => setTopicText(e.target.value)}
-            rows={4}
-            placeholder="One topic title per line"
-            style={{ gridColumn: "1 / -1", border: `1px solid ${fieldErrors.topic ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "8px 10px" }}
-          />
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Topics</label>
+            <textarea
+              value={topicText}
+              onChange={(e) => setTopicText(e.target.value)}
+              rows={4}
+              placeholder="One topic title per line"
+              style={{ width: "100%", border: `1px solid ${fieldErrors.topic ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "8px 10px" }}
+            />
+          </div>
           {fieldErrors.class_id && <div style={{ color: "#dc2626", fontSize: 12 }}>Class: {fieldErrors.class_id}</div>}
           {fieldErrors.section_id && <div style={{ color: "#dc2626", fontSize: 12 }}>Section: {fieldErrors.section_id}</div>}
           {fieldErrors.subject_id && <div style={{ color: "#dc2626", fontSize: 12 }}>Subject: {fieldErrors.subject_id}</div>}
@@ -767,7 +1077,10 @@ export function TopicPagePanel() {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
-              <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Group ID</th>
+              <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Class</th>
+              <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Section</th>
+              <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Subject</th>
+              <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Lesson</th>
               <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Topics</th>
               <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th>
             </tr>
@@ -775,7 +1088,10 @@ export function TopicPagePanel() {
           <tbody>
             {topicGroups.map((group) => (
               <tr key={group.id}>
-                <td style={{ padding: 8, borderBottom: "1px solid var(--line)", width: 80 }}>{group.id}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{fallbackLabel(group.class_name, classMap.get(group.class_id || 0), String(group.class_id || group.id))}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{group.section_id ? fallbackLabel(group.section_name, sectionMap.get(group.section_id), String(group.section_id)) : "-"}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{fallbackLabel(group.subject_name, subjectMap.get(group.subject_id || 0), String(group.subject_id || group.id))}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{group.lesson_name || lessonMap.get(group.lesson_id || 0) || (group.lesson_id ? `Lesson #${group.lesson_id}` : "-")}</td>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     {(group.topics || []).map((topic) => (
@@ -804,7 +1120,7 @@ export function TopicPagePanel() {
                 </td>
               </tr>
             ))}
-            {topicGroups.length === 0 && (
+            {topicGroups.length === 0 && !loading && (
               <tr><td colSpan={3} style={{ padding: 8, color: "var(--text-muted)" }}>No topic groups yet.</td></tr>
             )}
           </tbody>
@@ -825,8 +1141,12 @@ export function LessonPlannerPagePanel() {
   const [overviewItems, setOverviewItems] = useState<PlannerRow[]>([]);
   const [weekly, setWeekly] = useState<WeeklyPlanner | null>(null);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [loading, setLoading] = useState(true);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<PlannerRow | null>(null);
 
   const [academicYearId, setAcademicYearId] = useState("");
   const [day, setDay] = useState("1");
@@ -844,14 +1164,20 @@ export function LessonPlannerPagePanel() {
   const [customTopicIds, setCustomTopicIds] = useState("");
   const [customSubTopics, setCustomSubTopics] = useState("");
 
-  const [editingPlannerId, setEditingPlannerId] = useState<number | null>(null);
   const [weeklyStartDate, setWeeklyStartDate] = useState("");
+  const plannerFormRef = useRef<HTMLFormElement | null>(null);
 
   const filteredSections = useMemo(() => {
     const id = Number(classId);
     if (!id) return [];
     return sections.filter((section) => section.school_class === id);
   }, [classId, sections]);
+
+  const classMap = useMemo(() => new Map(classes.map((item) => [item.id, fallbackLabel(item.class_name, item.name, `Class ${item.id}`)])), [classes]);
+  const sectionMap = useMemo(() => new Map(sections.map((item) => [item.id, fallbackLabel(item.section_name, item.name, `Section ${item.id}`)])), [sections]);
+  const subjectMap = useMemo(() => new Map(subjects.map((item) => [item.id, fallbackLabel(item.subject_name, item.name, `Subject ${item.id}`)])), [subjects]);
+  const lessonMap = useMemo(() => new Map(lessons.map((item) => [item.id, fallbackLabel(item.lesson_name, item.lesson_title, `Lesson ${item.id}`)])), [lessons]);
+  const topicDetailMap = useMemo(() => new Map(topicDetails.map((item) => [item.id, item.topic_title])), [topicDetails]);
 
   const filteredLessons = useMemo(() => {
     return lessons.filter((lesson) => {
@@ -911,11 +1237,23 @@ export function LessonPlannerPagePanel() {
   };
 
   useEffect(() => {
-    void Promise.all([loadTeachers(), loadClassPeriods(), loadLessons(), loadTopicDetails(), loadPlanners(), loadOverview(), loadWeekly()]);
+    const loadAll = async () => {
+      try {
+        setLoading(true);
+        setError("");
+        await Promise.all([loadTeachers(), loadClassPeriods(), loadLessons(), loadTopicDetails(), loadPlanners(), loadOverview(), loadWeekly()]);
+      } catch {
+        setError("Unable to load lesson planner data.");
+      } finally {
+        setLoading(false);
+      }
+    };
+    void loadAll();
   }, []);
 
   const resetPlannerForm = () => {
-    setEditingPlannerId(null);
+    setIsEditMode(false);
+    setSelectedItem(null);
     setCustomizeMode(false);
     setFieldErrors({});
     setClassPeriodId("");
@@ -925,8 +1263,18 @@ export function LessonPlannerPagePanel() {
     setCustomSubTopics("");
   };
 
+  const focusPlannerForm = () => {
+    window.requestAnimationFrame(() => {
+      const formElement = plannerFormRef.current;
+      const firstField = formElement?.querySelector<HTMLElement>("select, input, textarea, button");
+      firstField?.focus();
+      formElement?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
   const fillPlannerForm = (row: PlannerRow) => {
-    setEditingPlannerId(row.id);
+    setIsEditMode(true);
+    setSelectedItem(row);
     setAcademicYearId(row.academic_year_id ? String(row.academic_year_id) : "");
     setDay(row.day ? String(row.day) : "1");
     setClassId(String(row.class_id));
@@ -950,6 +1298,8 @@ export function LessonPlannerPagePanel() {
       setCustomTopicIds("");
       setCustomSubTopics("");
     }
+
+    focusPlannerForm();
   };
 
   const submit = async (event: FormEvent) => {
@@ -963,6 +1313,8 @@ export function LessonPlannerPagePanel() {
     try {
       setSaving(true);
       setError("");
+      setSuccess("");
+      const wasEditMode = isEditMode;
 
       const payload: Record<string, unknown> = {
         academic_year_id: academicYearId ? Number(academicYearId) : undefined,
@@ -985,14 +1337,15 @@ export function LessonPlannerPagePanel() {
         payload.sub_topic = subTopic;
       }
 
-      if (editingPlannerId) {
-        await apiPut(`/api/v1/academics/lesson-planners/${editingPlannerId}/`, payload);
+      if (isEditMode && selectedItem) {
+        await apiPut(`/api/v1/academics/lesson-planners/${selectedItem.id}/`, payload);
       } else {
         await apiPost("/api/v1/academics/lesson-planners/", payload);
       }
 
       resetPlannerForm();
       await Promise.all([loadPlanners(), loadOverview(), loadWeekly()]);
+      setSuccess(wasEditMode ? "Lesson plan updated successfully." : "Lesson plan created successfully.");
     } catch (err) {
       const apiError = getApiError(err);
       setError(apiError.message || "Unable to save lesson planner row.");
@@ -1003,9 +1356,12 @@ export function LessonPlannerPagePanel() {
   };
 
   const deletePlanner = async (id: number) => {
+    if (!window.confirm("Are you sure you want to delete this item?")) return;
     try {
+      setSuccess("");
       await apiDelete(`/api/v1/academics/lesson-planners/${id}/`);
       await Promise.all([loadPlanners(), loadOverview(), loadWeekly()]);
+      setSuccess("Lesson plan deleted successfully.");
     } catch {
       setError("Unable to delete planner row.");
     }
@@ -1027,41 +1383,70 @@ export function LessonPlannerPagePanel() {
       <LegacyBreadcrumb title="Lesson Plan Create" moduleLabel="Lesson Plan" pageLabel="Lesson Plan Create" />
       <LegacyPageFrame>
       <div style={{ marginBottom: 14, color: "var(--text-muted)", fontSize: 13 }}>Planner create/update/delete plus weekly and overview reports in the same legacy flow.</div>
+      {loading && <div style={{ marginBottom: 12, color: "var(--text-muted)", fontSize: 13 }}>Loading lesson planner data...</div>}
+      {success && <div style={{ marginBottom: 12, color: "#15803d", fontSize: 13 }}>{success}</div>}
 
       <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
-        <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
-          <select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.academic_year_id ? "#dc2626" : undefined }}>
-            <option value="">Academic year (optional)</option>
-            {years.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}
-          </select>
-          <input value={day} onChange={(e) => setDay(e.target.value)} type="number" min={1} max={7} placeholder="Day ID" style={{ ...fieldStyle(), borderColor: fieldErrors.day ? "#dc2626" : undefined }} />
-          <select value={teacherId} onChange={(e) => setTeacherId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.teacher_id ? "#dc2626" : undefined }}>
-            <option value="">Select teacher</option>
-            {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.full_name}</option>)}
-          </select>
-          <select value={classPeriodId} onChange={(e) => setClassPeriodId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.class_period_id ? "#dc2626" : undefined }}>
-            <option value="">Select period</option>
-            {classPeriods.map((period) => <option key={period.id} value={period.id}>{period.period} ({period.start_time} - {period.end_time})</option>)}
-          </select>
+        <form ref={plannerFormRef} onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Academic Year</label>
+            <select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.academic_year_id ? "#dc2626" : undefined }}>
+              <option value="">Academic year (optional)</option>
+              {years.map((year) => <option key={year.id} value={year.id}>{year.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Day</label>
+            <input value={day} onChange={(e) => setDay(e.target.value)} type="number" min={1} max={7} placeholder="Day ID" style={{ ...fieldStyle(), borderColor: fieldErrors.day ? "#dc2626" : undefined }} />
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Teacher</label>
+            <select value={teacherId} onChange={(e) => setTeacherId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.teacher_id ? "#dc2626" : undefined }}>
+              <option value="">Select teacher</option>
+              {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.full_name || teacher.username}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Class Period</label>
+            <select value={classPeriodId} onChange={(e) => setClassPeriodId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.class_period_id ? "#dc2626" : undefined }}>
+              <option value="">Select period</option>
+              {classPeriods.map((period) => <option key={period.id} value={period.id}>{period.period} ({period.start_time} - {period.end_time})</option>)}
+            </select>
+          </div>
 
-          <select value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); }} style={{ ...fieldStyle(), borderColor: fieldErrors.class_id ? "#dc2626" : undefined }}>
-            <option value="">Class</option>
-            {classes.map((schoolClass) => <option key={schoolClass.id} value={schoolClass.id}>{schoolClass.name}</option>)}
-          </select>
-          <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.section_id ? "#dc2626" : undefined }}>
-            <option value="">Section</option>
-            {filteredSections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
-          </select>
-          <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.subject_id ? "#dc2626" : undefined }}>
-            <option value="">Subject</option>
-            {subjects.map((subject) => <option key={subject.id} value={subject.id}>{subject.name}</option>)}
-          </select>
-          <select value={lessonId} onChange={(e) => setLessonId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.lesson ? "#dc2626" : undefined }}>
-            <option value="">Lesson</option>
-            {filteredLessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.lesson_title}</option>)}
-          </select>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Class</label>
+            <select value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); }} style={{ ...fieldStyle(), borderColor: fieldErrors.class_id ? "#dc2626" : undefined }}>
+              <option value="">Class</option>
+              {classes.map((schoolClass) => <option key={schoolClass.id} value={schoolClass.id}>{fallbackLabel(schoolClass.class_name, schoolClass.name, `Class ${schoolClass.id}`)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Section</label>
+            <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.section_id ? "#dc2626" : undefined }}>
+              <option value="">Section</option>
+              {filteredSections.map((section) => <option key={section.id} value={section.id}>{fallbackLabel(section.section_name, section.name, `Section ${section.id}`)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Subject</label>
+            <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.subject_id ? "#dc2626" : undefined }}>
+              <option value="">Subject</option>
+              {subjects.map((subject) => <option key={subject.id} value={subject.id}>{fallbackLabel(subject.subject_name, subject.name, `Subject ${subject.id}`)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Lesson</label>
+            <select value={lessonId} onChange={(e) => setLessonId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.lesson ? "#dc2626" : undefined }}>
+              <option value="">Lesson</option>
+              {filteredLessons.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.lesson_name || lesson.lesson_title}</option>)}
+            </select>
+          </div>
 
-          <input value={lessonDate} onChange={(e) => setLessonDate(e.target.value)} type="date" style={{ ...fieldStyle(), borderColor: fieldErrors.lesson_date ? "#dc2626" : undefined }} />
+          <div>
+            <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Lesson Date</label>
+            <input value={lessonDate} onChange={(e) => setLessonDate(e.target.value)} type="date" style={{ ...fieldStyle(), borderColor: fieldErrors.lesson_date ? "#dc2626" : undefined }} />
+          </div>
 
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
             <input type="checkbox" checked={customizeMode} onChange={(e) => setCustomizeMode(e.target.checked)} />
@@ -1070,29 +1455,41 @@ export function LessonPlannerPagePanel() {
 
           {!customizeMode && (
             <>
-              <select value={topicId} onChange={(e) => setTopicId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.topic ? "#dc2626" : undefined }}>
-                <option value="">Topic detail</option>
-                {filteredTopicDetails.map((topic) => <option key={topic.id} value={topic.id}>{topic.topic_title} (#{topic.id})</option>)}
-              </select>
-              <input value={subTopic} onChange={(e) => setSubTopic(e.target.value)} placeholder="Sub topic" style={{ ...fieldStyle(), borderColor: fieldErrors.sub_topic ? "#dc2626" : undefined }} />
+              <div>
+                <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Topic Detail</label>
+                <select value={topicId} onChange={(e) => setTopicId(e.target.value)} style={{ ...fieldStyle(), borderColor: fieldErrors.topic ? "#dc2626" : undefined }}>
+                  <option value="">Topic detail</option>
+                  {filteredTopicDetails.map((topic) => <option key={topic.id} value={topic.id}>{topic.topic_title}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Sub Topic</label>
+                <input value={subTopic} onChange={(e) => setSubTopic(e.target.value)} placeholder="Sub topic" style={{ ...fieldStyle(), borderColor: fieldErrors.sub_topic ? "#dc2626" : undefined }} />
+              </div>
             </>
           )}
 
           {customizeMode && (
             <>
-              <input
-                value={customTopicIds}
-                onChange={(e) => setCustomTopicIds(e.target.value)}
-                placeholder="Topic detail IDs (comma separated)"
-                style={{ ...fieldStyle(), gridColumn: "1 / -1", borderColor: fieldErrors.topic ? "#dc2626" : undefined }}
-              />
-              <textarea
-                value={customSubTopics}
-                onChange={(e) => setCustomSubTopics(e.target.value)}
-                placeholder="Sub topic lines (line 1 = first topic id)"
-                rows={3}
-                style={{ gridColumn: "1 / -1", border: `1px solid ${fieldErrors.sub_topic ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "8px 10px" }}
-              />
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Topic Detail IDs</label>
+                <input
+                  value={customTopicIds}
+                  onChange={(e) => setCustomTopicIds(e.target.value)}
+                  placeholder="Topic detail IDs (comma separated)"
+                  style={{ ...fieldStyle(), borderColor: fieldErrors.topic ? "#dc2626" : undefined }}
+                />
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Sub Topic Lines</label>
+                <textarea
+                  value={customSubTopics}
+                  onChange={(e) => setCustomSubTopics(e.target.value)}
+                  placeholder="Sub topic lines (line 1 = first topic id)"
+                  rows={3}
+                  style={{ width: "100%", border: `1px solid ${fieldErrors.sub_topic ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "8px 10px" }}
+                />
+              </div>
             </>
           )}
 
@@ -1105,12 +1502,12 @@ export function LessonPlannerPagePanel() {
           {fieldErrors.sub_topic && <div style={{ color: "#dc2626", fontSize: 12, gridColumn: "1 / -1" }}>Sub topic: {fieldErrors.sub_topic}</div>}
 
           <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            {editingPlannerId && (
+            {isEditMode && (
               <button type="button" onClick={resetPlannerForm} style={{ ...buttonStyle(), background: "#6b7280", borderColor: "#6b7280" }}>
                 Cancel Edit
               </button>
             )}
-            <button type="submit" disabled={!isPlannerFormValid} style={{ ...buttonStyle(), opacity: isPlannerFormValid ? 1 : 0.6, cursor: isPlannerFormValid ? "pointer" : "not-allowed" }}>{saving ? "Saving..." : editingPlannerId ? "Update Lesson Plan" : "Save Lesson Plan"}</button>
+            <button type="submit" disabled={!isPlannerFormValid} style={{ ...buttonStyle(), opacity: isPlannerFormValid ? 1 : 0.6, cursor: isPlannerFormValid ? "pointer" : "not-allowed" }}>{saving ? "Saving..." : isEditMode ? "Update Lesson Plan" : "Create Lesson Plan"}</button>
           </div>
         </form>
         {error && <p style={{ color: "var(--warning)", marginTop: 8 }}>{error}</p>}
@@ -1136,8 +1533,8 @@ export function LessonPlannerPagePanel() {
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)", width: 70 }}>{item.id}</td>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.lesson_date}</td>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.class_period_id ? (periodNameById.get(item.class_period_id) || `Period #${item.class_period_id}`) : "-"}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.lesson_detail_id}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.topic_detail_id || "-"}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.lesson_detail_name || lessonMap.get(item.lesson_detail_id) || `Lesson #${item.lesson_detail_id}`}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.topic_detail_name || (item.topic_detail_id ? `Topic #${item.topic_detail_id}` : "-")}</td>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.sub_topic || item.topics.map((topic) => topic.sub_topic_title).join(", ") || "-"}</td>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)", width: 180 }}>
                   <div style={{ display: "flex", gap: 6 }}>
@@ -1185,8 +1582,8 @@ export function LessonPlannerPagePanel() {
                               {row ? (
                                 <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 8, background: "#fff" }}>
                                   <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 4 }}>{row.class_period_id ? (periodNameById.get(row.class_period_id) || `Period #${row.class_period_id}`) : rowInfo.label}</div>
-                                  <div style={{ fontWeight: 600, fontSize: 12 }}>Lesson #{row.lesson_detail_id}</div>
-                                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Topic: {row.topic_detail_id || "-"}</div>
+                                  <div style={{ fontWeight: 600, fontSize: 12 }}>Lesson: {row.lesson_detail_name || lessonMap.get(row.lesson_detail_id) || `Lesson #${row.lesson_detail_id}`}</div>
+                                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Topic: {row.topic_detail_name || (row.topic_detail_id ? `Topic #${row.topic_detail_id}` : "-")}</div>
                                   <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Routine: {row.routine_id || "-"}</div>
                                   <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Teacher: {row.teacher_id ? (teacherNameById.get(row.teacher_id) || `#${row.teacher_id}`) : "-"}</div>
                                 </div>
@@ -1225,9 +1622,9 @@ export function LessonPlannerPagePanel() {
               <tr key={item.id}>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.id}</td>
                 <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.lesson_date}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.class_id}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.section_id ?? "-"}</td>
-                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.subject_id}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.class_name || classMap.get(item.class_id) || item.class_id}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.section_id ? (item.section_name || sectionMap.get(item.section_id) || item.section_id) : "-"}</td>
+                <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{item.subject_name || subjectMap.get(item.subject_id) || item.subject_id}</td>
               </tr>
             ))}
             {overviewItems.length === 0 && <tr><td colSpan={5} style={{ padding: 8, color: "var(--text-muted)" }}>No overview rows.</td></tr>}

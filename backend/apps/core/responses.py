@@ -39,15 +39,17 @@ class StandardizedResponse:
     @staticmethod
     def paginated(page_obj, serializer_data, message="Data retrieved successfully", status_code=status.HTTP_200_OK):
         """Return a paginated response with metadata."""
+        count = page_obj.paginator.count if hasattr(page_obj, 'paginator') else len(serializer_data)
+        next_link = page_obj.get_next_link() if hasattr(page_obj, 'get_next_link') else None
+        previous_link = page_obj.get_previous_link() if hasattr(page_obj, 'get_previous_link') else None
         return Response(
             {
                 "success": True,
                 "message": message,
-                "pagination": {
-                    "count": page_obj.paginator.count if hasattr(page_obj, 'paginator') else len(serializer_data),
-                    "next": page_obj.get_next_link() if hasattr(page_obj, 'get_next_link') else None,
-                    "previous": page_obj.get_previous_link() if hasattr(page_obj, 'get_previous_link') else None,
-                },
+                "count": count,
+                "next": next_link,
+                "previous": previous_link,
+                "results": serializer_data,
                 "data": serializer_data,
             },
             status=status_code,

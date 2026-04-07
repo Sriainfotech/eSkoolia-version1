@@ -160,7 +160,7 @@ export function TimeSpinnerPicker({ value, onChange }: TimeSpinnerPickerProps) {
           <div style={{ display: "flex", flexDirection: "column", gap: 1, alignItems: "center" }}>
             <button
               type="button"
-              onClick={incrementHours}
+              onClick={decrementHours}
               onMouseDown={(e) => e.preventDefault()}
               style={spinnerButtonStyle as React.CSSProperties}
             >
@@ -169,7 +169,7 @@ export function TimeSpinnerPicker({ value, onChange }: TimeSpinnerPickerProps) {
             <div style={timeDisplayStyle as React.CSSProperties}>{hours}</div>
             <button
               type="button"
-              onClick={decrementHours}
+              onClick={incrementHours}
               onMouseDown={(e) => e.preventDefault()}
               style={spinnerButtonStyle as React.CSSProperties}
             >
@@ -182,7 +182,7 @@ export function TimeSpinnerPicker({ value, onChange }: TimeSpinnerPickerProps) {
           <div style={{ display: "flex", flexDirection: "column", gap: 1, alignItems: "center" }}>
             <button
               type="button"
-              onClick={incrementMinutes}
+              onClick={decrementMinutes}
               onMouseDown={(e) => e.preventDefault()}
               style={spinnerButtonStyle as React.CSSProperties}
             >
@@ -191,7 +191,7 @@ export function TimeSpinnerPicker({ value, onChange }: TimeSpinnerPickerProps) {
             <div style={timeDisplayStyle as React.CSSProperties}>{minutes}</div>
             <button
               type="button"
-              onClick={decrementMinutes}
+              onClick={incrementMinutes}
               onMouseDown={(e) => e.preventDefault()}
               style={spinnerButtonStyle as React.CSSProperties}
             >

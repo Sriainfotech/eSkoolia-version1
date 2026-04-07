@@ -2,6 +2,7 @@ from rest_framework import permissions, status, viewsets
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from django.db import IntegrityError
+from config.pagination import ApiPageNumberPagination
 from .models import AcademicYear, Class, ClassPeriod, ClassRoom, Section, Subject, Vehicle, TransportRoute, AssignVehicle
 from .models import ItemCategory, ItemStore, Supplier, Item, ItemReceive, ItemIssue, ItemSell
 from .serializers import (
@@ -77,7 +78,7 @@ class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Class.objects.prefetch_related("sections")
+        qs = Class.objects.prefetch_related("sections").order_by("numeric_order", "name", "id")
         if user.is_superuser:
             return qs
         if user.school_id:
@@ -192,6 +193,12 @@ class SectionViewSet(viewsets.ModelViewSet):
             Section.objects.filter(school_class_id=school_class_id).values_list("name", flat=True)
         )
         existing_lower = {name.casefold() for name in existing_lower if name}
+
+        max_sections_per_class = getattr(SectionSerializer, "MAX_SECTIONS_PER_CLASS", 26)
+        existing_count = Section.objects.filter(school_class_id=school_class_id).count()
+        if existing_count + len(split_names) > max_sections_per_class:
+            raise ValidationError({"name": ["Section limit reached for this class."]})
+
         duplicate_existing = [name for name in split_names if name.casefold() in existing_lower]
         if duplicate_existing:
             raise ValidationError({"name": ["Section name already exists"]})
@@ -309,6 +316,10 @@ class ClassRoomViewSet(TenantQueryMixin, viewsets.ModelViewSet):
     model = ClassRoom
     serializer_class = ClassRoomSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        return queryset.order_by("room_no", "id")
 
     def _normalized_errors(self, serializer_errors):
         if isinstance(serializer_errors, dict):
@@ -506,6 +517,7 @@ class AssignVehicleViewSet(TenantQueryMixin, PermissionScopedViewSet):
 class ItemCategoryViewSet(TenantQueryMixin, PermissionScopedViewSet):
     model = ItemCategory
     serializer_class = ItemCategorySerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     permission_codes = {"*": "inventory.item_category.view"}
 
@@ -517,6 +529,7 @@ class ItemCategoryViewSet(TenantQueryMixin, PermissionScopedViewSet):
 class ItemStoreViewSet(TenantQueryMixin, PermissionScopedViewSet):
     model = ItemStore
     serializer_class = ItemStoreSerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     permission_codes = {"*": "inventory.item_store.view"}
 
@@ -528,6 +541,7 @@ class ItemStoreViewSet(TenantQueryMixin, PermissionScopedViewSet):
 class SupplierViewSet(TenantQueryMixin, PermissionScopedViewSet):
     model = Supplier
     serializer_class = SupplierSerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     permission_codes = {"*": "inventory.supplier.view"}
 
@@ -539,6 +553,7 @@ class SupplierViewSet(TenantQueryMixin, PermissionScopedViewSet):
 class ItemViewSet(TenantQueryMixin, PermissionScopedViewSet):
     model = Item
     serializer_class = ItemSerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     permission_codes = {"*": "inventory.item.view"}
 
@@ -556,6 +571,7 @@ class ItemViewSet(TenantQueryMixin, PermissionScopedViewSet):
 class ItemReceiveViewSet(TenantQueryMixin, PermissionScopedViewSet):
     model = ItemReceive
     serializer_class = ItemReceiveSerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     permission_codes = {"*": "inventory.item_receive.view"}
 
@@ -573,6 +589,7 @@ class ItemReceiveViewSet(TenantQueryMixin, PermissionScopedViewSet):
 class ItemIssueViewSet(TenantQueryMixin, PermissionScopedViewSet):
     model = ItemIssue
     serializer_class = ItemIssueSerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     permission_codes = {"*": "inventory.item_issue.view"}
 
@@ -590,6 +607,7 @@ class ItemIssueViewSet(TenantQueryMixin, PermissionScopedViewSet):
 class ItemSellViewSet(TenantQueryMixin, PermissionScopedViewSet):
     model = ItemSell
     serializer_class = ItemSellSerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     permission_codes = {"*": "inventory.item_sell.view"}
 

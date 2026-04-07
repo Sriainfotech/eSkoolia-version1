@@ -1,3 +1,5 @@
+import re
+
 from django.db import models
 from decimal import Decimal
 
@@ -35,10 +37,29 @@ class Class(models.Model):
 
     class Meta:
         db_table = "school_classes"
-        ordering = ["numeric_order", "name"]
+        ordering = ["numeric_order", "name", "id"]
         constraints = [
             models.UniqueConstraint(fields=["school", "name"], name="uq_class_school_name"),
         ]
+
+    @staticmethod
+    def resolve_numeric_order(name):
+        cleaned = (name or "").strip().upper()
+        if cleaned == "LKG":
+            return 1
+        if cleaned == "UKG":
+            return 2
+
+        match = re.search(r"(?<!\d)(1[0-2]|[1-9])(?!\d)", cleaned)
+        if match:
+            return int(match.group(1)) + 2
+
+        return 1000
+
+    def save(self, *args, **kwargs):
+        if not self.numeric_order:
+            self.numeric_order = self.resolve_numeric_order(self.name)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name

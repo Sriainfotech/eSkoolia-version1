@@ -129,7 +129,7 @@ class StudentAttendanceIndexAPIView(AttendanceTenantMixin, APIView):
 
 
 class StudentSearchAPIView(AttendanceTenantMixin, APIView):
-    """Parity with PHP studentSearch()."""
+    """Parity with PHP studentSearch() with enhanced validation."""
 
     def post(self, request):
         req = StudentSearchRequestSerializer(data=request.data)
@@ -138,6 +138,14 @@ class StudentSearchAPIView(AttendanceTenantMixin, APIView):
         class_id = req.validated_data["class"]
         section_id = req.validated_data["section"]
         attendance_date = req.validated_data["attendance_date"]
+
+        # Validate date is not in future
+        from datetime import date as date_type
+        if attendance_date > date_type.today():
+            return Response(
+                {"success": False, "message": "Attendance cannot be marked for future dates"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         students = Student.objects.filter(
             current_class_id=class_id,
@@ -222,54 +230,130 @@ class StudentSearchAPIView(AttendanceTenantMixin, APIView):
 
 
 class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
-    """Parity with PHP studentAttendanceStore()."""
+    """Parity with PHP studentAttendanceStore() with enhanced validation."""
 
     def post(self, request):
-        req = StudentAttendanceStoreRequestSerializer(data=request.data)
-        req.is_valid(raise_exception=True)
-        data = req.validated_data
+        try:
+            req = StudentAttendanceStoreRequestSerializer(data=request.data)
+            req.is_valid(raise_exception=True)
+            data = req.validated_data
 
-        attendance_map = data.get("attendance") or data.get("attendance_type") or {}
-        note_map = data.get("note") or data.get("attendance_note") or {}
-
-        for student_id in data["id"]:
-            existing = StudentAttendance.objects.filter(
-                student_id=student_id,
+            # Validation: Check if attendance already exists
+            existing_attendance = StudentAttendance.objects.filter(
                 attendance_date=data["date"],
+                class_id=data.get("class_id"),
+                section_id=data.get("section_id"),
                 **self.school_filter(request),
-            ).first()
-            if existing:
-                existing.delete()
+            ).exists()
+            if existing_attendance:
+                return Response(
+                    {"success": False, "message": "Attendance already exists for this date. You can update the existing records."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-            attendance = StudentAttendance()
-            attendance.student_id = student_id
-            if data.get("mark_holiday"):
-                attendance.attendance_type = "H"
-                attendance.notes = "Holiday"
-            else:
-                raw_type = attendance_map.get(str(student_id))
-                if raw_type is None:
-                    raw_type = attendance_map.get(student_id)
-                attendance.attendance_type = raw_type or "P"
+            # Validation: Check if all students have a status
+            attendance_map = data.get("attendance") or data.get("attendance_type") or {}
+            lock_attendance = data.get("lock_attendance", False)
 
-                raw_note = note_map.get(str(student_id))
-                if raw_note is None:
-                    raw_note = note_map.get(student_id)
-                attendance.notes = raw_note or ""
+            if not attendance_map:
+                return Response(
+                    {"success": False, "message": "Please mark attendance for all students"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-            attendance.attendance_date = data["date"]
-            attendance.school = request.user.school
-            attendance.academic_year_id = request.data.get("academic_year_id")
-            attendance.class_id = request.data.get("class_id")
-            attendance.section_id = request.data.get("section_id")
-            attendance.save()
+            attendance_ids = set(data.get("id", []))
+            status_count = len([v for k, v in attendance_map.items() if str(k) in [str(i) for i in attendance_ids]])
+            if status_count != len(attendance_ids):
+                return Response(
+                    {"success": False, "message": "Please mark attendance for all students"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-            if attendance.attendance_type == "P":
-                student = Student.objects.filter(id=student_id, **self.school_filter(request)).select_related("guardian").first()
-                if student:
-                    send_present_attendance_notifications(student, attendance.attendance_date)
+            # Validation: Check if students exist for class and section
+            students = Student.objects.filter(
+                current_class_id=data.get("class_id"),
+                current_section_id=data.get("section_id"),
+                **self.school_filter(request),
+            )
+            if not students.exists():
+                return Response(
+                    {"success": False, "message": "No students found for selected class and section"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-        return Response({"message": "Student attendance been submitted successfully"}, status=status.HTTP_200_OK)
+            note_map = data.get("note") or data.get("attendance_note") or {}
+
+            with transaction.atomic():
+                for student_id in data["id"]:
+                    # Delete existing attendance for same date
+                    existing = StudentAttendance.objects.filter(
+                        student_id=student_id,
+                        attendance_date=data["date"],
+                        **self.school_filter(request),
+                    ).first()
+                    if existing and not existing.is_locked:
+                        existing.delete()
+                    elif existing and existing.is_locked:
+                        return Response(
+                            {"success": False, "message": "Cannot update locked attendance. Only admin can override."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
+                    attendance = StudentAttendance()
+                    attendance.student_id = student_id
+                    if data.get("mark_holiday"):
+                        attendance.attendance_type = "H"
+                        attendance.notes = "Holiday"
+                    else:
+                        raw_type = attendance_map.get(str(student_id))
+                        if raw_type is None:
+                            raw_type = attendance_map.get(student_id)
+                        
+                        # Validate attendance type
+                        valid_types = ["P", "A", "L", "F", "H"]
+                        if raw_type and raw_type not in valid_types:
+                            return Response(
+                                {"success": False, "message": "Invalid attendance status"},
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+                        attendance.attendance_type = raw_type or "P"
+
+                        raw_note = note_map.get(str(student_id))
+                        if raw_note is None:
+                            raw_note = note_map.get(student_id)
+                        
+                        # Validate note length
+                        note_text = raw_note or ""
+                        if len(note_text) > 250:
+                            return Response(
+                                {"success": False, "message": "Note cannot exceed 250 characters"},
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+                        attendance.notes = note_text
+
+                    attendance.attendance_date = data["date"]
+                    attendance.school = request.user.school
+                    attendance.academic_year_id = request.data.get("academic_year_id")
+                    attendance.class_id = request.data.get("class_id")
+                    attendance.section_id = request.data.get("section_id")
+                    attendance.marked_by = request.user
+                    attendance.is_locked = lock_attendance
+                    attendance.save()
+
+                    if attendance.attendance_type == "P":
+                        student = Student.objects.filter(id=student_id, **self.school_filter(request)).select_related("guardian").first()
+                        if student:
+                            send_present_attendance_notifications(student, attendance.attendance_date)
+
+            return Response(
+                {"success": True, "message": "Attendance saved successfully"},
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {"success": False, "message": f"Failed to save attendance: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class StudentAttendanceHolidayAPIView(AttendanceTenantMixin, APIView):
@@ -385,6 +469,10 @@ class StudentAttendanceImportAPIView(AttendanceTenantMixin, APIView):
 
 class StudentAttendanceDownloadSampleAPIView(AttendanceTenantMixin, APIView):
     """Parity with PHP downloadStudentAtendanceFile()."""
+    
+    # Allow any authenticated user to download sample (no special permission needed)
+    def _required_permission_code(self):
+        return None  # No permission code check for sample download
 
     def get(self, request):
         try:
@@ -448,12 +536,14 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
         section_id = request.data.get("section")
         uploaded_file = request.FILES.get("file")
 
+        # Validation: Required fields
         if not attendance_date or not class_id or not section_id or not uploaded_file:
             return Response(
                 {"detail": "attendance_date, file, class and section are required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Validation: File format
         ext = uploaded_file.name.split(".")[-1].lower() if "." in uploaded_file.name else ""
         if ext not in {"csv", "xlsx", "xls"}:
             return Response(
@@ -461,23 +551,43 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Validation: File size (5MB max)
+        file_size_mb = uploaded_file.size / (1024 * 1024)
+        if file_size_mb > 5:
+            return Response(
+                {"detail": f"File size exceeds 5MB limit (current: {file_size_mb:.2f}MB)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validation: Date format and range
         request_date = self._normalize_date(attendance_date)
         if not request_date:
             return Response({"detail": "Invalid attendance_date."}, status=status.HTTP_400_BAD_REQUEST)
 
-        imported_rows = []
+        # Validation: Date not in future
+        from datetime import date as date_type
+        if request_date > date_type.today():
+            return Response(
+                {"detail": "Cannot import attendance for future dates."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
+        imported_rows = []
+        errors: list[dict] = []
+        row_number = 2  # Start from 2 (header is row 1)
+
+        # Parse file
         if ext == "csv":
-            content = uploaded_file.read().decode("utf-8", errors="ignore")
-            reader = csv.DictReader(StringIO(content))
-            for row in reader:
-                imported_rows.append(
-                    {
-                        "admission_no": row.get("admission_no"),
-                        "attendance_date": self._normalize_date(row.get("attendance_date")),
-                        "attendance_type": (row.get("attendance_type") or "").strip(),
-                        "note": row.get("note") or "",
-                    }
+            try:
+                content = uploaded_file.read().decode("utf-8", errors="ignore")
+                reader = csv.DictReader(StringIO(content))
+                for row in reader:
+                    imported_rows.append((row_number, row))
+                    row_number += 1
+            except Exception as e:
+                return Response(
+                    {"detail": f"Failed to parse CSV file: {str(e)}"},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
         else:
             try:
@@ -485,117 +595,146 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
             except Exception:
                 return Response({"detail": "openpyxl is required for xlsx import."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            workbook = load_workbook(uploaded_file, data_only=True)
-            sheet = workbook.active
-            rows = list(sheet.iter_rows(values_only=True))
-            if not rows:
-                return Response({"detail": "File is empty."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                workbook = load_workbook(uploaded_file, data_only=True)
+                sheet = workbook.active
+                rows = list(sheet.iter_rows(values_only=True))
+                if not rows:
+                    return Response({"detail": "File is empty."}, status=status.HTTP_400_BAD_REQUEST)
 
-            headers = [str(h).strip() if h is not None else "" for h in rows[0]]
-            header_map = {h: i for i, h in enumerate(headers)}
+                headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+                header_map = {h: i for i, h in enumerate(headers)}
 
-            for row in rows[1:]:
-                imported_rows.append(
-                    {
-                        "admission_no": row[header_map.get("admission_no", -1)] if header_map.get("admission_no", -1) >= 0 else None,
-                        "attendance_date": self._normalize_date(row[header_map.get("attendance_date", -1)] if header_map.get("attendance_date", -1) >= 0 else None),
-                        "attendance_type": str(row[header_map.get("attendance_type", -1)]).strip() if header_map.get("attendance_type", -1) >= 0 and row[header_map.get("attendance_type", -1)] is not None else "",
-                        "note": str(row[header_map.get("note", -1)]).strip() if header_map.get("note", -1) >= 0 and row[header_map.get("note", -1)] is not None else "",
-                    }
+                for idx, row in enumerate(rows[1:], start=2):
+                    row_dict = {}
+                    for header, col_idx in header_map.items():
+                        if col_idx < len(row):
+                            row_dict[header] = row[col_idx]
+                    imported_rows.append((idx, row_dict))
+            except Exception as e:
+                return Response(
+                    {"detail": f"Failed to parse Excel file: {str(e)}"},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
         school_filter = self.school_filter(request)
+        processed_count = 0
+        failed_count = 0
 
-        # Legacy importer behavior: stage parsed rows into StudentAttendanceBulk first.
-        for value in imported_rows:
-            admission_no = (value.get("admission_no") or "").strip()
+        # Validate and process rows
+        valid_attendance_types = ["P", "A", "L", "F", "H"]
+
+        for row_num, row_data in imported_rows:
+            row_errors = []
+            admission_no = (row_data.get("admission_no") or "").strip()
+            attendance_type = (row_data.get("attendance_type") or "").strip()
+            note = (row_data.get("note") or "").strip()
+
+            # Validate admission_no
             if not admission_no:
+                row_errors.append({"field": "admission_no", "message": "Admission number is required"})
+
+            # Validate attendance_type
+            if attendance_type and attendance_type not in valid_attendance_types:
+                row_errors.append({
+                    "field": "attendance_type",
+                    "message": f"Invalid attendance type. Must be one of: {', '.join(valid_attendance_types)}"
+                })
+
+            # Validate note length
+            if len(note) > 250:
+                row_errors.append({"field": "note", "message": "Note cannot exceed 250 characters"})
+
+            if row_errors:
+                for err in row_errors:
+                    errors.append({
+                        "row": row_num,
+                        "field": err["field"],
+                        "message": err["message"]
+                    })
+                failed_count += 1
                 continue
 
+            # Check student exists
             student = Student.objects.filter(admission_no=admission_no, **school_filter).first()
             if not student:
+                errors.append({
+                    "row": row_num,
+                    "field": "admission_no",
+                    "message": f"Student with admission number '{admission_no}' not found"
+                })
+                failed_count += 1
                 continue
-
-            row_date = value.get("attendance_date")
-            if not row_date:
-                continue
-
-            StudentAttendanceBulk.objects.create(
-                school=request.user.school,
-                student=student,
-                attendance_date=row_date,
-                attendance_type=(value.get("attendance_type") or "A"),
-                note=value.get("note") or "",
-                class_id=class_id,
-                section_id=section_id,
-                student_record_id=None,
-            )
-
-        data = list(StudentAttendanceBulk.objects.filter(**school_filter))
-
-        if data:
-            class_sections = []
-            for value in data:
-                if self._normalize_date(value.attendance_date) == request_date:
-                    class_sections.append(f"{value.class_id}-{value.section_id}")
 
             try:
-                with transaction.atomic():
-                    all_student_ids = []
-                    present_students = []
+                # Delete existing attendance for this student on the date
+                StudentAttendance.objects.filter(
+                    student_id=student.id,
+                    attendance_date=request_date,
+                    **school_filter,
+                ).delete()
 
-                    for value in sorted(set(class_sections)):
-                        class_section = value.split("-")
-                        if len(class_section) != 2:
-                            continue
-                        cs_class_id, cs_section_id = class_section
+                # Create new attendance record
+                attendance = StudentAttendance()
+                attendance.student_id = student.id
+                attendance.attendance_date = request_date
+                attendance.attendance_type = attendance_type or "P"
+                attendance.notes = note
+                attendance.school = request.user.school
+                attendance.academic_year_id = request.data.get("academic_year_id")
+                attendance.class_id = class_id
+                attendance.section_id = section_id
+                attendance.save()
 
-                        students = Student.objects.filter(
-                            current_class_id=cs_class_id,
-                            current_section_id=cs_section_id,
-                            **school_filter,
-                        )
+                processed_count += 1
+            except Exception as e:
+                errors.append({
+                    "row": row_num,
+                    "field": "system",
+                    "message": f"Failed to save record: {str(e)[:100]}"
+                })
+                failed_count += 1
 
-                        for student in students:
-                            StudentAttendanceBulk.objects.filter(
-                                student_id=student.id,
-                                attendance_date=request_date,
-                                **school_filter,
-                            ).delete()
-                            all_student_ids.append(student.id)
-
-                    for value in data:
-                        if value is None:
-                            continue
-
-                        value_date = self._normalize_date(value.attendance_date)
-                        if value_date == request_date:
-                            student = Student.objects.filter(id=value.student_id, **school_filter).first()
-                            if student:
-                                attendance_check = StudentAttendance.objects.filter(
-                                    student_id=student.id,
-                                    attendance_date=value_date,
-                                    **school_filter,
-                                ).first()
-                                if attendance_check:
-                                    attendance_check.delete()
-
-                                present_students.append(student.id)
-
-                                attendance = StudentAttendance()
-                                attendance.student_id = student.id
-                                attendance.attendance_date = value_date
-                                attendance.attendance_type = value.attendance_type
-                                attendance.notes = value.note
-                                attendance.school = request.user.school
-                                attendance.academic_year_id = request.data.get("academic_year_id")
-                                attendance.class_id = class_id
-                                attendance.section_id = section_id
-                                attendance.save()
-                        else:
-                            # Legacy behavior removes mismatched-date bulk rows by student id.
-                            StudentAttendanceBulk.objects.filter(student_id=value.student_id, **school_filter).delete()
-            except Exception:
-                return Response({"detail": "Operation Failed"}, status=status.HTTP_400_BAD_REQUEST)
-
-        return Response({"message": "Operation successful"}, status=status.HTTP_200_OK)
+        # Determine response based on results
+        if processed_count == 0 and failed_count > 0:
+            # All failed
+            return Response(
+                {
+                    "success": False,
+                    "message": f"Failed to import any records. {failed_count} errors found.",
+                    "data": {
+                        "imported": 0,
+                        "failed": failed_count,
+                        "errors": errors[:50]  # Limit to first 50 errors
+                    }
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        elif failed_count > 0:
+            # Partial success
+            return Response(
+                {
+                    "success": True,
+                    "message": f"{processed_count} records imported, {failed_count} failed",
+                    "data": {
+                        "imported": processed_count,
+                        "failed": failed_count,
+                        "errors": errors[:50]  # Limit to first 50 errors
+                    }
+                },
+                status=status.HTTP_200_OK,
+            )
+        else:
+            # Full success
+            return Response(
+                {
+                    "success": True,
+                    "message": f"Successfully imported {processed_count} attendance records",
+                    "data": {
+                        "imported": processed_count,
+                        "failed": 0,
+                        "errors": []
+                    }
+                },
+                status=status.HTTP_200_OK,
+            )

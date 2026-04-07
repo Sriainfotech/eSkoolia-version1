@@ -4,6 +4,8 @@ import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { API_BASE_URL } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
+import { ActionButton } from "@/components/common/ActionButton";
+import { useFormLoader } from "@/hooks/useFormLoader";
 
 type ExamTypeRow = {
   id: number;
@@ -78,19 +80,26 @@ const defaultForm: FormState = {
 export default function ExamTypePanel() {
   const [rows, setRows] = useState<ExamTypeRow[]>([]);
   const [form, setForm] = useState<FormState>(defaultForm);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+
+  // Use the new form loader hook
+  const form_loader = useFormLoader();
+
+  const totalPages = Math.ceil(rows.length / itemsPerPage);
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedRows = rows.slice(startIndex, endIndex);
 
   const load = async () => {
     try {
-      setLoading(true);
-      setError("");
+      form_loader.clearMessages();
       const data = await apiGet<{ exams_types: ExamTypeRow[] }>("/api/v1/exams/exam-type/");
       setRows(data.exams_types || []);
-    } catch {
-      setError("Failed to load exam types.");
-    } finally {
-      setLoading(false);
+      setCurrentPage(1);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load exam types.";
+      form_loader.setError(message);
     }
   };
 
@@ -101,16 +110,15 @@ export default function ExamTypePanel() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!form.exam_type_title.trim()) {
-      setError("Exam name is required.");
+      form_loader.setError("Exam name is required.");
       return;
     }
     if (form.is_average && !form.average_mark.trim()) {
-      setError("Average mark is required when average passing examination is enabled.");
+      form_loader.setError("Average mark is required when average passing examination is enabled.");
       return;
     }
 
-    try {
-      setError("");
+    await form_loader.execute("save", async () => {
       const payload = {
         id: form.id || undefined,
         exam_type_title: form.exam_type_title.trim(),
@@ -124,13 +132,13 @@ export default function ExamTypePanel() {
       }
       setForm(defaultForm);
       await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Operation failed");
-    }
+      form_loader.setSuccessMessage(form.id ? "Exam type updated successfully" : "Exam type saved successfully");
+    });
   };
 
   const startEdit = async (id: number) => {
     try {
+      form_loader.clearMessages();
       const data = await apiGet<ExamTypeRow>(`/api/v1/exams/exam-type/edit/${id}/`);
       setForm({
         id: data.id,
@@ -138,20 +146,19 @@ export default function ExamTypePanel() {
         is_average: data.is_average,
         average_mark: data.average_mark || "0.00",
       });
-      setError("");
-    } catch {
-      setError("Failed to load selected exam type.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load selected exam type.";
+      form_loader.setError(message);
     }
   };
 
   const remove = async (id: number) => {
-    try {
+    await form_loader.execute("delete", async () => {
       await apiDelete(`/api/v1/exams/exam-type/delete/${id}/`);
       if (form.id === id) setForm(defaultForm);
       await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Delete failed");
-    }
+      form_loader.setSuccessMessage("Exam type deleted successfully");
+    });
   };
 
   return (
@@ -208,15 +215,21 @@ export default function ExamTypePanel() {
                 )}
 
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button type="submit" style={buttonStyle()}>
-                    {form.id ? "Update Exam Type" : "Save Exam Type"}
-                  </button>
+                  <ActionButton
+                    type="submit"
+                    label={form.id ? "Update Exam Type" : "Save Exam Type"}
+                    loadingLabel={form.id ? "Updating..." : "Saving..."}
+                    isLoading={form_loader.isSaving}
+                    onClick={() => {}}
+                    variant="primary"
+                  />
                   {form.id && (
                     <button type="button" onClick={() => setForm(defaultForm)} style={buttonStyle("#6b7280")}>Cancel</button>
                   )}
                 </div>
               </form>
-              {error && <p style={{ color: "var(--warning)", marginTop: 10 }}>{error}</p>}
+              {form_loader.error && <p style={{ color: "#dc2626", marginTop: 10, fontSize: 13 }}>{form_loader.error}</p>}
+              {form_loader.success && <p style={{ color: "#059669", marginTop: 10, fontSize: 13 }}>{form_loader.success}</p>}
             </div>
 
             <div className="white-box" style={boxStyle()}>
@@ -238,28 +251,102 @@ export default function ExamTypePanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row, index) => (
+                  {paginatedRows.map((row, index) => (
                     <tr key={row.id}>
-                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{index + 1}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{startIndex + index + 1}</td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.title}</td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.is_average ? "Yes" : "No"}</td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{Number(row.average_mark || 0).toFixed(2)}</td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)", display: "flex", gap: 8 }}>
-                        <button type="button" onClick={() => void startEdit(row.id)} style={buttonStyle("#2563eb")}>Edit</button>
-                        <button type="button" onClick={() => void remove(row.id)} style={buttonStyle("#dc2626")}>Delete</button>
+                        <ActionButton
+                          label="Edit"
+                          isLoading={false}
+                          onClick={() => void startEdit(row.id)}
+                          variant="primary"
+                        />
+                        <ActionButton
+                          label="Delete"
+                          loadingLabel="Deleting"
+                          isLoading={form_loader.isDeleting}
+                          onClick={() => void remove(row.id)}
+                          variant="danger"
+                        />
                         <Link href={`/exams/setup?exam_type_id=${row.id}`} style={{ textDecoration: "none" }}>
                           <button type="button" style={buttonStyle("#059669")}>Exam Setup</button>
                         </Link>
                       </td>
                     </tr>
                   ))}
-                  {!loading && rows.length === 0 && (
+                  {rows.length === 0 && (
                     <tr>
                       <td colSpan={5} style={{ padding: 8, color: "var(--text-muted)" }}>No exam type found.</td>
                     </tr>
                   )}
                 </tbody>
               </table>
+
+              {rows.length > 0 && (
+                <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Show:</span>
+                    <select
+                      value={itemsPerPage}
+                      onChange={(e) => {
+                        setItemsPerPage(Number(e.target.value));
+                        setCurrentPage(1);
+                      }}
+                      style={{
+                        height: 32,
+                        border: "1px solid var(--line)",
+                        borderRadius: 6,
+                        padding: "0 8px",
+                        fontSize: 13,
+                        background: "var(--surface)",
+                        color: "var(--text)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <option value={10}>10</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                    <span style={{ fontSize: 13, color: "var(--text-muted)" }}>entries</span>
+                    <span style={{ fontSize: 13, color: "var(--text-muted)", marginLeft: 8 }}>
+                      Showing {startIndex + 1}-{Math.min(endIndex, rows.length)} of {rows.length} exam types
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button
+                      type="button"
+                      disabled={currentPage === 1}
+                      onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                      style={{
+                        ...buttonStyle(),
+                        opacity: currentPage === 1 ? 0.5 : 1,
+                        cursor: currentPage === 1 ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      ← Previous
+                    </button>
+                    <span style={{ padding: "0 12px", fontSize: 13, fontWeight: 500 }}>
+                      Page {currentPage} of {totalPages}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={currentPage === totalPages}
+                      onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                      style={{
+                        ...buttonStyle(),
+                        opacity: currentPage === totalPages ? 0.5 : 1,
+                        cursor: currentPage === totalPages ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      Next →
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

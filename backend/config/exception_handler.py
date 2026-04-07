@@ -54,7 +54,8 @@ def custom_exception_handler(exc, context):
     # Return a clean validation message with no nested non_field_errors structure.
     if isinstance(exc, DRFValidationError):
         message = _first_error_message(exc.detail) or "Validation failed"
-        return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+        field_errors = exc.detail if isinstance(exc.detail, dict) else {"non_field_errors": exc.detail}
+        return Response({"error": message, "field_errors": field_errors}, status=status.HTTP_400_BAD_REQUEST)
 
     # Handle our custom API exceptions
     if isinstance(exc, APIException):

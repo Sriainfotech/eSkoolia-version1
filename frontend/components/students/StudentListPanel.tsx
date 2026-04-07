@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
-
-type ApiList<T> = T[] | { results?: T[] };
+import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
+import { PaginationControls } from "@/components/common/PaginationControls";
+import { usePersistentPagination } from "@/hooks/usePersistentPagination";
 
 type SchoolClass = {
   id: number;
@@ -32,10 +33,6 @@ type StudentRow = {
   is_active: boolean;
   created_at: string;
 };
-
-function listData<T>(value: ApiList<T>): T[] {
-  return Array.isArray(value) ? value : value.results || [];
-}
 
 async function apiGet<T>(path: string): Promise<T> {
   return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
@@ -73,9 +70,11 @@ function buttonStyle(color = "var(--primary)") {
 }
 
 export function StudentListPanel() {
+  const { page, pageSize, setPage, setPageSize } = usePersistentPagination("students.list", 1, 10);
   const [rows, setRows] = useState<StudentRow[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
   const [search, setSearch] = useState("");
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
@@ -88,20 +87,38 @@ export function StudentListPanel() {
     return sections.filter((section) => String(section.school_class) === classId);
   }, [sections, classId]);
 
+  const loadStudents = async (targetPage = page, targetPageSize = pageSize) => {
+    try {
+      setLoading(true);
+      setError("");
+      const query = buildPaginationQuery(targetPage, targetPageSize, {
+        search: search.trim() || undefined,
+        current_class: classId || undefined,
+        current_section: sectionId || undefined,
+        is_active: onlyActive ? "true" : undefined,
+      });
+      const studentData = await apiGet<ListApiResponse<StudentRow>>(`/api/v1/students/students/?${query}`);
+      const items = extractListData(studentData);
+      const meta = extractPaginationMeta(studentData);
+      setRows(items);
+      setTotalCount(meta?.count ?? items.length);
+    } catch {
+      setError("Unable to load students.");
+    }
+  };
+
   const load = async () => {
     try {
       setLoading(true);
       setError("");
-      const [studentData, classData, sectionData] = await Promise.all([
-        apiGet<ApiList<StudentRow>>("/api/v1/students/students/"),
-        apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
-        apiGet<ApiList<Section>>("/api/v1/core/sections/"),
+      const [classData, sectionData] = await Promise.all([
+        apiGet<ListApiResponse<SchoolClass>>("/api/v1/core/classes/"),
+        apiGet<ListApiResponse<Section>>("/api/v1/core/sections/"),
       ]);
-      setRows(listData(studentData));
-      setClasses(listData(classData));
-      setSections(listData(sectionData));
+      setClasses(extractListData(classData));
+      setSections(extractListData(sectionData));
     } catch {
-      setError("Unable to load students.");
+      setError("Unable to load filter options.");
     } finally {
       setLoading(false);
     }
@@ -111,28 +128,14 @@ export function StudentListPanel() {
     void load();
   }, []);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return rows.filter((row) => {
-      if (onlyActive && !row.is_active) {
-        return false;
-      }
-      if (classId && String(row.current_class || "") !== classId) {
-        return false;
-      }
-      if (sectionId && String(row.current_section || "") !== sectionId) {
-        return false;
-      }
-      if (!q) {
-        return true;
-      }
-      const name = `${row.first_name || ""} ${row.last_name || ""}`.trim().toLowerCase();
-      return (
-        (row.roll_no || "").toLowerCase().includes(q) ||
-        name.includes(q)
-      );
-    });
-  }, [rows, search, onlyActive, classId, sectionId]);
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      void loadStudents();
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [page, pageSize, search, classId, sectionId, onlyActive]);
+
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   return (
     <div className="legacy-panel">
@@ -160,6 +163,7 @@ export function StudentListPanel() {
                 onChange={(event) => {
                   setClassId(event.target.value);
                   setSectionId("");
+                  setPage(1);
                 }}
                 style={fieldStyle()}
               >
@@ -172,7 +176,10 @@ export function StudentListPanel() {
               </select>
               <select
                 value={sectionId}
-                onChange={(event) => setSectionId(event.target.value)}
+                onChange={(event) => {
+                  setSectionId(event.target.value);
+                  setPage(1);
+                }}
                 style={fieldStyle()}
                 disabled={!classId}
               >
@@ -185,12 +192,18 @@ export function StudentListPanel() {
               </select>
               <input
                 value={search}
-                onChange={(event) => setSearch(event.target.value)}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setPage(1);
+                }}
                 placeholder="Search by name or roll no"
                 style={fieldStyle()}
               />
               <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <input type="checkbox" checked={onlyActive} onChange={(event) => setOnlyActive(event.target.checked)} />
+                <input type="checkbox" checked={onlyActive} onChange={(event) => {
+                  setOnlyActive(event.target.checked);
+                  setPage(1);
+                }} />
                 Active Only
               </label>
               <button
@@ -200,12 +213,13 @@ export function StudentListPanel() {
                   setSectionId("");
                   setSearch("");
                   setOnlyActive(true);
+                  setPage(1);
                 }}
                 style={buttonStyle("#6b7280")}
               >
                 Reset
               </button>
-              <button type="button" onClick={() => void load()} style={buttonStyle()}>
+              <button type="button" onClick={() => void loadStudents()} style={buttonStyle()}>
                 Refresh
               </button>
             </div>
@@ -213,6 +227,7 @@ export function StudentListPanel() {
 
           <div className="white-box" style={boxStyle()}>
             <h3 style={{ marginTop: 0, marginBottom: 12 }}>Student List</h3>
+            {error && <p style={{ color: "var(--warning)", marginBottom: 10 }}>{error}</p>}
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
@@ -228,16 +243,22 @@ export function StudentListPanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {!loading && filtered.length === 0 ? (
+                  {loading ? (
+                    <tr>
+                      <td colSpan={8} style={{ padding: 12, color: "var(--text-muted)" }}>
+                        Loading students...
+                      </td>
+                    </tr>
+                  ) : rows.length === 0 ? (
                     <tr>
                       <td colSpan={8} style={{ padding: 12, color: "var(--text-muted)" }}>
                         No students found.
                       </td>
                     </tr>
                   ) : (
-                    filtered.map((row, index) => (
+                    rows.map((row, index) => (
                       <tr key={row.id}>
-                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{index + 1}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{(page - 1) * pageSize + index + 1}</td>
                         <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.admission_no || "-"}</td>
                         <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.roll_no || "-"}</td>
                         <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
@@ -255,8 +276,19 @@ export function StudentListPanel() {
                 </tbody>
               </table>
             </div>
-            {loading && <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading students...</p>}
-            {error && <p style={{ marginTop: 10, color: "var(--warning)" }}>{error}</p>}
+
+            <PaginationControls
+              currentPage={page}
+              totalPages={totalPages}
+              totalItems={totalCount}
+              pageSize={pageSize}
+              loading={loading}
+              onPageChange={(nextPage) => setPage(nextPage)}
+              onPageSizeChange={(nextSize) => {
+                setPageSize(nextSize);
+                setPage(1);
+              }}
+            />
           </div>
         </div>
       </section>

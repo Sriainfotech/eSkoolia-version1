@@ -1,8 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL } from "@/lib/api";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { sortAcademicsClasses } from "@/lib/classOrdering";
 
 type AcademicYear = { id: number; name: string };
 type SchoolClass = { id: number; name: string };
@@ -25,10 +26,47 @@ type UploadedContent = {
 
 type ContentType = "as" | "st" | "sy" | "ot";
 
-type ApiList<T> = T[] | { results?: T[] };
+type ApiList<T> = T[] | { results?: T[]; next?: string | null };
 
 function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
+}
+
+async function fetchAllPages<T>(path: string): Promise<T[]> {
+  const merged: T[] = [];
+  let nextPath = path;
+
+  for (let index = 0; index < 50 && nextPath; index += 1) {
+    const response = await apiGet<ApiList<T>>(nextPath);
+    merged.push(...listData(response));
+
+    if (Array.isArray(response) || !response.next) {
+      break;
+    }
+
+    if (response.next.startsWith("http")) {
+      try {
+        const nextUrl = new URL(response.next);
+        nextPath = `${nextUrl.pathname}${nextUrl.search}`;
+      } catch {
+        break;
+      }
+    } else {
+      nextPath = response.next;
+    }
+  }
+
+  return merged;
+}
+
+function sortSectionsByClassAndName(items: Section[], classes: SchoolClass[]): Section[] {
+  const classOrder = new Map(sortAcademicsClasses(classes).map((row, index) => [row.id, index]));
+  return [...items].sort((a, b) => {
+    const orderA = classOrder.get(a.school_class) ?? Number.MAX_SAFE_INTEGER;
+    const orderB = classOrder.get(b.school_class) ?? Number.MAX_SAFE_INTEGER;
+    if (orderA !== orderB) return orderA - orderB;
+    return (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" });
+  });
 }
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -38,14 +76,6 @@ async function apiGet<T>(path: string): Promise<T> {
 async function apiPost<T>(path: string, payload: unknown): Promise<T> {
   return apiRequestWithRefresh<T>(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
-async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
-  return apiRequestWithRefresh<T>(path, {
-    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
@@ -90,13 +120,14 @@ function useLookups() {
   useEffect(() => {
     const load = async () => {
       const [yearData, classData, sectionData] = await Promise.all([
-        apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
-        apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
-        apiGet<ApiList<Section>>("/api/v1/core/sections/"),
+        fetchAllPages<AcademicYear>("/api/v1/core/academic-years/?page_size=100"),
+        fetchAllPages<SchoolClass>("/api/v1/core/classes/?page_size=100"),
+        fetchAllPages<Section>("/api/v1/core/sections/?page_size=100"),
       ]);
-      setYears(listData(yearData));
-      setClasses(listData(classData));
-      setSections(listData(sectionData));
+      const orderedClasses = sortAcademicsClasses(classData);
+      setYears(yearData);
+      setClasses(orderedClasses);
+      setSections(sortSectionsByClassAndName(sectionData, orderedClasses));
     };
     void load();
   }, []);
@@ -120,6 +151,12 @@ const ALLOWED_UPLOAD_EXTENSIONS = new Set(["pdf", "doc", "docx", "xls", "xlsx", 
 function fileExtension(filename: string) {
   const parts = filename.split(".");
   return parts.length > 1 ? parts[parts.length - 1].toLowerCase() : "";
+}
+
+function fileNameFromPath(value: string) {
+  const normalized = (value || "").replace(/\\/g, "/");
+  const segments = normalized.split("/").filter(Boolean);
+  return segments.length ? segments[segments.length - 1] : value;
 }
 
 function errorDetails(error: unknown): unknown {
@@ -296,6 +333,10 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
   const [items, setItems] = useState<UploadedContent[]>([]);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<UploadedContent | null>(null);
+  const [editingUploadFile, setEditingUploadFile] = useState<File | null>(null);
+  const [removeExistingUploadFile, setRemoveExistingUploadFile] = useState(false);
+  const [showEditFilePicker, setShowEditFilePicker] = useState(false);
+  const [editFileInputKey, setEditFileInputKey] = useState(0);
   const [viewing, setViewing] = useState<UploadedContent | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -304,6 +345,7 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
   const [contentType, setContentType] = useState<"" | ContentType>(type);
+  const editFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const messageMap: Record<ContentType, {
     noCriteria: string;
@@ -360,7 +402,7 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
   const messages = messageMap[type];
 
   const filteredSections = useMemo(() => {
-    if (!classId) return [];
+    if (!classId) return sections;
     return sections.filter((section) => section.school_class === Number(classId));
   }, [classId, sections]);
 
@@ -408,6 +450,11 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
     try {
       setError("");
       const row = await apiGet<UploadedContent>(`/api/v1/academics/upload-contents/${id}/`);
+      const fileUrl = resolveUrl(row.upload_file || row.source_url);
+      if (fileUrl) {
+        window.open(fileUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
       setViewing(row);
     } catch {
       setError(messages.viewFail);
@@ -419,27 +466,79 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
       setError("");
       const row = await apiGet<UploadedContent>(`/api/v1/academics/upload-contents/${id}/`);
       setEditing(row);
+      setEditingUploadFile(null);
+      setRemoveExistingUploadFile(false);
+      setShowEditFilePicker(false);
+      setEditFileInputKey((prev) => prev + 1);
     } catch {
       setError(messages.editFail);
     }
+  };
+
+  const clearEditFilePicker = () => {
+    if (editFileInputRef.current) {
+      editFileInputRef.current.value = "";
+    }
+    setEditFileInputKey((prev) => prev + 1);
+  };
+
+  const onEditFileSelected = (nextFile: File | null) => {
+    if (!nextFile) {
+      setEditingUploadFile(null);
+      return;
+    }
+    if (!ALLOWED_UPLOAD_EXTENSIONS.has(fileExtension(nextFile.name))) {
+      setError("Invalid file format.");
+      clearEditFilePicker();
+      setEditingUploadFile(null);
+      return;
+    }
+    setError("");
+    setEditingUploadFile(nextFile);
+    setRemoveExistingUploadFile(false);
+    setShowEditFilePicker(false);
+  };
+
+  const startReplaceFileInEdit = () => {
+    if (!editing) return;
+    setError("");
+    setRemoveExistingUploadFile(false);
+    setShowEditFilePicker(true);
+    clearEditFilePicker();
+  };
+
+  const removeExistingFileInEdit = () => {
+    if (!editing) return;
+    setEditingUploadFile(null);
+    setRemoveExistingUploadFile(true);
+    setShowEditFilePicker(false);
+    setEditing({ ...editing, upload_file: "" });
+    clearEditFilePicker();
   };
 
   const downloadItem = (item: UploadedContent) => {
     try {
       const fileUrl = resolveUrl(item.upload_file || item.source_url);
       if (!fileUrl) throw new Error("download-missing");
-      window.open(fileUrl, "_blank", "noopener,noreferrer");
+      const anchor = document.createElement("a");
+      anchor.href = fileUrl;
+      anchor.download = fileNameFromPath(item.upload_file || item.source_url || item.content_title || "download");
+      anchor.rel = "noopener noreferrer";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
     } catch {
       setError(messages.downloadFail);
     }
   };
 
-  const removeItem = async (id: number) => {
-    const confirmed = window.confirm(messages.deleteConfirm);
+  const removeItem = async (item: UploadedContent) => {
+    const label = (item.content_title || item.upload_file || item.source_url || `#${item.id}`).trim();
+    const confirmed = window.confirm(`${messages.deleteConfirm} (${label})`);
     if (!confirmed) return;
     try {
       setError("");
-      await apiDelete(`/api/v1/academics/upload-contents/${id}/`);
+      await apiDelete(`/api/v1/academics/upload-contents/${item.id}/`);
       if (hasSearched) {
         await loadItems();
       }
@@ -451,22 +550,50 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
   const saveEdit = async (event: FormEvent) => {
     event.preventDefault();
     if (!editing) return;
+    const hasAnyFileAfterEdit = Boolean(editingUploadFile) || (Boolean(editing.upload_file) && !removeExistingUploadFile);
+    if (!hasAnyFileAfterEdit) {
+      setError("Please select a file to upload.");
+      return;
+    }
     try {
       setSavingEdit(true);
       setError("");
-      await apiPatch(`/api/v1/academics/upload-contents/${editing.id}/`, {
-        class_id: editing.class_id || null,
-        section_id: editing.section_id || null,
-        content_title: editing.content_title,
-        content_type: editing.content_type,
-        upload_date: editing.upload_date,
-        description: editing.description,
-        source_url: editing.source_url,
-        upload_file: editing.upload_file,
-        available_for_admin: editing.available_for_admin,
-        available_for_all_classes: editing.available_for_all_classes,
+      const formData = new FormData();
+      formData.append("content_title", editing.content_title || "");
+      formData.append("content_type", editing.content_type || type);
+      formData.append("upload_date", editing.upload_date || "");
+      formData.append("description", editing.description || "");
+      formData.append("source_url", editing.source_url || "");
+      formData.append("available_for_admin", editing.available_for_admin ? "true" : "false");
+      formData.append("available_for_all_classes", editing.available_for_all_classes ? "true" : "false");
+
+      if (editing.academic_year_id) {
+        formData.append("academic_year_id", String(editing.academic_year_id));
+      }
+      if (editing.available_for_all_classes) {
+        formData.append("class_id", "");
+        formData.append("section_id", "");
+      } else {
+        formData.append("class_id", editing.class_id ? String(editing.class_id) : "");
+        formData.append("section_id", editing.section_id ? String(editing.section_id) : "");
+      }
+
+      if (editingUploadFile) {
+        formData.append("file_upload", editingUploadFile);
+      }
+      if (removeExistingUploadFile && !editingUploadFile) {
+        formData.append("remove_upload_file", "true");
+      }
+
+      await apiRequestWithRefresh(`/api/v1/academics/upload-contents/${editing.id}/`, {
+        method: "PATCH",
+        body: formData,
       });
       setEditing(null);
+      setEditingUploadFile(null);
+      setRemoveExistingUploadFile(false);
+      setShowEditFilePicker(false);
+      clearEditFilePicker();
       await loadItems();
     } catch {
       setError(messages.editFail);
@@ -482,7 +609,7 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
         <div className="container-fluid p-0">
           <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
             <h3 style={{ marginTop: 0, marginBottom: 10 }}>Search Criteria</h3>
-            <div style={{ display: "grid", gridTemplateColumns: lockType ? "repeat(2, minmax(0, 1fr)) auto" : "repeat(4, minmax(0, 1fr)) auto", gap: 8 }}>
+            <div style={{ display: "grid", gridTemplateColumns: lockType ? "repeat(2, minmax(0, 1fr)) auto" : "repeat(4, minmax(0, 1fr)) auto", gap: 8, alignItems: "end" }}>
               <div>
                 <label style={{ display: "block", marginBottom: 4, fontSize: 13, fontWeight: 600 }}>Class</label>
                 <select value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); }} style={fieldStyle()}>
@@ -506,7 +633,10 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
                   </select>
                 </div>
               )}
-              <button type="button" onClick={() => void loadItems()} style={buttonStyle()}>Search</button>
+              <div>
+                <label style={{ display: "block", marginBottom: 4, fontSize: 13, fontWeight: 600, opacity: 0 }}>Action</label>
+                <button type="button" onClick={() => void loadItems()} style={buttonStyle()}>Search</button>
+              </div>
             </div>
             {error && <p style={{ color: "var(--warning)", marginTop: 8 }}>{error}</p>}
           </div>
@@ -543,7 +673,7 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
                         <button type="button" onClick={() => void viewItem(item.id)} style={buttonStyle("#2563eb")}>View</button>
                         <button type="button" onClick={() => void editItem(item.id)} style={buttonStyle("#0ea5e9")}>Edit</button>
                         <button type="button" onClick={() => downloadItem(item)} style={buttonStyle("#475569")}>Download</button>
-                        <button type="button" onClick={() => void removeItem(item.id)} style={buttonStyle("#dc2626")}>Delete</button>
+                        <button type="button" onClick={() => void removeItem(item)} style={buttonStyle("#dc2626")}>Delete</button>
                       </div>
                     </td>
                   </tr>
@@ -561,7 +691,14 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
                 <p><strong>Upload Date:</strong> {viewing.upload_date}</p>
                 <p><strong>Description:</strong> {viewing.description || "-"}</p>
                 <p><strong>Source:</strong> {viewing.source_url || "-"}</p>
-                <p><strong>File:</strong> {viewing.upload_file || "-"}</p>
+                <p>
+                  <strong>File:</strong>{" "}
+                  {viewing.upload_file ? (
+                    <a href={resolveUrl(viewing.upload_file)} target="_blank" rel="noopener noreferrer">
+                      {fileNameFromPath(viewing.upload_file)}
+                    </a>
+                  ) : "-"}
+                </p>
                 <button type="button" onClick={() => setViewing(null)} style={buttonStyle("#6b7280")}>Close</button>
               </div>
             </div>
@@ -591,8 +728,34 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
                     <input value={editing.source_url || ""} onChange={(e) => setEditing({ ...editing, source_url: e.target.value })} style={fieldStyle()} placeholder="Source URL" />
                   </div>
                   <div>
-                    <label style={{ display: "block", marginBottom: 4, fontSize: 13, fontWeight: 600 }}>Upload File Path</label>
-                    <input value={editing.upload_file || ""} onChange={(e) => setEditing({ ...editing, upload_file: e.target.value })} style={fieldStyle()} placeholder="Upload File URL/Path" />
+                    <label style={{ display: "block", marginBottom: 4, fontSize: 13, fontWeight: 600 }}>Upload File *</label>
+                    {(editing.upload_file && !removeExistingUploadFile && !editingUploadFile && !showEditFilePicker) ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 36, border: "1px solid var(--line)", borderRadius: 8, padding: "0 10px" }}>
+                        <a href={resolveUrl(editing.upload_file)} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, textDecoration: "underline" }}>
+                          {fileNameFromPath(editing.upload_file)}
+                        </a>
+                        <button type="button" onClick={startReplaceFileInEdit} style={{ ...buttonStyle("#2563eb"), height: 28, padding: "0 8px", marginLeft: "auto" }} title="Replace file">
+                          Replace
+                        </button>
+                        <button type="button" onClick={removeExistingFileInEdit} style={{ ...buttonStyle("#dc2626"), height: 28, padding: "0 8px" }} title="Remove file">
+                          ❌
+                        </button>
+                      </div>
+                    ) : (
+                      <input
+                        key={editFileInputKey}
+                        ref={editFileInputRef}
+                        type="file"
+                        accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.jpg,.jpeg,.png,.mp4,.mp3"
+                        onChange={(e) => onEditFileSelected(e.target.files?.[0] || null)}
+                        style={{ ...fieldStyle(), paddingTop: 6 }}
+                      />
+                    )}
+                    {(editingUploadFile || removeExistingUploadFile) && (
+                      <span style={{ display: "block", marginTop: 4, fontSize: 12, color: "var(--text-muted)" }}>
+                        {editingUploadFile ? `Selected: ${editingUploadFile.name}` : "Existing file marked for deletion"}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <textarea value={editing.description || ""} onChange={(e) => setEditing({ ...editing, description: e.target.value })} style={{ width: "100%", minHeight: 90, border: "1px solid var(--line)", borderRadius: 8, padding: 10, marginTop: 10 }} />

@@ -2,10 +2,12 @@ from django.db import IntegrityError, transaction
 import csv
 import io
 import re
+from datetime import datetime
 from django.utils import timezone
 from django.db.models.deletion import ProtectedError
 from django.db.models import Count, Q
 from rest_framework import permissions, status, viewsets
+from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
@@ -101,6 +103,7 @@ class TenantScopedModelViewSet(viewsets.ModelViewSet):
 class StudentCategoryViewSet(TenantScopedModelViewSet):
     model = StudentCategory
     serializer_class = StudentCategorySerializer
+    pagination_class = ApiPageNumberPagination
     permission_codes = {"*": "student_info.student_category.view"}
 
     def _build_validation_error_response(self, field_errors=None, message="Validation failed"):
@@ -204,6 +207,7 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
 class StudentGroupViewSet(TenantScopedModelViewSet):
     model = StudentGroup
     serializer_class = StudentGroupSerializer
+    pagination_class = ApiPageNumberPagination
     permission_codes = {"*": "student_info.student_group.view"}
 
     def get_queryset(self):
@@ -215,16 +219,48 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
             return qs.filter(school_id=user.school_id).annotate(students_count=Count("students", distinct=True)).order_by("name")
         return qs.none()
 
+    def destroy(self, request, *args, **kwargs):
+        """
+        Delete a student group.
+        
+        Returns 400 error if the group has assigned students.
+        """
+        instance = self.get_object()
+        
+        # Check if group has assigned students
+        if instance.students.exists():
+            return Response(
+                {
+                    "success": False,
+                    "message": f"Cannot delete group with assigned students. This group has {instance.students.count()} students assigned.",
+                    "field_errors": {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Proceed with deletion
+        self.perform_destroy(instance)
+        
+        return Response(
+            {
+                "success": True,
+                "message": "Student group deleted successfully.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 class GuardianViewSet(TenantScopedModelViewSet):
     model = Guardian
     serializer_class = GuardianSerializer
+    pagination_class = ApiPageNumberPagination
     permission_codes = {"*": "student_info.add_student.view"}
 
 
 class StudentViewSet(TenantScopedModelViewSet):
     model = Student
     serializer_class = StudentSerializer
+    pagination_class = ApiPageNumberPagination
     permission_codes = {
         "list": "student_info.student_list.view",
         "retrieve": "student_info.student_list.view",
@@ -314,6 +350,87 @@ class StudentViewSet(TenantScopedModelViewSet):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    def _normalize_import_row(self, raw_row):
+        key_aliases = {
+            "admission no": "admission_no",
+            "admission_no": "admission_no",
+            "admission number": "admission_no",
+            "admission_number": "admission_no",
+            "roll no": "roll_no",
+            "roll_no": "roll_no",
+            "roll number": "roll_no",
+            "roll_number": "roll_no",
+            "first name": "first_name",
+            "first_name": "first_name",
+            "last name": "last_name",
+            "last_name": "last_name",
+            "dob": "date_of_birth",
+            "date of birth": "date_of_birth",
+            "date_of_birth": "date_of_birth",
+            "academic year": "academic_year",
+            "academic_year": "academic_year",
+            "class": "current_class",
+            "current class": "current_class",
+            "current_class": "current_class",
+            "section": "current_section",
+            "current section": "current_section",
+            "current_section": "current_section",
+            "custom gender": "custom_gender",
+            "custom_gender": "custom_gender",
+            "blood group": "blood_group",
+            "blood_group": "blood_group",
+            "address": "address_line",
+            "address line": "address_line",
+            "address_line": "address_line",
+            "pin": "pincode",
+            "zip": "pincode",
+            "postal code": "pincode",
+            "postal_code": "pincode",
+            "student category": "category",
+            "student_category": "category",
+        }
+
+        cleaned = {}
+        for key, value in (raw_row or {}).items():
+            key_text = str(key or "").strip()
+            if not key_text:
+                continue
+            normalized_key = key_aliases.get(key_text.lower(), key_text.replace(" ", "_").lower())
+
+            value_text = "" if value is None else str(value).strip()
+            if value_text == "":
+                cleaned[normalized_key] = ""
+                continue
+
+            if normalized_key == "date_of_birth":
+                parsed = None
+                for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+                    try:
+                        parsed = datetime.strptime(value_text, fmt).date().isoformat()
+                        break
+                    except ValueError:
+                        continue
+                cleaned[normalized_key] = parsed or value_text
+                continue
+
+            if normalized_key in {"academic_year", "current_class", "current_section", "category", "guardian"}:
+                cleaned[normalized_key] = int(value_text) if value_text.isdigit() else value_text
+                continue
+
+            if normalized_key in {"is_active", "is_disabled"}:
+                lowered = value_text.lower()
+                if lowered in {"true", "1", "yes", "y"}:
+                    cleaned[normalized_key] = True
+                elif lowered in {"false", "0", "no", "n"}:
+                    cleaned[normalized_key] = False
+                else:
+                    cleaned[normalized_key] = value_text
+                continue
+
+            cleaned[normalized_key] = value_text
+
+        return cleaned
+
     def _duplicate_warning(self, validated_data):
         first_name = (validated_data.get("first_name") or "").strip()
         last_name = (validated_data.get("last_name") or "").strip()
@@ -402,7 +519,8 @@ class StudentViewSet(TenantScopedModelViewSet):
         class_qs = Class.objects.filter(id=target_class_id)
         if not request.user.is_superuser:
             class_qs = class_qs.filter(school_id=school_id)
-        if not class_qs.exists():
+        target_class = class_qs.first()
+        if not target_class:
             raise ValidationError("Target class not found in your school.")
 
         if target_section_id:
@@ -425,9 +543,25 @@ class StudentViewSet(TenantScopedModelViewSet):
         if not students:
             raise ValidationError("No students found for promotion.")
 
+        # Track promoted count and errors for partial success
         promoted_count = 0
-        with transaction.atomic():
-            for st in students:
+        failed_count = 0
+        errors_list = []
+
+        # Process each student individually to support partial success
+        for st in students:
+            try:
+                # Validate: prevent promoting to same class
+                if st.current_class_id == target_class_id:
+                    failed_count += 1
+                    errors_list.append({
+                        "student_id": st.id,
+                        "admission_no": st.admission_no,
+                        "error": f"Cannot promote to the same class ({target_class.name})"
+                    })
+                    continue
+
+                # Create promotion history
                 StudentPromotionHistory.objects.create(
                     student=st,
                     from_class=st.current_class,
@@ -438,12 +572,44 @@ class StudentViewSet(TenantScopedModelViewSet):
                     note=data.get("note", ""),
                     promoted_by=request.user,
                 )
+
+                # Update student's current class and section
                 st.current_class_id = target_class_id
                 st.current_section_id = target_section_id
                 st.save(update_fields=["current_class", "current_section", "updated_at"])
                 promoted_count += 1
 
-        return Response({"promoted": promoted_count}, status=status.HTTP_200_OK)
+            except Exception as e:
+                failed_count += 1
+                errors_list.append({
+                    "student_id": st.id,
+                    "admission_no": st.admission_no,
+                    "error": str(e)
+                })
+                continue
+
+        # Return comprehensive response
+        response_data = {
+            "promoted": promoted_count,
+            "failed": failed_count,
+            "total": promoted_count + failed_count,
+            "success": failed_count == 0
+        }
+
+        if errors_list:
+            # Limit errors to first 50 for response
+            response_data["errors"] = errors_list[:50]
+
+        # Determine status code based on promotion success
+        if promoted_count == 0:
+            # Complete failure
+            return Response(response_data, status=status.HTTP_400_BAD_REQUEST)
+        elif failed_count > 0:
+            # Partial success
+            return Response(response_data, status=status.HTTP_200_OK)
+        else:
+            # Complete success
+            return Response(response_data, status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
         return self.soft_delete(request, *args, **kwargs)
@@ -596,7 +762,11 @@ class StudentViewSet(TenantScopedModelViewSet):
         created = 0
         errors = []
         for index, row in enumerate(rows, start=2):
-            serializer = self.get_serializer(data=row)
+            normalized_row = self._normalize_import_row(row)
+            if not any(str(value or "").strip() for value in normalized_row.values()):
+                continue
+
+            serializer = self.get_serializer(data=normalized_row)
             if serializer.is_valid():
                 try:
                     self.perform_create(serializer)

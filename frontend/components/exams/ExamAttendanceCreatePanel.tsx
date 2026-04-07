@@ -117,6 +117,7 @@ export default function ExamAttendanceCreatePanel() {
     if (!examId || !classId || !subjectId || students.length === 0) return;
     try {
       setError("");
+      setSuccess("");
       await apiPost("/api/v1/exams/exam-attendance/store/", {
         exam_id: Number(examId),
         class_id: Number(classId),
@@ -134,8 +135,8 @@ export default function ExamAttendanceCreatePanel() {
           ])
         ),
       });
-      setSuccess("Operation successful");
       await search();
+      setSuccess("Operation successful");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Operation failed");
     }

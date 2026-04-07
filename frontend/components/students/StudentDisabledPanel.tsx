@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
-
-type ApiList<T> = T[] | { results?: T[] };
+import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
+import { PaginationControls } from "@/components/common/PaginationControls";
+import { ConfirmationModal } from "@/components/common/ConfirmationModal";
+import { usePersistentPagination } from "@/hooks/usePersistentPagination";
 
 type StudentRow = {
   id: number;
@@ -26,10 +28,7 @@ type SchoolClass = { id: number; name: string };
 type Section = { id: number; school_class: number; name: string };
 type Guardian = { id: number; full_name: string; phone?: string };
 type StudentCategory = { id: number; name: string };
-
-function listData<T>(value: ApiList<T>): T[] {
-  return Array.isArray(value) ? value : value.results || [];
-}
+type ApiError = Error & { status?: number; details?: { message?: string; detail?: string } };
 
 async function apiGet<T>(path: string): Promise<T> {
   return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
@@ -97,40 +96,119 @@ function formatDate(value?: string | null) {
 }
 
 export function StudentDisabledPanel() {
+  const { page, pageSize, setPage, setPageSize } = usePersistentPagination("students.disabled", 1, 10);
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [guardians, setGuardians] = useState<Guardian[]>([]);
   const [categories, setCategories] = useState<StudentCategory[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
 
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
   const [nameQuery, setNameQuery] = useState("");
   const [admissionQuery, setAdmissionQuery] = useState("");
+  const [debouncedNameQuery, setDebouncedNameQuery] = useState("");
+  const [debouncedAdmissionQuery, setDebouncedAdmissionQuery] = useState("");
+  const [filterError, setFilterError] = useState("");
 
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<StudentRow | null>(null);
+  const [enableCandidate, setEnableCandidate] = useState<StudentRow | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [hoveredRowId, setHoveredRowId] = useState<number | null>(null);
+
+  const classMap = useMemo(() => new Map(classes.map((item) => [item.id, item.name])), [classes]);
+  const sectionMap = useMemo(() => new Map(sections.map((item) => [item.id, item.name])), [sections]);
+  const guardianMap = useMemo(() => new Map(guardians.map((item) => [item.id, item])), [guardians]);
+  const categoryMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+
+  const filteredSections = useMemo(() => {
+    if (!classId) {
+      return [];
+    }
+    return sections.filter((item) => String(item.school_class) === classId);
+  }, [sections, classId]);
+
+  const mapApiErrorMessage = (err: unknown, fallback: string) => {
+    const apiErr = err as ApiError;
+    const message = apiErr?.message || apiErr?.details?.message || apiErr?.details?.detail;
+
+    if (!apiErr?.status || String(message).toLowerCase().includes("failed to fetch")) {
+      return "Check your internet connection";
+    }
+    if (apiErr.status >= 500) {
+      return "Unable to fetch data. Try again later";
+    }
+    return message || fallback;
+  };
+
+  const loadStudents = async (targetPage = page, targetPageSize = pageSize) => {
+    if (sectionId && !classId) {
+      setFilterError("Please select class first");
+      setSectionId("");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError("");
+      const query = buildPaginationQuery(targetPage, targetPageSize, {
+        is_disabled: "true",
+        current_class: classId || undefined,
+        current_section: sectionId || undefined,
+        first_name: debouncedNameQuery.trim() || undefined,
+        admission_no: debouncedAdmissionQuery.trim() || undefined,
+      });
+      const studentData = await apiGet<ListApiResponse<StudentRow>>(`/api/v1/students/students/?${query}`);
+      const items = extractListData(studentData);
+      const meta = extractPaginationMeta(studentData);
+      const safeCount = meta?.count ?? items.length;
+
+      if (targetPage > 1 && items.length === 0 && safeCount > 0) {
+        setPage(targetPage - 1);
+        return;
+      }
+
+      setStudents(items);
+      setTotalCount(safeCount);
+    } catch (err) {
+      const apiErr = err as ApiError;
+      const message = mapApiErrorMessage(apiErr, "Unable to load disabled students.");
+      if (apiErr?.status === 404 && targetPage !== 1) {
+        setPage(1);
+        setError("Invalid page. Reset to page 1.");
+      } else {
+        setError(message);
+      }
+      setStudents([]);
+      setTotalCount(0);
+    }
+    finally {
+      setLoading(false);
+    }
+  };
 
   const load = async () => {
     try {
       setLoading(true);
       setError("");
-      const [studentData, classData, sectionData, guardianData, categoryData] = await Promise.all([
-        apiGet<ApiList<StudentRow>>("/api/v1/students/students/"),
-        apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
-        apiGet<ApiList<Section>>("/api/v1/core/sections/"),
-        apiGet<ApiList<Guardian>>("/api/v1/students/guardians/"),
-        apiGet<ApiList<StudentCategory>>("/api/v1/students/categories/"),
+      const [classData, sectionData, guardianData, categoryData] = await Promise.all([
+        apiGet<ListApiResponse<SchoolClass>>("/api/v1/core/classes/"),
+        apiGet<ListApiResponse<Section>>("/api/v1/core/sections/"),
+        apiGet<ListApiResponse<Guardian>>("/api/v1/students/guardians/"),
+        apiGet<ListApiResponse<StudentCategory>>("/api/v1/students/categories/"),
       ]);
-      setStudents(listData(studentData));
-      setClasses(listData(classData));
-      setSections(listData(sectionData));
-      setGuardians(listData(guardianData));
-      setCategories(listData(categoryData));
+      setClasses(extractListData(classData));
+      setSections(extractListData(sectionData));
+      setGuardians(extractListData(guardianData));
+      setCategories(extractListData(categoryData));
     } catch {
-      setError("Unable to load disabled students.");
+      setError("Unable to load filter options.");
     } finally {
       setLoading(false);
     }
@@ -140,41 +218,28 @@ export function StudentDisabledPanel() {
     void load();
   }, []);
 
-  const classMap = useMemo(() => new Map(classes.map((item) => [item.id, item.name])), [classes]);
-  const sectionMap = useMemo(() => new Map(sections.map((item) => [item.id, item.name])), [sections]);
-  const guardianMap = useMemo(() => new Map(guardians.map((item) => [item.id, item])), [guardians]);
-  const categoryMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+  useEffect(() => {
+    const nameTimer = window.setTimeout(() => {
+      setDebouncedNameQuery(nameQuery);
+    }, 400);
+    const admissionTimer = window.setTimeout(() => {
+      setDebouncedAdmissionQuery(admissionQuery);
+    }, 400);
 
-  const filteredSections = useMemo(() => {
-    if (!classId) {
-      return sections;
-    }
-    return sections.filter((item) => String(item.school_class) === classId);
-  }, [sections, classId]);
+    return () => {
+      window.clearTimeout(nameTimer);
+      window.clearTimeout(admissionTimer);
+    };
+  }, [nameQuery, admissionQuery]);
 
-  const filteredRows = useMemo(() => {
-    const name = nameQuery.trim().toLowerCase();
-    const admission = admissionQuery.trim().toLowerCase();
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      void loadStudents();
+    }, 350);
+    return () => window.clearTimeout(handle);
+  }, [page, pageSize, classId, sectionId, debouncedNameQuery, debouncedAdmissionQuery]);
 
-    return students.filter((row) => {
-      if (!row.is_disabled) {
-        return false;
-      }
-      if (classId && String(row.current_class || "") !== classId) {
-        return false;
-      }
-      if (sectionId && String(row.current_section || "") !== sectionId) {
-        return false;
-      }
-      if (name && !fullName(row).toLowerCase().includes(name)) {
-        return false;
-      }
-      if (admission && !(row.admission_no || "").toLowerCase().includes(admission)) {
-        return false;
-      }
-      return true;
-    });
-  }, [students, classId, sectionId, nameQuery, admissionQuery]);
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   const enableStudent = async (id: number) => {
     try {
@@ -182,32 +247,43 @@ export function StudentDisabledPanel() {
       setError("");
       setSuccess("");
       await apiPatch(`/api/v1/students/students/${id}/`, { is_disabled: false, is_active: true });
-      setStudents((prev) => prev.map((row) => (row.id === id ? { ...row, is_disabled: false, is_active: true } : row)));
+      await loadStudents(page, pageSize);
       setSuccess("Student enabled successfully.");
-    } catch {
-      setError("Unable to enable student.");
+    } catch (err) {
+      setError(mapApiErrorMessage(err, "Unable to enable student."));
     } finally {
       setBusyId(null);
+      setEnableCandidate(null);
     }
   };
 
-  const deleteStudent = async (id: number, name: string) => {
-    const yes = window.confirm(`You are going to remove ${name}. Removed data cannot be restored. Continue?`);
-    if (!yes) {
-      return;
-    }
-
+  const remove = async (id: number) => {
     try {
-      setBusyId(id);
+      setDeletingId(id);
       setError("");
       setSuccess("");
       await apiDelete(`/api/v1/students/students/${id}/`);
-      setStudents((prev) => prev.filter((row) => row.id !== id));
       setSuccess("Student deleted successfully.");
-    } catch {
-      setError("Unable to delete student.");
+      const nextStudents = students.filter((row) => row.id !== id);
+      if (nextStudents.length === 0 && page > 1) {
+        setPage(page - 1);
+      } else {
+        await loadStudents(nextStudents.length === 0 && page > 1 ? page - 1 : page, pageSize);
+      }
+    } catch (err) {
+      setError(mapApiErrorMessage(err, "Unable to delete student."));
     } finally {
-      setBusyId(null);
+      setDeletingId(null);
+      setDeleteCandidate(null);
+    }
+  };
+
+  const handleRefresh = async () => {
+    try {
+      setRefreshing(true);
+      await loadStudents(page, pageSize);
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -222,8 +298,13 @@ export function StudentDisabledPanel() {
                 <Link href="/students/list" style={{ ...buttonStyle("#0ea5e9"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
                   Student List
                 </Link>
-                <button type="button" onClick={() => void load()} style={buttonStyle()}>
-                  Refresh
+                <button
+                  type="button"
+                  onClick={() => void handleRefresh()}
+                  disabled={loading || refreshing}
+                  style={{ ...buttonStyle(), opacity: loading || refreshing ? 0.7 : 1, cursor: loading || refreshing ? "not-allowed" : "pointer" }}
+                >
+                  {refreshing ? "Refreshing..." : "🔄 Refresh"}
                 </button>
               </div>
               <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
@@ -243,7 +324,15 @@ export function StudentDisabledPanel() {
           <div className="white-box" style={boxStyle()}>
             <h3 style={{ marginTop: 0, marginBottom: 12 }}>Select Criteria</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(160px, 1fr))", gap: 8 }}>
-              <select value={classId} onChange={(event) => { setClassId(event.target.value); setSectionId(""); }} style={fieldStyle()}>
+              <select 
+                value={classId} 
+                onChange={(event) => { 
+                  setClassId(event.target.value); 
+                  setSectionId(""); 
+                  setFilterError("");
+                }} 
+                style={fieldStyle()}
+              >
                 <option value="">Select Class</option>
                 {classes.map((item) => (
                   <option key={item.id} value={item.id}>
@@ -251,7 +340,22 @@ export function StudentDisabledPanel() {
                   </option>
                 ))}
               </select>
-              <select value={sectionId} onChange={(event) => setSectionId(event.target.value)} style={fieldStyle()}>
+              <select 
+                value={sectionId} 
+                onChange={(event) => {
+                  if (!classId && event.target.value) {
+                    setFilterError("Please select class first");
+                    setSectionId("");
+                    return;
+                  }
+                  setFilterError("");
+                  setSectionId(event.target.value);
+                }} 
+                onFocus={() => {
+                  if (!classId) setFilterError("Please select class first");
+                }}
+                style={fieldStyle()}
+              >
                 <option value="">Select Section</option>
                 {filteredSections.map((item) => (
                   <option key={item.id} value={item.id}>
@@ -259,13 +363,72 @@ export function StudentDisabledPanel() {
                   </option>
                 ))}
               </select>
-              <input value={nameQuery} onChange={(event) => setNameQuery(event.target.value)} placeholder="Search by name" style={fieldStyle()} />
-              <input value={admissionQuery} onChange={(event) => setAdmissionQuery(event.target.value)} placeholder="Search by admission no" style={fieldStyle()} />
+              <div style={{ position: "relative" }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    left: 10,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    fontSize: 13,
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  🔍
+                </span>
+                <input 
+                  value={nameQuery} 
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    if (/^[A-Za-z\s]*$/.test(nextValue)) {
+                      setNameQuery(nextValue);
+                      setFilterError("");
+                      return;
+                    }
+                    setFilterError("Name accepts only letters and spaces");
+                  }} 
+                  placeholder="Search by name" 
+                  style={{ ...fieldStyle(), paddingLeft: 32 }} 
+                />
+              </div>
+              <div style={{ position: "relative" }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    position: "absolute",
+                    left: 10,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    fontSize: 13,
+                    color: "var(--text-muted)",
+                  }}
+                >
+                  🔍
+                </span>
+                <input 
+                  value={admissionQuery} 
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    if (/^[A-Za-z0-9]*$/.test(nextValue)) {
+                      setAdmissionQuery(nextValue);
+                      setFilterError("");
+                      return;
+                    }
+                    setFilterError("Admission No accepts only letters and numbers");
+                  }} 
+                  placeholder="Search by admission no" 
+                  style={{ ...fieldStyle(), paddingLeft: 32 }} 
+                />
+              </div>
             </div>
+            {filterError ? <p style={{ color: "#dc2626", margin: "8px 0 0" }}>{filterError}</p> : null}
           </div>
 
           <div className="white-box" style={boxStyle()}>
             <h3 style={{ marginTop: 0, marginBottom: 12 }}>Disabled Students</h3>
+            {error && <p style={{ color: "var(--warning)", marginBottom: 10 }}>{error}</p>}
+            {success && <p style={{ color: "#0f766e", marginBottom: 10 }}>{success}</p>}
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
@@ -283,21 +446,33 @@ export function StudentDisabledPanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {!loading && filteredRows.length === 0 ? (
+                  {loading ? (
                     <tr>
-                      <td colSpan={10} style={{ padding: 12, color: "var(--text-muted)" }}>
-                        No disabled students found.
+                      <td colSpan={10} style={{ padding: 12, color: "var(--text-muted)", textAlign: "center" }}>
+                        Loading disabled students...
+                      </td>
+                    </tr>
+                  ) : students.length === 0 ? (
+                    <tr>
+                      <td colSpan={10} style={{ padding: 24, textAlign: "center" }}>
+                        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>No disabled students found</div>
+                        <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Try adjusting filters or search criteria</div>
                       </td>
                     </tr>
                   ) : (
-                    filteredRows.map((row) => {
+                    students.map((row) => {
                       const className = classMap.get(row.current_class || 0) || "-";
                       const sectionName = sectionMap.get(row.current_section || 0);
                       const guardian = row.guardian ? guardianMap.get(row.guardian) : undefined;
                       const categoryName = row.category ? categoryMap.get(row.category) : undefined;
 
                       return (
-                        <tr key={row.id}>
+                        <tr
+                          key={row.id}
+                          onMouseEnter={() => setHoveredRowId(row.id)}
+                          onMouseLeave={() => setHoveredRowId(null)}
+                          style={{ background: hoveredRowId === row.id ? "#f8fafc" : "transparent" }}
+                        >
                           <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.admission_no || "-"}</td>
                           <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.roll_no || "-"}</td>
                           <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{fullName(row)}</td>
@@ -311,14 +486,19 @@ export function StudentDisabledPanel() {
                           <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{guardian?.phone || "-"}</td>
                           <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                              <button type="button" disabled={busyId === row.id} style={buttonStyle("#0284c7")} onClick={() => void enableStudent(row.id)}>
+                              <button
+                                type="button"
+                                disabled={busyId === row.id}
+                                style={buttonStyle("#0284c7")}
+                                onClick={() => setEnableCandidate(row)}
+                              >
                                 Enable
                               </button>
                               <button
                                 type="button"
                                 disabled={busyId === row.id}
                                 style={buttonStyle("#dc2626")}
-                                onClick={() => void deleteStudent(row.id, fullName(row))}
+                                onClick={() => setDeleteCandidate(row)}
                               >
                                 Delete
                               </button>
@@ -332,12 +512,42 @@ export function StudentDisabledPanel() {
               </table>
             </div>
 
-            {loading && <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading disabled students...</p>}
-            {error && <p style={{ marginTop: 10, color: "var(--warning)" }}>{error}</p>}
-            {success && <p style={{ marginTop: 10, color: "#0f766e" }}>{success}</p>}
+            <PaginationControls
+              currentPage={page}
+              totalPages={totalPages}
+              totalItems={totalCount}
+              pageSize={pageSize}
+              loading={loading}
+              onPageChange={(nextPage) => setPage(nextPage)}
+              onPageSizeChange={(nextSize) => {
+                setPageSize(nextSize);
+              }}
+            />
           </div>
         </div>
       </section>
+
+      <ConfirmationModal
+        isOpen={enableCandidate !== null}
+        title="Enable Student"
+        message={`Are you sure you want to enable ${enableCandidate ? fullName(enableCandidate) : "this student"}?`}
+        confirmLabel="Enable"
+        cancelLabel="Cancel"
+        isConfirming={busyId !== null}
+        onConfirm={() => (enableCandidate ? void enableStudent(enableCandidate.id) : undefined)}
+        onCancel={() => setEnableCandidate(null)}
+      />
+
+      <ConfirmationModal
+        isOpen={deleteCandidate !== null}
+        title="Delete Student"
+        message={`Are you sure you want to delete ${deleteCandidate ? fullName(deleteCandidate) : "this student"}? This action cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        isConfirming={deletingId !== null}
+        onConfirm={() => deleteCandidate ? void remove(deleteCandidate.id) : undefined}
+        onCancel={() => setDeleteCandidate(null)}
+      />
     </div>
   );
 }

@@ -17,6 +17,7 @@ from apps.students.models import Student, StudentMultiClassRecord
 from .models import Permission, Role, UserRole
 from .permission_classes import CanManageRoles, CanManageUserRoles, CanViewPermissions
 from .serializers import PermissionSerializer, RoleSerializer, UserRoleSerializer
+from config.pagination import ApiPageNumberPagination
 
 User = get_user_model()
 
@@ -137,15 +138,29 @@ class PermissionViewSet(StandardizedAccessControlResponseMixin, viewsets.ReadOnl
 class RoleViewSet(StandardizedAccessControlResponseMixin, viewsets.ModelViewSet):
     serializer_class = RoleSerializer
     permission_classes = [permissions.IsAuthenticated, CanManageRoles]
+    pagination_class = ApiPageNumberPagination
 
     def get_queryset(self):
         user = self.request.user
         queryset = Role.objects.prefetch_related("permissions")
         if user.is_superuser:
-            return queryset
+            queryset = queryset
         if user.school_id:
-            return queryset.filter(school_id=user.school_id)
-        return queryset.none()
+            queryset = queryset.filter(school_id=user.school_id)
+        else:
+            queryset = queryset.none()
+
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+
+        ordering = (self.request.query_params.get("ordering") or "").strip()
+        if ordering:
+            queryset = queryset.order_by(ordering)
+        else:
+            queryset = queryset.order_by("name")
+
+        return queryset
 
     def get_object(self):
         try:
@@ -179,6 +194,15 @@ class RoleViewSet(StandardizedAccessControlResponseMixin, viewsets.ModelViewSet)
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            payload = dict(response.data)
+            payload["success"] = True
+            payload["message"] = "Roles fetched successfully"
+            payload["data"] = payload.get("results", [])
+            return Response(payload, status=response.status_code)
         serializer = self.get_serializer(queryset, many=True)
         return self.success_response("Roles fetched successfully", serializer.data)
 

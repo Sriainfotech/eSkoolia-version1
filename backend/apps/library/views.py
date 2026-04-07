@@ -1,6 +1,7 @@
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import permissions, viewsets
+from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
@@ -50,6 +51,7 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
 class BookCategoryViewSet(SchoolScopedModelViewSet):
     queryset = BookCategory.objects.select_related("school").all()
     serializer_class = BookCategorySerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["is_active"]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "created_at"]
@@ -59,6 +61,7 @@ class BookCategoryViewSet(SchoolScopedModelViewSet):
 class BookViewSet(SchoolScopedModelViewSet):
     queryset = Book.objects.select_related("school", "category").all()
     serializer_class = BookSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["category", "rack"]
     search_fields = ["title", "author", "isbn", "publisher"]
     ordering_fields = ["title", "available_quantity", "created_at"]
@@ -68,6 +71,7 @@ class BookViewSet(SchoolScopedModelViewSet):
 class LibraryMemberViewSet(SchoolScopedModelViewSet):
     queryset = LibraryMember.objects.select_related("school", "student", "staff").all()
     serializer_class = LibraryMemberSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["member_type", "is_active"]
     search_fields = ["card_no", "student__first_name", "student__last_name", "staff__first_name", "staff__last_name"]
     ordering_fields = ["created_at", "card_no"]
@@ -77,6 +81,7 @@ class LibraryMemberViewSet(SchoolScopedModelViewSet):
 class BookIssueViewSet(SchoolScopedModelViewSet):
     queryset = BookIssue.objects.select_related("school", "book", "member", "issued_by").all()
     serializer_class = BookIssueSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["book", "member", "status", "issue_date", "due_date"]
     search_fields = ["book__title", "member__card_no"]
     ordering_fields = ["issue_date", "due_date", "created_at"]

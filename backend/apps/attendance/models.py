@@ -13,7 +13,7 @@ ATTENDANCE_TYPE_CHOICES = [
 class StudentAttendance(models.Model):
     """
     Matches legacy sm_student_attendances.
-    attendance_type: P=Present, A=Absent, L=Late, H=Holiday
+    attendance_type: P=Present, A=Absent, L=Late, F=Half Day, H=Holiday
     """
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="student_attendances")
     academic_year = models.ForeignKey(
@@ -28,13 +28,26 @@ class StudentAttendance(models.Model):
     section_id = models.PositiveIntegerField(null=True, blank=True, help_text="Legacy section_id parity")
     attendance_date = models.DateField()
     attendance_type = models.CharField(max_length=1, choices=ATTENDANCE_TYPE_CHOICES)
-    notes = models.TextField(blank=True, default="")
-    created_at = models.DateTimeField(auto_now_add=True)
+    notes = models.TextField(blank=True, default="", max_length=250)
+    is_locked = models.BooleanField(default=False, help_text="Prevents editing of locked attendance")
+    marked_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="attendances_marked"
+    )
+    marked_at = models.DateTimeField(auto_now_add=True)
+    updated_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="attendances_updated"
+    )
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "student_attendances"
         ordering = ["-attendance_date", "student_id"]
+        indexes = [
+            models.Index(fields=["student_id"]),
+            models.Index(fields=["class_id"]),
+            models.Index(fields=["section_id"]),
+            models.Index(fields=["attendance_date"]),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["school", "academic_year", "student", "attendance_date"],

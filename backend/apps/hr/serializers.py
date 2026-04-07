@@ -8,7 +8,7 @@ from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 from rest_framework import serializers
 
-from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, Staff, StaffAttendance
+from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, Staff, StaffAttendance, StaffDocument
 
 
 class DepartmentSerializer(serializers.ModelSerializer):
@@ -113,6 +113,60 @@ class DesignationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"name": "Designation already exists in this department"})
 
         return attrs
+
+
+class StaffDocumentSerializer(serializers.ModelSerializer):
+    """
+    Serializer for staff document uploads with proper validation.
+    Supports multiple file uploads with type categorization.
+    """
+    document_type_display = serializers.CharField(source="get_document_type_display", read_only=True)
+    
+    class Meta:
+        model = StaffDocument
+        fields = [
+            "id",
+            "staff",
+            "document_type",
+            "document_type_display",
+            "file_path",
+            "file_name",
+            "file_size",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "staff", "created_at", "updated_at"]
+
+    def validate_document_type(self, value):
+        """Validate document type is one of allowed choices."""
+        valid_types = dict(StaffDocument.DOCUMENT_TYPE_CHOICES).keys()
+        if value not in valid_types:
+            raise serializers.ValidationError(f"Invalid document type. Must be one of: {', '.join(valid_types)}")
+        return value
+
+    def validate_file_name(self, value):
+        """Validate file name is not empty and doesn't contain invalid characters."""
+        if not value or not value.strip():
+            raise serializers.ValidationError("File name cannot be empty.")
+        # Allow alphanumeric, dots, hyphens, underscores only
+        if not re.match(r'^[\w\-. ]+$', value):
+            raise serializers.ValidationError("File name contains invalid characters.")
+        return value.strip()
+
+    def validate_file_size(self, value):
+        """Validate file size (max 50MB)."""
+        max_size = 50 * 1024 * 1024  # 50MB
+        if value > max_size:
+            raise serializers.ValidationError(f"File size exceeds maximum allowed size of 50MB.")
+        if value <= 0:
+            raise serializers.ValidationError("File size must be greater than 0.")
+        return value
+
+    def validate_file_path(self, value):
+        """Validate file path is not empty."""
+        if not value or not value.strip():
+            raise serializers.ValidationError("File path cannot be empty.")
+        return value.strip()
 
 
 class StaffSerializer(serializers.ModelSerializer):
@@ -268,6 +322,9 @@ class StaffSerializer(serializers.ModelSerializer):
         date_of_birth = get_value("date_of_birth")
         join_date = get_value("join_date")
         staff_photo = (get_value("staff_photo") or "").strip()
+        current_address = (get_value("current_address") or "").strip()
+        permanent_address = (get_value("permanent_address") or "").strip()
+        other_document = (get_value("other_document") or "").strip()
         epf_no = (get_value("epf_no") or "").strip()
         basic_salary = get_value("basic_salary")
         contract_type = (get_value("contract_type") or "").strip()
@@ -289,8 +346,18 @@ class StaffSerializer(serializers.ModelSerializer):
             required_errors["first_name"] = "First name is required."
         if not email:
             required_errors["email"] = "Email is required."
+        if not phone:
+            required_errors["phone"] = "Mobile number is required."
         if not join_date:
             required_errors["join_date"] = "Joining date is required."
+        if not staff_photo:
+            required_errors["staff_photo"] = "Staff photo is required."
+        if not current_address:
+            required_errors["current_address"] = "Current address is required."
+        if not permanent_address:
+            required_errors["permanent_address"] = "Permanent address is required."
+        if not other_document:
+            required_errors["other_document"] = "Signature upload is required."
         if not bank_account_name:
             required_errors["bank_account_name"] = "Account holder name is required."
         if not bank_account_no:
@@ -318,16 +385,45 @@ class StaffSerializer(serializers.ModelSerializer):
         if bank_mobile_no and not mobile_pattern.fullmatch(bank_mobile_no):
             raise serializers.ValidationError({"bank_mobile_no": "Mobile number must contain digits only and must not exceed 12 digits."})
 
-        if bank_account_no and not re.fullmatch(r"\d{6,30}", bank_account_no):
-            raise serializers.ValidationError({"bank_account_no": "Enter valid account number"})
+        # ========== BANK INFO VALIDATION ==========
+        # Account Holder Name: Letters, spaces, and hyphens only - no special characters
+        if bank_account_name and not re.match(r"^[A-Za-z\s\-']{2,120}$", bank_account_name):
+            raise serializers.ValidationError({
+                "bank_account_name": "Account holder name can contain only letters, spaces, hyphens, and apostrophes."
+            })
 
-        # Optional advanced business rule: enforce unique bank account number per school.
+        # Account Number: 6-30 digits, no special characters
+        if bank_account_no and not re.fullmatch(r"\d{6,30}", bank_account_no):
+            raise serializers.ValidationError({"bank_account_no": "Account number must be 6-30 digits."})
+
+        # Bank Name: Letters, spaces, hyphens, and ampersands only
+        if bank_name and not re.match(r"^[A-Za-z\s\-&]{2,120}$", bank_name):
+            raise serializers.ValidationError({
+                "bank_name": "Bank name can contain only letters, spaces, hyphens, and ampersands."
+            })
+
+        # Branch Name: Letters, spaces, hyphens only (fixing the issue where IFSC errors were mapped to branch)
+        if bank_branch and not re.match(r"^[A-Za-z\s\-]{2,120}$", bank_branch):
+            raise serializers.ValidationError({
+                "bank_branch": "Branch name can contain only letters and spaces."
+            })
+
+        # IFSC Code: Proper validation - 4 letters + 0 + 6 alphanumeric characters
+        custom_field = get_value("custom_field") or {}
+        ifsc_code = (custom_field.get("ifsc_code") or "").strip() if isinstance(custom_field, dict) else ""
+        if ifsc_code:
+            if not re.fullmatch(r"[A-Z]{4}0[A-Z0-9]{6}", ifsc_code.upper()):
+                raise serializers.ValidationError({
+                    "ifsc_code": "Invalid IFSC code format. Expected: 4 uppercase letters + 0 + 6 alphanumeric characters (e.g., HDFC0001234)."
+                })
+
+        # Unique bank account number per school
         if school_id and bank_account_no:
             bank_qs = Staff.objects.filter(school_id=school_id, bank_account_no=bank_account_no)
             if self.instance:
                 bank_qs = bank_qs.exclude(pk=self.instance.pk)
             if bank_qs.exists():
-                raise serializers.ValidationError({"bank_account_no": "Bank account already exists."})
+                raise serializers.ValidationError({"bank_account_no": "This bank account number is already registered for another staff member."})
 
         try:
             salary_value = Decimal(str(basic_salary))
@@ -389,6 +485,11 @@ class StaffSerializer(serializers.ModelSerializer):
             lowered = staff_photo.lower()
             if not (lowered.endswith(".jpg") or lowered.endswith(".jpeg") or lowered.endswith(".png")):
                 raise serializers.ValidationError({"staff_photo": "Only JPG and PNG files are allowed."})
+
+        if other_document:
+            lowered_doc = other_document.lower()
+            if not lowered_doc.endswith((".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png")):
+                raise serializers.ValidationError({"other_document": "Signature upload must be PDF, DOC, DOCX, JPG, JPEG, or PNG."})
 
         if school_id and staff_no:
             duplicate_staff_qs = Staff.objects.filter(school_id=school_id, staff_no__iexact=staff_no)
@@ -743,6 +844,14 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
         if from_date and to_date:
             if to_date < from_date:
                 raise serializers.ValidationError({"to_date": "To date cannot be earlier than From date."})
+
+        if leave_type and from_date and to_date:
+            requested_days = (to_date - from_date).days + 1
+            max_allowed = int(getattr(leave_type, "max_days_per_year", 0) or 0)
+            if requested_days > max_allowed:
+                raise serializers.ValidationError(
+                    {"to_date": "Leave limit exceeded"}
+                )
         
         # Validate school associations
         if school_id and staff and staff.school_id != school_id:

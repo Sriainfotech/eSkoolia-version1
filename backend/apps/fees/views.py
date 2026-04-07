@@ -5,6 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework import permissions, viewsets
+from config.pagination import ApiPageNumberPagination
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
@@ -53,6 +54,7 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
 class FeesGroupViewSet(SchoolScopedModelViewSet):
     queryset = FeesGroup.objects.select_related("school", "academic_year").all()
     serializer_class = FeesGroupSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["academic_year", "is_active"]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "created_at", "updated_at"]
@@ -62,6 +64,7 @@ class FeesGroupViewSet(SchoolScopedModelViewSet):
 class FeesTypeViewSet(SchoolScopedModelViewSet):
     queryset = FeesType.objects.select_related("school", "academic_year", "fees_group").all()
     serializer_class = FeesTypeSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["academic_year", "fees_group", "is_active"]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "amount", "created_at"]
@@ -71,6 +74,7 @@ class FeesTypeViewSet(SchoolScopedModelViewSet):
 class FeesAssignmentViewSet(SchoolScopedModelViewSet):
     queryset = FeesAssignment.objects.select_related("school", "academic_year", "student", "fees_type").all()
     serializer_class = FeesAssignmentSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["academic_year", "student", "fees_type", "status", "due_date"]
     search_fields = ["student__first_name", "student__last_name", "student__admission_no", "fees_type__name"]
     ordering_fields = ["due_date", "created_at", "amount"]

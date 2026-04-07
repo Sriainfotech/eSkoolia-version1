@@ -2,9 +2,11 @@ import os
 from datetime import time as time_obj
 
 from rest_framework import serializers
+from django.db.models import Q
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from apps.access_control.models import UserRole
+from apps.hr.models import Staff
 from apps.users.models import User
 from .models import (
     ClassOptionalSubjectSetup,
@@ -25,6 +27,29 @@ from .models import (
 
 class LegacyAliasMixin(serializers.ModelSerializer):
     """Expose legacy PHP-style *_id keys while keeping FK-backed models."""
+
+
+TEACHER_ROLE_NAMES = {
+    "teacher",
+    "active teacher",
+    "class teacher",
+    "subject teacher",
+    "assistant teacher",
+}
+
+
+def _normalize_role_name(value: str) -> str:
+    return " ".join((value or "").strip().lower().replace("_", " ").replace("-", " ").split())
+
+
+def _is_teacher_user(user_id: int) -> bool:
+    role_names = UserRole.objects.filter(user_id=user_id).values_list("role__name", flat=True)
+    if any(_normalize_role_name(name) in TEACHER_ROLE_NAMES for name in role_names):
+        return True
+
+    return Staff.objects.filter(user_id=user_id, status=Staff.STATUS_ACTIVE).filter(
+        Q(role__name__icontains="teacher") | Q(designation__name__icontains="teacher")
+    ).exists()
 
 
 class ClassSubjectAssignmentSerializer(LegacyAliasMixin):
@@ -69,11 +94,7 @@ class ClassSubjectAssignmentSerializer(LegacyAliasMixin):
             raise serializers.ValidationError({"teacher": ["Selected teacher is inactive"]})
 
         # Validate teacher has Teacher role
-        has_teacher_role = UserRole.objects.filter(
-            user_id=teacher.id,
-            role__name__icontains="teacher",
-        ).exists()
-        if not has_teacher_role:
+        if not _is_teacher_user(teacher.id):
             raise serializers.ValidationError({"message": "Selected user is not a teacher"})
 
         # Validate no duplicate assignment (unique constraint scope)
@@ -164,11 +185,7 @@ class ClassTeacherAssignmentSerializer(LegacyAliasMixin):
         if not teacher_obj or not teacher_obj.is_active or not getattr(teacher_obj, "access_status", True):
             raise serializers.ValidationError({"teacher": ["Selected teacher is inactive"]})
 
-        has_teacher_role = UserRole.objects.filter(
-            user_id=teacher.id,
-            role__name__icontains="teacher",
-        ).exists()
-        if not has_teacher_role:
+        if not _is_teacher_user(teacher.id):
             raise serializers.ValidationError({"message": "Selected user is not a teacher"})
 
         # Validate class-section is set up for the academic year (check if any subject is assigned)
@@ -606,6 +623,7 @@ class UploadedContentSerializer(LegacyAliasMixin):
     section_id = serializers.PrimaryKeyRelatedField(source="section_id_ref", queryset=UploadedContent._meta.get_field("section_id_ref").related_model.objects.all(), allow_null=True, required=False)
     academic_year_id = serializers.PrimaryKeyRelatedField(source="academic_year", queryset=UploadedContent._meta.get_field("academic_year").related_model.objects.all(), allow_null=True, required=False)
     file_upload = serializers.FileField(write_only=True, required=False, allow_null=True)
+    remove_upload_file = serializers.BooleanField(write_only=True, required=False, default=False)
 
     class Meta:
         model = UploadedContent
@@ -616,6 +634,7 @@ class UploadedContentSerializer(LegacyAliasMixin):
             "class_id",
             "section_id",
             "file_upload",
+            "remove_upload_file",
             "academic_year",
             "class_id_ref",
             "section_id_ref",
@@ -644,8 +663,21 @@ class UploadedContentSerializer(LegacyAliasMixin):
         ]
         validators = []
 
+    def _delete_stored_file(self, file_path):
+        path = (file_path or "").strip()
+        if not path:
+            return
+        normalized = path.lstrip("/")
+        try:
+            if default_storage.exists(normalized):
+                default_storage.delete(normalized)
+        except Exception:
+            # Intentionally ignore storage deletion failures to avoid blocking content updates.
+            pass
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        self._file_to_delete = None
 
         content_title = (attrs.get("content_title") or getattr(self.instance, "content_title", "") or "").strip()
         content_type = attrs.get("content_type") or getattr(self.instance, "content_type", None)
@@ -668,7 +700,8 @@ class UploadedContentSerializer(LegacyAliasMixin):
             raise serializers.ValidationError({"message": "Invalid class and section combination"})
 
         file_upload = attrs.pop("file_upload", None)
-        existing_file = (attrs.get("upload_file") or getattr(self.instance, "upload_file", "") or "").strip()
+        remove_upload_file = bool(attrs.pop("remove_upload_file", False))
+        existing_file = ((getattr(self.instance, "upload_file", "") if self.instance else "") or "").strip()
 
         if file_upload:
             extension = os.path.splitext(file_upload.name or "")[1].lower()
@@ -682,6 +715,12 @@ class UploadedContentSerializer(LegacyAliasMixin):
             except Exception:
                 raise serializers.ValidationError({"message": "File upload failed. Please try again."})
             attrs["upload_file"] = saved_path
+            if self.instance and existing_file and existing_file != saved_path:
+                self._file_to_delete = existing_file
+        elif remove_upload_file and self.instance is not None:
+            attrs["upload_file"] = ""
+            if self.instance and existing_file:
+                self._file_to_delete = existing_file
         elif not existing_file:
             raise serializers.ValidationError({"message": "Please select a file to upload."})
 
@@ -690,6 +729,13 @@ class UploadedContentSerializer(LegacyAliasMixin):
 
         attrs["content_title"] = content_title
         return attrs
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+        if getattr(self, "_file_to_delete", None):
+            self._delete_stored_file(self._file_to_delete)
+            self._file_to_delete = None
+        return instance
 
 
 class LessonTopicDetailSerializer(LegacyAliasMixin):
@@ -707,6 +753,7 @@ class LessonTopicDetailSerializer(LegacyAliasMixin):
             "id",
             "topic",
             "lesson",
+            "lesson_name",
             "topic_title",
             "completed_status",
             "competed_date",
@@ -724,6 +771,10 @@ class LessonSerializer(LegacyAliasMixin):
     section_id = serializers.PrimaryKeyRelatedField(source="section", queryset=Lesson._meta.get_field("section").related_model.objects.all(), allow_null=True, required=False)
     subject_id = serializers.PrimaryKeyRelatedField(source="subject", queryset=Lesson._meta.get_field("subject").related_model.objects.all())
     academic_year_id = serializers.PrimaryKeyRelatedField(source="academic_year", queryset=Lesson._meta.get_field("academic_year").related_model.objects.all(), allow_null=True, required=False)
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    section_name = serializers.CharField(source="section.name", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    lesson_name = serializers.CharField(source="lesson_title", read_only=True)
 
     class Meta:
         model = Lesson
@@ -734,6 +785,10 @@ class LessonSerializer(LegacyAliasMixin):
             "class_id",
             "section_id",
             "subject_id",
+            "class_name",
+            "section_name",
+            "subject_name",
+            "lesson_name",
             "academic_year",
             "school_class",
             "section",
@@ -776,6 +831,10 @@ class LessonTopicSerializer(LegacyAliasMixin):
     subject_id = serializers.PrimaryKeyRelatedField(source="subject", queryset=LessonTopic._meta.get_field("subject").related_model.objects.all())
     lesson_id = serializers.PrimaryKeyRelatedField(source="lesson", queryset=LessonTopic._meta.get_field("lesson").related_model.objects.all())
     academic_year_id = serializers.PrimaryKeyRelatedField(source="academic_year", queryset=LessonTopic._meta.get_field("academic_year").related_model.objects.all(), allow_null=True, required=False)
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    section_name = serializers.CharField(source="section.name", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    lesson_name = serializers.CharField(source="lesson.lesson_title", read_only=True)
     topics = LessonTopicDetailSerializer(many=True, read_only=True)
 
     class Meta:
@@ -788,6 +847,10 @@ class LessonTopicSerializer(LegacyAliasMixin):
             "section_id",
             "subject_id",
             "lesson_id",
+            "class_name",
+            "section_name",
+            "subject_name",
+            "lesson_name",
             "academic_year",
             "school_class",
             "section",
@@ -915,7 +978,22 @@ class LessonPlannerSerializer(LegacyAliasMixin):
     lesson_detail_id = serializers.PrimaryKeyRelatedField(source="lesson_detail", queryset=LessonPlanner._meta.get_field("lesson_detail").related_model.objects.all())
     topic_detail_id = serializers.PrimaryKeyRelatedField(source="topic_detail", queryset=LessonPlanner._meta.get_field("topic_detail").related_model.objects.all(), allow_null=True, required=False)
     academic_year_id = serializers.PrimaryKeyRelatedField(source="academic_year", queryset=LessonPlanner._meta.get_field("academic_year").related_model.objects.all(), allow_null=True, required=False)
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    section_name = serializers.CharField(source="section.name", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    lesson_name = serializers.CharField(source="lesson.lesson_title", read_only=True)
+    topic_name = serializers.CharField(source="topic.topic_title", read_only=True)
+    lesson_detail_name = serializers.CharField(source="lesson_detail.lesson_title", read_only=True)
+    topic_detail_name = serializers.CharField(source="topic_detail.topic_title", read_only=True)
+    teacher_name = serializers.SerializerMethodField()
     topics = LessonPlanTopicSerializer(many=True, read_only=True)
+
+    def get_teacher_name(self, obj):
+        teacher = getattr(obj, "teacher", None)
+        if not teacher:
+            return ""
+        full_name = getattr(teacher, "get_full_name", lambda: "")()
+        return full_name.strip() or getattr(teacher, "username", "")
 
     class Meta:
         model = LessonPlanner
@@ -933,6 +1011,14 @@ class LessonPlannerSerializer(LegacyAliasMixin):
             "subject_id",
             "class_id",
             "section_id",
+            "class_name",
+            "section_name",
+            "subject_name",
+            "lesson_name",
+            "topic_name",
+            "lesson_detail_name",
+            "topic_detail_name",
+            "teacher_name",
             "academic_year",
             "lesson",
             "topic",

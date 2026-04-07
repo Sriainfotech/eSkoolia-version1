@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
-
-type ApiList<T> = T[] | { results?: T[] };
+import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
+import { PaginationControls } from "@/components/common/PaginationControls";
+import { ConfirmationModal } from "@/components/common/ConfirmationModal";
+import { usePersistentPagination } from "@/hooks/usePersistentPagination";
 
 type StudentRow = {
   id: number;
@@ -23,10 +25,6 @@ type StudentRow = {
 
 type Guardian = { id: number; full_name: string; phone: string };
 type StudentCategory = { id: number; name: string };
-
-function listData<T>(value: ApiList<T>): T[] {
-  return Array.isArray(value) ? value : value.results || [];
-}
 
 async function apiGet<T>(path: string): Promise<T> {
   return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
@@ -87,29 +85,36 @@ function formatDate(value?: string | null) {
 }
 
 export function StudentUnassignedPanel() {
+  const { page, pageSize, setPage, setPageSize } = usePersistentPagination("students.unassigned", 1, 10);
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [guardians, setGuardians] = useState<Guardian[]>([]);
   const [categories, setCategories] = useState<StudentCategory[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
 
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<StudentRow | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const load = async () => {
+  const guardianMap = useMemo(() => new Map(guardians.map((item) => [item.id, item])), [guardians]);
+  const categoryMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+
+  const loadStudents = async (targetPage = page, targetPageSize = pageSize) => {
     try {
       setLoading(true);
       setError("");
-      const studentData = await apiGet<ApiList<StudentRow>>("/api/v1/students/students/");
-      const [guardianResult, categoryResult] = await Promise.allSettled([
-        apiGet<ApiList<Guardian>>("/api/v1/students/guardians/"),
-        apiGet<ApiList<StudentCategory>>("/api/v1/students/categories/"),
-      ]);
-
-      setStudents(listData(studentData));
-      setGuardians(guardianResult.status === "fulfilled" ? listData(guardianResult.value) : []);
-      setCategories(categoryResult.status === "fulfilled" ? listData(categoryResult.value) : []);
+      const query = buildPaginationQuery(targetPage, targetPageSize, {
+        unassigned: "true",
+        search: search.trim() || undefined,
+      });
+      const studentData = await apiGet<ListApiResponse<StudentRow>>(`/api/v1/students/students/?${query}`);
+      const items = extractListData(studentData);
+      const meta = extractPaginationMeta(studentData);
+      setStudents(items);
+      setTotalCount(meta?.count ?? items.length);
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       if (message === "401") {
@@ -117,6 +122,22 @@ export function StudentUnassignedPanel() {
       } else {
         setError("Unable to load unassigned students.");
       }
+    }
+  };
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      setError("");
+      const [guardianResult, categoryResult] = await Promise.allSettled([
+        apiGet<ListApiResponse<Guardian>>("/api/v1/students/guardians/"),
+        apiGet<ListApiResponse<StudentCategory>>("/api/v1/students/categories/"),
+      ]);
+
+      setGuardians(guardianResult.status === "fulfilled" ? extractListData(guardianResult.value) : []);
+      setCategories(categoryResult.status === "fulfilled" ? extractListData(categoryResult.value) : []);
+    } catch {
+      setError("Unable to load filter options.");
     } finally {
       setLoading(false);
     }
@@ -126,43 +147,48 @@ export function StudentUnassignedPanel() {
     void load();
   }, []);
 
-  const guardianMap = useMemo(() => new Map(guardians.map((item) => [item.id, item])), [guardians]);
-  const categoryMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      void loadStudents();
+    }, 250);
+    return () => window.clearTimeout(handle);
+  }, [page, pageSize, search]);
 
-  const rows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return students.filter((row) => {
-      const isUnassigned = !row.current_class || !row.current_section;
-      if (!isUnassigned || !row.is_active) {
-        return false;
-      }
-      if (!q) {
-        return true;
-      }
-      return (
-        (row.admission_no || "").toLowerCase().includes(q) ||
-        (row.roll_no || "").toLowerCase().includes(q) ||
-        fullName(row).toLowerCase().includes(q)
-      );
-    });
-  }, [students, search]);
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
-  const deleteStudent = async (id: number, name: string) => {
-    const yes = window.confirm(`Move ${name} to deleted records?`);
-    if (!yes) {
-      return;
+  const fullName = (row: StudentRow) => {
+    return `${row.first_name || ""} ${row.last_name || ""}`.trim() || "-";
+  };
+
+  const formatDate = (value?: string | null) => {
+    if (!value) {
+      return "-";
     }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    return date.toLocaleDateString();
+  };
+
+  const remove = async (id: number) => {
     try {
-      setBusyId(id);
+      setDeletingId(id);
       setError("");
       setSuccess("");
       await apiPatch(`/api/v1/students/students/${id}/`, { is_active: false });
-      setStudents((prev) => prev.map((item) => (item.id === id ? { ...item, is_active: false } : item)));
       setSuccess("Student moved to deleted records.");
+      const nextStudents = students.filter((item) => item.id !== id);
+      if (nextStudents.length === 0 && page > 1) {
+        setPage(page - 1);
+      } else {
+        await loadStudents(nextStudents.length === 0 && page > 1 ? page - 1 : page, pageSize);
+      }
     } catch {
       setError("Unable to delete student.");
     } finally {
-      setBusyId(null);
+      setDeletingId(null);
+      setDeleteCandidate(null);
     }
   };
 
@@ -198,7 +224,10 @@ export function StudentUnassignedPanel() {
           <div className="white-box" style={boxStyle()}>
             <input
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
               placeholder="Search by admission, roll, name"
               style={fieldStyle()}
             />
@@ -206,6 +235,8 @@ export function StudentUnassignedPanel() {
 
           <div className="white-box" style={boxStyle()}>
             <h3 style={{ marginTop: 0, marginBottom: 12 }}>Unassigned Student List</h3>
+            {error && <p style={{ color: "var(--warning)", marginBottom: 10 }}>{error}</p>}
+            {success && <p style={{ color: "#0f766e", marginBottom: 10 }}>{success}</p>}
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
@@ -222,14 +253,20 @@ export function StudentUnassignedPanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {!loading && rows.length === 0 ? (
+                  {loading ? (
+                    <tr>
+                      <td colSpan={9} style={{ padding: 12, color: "var(--text-muted)" }}>
+                        Loading unassigned students...
+                      </td>
+                    </tr>
+                  ) : students.length === 0 ? (
                     <tr>
                       <td colSpan={9} style={{ padding: 12, color: "var(--text-muted)" }}>
                         No unassigned students found.
                       </td>
                     </tr>
                   ) : (
-                    rows.map((row) => {
+                    students.map((row) => {
                       const guardian = row.guardian ? guardianMap.get(row.guardian) : null;
                       const categoryName = row.category ? categoryMap.get(row.category) : null;
                       return (
@@ -254,7 +291,7 @@ export function StudentUnassignedPanel() {
                                 type="button"
                                 disabled={busyId === row.id}
                                 style={buttonStyle("#dc2626")}
-                                onClick={() => void deleteStudent(row.id, fullName(row))}
+                                onClick={() => setDeleteCandidate(row)}
                               >
                                 Delete
                               </button>
@@ -268,12 +305,32 @@ export function StudentUnassignedPanel() {
               </table>
             </div>
 
-            {loading && <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading unassigned students...</p>}
-            {error && <p style={{ marginTop: 10, color: "var(--warning)" }}>{error}</p>}
-            {success && <p style={{ marginTop: 10, color: "#0f766e" }}>{success}</p>}
+            <PaginationControls
+              currentPage={page}
+              totalPages={totalPages}
+              totalItems={totalCount}
+              pageSize={pageSize}
+              loading={loading}
+              onPageChange={(nextPage) => setPage(nextPage)}
+              onPageSizeChange={(nextSize) => {
+                setPageSize(nextSize);
+                setPage(1);
+              }}
+            />
           </div>
         </div>
       </section>
+
+      <ConfirmationModal
+        isOpen={deleteCandidate !== null}
+        title="Delete Student"
+        message={`Move ${deleteCandidate ? fullName(deleteCandidate) : "this student"} to deleted records?`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        isConfirming={deletingId !== null}
+        onConfirm={() => deleteCandidate ? void remove(deleteCandidate.id) : undefined}
+        onCancel={() => setDeleteCandidate(null)}
+      />
     </div>
   );
 }

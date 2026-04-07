@@ -4,6 +4,7 @@ from django.db import transaction
 from django.db.models import Count, Q, Sum
 from django.db.models.functions import Coalesce
 from rest_framework import permissions, status, viewsets
+from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
@@ -62,6 +63,7 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
 class IncidentViewSet(SchoolScopedModelViewSet):
     queryset = Incident.objects.select_related("school").all()
     serializer_class = IncidentSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["title", "point"]
     search_fields = ["title", "description"]
     ordering_fields = ["title", "point", "created_at"]
@@ -78,6 +80,7 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
         "assigned_by",
     ).prefetch_related("comments", "comments__user")
     serializer_class = AssignedIncidentSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["academic_year", "incident", "student"]
     search_fields = ["student__first_name", "student__last_name", "student__admission_no", "incident__title"]
     ordering_fields = ["created_at", "point"]

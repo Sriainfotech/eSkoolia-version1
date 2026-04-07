@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from django.http import Http404
 from django.utils import timezone
 from rest_framework import permissions, status, viewsets
+from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated, NotFound, PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
@@ -17,7 +18,7 @@ from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 
-from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, Staff, StaffAttendance
+from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, Staff, StaffAttendance, StaffDocument
 from .serializers import (
     DepartmentSerializer,
     DesignationSerializer,
@@ -27,6 +28,7 @@ from .serializers import (
     PayrollRecordSerializer,
     StaffSerializer,
     StaffAttendanceSerializer,
+    StaffDocumentSerializer,
 )
 
 
@@ -77,6 +79,7 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
 class DepartmentViewSet(SchoolScopedModelViewSet):
     queryset = Department.objects.select_related("school").all()
     serializer_class = DepartmentSerializer
+    pagination_class = ApiPageNumberPagination
     filterset_fields = ["is_active"]
     search_fields = ["name", "description"]
     ordering_fields = ["name", "created_at"]
@@ -1027,3 +1030,91 @@ class PayrollRecordViewSet(SchoolScopedModelViewSet):
         payroll.paid_at = timezone.now()
         payroll.save(update_fields=["status", "paid_at", "updated_at"])
         return Response({"id": payroll.id, "status": payroll.status, "paid_at": payroll.paid_at})
+
+
+class StaffDocumentViewSet(SchoolScopedModelViewSet):
+    """
+    ViewSet for managing staff document uploads.
+    
+    Supports:
+    - Create: Upload new documents
+    - List: Get all documents for a staff member
+    - Retrieve: Get a specific document
+    - Destroy: Delete a document
+    
+    All documents are scoped to the authenticated user's school.
+    """
+    queryset = StaffDocument.objects.select_related("school", "staff").all()
+    serializer_class = StaffDocumentSerializer
+    pagination_class = ApiPageNumberPagination
+    filterset_fields = ["staff", "document_type"]
+    search_fields = ["file_name", "staff__staff_no", "staff__first_name", "staff__last_name"]
+    ordering_fields = ["created_at", "file_name", "document_type"]
+    permission_codes = {
+        "*": "human_resource.staff.view",
+        "create": "human_resource.staff.update",
+        "destroy": "human_resource.staff.update",
+    }
+
+    def get_queryset(self):
+        """Filter documents to only those belonging to the user's school."""
+        school = getattr(self.request.user, "school", None)
+        if not school:
+            return StaffDocument.objects.none()
+        return StaffDocument.objects.filter(school=school).select_related("school", "staff")
+
+    def perform_create(self, serializer):
+        """Set school when creating a document."""
+        school = getattr(self.request.user, "school", None)
+        if not school:
+            raise PermissionDenied("No school associated with user.")
+        serializer.save(school=school)
+
+    def destroy(self, request, pk=None):
+        """Delete a staff document."""
+        try:
+            document = self.get_object()
+            document.delete()
+            return Response(
+                {"detail": "Document deleted successfully."},
+                status=status.HTTP_204_NO_CONTENT
+            )
+        except StaffDocument.DoesNotExist:
+            raise NotFound("Document not found.")
+        except Exception as err:
+            raise ValidationError({"detail": str(err)})
+
+    @action(detail=False, methods=["get"])
+    def by_staff(self, request):
+        """
+        Get all documents for a specific staff member.
+        Query params:
+        - staff_id: Staff member ID (required)
+        """
+        staff_id = request.query_params.get("staff_id")
+        if not staff_id:
+            return Response(
+                {"error": "staff_id query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        school = getattr(request.user, "school", None)
+        if not school:
+            return Response(
+                {"error": "No school associated with user."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            staff_member = Staff.objects.get(id=int(staff_id), school=school)
+        except (Staff.DoesNotExist, ValueError):
+            raise NotFound("Staff member not found.")
+
+        documents = StaffDocument.objects.filter(staff=staff_member).order_by("-created_at")
+        page = self.paginate_queryset(documents)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(documents, many=True)
+        return Response(serializer.data)

@@ -3,9 +3,10 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TimeSpinnerPicker } from "@/components/common/TimeSpinnerPicker";
+import { sortAcademicsClasses } from "@/lib/classOrdering";
 
 type AcademicYear = { id: number; name: string; is_current: boolean };
-type SchoolClass = { id: number; name: string };
+type SchoolClass = { id: number; name: string; numeric_order?: number };
 type Section = { id: number; school_class: number; name: string };
 type Subject = { id: number; name: string; code: string };
 type Teacher = { id: number; full_name?: string; username: string };
@@ -72,6 +73,8 @@ type LookupBundle = {
 
 type ApiList<T> = T[] | { results?: T[] };
 
+type PagedList<T> = ApiList<T> & { next?: string | null };
+
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
   return apiRequestWithRefresh<T>(path, {
     ...options,
@@ -84,6 +87,34 @@ async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
 
 function asList<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
+}
+
+async function fetchAllPages<T>(path: string): Promise<T[]> {
+  const merged: T[] = [];
+  let nextPath = path;
+
+  for (let index = 0; index < 50 && nextPath; index += 1) {
+    const response = await apiFetch<PagedList<T>>(nextPath);
+    merged.push(...asList(response));
+
+    const nextRaw = response.next;
+    if (!nextRaw) {
+      break;
+    }
+
+    if (nextRaw.startsWith("http")) {
+      try {
+        const nextUrl = new URL(nextRaw);
+        nextPath = `${nextUrl.pathname}${nextUrl.search}`;
+      } catch {
+        break;
+      }
+    } else {
+      nextPath = nextRaw;
+    }
+  }
+
+  return merged;
 }
 
 function toId(value: unknown): number | null {
@@ -109,22 +140,22 @@ function useLookupData() {
     try {
       setError("");
       const [years, classes, sections, subjects, teachers, periods, rooms] = await Promise.all([
-        apiFetch<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
-        apiFetch<ApiList<SchoolClass>>("/api/v1/core/classes/"),
-        apiFetch<ApiList<Section>>("/api/v1/core/sections/"),
-        apiFetch<ApiList<Subject>>("/api/v1/core/subjects/"),
+        fetchAllPages<AcademicYear>("/api/v1/core/academic-years/?page_size=100"),
+        fetchAllPages<SchoolClass>("/api/v1/core/classes/?page_size=100"),
+        fetchAllPages<Section>("/api/v1/core/sections/?page_size=100"),
+        fetchAllPages<Subject>("/api/v1/core/subjects/?page_size=100"),
         apiFetch<Teacher[]>("/api/v1/academics/lesson-planners/teachers/"),
-        apiFetch<ApiList<ClassPeriod>>("/api/v1/core/class-periods/?period_type=class"),
-        apiFetch<ApiList<ClassRoom>>("/api/v1/core/class-rooms/"),
+        fetchAllPages<ClassPeriod>("/api/v1/core/class-periods/?period_type=class&page_size=100"),
+        fetchAllPages<ClassRoom>("/api/v1/core/class-rooms/?page_size=100"),
       ]);
       setData({
         years: asList(years),
-        classes: asList(classes),
+        classes: sortAcademicsClasses(asList(classes)),
         sections: asList(sections),
         subjects: asList(subjects),
-        teachers,
+        teachers: sortTeachers(teachers),
         periods: asList(periods),
-        rooms: asList(rooms),
+        rooms: sortClassRooms(asList(rooms)),
       });
     } catch {
       setError("Unable to load lookup data.");
@@ -147,6 +178,40 @@ function sectionOptionsForClass(sections: Section[], classId: string): Section[]
   if (!classId) return [];
   const cid = Number(classId);
   return sections.filter((section) => section.school_class === cid);
+}
+
+function teacherDisplayName(teacher: Teacher): string {
+  const fullName = typeof teacher?.full_name === "string" ? teacher.full_name.trim() : "";
+  if (fullName) return fullName;
+
+  const username = typeof (teacher as { username?: unknown })?.username === "string"
+    ? ((teacher as { username?: string }).username || "").trim()
+    : "";
+  if (username) return username;
+
+  return teacher?.id ? `Teacher #${teacher.id}` : "Unknown Teacher";
+}
+
+function sortTeachers(items: Teacher[]): Teacher[] {
+  return [...items].sort((left, right) => teacherDisplayName(left).localeCompare(teacherDisplayName(right), undefined, { numeric: true, sensitivity: "base" }));
+}
+
+function sortClassRooms(items: ClassRoom[]): ClassRoom[] {
+  const splitRoom = (room: string) => {
+    const normalized = room.trim().toUpperCase();
+    const match = normalized.match(/^(.*?)(\d+)$/);
+    if (!match) return { prefix: normalized, number: Number.NaN };
+    return { prefix: match[1].trim(), number: Number(match[2]) };
+  };
+
+  return [...items].sort((left, right) => {
+    const a = splitRoom(left.room_no || "");
+    const b = splitRoom(right.room_no || "");
+    const prefixCompare = a.prefix.localeCompare(b.prefix, undefined, { numeric: true, sensitivity: "base" });
+    if (prefixCompare !== 0) return prefixCompare;
+    if (Number.isFinite(a.number) && Number.isFinite(b.number) && a.number !== b.number) return a.number - b.number;
+    return (left.room_no || "").localeCompare(right.room_no || "", undefined, { numeric: true, sensitivity: "base" });
+  });
 }
 
 function initialYearId(years: AcademicYear[]): string {
@@ -214,6 +279,8 @@ export function AssignClassTeacherPanel() {
   const [teacherId, setTeacherId] = useState("");
   const [filterClassId, setFilterClassId] = useState("");
   const [filterSectionId, setFilterSectionId] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     if (!yearId && data.years.length) {
@@ -231,6 +298,7 @@ export function AssignClassTeacherPanel() {
       const suffix = params.toString() ? `?${params.toString()}` : "";
       const response = await apiFetch<ApiList<ClassTeacherAssignment>>(`/api/v1/academics/class-teachers/${suffix}`);
       setItems(asList(response));
+      setPage(1);
     } catch {
       setError("Unable to load class teacher assignments.");
     } finally {
@@ -245,6 +313,18 @@ export function AssignClassTeacherPanel() {
   const availableSections = useMemo(() => sectionOptionsForClass(data.sections, classId), [data.sections, classId]);
   const filterSections = useMemo(() => sectionOptionsForClass(data.sections, filterClassId), [data.sections, filterClassId]);
   const hasClassTeacherFieldError = Boolean(fieldErrors.academic_year || fieldErrors.class_id || fieldErrors.section_id || fieldErrors.teacher);
+  const isEditMode = editingId !== null;
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const paginatedItems = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, page, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   const resetForm = (clearNotice = true) => {
     setEditingId(null);
@@ -324,11 +404,13 @@ export function AssignClassTeacherPanel() {
     setFieldErrors({});
   };
 
-  const remove = async (id: number) => {
-    if (!window.confirm("Delete this class teacher assignment?")) return;
+  const remove = async (row: ClassTeacherAssignment) => {
+    const className = nameById(data.classes, toId(row.class_id) ?? toId(row.school_class), (entry) => entry.name);
+    const teacherName = nameById(data.teachers, toId(row.teacher_id) ?? toId(row.teacher), teacherDisplayName);
+    if (!window.confirm(`Delete assignment for ${className} - ${teacherName}?`)) return;
     try {
       setError("");
-      await apiFetch(`/api/v1/academics/class-teachers/${id}/`, { method: "DELETE" });
+      await apiFetch(`/api/v1/academics/class-teachers/${row.id}/`, { method: "DELETE" });
       await load();
     } catch {
       setError("Failed to delete class teacher assignment.");
@@ -363,6 +445,7 @@ export function AssignClassTeacherPanel() {
         </div>
       </div>
 
+      {isEditMode ? <p style={{ margin: "0 0 10px", color: "#0f766e", fontSize: 13, fontWeight: 600 }}>Edit mode active: update the assignment, or click Cancel to create a new one.</p> : null}
       <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto auto", gap: 8, marginBottom: 12, alignItems: "start" }}>
         <div>
           <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Academic Year</label>
@@ -392,12 +475,14 @@ export function AssignClassTeacherPanel() {
           <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Class Teacher</label>
           <select required value={teacherId} onChange={(e) => { setTeacherId(e.target.value); setFieldErrors((prev) => ({ ...prev, teacher: undefined })); }} style={{ marginTop: 4, width: "100%", height: 36, border: `1px solid ${fieldErrors.teacher ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px" }}>
             <option value="">Select teacher</option>
-            {data.teachers.map((row) => <option key={row.id} value={row.id}>{row.full_name || row.username}</option>)}
+            {data.teachers.map((row) => <option key={row.id} value={row.id}>{teacherDisplayName(row)}</option>)}
           </select>
           <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.teacher || ""}</span>
         </div>
-        <button type="submit" disabled={saving} style={{ height: 36, background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer", alignSelf: "center", marginTop: 22 }}>{saving ? "Saving..." : editingId ? "Update" : "Assign"}</button>
-        {editingId ? <button type="button" onClick={() => resetForm()} style={{ height: 36, background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer", alignSelf: "center", marginTop: 22 }}>Cancel</button> : <span />}
+        <div style={{ alignSelf: "start", marginTop: 22 }}>
+          <button type="submit" disabled={saving} style={{ height: 36, background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer" }}>{saving ? "Saving..." : isEditMode ? "Update" : "Assign"}</button>
+        </div>
+        {isEditMode ? <div style={{ alignSelf: "start", marginTop: 22 }}><button type="button" onClick={() => resetForm()} style={{ height: 36, background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer" }}>Cancel</button></div> : <span />}
       </form>
 
       {(lookupError || (error && !hasClassTeacherFieldError)) && <p style={{ color: "var(--warning)", margin: "8px 0" }}>{lookupError || error}</p>}
@@ -415,8 +500,8 @@ export function AssignClassTeacherPanel() {
           </thead>
           <tbody>
             {loading ? <tr><td colSpan={4} style={{ padding: 12 }}>Loading...</td></tr> : null}
-            {!loading && items.length === 0 ? <tr><td colSpan={4} style={{ padding: 12, color: "var(--text-muted)" }}>No class teacher assignments found.</td></tr> : null}
-            {!loading && items.map((row) => {
+            {!loading && paginatedItems.length === 0 ? <tr><td colSpan={4} style={{ padding: 12, color: "var(--text-muted)" }}>No class teacher assignments found.</td></tr> : null}
+            {!loading && paginatedItems.map((row) => {
               const classValue = toId(row.class_id) ?? toId(row.school_class);
               const sectionValue = toId(row.section_id) ?? toId(row.section);
               const teacherValue = toId(row.teacher_id) ?? toId(row.teacher);
@@ -424,17 +509,37 @@ export function AssignClassTeacherPanel() {
                 <tr key={row.id}>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.classes, classValue, (entry) => entry.name)}</td>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.sections, sectionValue, (entry) => entry.name)}</td>
-                  <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.teachers, teacherValue, (entry) => entry.full_name || entry.username)}</td>
+                  <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.teachers, teacherValue, teacherDisplayName)}</td>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", display: "flex", gap: 6 }}>
                     <button type="button" onClick={() => setViewingRow(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#6366f1", color: "#fff", cursor: "pointer", fontSize: 12 }}>View</button>
                     <button type="button" onClick={() => edit(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#0284c7", color: "#fff", cursor: "pointer", fontSize: 12 }}>Edit</button>
-                    <button type="button" onClick={() => void remove(row.id)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#dc2626", color: "#fff", cursor: "pointer", fontSize: 12 }}>Delete</button>
+                    <button type="button" onClick={() => void remove(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#dc2626", color: "#fff", cursor: "pointer", fontSize: 12 }}>Delete</button>
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+        {items.length > 0 ? (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: 12, borderTop: "1px solid var(--line)", flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Rows per page</span>
+              <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} style={{ height: 34, border: "1px solid var(--line)", borderRadius: 8, padding: "0 10px", background: "var(--surface)" }}>
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setPage(1)} disabled={page <= 1} style={{ height: 34, padding: "0 12px", border: "1px solid #6b7280", background: "#6b7280", color: "#fff", borderRadius: 8, cursor: page <= 1 ? "not-allowed" : "pointer", opacity: page <= 1 ? 0.6 : 1 }}>First</button>
+              <button type="button" onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1} style={{ height: 34, padding: "0 12px", border: "1px solid #6b7280", background: "#6b7280", color: "#fff", borderRadius: 8, cursor: page <= 1 ? "not-allowed" : "pointer", opacity: page <= 1 ? 0.6 : 1 }}>Previous</button>
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Page {page} of {totalPages}</span>
+              <button type="button" onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages} style={{ height: 34, padding: "0 12px", border: "1px solid #6b7280", background: "#6b7280", color: "#fff", borderRadius: 8, cursor: page >= totalPages ? "not-allowed" : "pointer", opacity: page >= totalPages ? 0.6 : 1 }}>Next</button>
+              <button type="button" onClick={() => setPage(totalPages)} disabled={page >= totalPages} style={{ height: 34, padding: "0 12px", border: "1px solid #6b7280", background: "#6b7280", color: "#fff", borderRadius: 8, cursor: page >= totalPages ? "not-allowed" : "pointer", opacity: page >= totalPages ? 0.6 : 1 }}>Last</button>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {viewingRow && (
@@ -456,7 +561,7 @@ export function AssignClassTeacherPanel() {
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block" }}>Class Teacher</label>
-                <div style={{ fontSize: 14, marginTop: 4 }}>{nameById(data.teachers, toId(viewingRow.teacher_id) ?? toId(viewingRow.teacher), (entry) => entry.full_name || entry.username)}</div>
+                <div style={{ fontSize: 14, marginTop: 4 }}>{nameById(data.teachers, toId(viewingRow.teacher_id) ?? toId(viewingRow.teacher), teacherDisplayName)}</div>
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block" }}>Status</label>
@@ -600,12 +705,15 @@ export function AssignSubjectPanel() {
   const [isOptional, setIsOptional] = useState(false);
   const [filterClassId, setFilterClassId] = useState("");
   const [filterSectionId, setFilterSectionId] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const searchWithFilters = async () => {
     if (!filterClassId || !filterSectionId) {
       setError("Please select both class and section before searching.");
       return;
     }
+    setPage(1);
     await load();
   };
 
@@ -625,6 +733,7 @@ export function AssignSubjectPanel() {
       const suffix = params.toString() ? `?${params.toString()}` : "";
       const response = await apiFetch<ApiList<ClassSubjectAssignment>>(`/api/v1/academics/class-subjects/${suffix}`);
       setItems(asList(response));
+      setPage(1);
     } catch {
       setError("Unable to load subject assignments.");
     } finally {
@@ -639,6 +748,18 @@ export function AssignSubjectPanel() {
   const availableSections = useMemo(() => sectionOptionsForClass(data.sections, classId), [data.sections, classId]);
   const filterSections = useMemo(() => sectionOptionsForClass(data.sections, filterClassId), [data.sections, filterClassId]);
   const hasSubjectFieldError = Boolean(fieldErrors.academic_year || fieldErrors.class_id || fieldErrors.section_id || fieldErrors.subject_id || fieldErrors.teacher_id);
+  const isEditMode = editingId !== null;
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const paginatedItems = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, page, pageSize]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   const resetForm = (clearNotice = true) => {
     setEditingId(null);
@@ -725,13 +846,18 @@ export function AssignSubjectPanel() {
     setMessage("");
     setError("");
     setFieldErrors({});
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
   };
 
-  const remove = async (id: number) => {
-    if (!window.confirm("Delete this subject assignment?")) return;
+  const remove = async (row: ClassSubjectAssignment) => {
+    const className = nameById(data.classes, toId(row.class_id) ?? toId(row.school_class), (entry) => entry.name);
+    const teacherName = nameById(data.teachers, toId(row.teacher_id) ?? toId(row.teacher), teacherDisplayName);
+    if (!window.confirm(`Delete assignment for ${className} - ${teacherName}?`)) return;
     try {
       setError("");
-      await apiFetch(`/api/v1/academics/class-subjects/${id}/`, { method: "DELETE" });
+      await apiFetch(`/api/v1/academics/class-subjects/${row.id}/`, { method: "DELETE" });
       await load();
     } catch {
       setError("Failed to delete subject assignment.");
@@ -766,6 +892,7 @@ export function AssignSubjectPanel() {
         </div>
       </div>
 
+      {isEditMode ? <p style={{ margin: "0 0 10px", color: "#0f766e", fontSize: 13, fontWeight: 600 }}>Edit mode active: update this subject mapping, or click Cancel to add a new mapping.</p> : null}
       <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr auto auto", gap: 8, marginBottom: 12, alignItems: "start" }}>
         <div>
           <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Academic Year</label>
@@ -803,13 +930,14 @@ export function AssignSubjectPanel() {
           <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Teacher</label>
           <select required value={teacherId} onChange={(e) => { setTeacherId(e.target.value); setFieldErrors((prev) => ({ ...prev, teacher_id: undefined })); }} style={{ marginTop: 4, width: "100%", height: 36, border: `1px solid ${fieldErrors.teacher_id ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px" }}>
             <option value="">Select teacher</option>
-            {data.teachers.map((row) => <option key={row.id} value={row.id}>{row.full_name || row.username}</option>)}
+            {data.teachers.map((row) => <option key={row.id} value={row.id}>{teacherDisplayName(row)}</option>)}
           </select>
           <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.teacher_id || ""}</span>
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 22, fontSize: 13 }}><input type="checkbox" checked={isOptional} onChange={(e) => setIsOptional(e.target.checked)} /> Optional</label>
-        <button type="submit" disabled={saving} style={{ height: 36, background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer", alignSelf: "center", marginTop: 22 }}>{saving ? "Saving..." : editingId ? "Update" : "Assign"}</button>
-        {editingId ? <button type="button" onClick={() => resetForm()} style={{ height: 36, background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer", alignSelf: "center", marginTop: 22 }}>Cancel</button> : <span />}
+        <button type="submit" disabled={saving} style={{ height: 36, background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer", alignSelf: "start", marginTop: 22 }}>{saving ? "Saving..." : isEditMode ? "Update" : "Assign"}</button>
+        <button type="button" onClick={() => { resetForm(); setYearId(initialYearId(data.years)); }} style={{ height: 36, background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer", alignSelf: "start", marginTop: 22 }}>Reset</button>
+        {isEditMode ? <button type="button" onClick={() => resetForm()} style={{ height: 36, background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer", alignSelf: "start", marginTop: 22 }}>Cancel</button> : <span />}
       </form>
 
       {(lookupError || (error && !hasSubjectFieldError)) && <p style={{ color: "var(--warning)", margin: "8px 0" }}>{lookupError || error}</p>}
@@ -829,8 +957,8 @@ export function AssignSubjectPanel() {
           </thead>
           <tbody>
             {loading ? <tr><td colSpan={6} style={{ padding: 12 }}>Loading...</td></tr> : null}
-            {!loading && items.length === 0 ? <tr><td colSpan={6} style={{ padding: 12, color: "var(--text-muted)" }}>No subject assignments found.</td></tr> : null}
-            {!loading && items.map((row) => {
+            {!loading && paginatedItems.length === 0 ? <tr><td colSpan={6} style={{ padding: 12, color: "var(--text-muted)" }}>No subject assignments found.</td></tr> : null}
+            {!loading && paginatedItems.map((row) => {
               const classValue = toId(row.class_id) ?? toId(row.school_class);
               const sectionValue = toId(row.section_id) ?? toId(row.section);
               const subjectValue = toId(row.subject_id) ?? toId(row.subject);
@@ -840,18 +968,38 @@ export function AssignSubjectPanel() {
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.classes, classValue, (entry) => entry.name)}</td>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.sections, sectionValue, (entry) => entry.name)}</td>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.subjects, subjectValue, (entry) => entry.name)}</td>
-                  <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.teachers, teacherValue, (entry) => entry.full_name || entry.username)}</td>
+                  <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.teachers, teacherValue, teacherDisplayName)}</td>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{row.is_optional ? "Yes" : "No"}</td>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", display: "flex", gap: 6 }}>
                     <button type="button" onClick={() => setViewingRow(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#6366f1", color: "#fff", cursor: "pointer", fontSize: 12 }}>View</button>
                     <button type="button" onClick={() => edit(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#0284c7", color: "#fff", cursor: "pointer", fontSize: 12 }}>Edit</button>
-                    <button type="button" onClick={() => void remove(row.id)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#dc2626", color: "#fff", cursor: "pointer", fontSize: 12 }}>Delete</button>
+                    <button type="button" onClick={() => void remove(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#dc2626", color: "#fff", cursor: "pointer", fontSize: 12 }}>Delete</button>
                   </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+        {items.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: 12, flexWrap: "wrap", borderTop: "1px solid var(--line)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Rows per page</span>
+              <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} style={{ height: 34, border: "1px solid var(--line)", borderRadius: 8, padding: "0 10px", background: "var(--surface)" }}>
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={() => setPage(1)} disabled={page <= 1} style={{ height: 34, padding: "0 12px", border: "1px solid #6b7280", background: "#6b7280", color: "#fff", borderRadius: 8, cursor: page <= 1 ? "not-allowed" : "pointer", opacity: page <= 1 ? 0.6 : 1 }}>First</button>
+              <button type="button" onClick={() => setPage(Math.max(1, page - 1))} disabled={page <= 1} style={{ height: 34, padding: "0 12px", border: "1px solid #6b7280", background: "#6b7280", color: "#fff", borderRadius: 8, cursor: page <= 1 ? "not-allowed" : "pointer", opacity: page <= 1 ? 0.6 : 1 }}>Previous</button>
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Page {page} of {totalPages}</span>
+              <button type="button" onClick={() => setPage(Math.min(totalPages, page + 1))} disabled={page >= totalPages} style={{ height: 34, padding: "0 12px", border: "1px solid #6b7280", background: "#6b7280", color: "#fff", borderRadius: 8, cursor: page >= totalPages ? "not-allowed" : "pointer", opacity: page >= totalPages ? 0.6 : 1 }}>Next</button>
+              <button type="button" onClick={() => setPage(totalPages)} disabled={page >= totalPages} style={{ height: 34, padding: "0 12px", border: "1px solid #6b7280", background: "#6b7280", color: "#fff", borderRadius: 8, cursor: page >= totalPages ? "not-allowed" : "pointer", opacity: page >= totalPages ? 0.6 : 1 }}>Last</button>
+            </div>
+          </div>
+        )}
       </div>
 
       {viewingRow && (
@@ -877,7 +1025,7 @@ export function AssignSubjectPanel() {
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block" }}>Teacher</label>
-                <div style={{ fontSize: 14, marginTop: 4 }}>{nameById(data.teachers, toId(viewingRow.teacher_id) ?? toId(viewingRow.teacher), (entry) => entry.full_name || entry.username)}</div>
+                <div style={{ fontSize: 14, marginTop: 4 }}>{nameById(data.teachers, toId(viewingRow.teacher_id) ?? toId(viewingRow.teacher), teacherDisplayName)}</div>
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block" }}>Optional</label>
@@ -910,13 +1058,27 @@ export function ClassRoomPanel() {
 
   const [roomNo, setRoomNo] = useState("");
   const [capacity, setCapacity] = useState("");
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
+
+  const sortedItems = useMemo(() => sortClassRooms(items), [items]);
+  const totalPages = Math.max(1, Math.ceil(sortedItems.length / pageSize));
+  const pagedItems = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return sortedItems.slice(start, start + pageSize);
+  }, [page, sortedItems]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
 
   const load = async () => {
     try {
       setLoading(true);
       setError("");
-      const response = await apiFetch<ApiList<ClassRoom>>("/api/v1/core/class-rooms/");
-      setItems(asList(response));
+      const response = await fetchAllPages<ClassRoom>("/api/v1/core/class-rooms/?page_size=100");
+      setItems(sortClassRooms(response));
+      setPage(1);
     } catch {
       setError("Unable to load class rooms.");
     } finally {
@@ -963,7 +1125,7 @@ export function ClassRoomPanel() {
 
     const message = typeof payload.message === "string" ? payload.message : fallbackMessage;
     const lowered = message.toLowerCase();
-    if (!next.room_no && (lowered.includes("room") || lowered.includes("format"))) {
+    if (!next.room_no && lowered.includes("room")) {
       next.room_no = message;
     }
     if (!next.capacity && lowered.includes("capacity")) {
@@ -978,8 +1140,8 @@ export function ClassRoomPanel() {
   const isCapacityNumber = Number.isInteger(capacityValue);
   const roomNoClientError = !normalizedRoomNo
     ? "Room no is required"
-    : !/^[A-Z]{1,5}-\d{1,4}$/.test(normalizedRoomNo)
-      ? "Invalid room number format"
+    : !/^[A-Z0-9][A-Z0-9\- ]{0,49}$/.test(normalizedRoomNo)
+      ? "Enter a valid room number."
       : "";
   const capacityClientError = !capacity
     ? "Capacity is required"
@@ -1044,6 +1206,9 @@ export function ClassRoomPanel() {
     setError("");
     setFieldErrors({});
     setTouched({ room_no: false, capacity: false });
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
   };
 
   const remove = async (id: number) => {
@@ -1075,8 +1240,10 @@ export function ClassRoomPanel() {
           <input type="number" min={1} max={200} value={capacity} onChange={(e) => { setCapacity(e.target.value); setFieldErrors((prev) => ({ ...prev, capacity: undefined })); setError(""); }} onBlur={() => setTouched((prev) => ({ ...prev, capacity: true }))} placeholder="Enter capacity (1-200)" style={{ marginTop: 4, width: "100%", height: 36, border: `1px solid ${capacityInlineError ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px" }} />
           <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{capacityInlineError || ""}</span>
         </div>
-        <button type="submit" disabled={saving || isFormInvalid} style={{ height: 36, background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: saving || isFormInvalid ? "not-allowed" : "pointer", opacity: saving || isFormInvalid ? 0.6 : 1 }}>{saving ? "Saving..." : editingId ? "Update" : "Add"}</button>
-        {editingId ? <button type="button" onClick={() => resetForm()} style={{ height: 36, background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer" }}>Cancel</button> : null}
+        <div style={{ alignSelf: "start", marginTop: 22 }}>
+          <button type="submit" disabled={saving || isFormInvalid} style={{ height: 36, background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: saving || isFormInvalid ? "not-allowed" : "pointer", opacity: saving || isFormInvalid ? 0.6 : 1 }}>{saving ? "Saving..." : editingId ? "Update" : "Add"}</button>
+        </div>
+        {editingId ? <div style={{ alignSelf: "start", marginTop: 22 }}><button type="button" onClick={() => resetForm()} style={{ height: 36, background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer" }}>Cancel</button></div> : null}
       </form>
 
       {error && !hasRoomFieldError && <p style={{ color: "var(--warning)", margin: "8px 0" }}>{error}</p>}
@@ -1093,8 +1260,8 @@ export function ClassRoomPanel() {
           </thead>
           <tbody>
             {loading ? <tr><td colSpan={3} style={{ padding: 12 }}>Loading...</td></tr> : null}
-            {!loading && items.length === 0 ? <tr><td colSpan={3} style={{ padding: 12, color: "var(--text-muted)" }}>No class room found.</td></tr> : null}
-            {!loading && items.map((row) => (
+            {!loading && pagedItems.length === 0 ? <tr><td colSpan={3} style={{ padding: 12, color: "var(--text-muted)" }}>No class room found.</td></tr> : null}
+            {!loading && pagedItems.map((row) => (
               <tr key={row.id}>
                 <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{row.room_no}</td>
                 <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{row.capacity ?? "-"}</td>
@@ -1107,6 +1274,18 @@ export function ClassRoomPanel() {
           </tbody>
         </table>
       </div>
+
+      {sortedItems.length > pageSize ? (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+            Showing {sortedItems.length === 0 ? 0 : (page - 1) * pageSize + 1}-{Math.min(page * pageSize, sortedItems.length)} of {sortedItems.length}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))} style={{ height: 32, padding: "0 12px", border: "1px solid var(--line)", borderRadius: 8, background: page <= 1 ? "#e5e7eb" : "#fff", color: "var(--text)", cursor: page <= 1 ? "not-allowed" : "pointer" }}>Previous</button>
+            <button type="button" disabled={page >= totalPages} onClick={() => setPage((current) => Math.min(totalPages, current + 1))} style={{ height: 32, padding: "0 12px", border: "1px solid var(--line)", borderRadius: 8, background: page >= totalPages ? "#e5e7eb" : "#fff", color: "var(--text)", cursor: page >= totalPages ? "not-allowed" : "pointer" }}>Next</button>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -1344,6 +1523,7 @@ export function ClassRoutinePanel() {
         </div>
       </div>
 
+      <p style={{ margin: "0 0 10px", fontSize: 12, color: "var(--text-muted)" }}>* Marked fields are required.</p>
       <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
         <div>
           <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Academic Year</label>
@@ -1353,7 +1533,7 @@ export function ClassRoutinePanel() {
           </select>
         </div>
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Class</label>
+          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Class *</label>
           <select value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); setFieldErrors((prev) => ({ ...prev, class_id: undefined, section_id: undefined })); }} style={{ marginTop: 4, width: "100%", height: 36, border: `1px solid ${fieldErrors.class_id ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px" }}>
             <option value="">Select class</option>
             {data.classes.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
@@ -1361,7 +1541,7 @@ export function ClassRoutinePanel() {
           <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.class_id || ""}</span>
         </div>
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Section</label>
+          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Section *</label>
           <select value={sectionId} onChange={(e) => { setSectionId(e.target.value); setFieldErrors((prev) => ({ ...prev, section_id: undefined })); }} style={{ marginTop: 4, width: "100%", height: 36, border: `1px solid ${fieldErrors.section_id ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px" }}>
             <option value="">All sections</option>
             {availableSections.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
@@ -1369,7 +1549,7 @@ export function ClassRoutinePanel() {
           <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.section_id || ""}</span>
         </div>
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Subject</label>
+          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Subject {isBreak ? "" : "*"}</label>
           <select value={subjectId} disabled={isBreak} onChange={(e) => { setSubjectId(e.target.value); setFieldErrors((prev) => ({ ...prev, subject_id: undefined })); }} style={{ marginTop: 4, width: "100%", height: 36, border: `1px solid ${fieldErrors.subject_id ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px", opacity: isBreak ? 0.7 : 1 }}>
             <option value="">{isBreak ? "Not required for break" : "Select subject"}</option>
             {data.subjects.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
@@ -1377,7 +1557,7 @@ export function ClassRoutinePanel() {
           <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.subject_id || ""}</span>
         </div>
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Teacher</label>
+          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Teacher {isBreak ? "" : "*"}</label>
           <select value={teacherId} disabled={isBreak} onChange={(e) => { setTeacherId(e.target.value); setFieldErrors((prev) => ({ ...prev, teacher_id: undefined })); }} style={{ marginTop: 4, width: "100%", height: 36, border: `1px solid ${fieldErrors.teacher_id ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px", opacity: isBreak ? 0.7 : 1 }}>
             <option value="">{isBreak ? "Not required for break" : "Select teacher"}</option>
             {data.teachers.map((row) => <option key={row.id} value={row.id}>{row.full_name || row.username}</option>)}
@@ -1386,7 +1566,7 @@ export function ClassRoutinePanel() {
         </div>
 
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Day</label>
+          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Day *</label>
           <select value={day} onChange={(e) => { setDay(e.target.value); setFieldErrors((prev) => ({ ...prev, day: undefined })); }} style={{ marginTop: 4, width: "100%", height: 36, border: `1px solid ${fieldErrors.day ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px" }}>
             {dayOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
           </select>
@@ -1401,12 +1581,12 @@ export function ClassRoutinePanel() {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <div>
-            <label style={{ fontSize: 12, color: "var(--text-muted)", display: 'block', marginBottom: 6, fontWeight: 600 }}>Start</label>
+            <label style={{ fontSize: 12, color: "var(--text-muted)", display: 'block', marginBottom: 6, fontWeight: 600 }}>Start *</label>
             <TimeSpinnerPicker value={startTime} onChange={(value) => { setStartTime(value); setFieldErrors((prev) => ({ ...prev, start_time: undefined })); }} />
             <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.start_time || ""}</span>
           </div>
           <div>
-            <label style={{ fontSize: 12, color: "var(--text-muted)", display: 'block', marginBottom: 6, fontWeight: 600 }}>End</label>
+            <label style={{ fontSize: 12, color: "var(--text-muted)", display: 'block', marginBottom: 6, fontWeight: 600 }}>End *</label>
             <TimeSpinnerPicker value={endTime} onChange={(value) => { setEndTime(value); setFieldErrors((prev) => ({ ...prev, end_time: undefined })); }} />
             <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.end_time || ""}</span>
           </div>
@@ -1483,7 +1663,7 @@ export function ClassRoutinePanel() {
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.sections, sectionValue, (entry) => entry.name)}</td>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{row.start_time?.slice(0, 5)} - {row.end_time?.slice(0, 5)}</td>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.subjects, subjectValue, (entry) => entry.name)}</td>
-                  <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.teachers, teacherValue, (entry) => entry.full_name || entry.username)}</td>
+                  <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{nameById(data.teachers, teacherValue, teacherDisplayName)}</td>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{roomLabel || "-"}</td>
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", display: "flex", gap: 6 }}>
                     <button type="button" onClick={() => edit(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#0284c7", color: "#fff", cursor: "pointer", fontSize: 12 }}>Edit</button>
