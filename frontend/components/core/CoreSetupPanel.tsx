@@ -432,7 +432,7 @@ function ClassesSection() {
           >
             <h3 style={{ margin: 0, fontSize: 18 }}>Delete Class</h3>
             <p style={{ marginTop: 10, marginBottom: 14, color: "var(--text-muted)" }}>
-              Delete class "{deleteCandidate.name}"?
+              Delete class &quot;{deleteCandidate.name}&quot;?
             </p>
             <div style={{ marginBottom: 14, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--surface-muted)" }}>
               <strong>{deleteCandidate.name}</strong>

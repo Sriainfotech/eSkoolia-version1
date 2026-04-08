@@ -674,7 +674,7 @@ export function StudentGroupPanel() {
           >
             <h3 style={{ margin: "0 0 12px 0", fontSize: 18, fontWeight: 600 }}>⚠️ Delete Group</h3>
             <p style={{ margin: "0 0 20px 0", color: "var(--text-muted)", lineHeight: 1.6 }}>
-              Are you sure you want to delete the group <strong>"{deleteConfirm.name}"</strong>?
+              Are you sure you want to delete the group <strong>&quot;{deleteConfirm.name}&quot;</strong>?
               {deleteConfirm.students_count ? (
                 <span style={{ display: "block", marginTop: 8, color: "#dc2626", fontSize: 12 }}>
                   This group has {deleteConfirm.students_count} assigned student{deleteConfirm.students_count !== 1 ? "s" : ""}.
