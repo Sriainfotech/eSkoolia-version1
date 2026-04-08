@@ -148,6 +148,11 @@ a {
   border-radius: 999px;
 }
 
+.dashboard-main button:disabled {
+  cursor: not-allowed !important;
+  opacity: 0.55;
+}
+
 .dashboard-main [class*="danger"],
 .dashboard-main [class*="declineBtn"] {
   color: var(--danger);
@@ -181,6 +186,161 @@ a {
 .legacy-panel td,
 .legacy-panel th {
   vertical-align: top;
+}
+
+.dashboard-loading {
+  display: grid;
+  gap: 18px;
+  animation: fade-in 180ms ease-out;
+}
+
+.loading-hero {
+  display: grid;
+  gap: 10px;
+  max-width: 560px;
+}
+
+.loading-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.loading-card,
+.loading-panel {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+  backdrop-filter: blur(10px);
+}
+
+.loading-card {
+  padding: 18px;
+  min-height: 124px;
+  display: grid;
+  gap: 12px;
+}
+
+.loading-panel {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.loading-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.loading-list {
+  display: grid;
+  gap: 10px;
+}
+
+.loading-row {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 0.8fr;
+  gap: 10px;
+}
+
+.loading-row span,
+.loading-card span,
+.loading-hero span {
+  display: block;
+}
+
+.editing-highlight {
+  border: 2px solid rgba(29, 78, 216, 0.55) !important;
+  box-shadow:
+    0 0 0 4px rgba(59, 130, 246, 0.12),
+    0 24px 60px rgba(15, 23, 42, 0.12) !important;
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.95) 0%, rgba(255, 255, 255, 0.92) 100%) !important;
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(90deg, rgba(226, 232, 240, 0.95) 0%, rgba(248, 250, 252, 1) 50%, rgba(226, 232, 240, 0.95) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-line {
+  height: 14px;
+  border-radius: 999px;
+}
+
+.skeleton-title {
+  width: min(72%, 360px);
+  height: 28px;
+  border-radius: 999px;
+}
+
+.skeleton-subtitle {
+  width: min(58%, 420px);
+  height: 16px;
+  border-radius: 999px;
+}
+
+.skeleton-pill {
+  width: 110px;
+  height: 24px;
+  border-radius: 999px;
+}
+
+.skeleton-chip {
+  width: 88px;
+  height: 30px;
+  border-radius: 999px;
+}
+
+.skeleton-block {
+  border-radius: 14px;
+  height: 16px;
+}
+
+.skeleton-block.short {
+  width: 52%;
+}
+
+.skeleton-block.medium {
+  width: 76%;
+}
+
+.skeleton-block.long {
+  width: 92%;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton,
+  .dashboard-loading {
+    animation: none;
+  }
 }
 
 /* Bootstrap-like grid helpers used by legacy PHP-converted screens */

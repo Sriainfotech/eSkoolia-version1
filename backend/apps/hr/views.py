@@ -18,7 +18,7 @@ from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 
-from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, Staff, StaffAttendance, StaffDocument
+from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance
 from .serializers import (
     DepartmentSerializer,
     DesignationSerializer,
@@ -26,6 +26,7 @@ from .serializers import (
     LeaveRequestSerializer,
     LeaveTypeSerializer,
     PayrollRecordSerializer,
+    PayrollSettingsSerializer,
     StaffSerializer,
     StaffAttendanceSerializer,
     StaffDocumentSerializer,
@@ -992,7 +993,10 @@ class PayrollRecordViewSet(SchoolScopedModelViewSet):
     permission_codes = {
         "*": "human_resource.payroll.view",
         "summary": "human_resource.payroll.view",
+        "settings": "human_resource.payroll.view",
+        "mark_processed": "human_resource.payroll.view",
         "mark_paid": "human_resource.payroll.view",
+        "bulk_generate": "human_resource.payroll.view",
     }
 
     def perform_create(self, serializer):
@@ -1020,101 +1024,157 @@ class PayrollRecordViewSet(SchoolScopedModelViewSet):
             }
         )
 
+    @action(detail=False, methods=["get", "patch"], url_path="settings")
+    def payroll_settings(self, request):
+        school = request.user.school or getattr(request, "school", None)
+        if not school and not request.user.is_superuser:
+            raise PermissionDenied("School context is required.")
+
+        settings_obj, _created = PayrollSettings.objects.get_or_create(school=school)
+
+        if request.method.lower() == "get":
+            serializer = PayrollSettingsSerializer(settings_obj)
+            return Response(serializer.data)
+
+        serializer = PayrollSettingsSerializer(settings_obj, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["post"], url_path="bulk-generate")
+    def bulk_generate(self, request):
+        user = request.user
+        school = user.school or getattr(request, "school", None)
+        if not school:
+            raise PermissionDenied("School context is required.")
+
+        try:
+            payroll_month = int(request.data.get("payroll_month"))
+            payroll_year = int(request.data.get("payroll_year"))
+        except (TypeError, ValueError):
+            raise ValidationError({"payroll_month": "Month and year are required."})
+
+        if payroll_month < 1 or payroll_month > 12:
+            raise ValidationError({"payroll_month": "Month must be between 1 and 12."})
+        if payroll_year < 2000 or payroll_year > 2100:
+            raise ValidationError({"payroll_year": "Year must be between 2000 and 2100."})
+
+        try:
+            allowance = Decimal(str(request.data.get("allowance", "0.00") or "0.00"))
+            deduction = Decimal(str(request.data.get("deduction", "0.00") or "0.00"))
+        except Exception:
+            raise ValidationError({"allowance": "Allowance and deduction must be valid numbers."})
+
+        if allowance < 0 or deduction < 0:
+            raise ValidationError({"deduction": "Allowance and deduction cannot be negative."})
+
+        overwrite_existing = str(request.data.get("overwrite_existing", "false")).lower() in ["1", "true", "yes"]
+        staff_ids = request.data.get("staff_ids")
+
+        staff_queryset = Staff.objects.filter(status=Staff.STATUS_ACTIVE)
+        if school:
+            staff_queryset = staff_queryset.filter(school=school)
+        if isinstance(staff_ids, list) and staff_ids:
+            staff_queryset = staff_queryset.filter(id__in=staff_ids)
+
+        staff_list = list(staff_queryset)
+        if not staff_list:
+            return Response(
+                {
+                    "detail": "No active staff found for bulk generation.",
+                    "created_count": 0,
+                    "updated_count": 0,
+                    "skipped_existing": 0,
+                    "skipped_paid": 0,
+                    "skipped_invalid": 0,
+                    "total_staff": 0,
+                }
+            )
+
+        created_count = 0
+        updated_count = 0
+        skipped_existing = 0
+        skipped_paid = 0
+        skipped_invalid = 0
+
+        for staff in staff_list:
+            basic_salary = staff.basic_salary or Decimal("0.00")
+            net_salary = basic_salary + allowance - deduction
+            if net_salary < 0:
+                skipped_invalid += 1
+                continue
+
+            existing = PayrollRecord.objects.filter(
+                school=school,
+                staff=staff,
+                payroll_month=payroll_month,
+                payroll_year=payroll_year,
+            ).first()
+
+            if existing:
+                if not overwrite_existing:
+                    skipped_existing += 1
+                    continue
+                if existing.status == PayrollRecord.STATUS_PAID:
+                    skipped_paid += 1
+                    continue
+
+                existing.basic_salary = basic_salary
+                existing.allowance = allowance
+                existing.deduction = deduction
+                existing.save(update_fields=["basic_salary", "allowance", "deduction", "net_salary", "updated_at"])
+                updated_count += 1
+                continue
+
+            try:
+                PayrollRecord.objects.create(
+                    school=school,
+                    staff=staff,
+                    payroll_month=payroll_month,
+                    payroll_year=payroll_year,
+                    basic_salary=basic_salary,
+                    allowance=allowance,
+                    deduction=deduction,
+                    created_by=user,
+                )
+                created_count += 1
+            except IntegrityError:
+                skipped_existing += 1
+
+        return Response(
+            {
+                "detail": "Bulk payroll generation completed.",
+                "created_count": created_count,
+                "updated_count": updated_count,
+                "skipped_existing": skipped_existing,
+                "skipped_paid": skipped_paid,
+                "skipped_invalid": skipped_invalid,
+                "total_staff": len(staff_list),
+            }
+        )
+
     @action(detail=True, methods=["post"], url_path="mark-paid")
     def mark_paid(self, request, pk=None):
         payroll = self.get_object()
         if payroll.status == PayrollRecord.STATUS_PAID:
             return Response({"id": payroll.id, "status": payroll.status, "paid_at": payroll.paid_at})
 
+        if payroll.status != PayrollRecord.STATUS_PROCESSED:
+            raise ValidationError({"status": "Payroll must be approved before marking as paid."})
+
         payroll.status = PayrollRecord.STATUS_PAID
         payroll.paid_at = timezone.now()
         payroll.save(update_fields=["status", "paid_at", "updated_at"])
         return Response({"id": payroll.id, "status": payroll.status, "paid_at": payroll.paid_at})
 
+    @action(detail=True, methods=["post"], url_path="mark-processed")
+    def mark_processed(self, request, pk=None):
+        payroll = self.get_object()
+        if payroll.status == PayrollRecord.STATUS_PROCESSED:
+            return Response({"id": payroll.id, "status": payroll.status, "paid_at": payroll.paid_at})
+        if payroll.status == PayrollRecord.STATUS_PAID:
+            raise ValidationError({"status": "Paid payroll cannot be moved back to approved."})
 
-class StaffDocumentViewSet(SchoolScopedModelViewSet):
-    """
-    ViewSet for managing staff document uploads.
-    
-    Supports:
-    - Create: Upload new documents
-    - List: Get all documents for a staff member
-    - Retrieve: Get a specific document
-    - Destroy: Delete a document
-    
-    All documents are scoped to the authenticated user's school.
-    """
-    queryset = StaffDocument.objects.select_related("school", "staff").all()
-    serializer_class = StaffDocumentSerializer
-    pagination_class = ApiPageNumberPagination
-    filterset_fields = ["staff", "document_type"]
-    search_fields = ["file_name", "staff__staff_no", "staff__first_name", "staff__last_name"]
-    ordering_fields = ["created_at", "file_name", "document_type"]
-    permission_codes = {
-        "*": "human_resource.staff.view",
-        "create": "human_resource.staff.update",
-        "destroy": "human_resource.staff.update",
-    }
-
-    def get_queryset(self):
-        """Filter documents to only those belonging to the user's school."""
-        school = getattr(self.request.user, "school", None)
-        if not school:
-            return StaffDocument.objects.none()
-        return StaffDocument.objects.filter(school=school).select_related("school", "staff")
-
-    def perform_create(self, serializer):
-        """Set school when creating a document."""
-        school = getattr(self.request.user, "school", None)
-        if not school:
-            raise PermissionDenied("No school associated with user.")
-        serializer.save(school=school)
-
-    def destroy(self, request, pk=None):
-        """Delete a staff document."""
-        try:
-            document = self.get_object()
-            document.delete()
-            return Response(
-                {"detail": "Document deleted successfully."},
-                status=status.HTTP_204_NO_CONTENT
-            )
-        except StaffDocument.DoesNotExist:
-            raise NotFound("Document not found.")
-        except Exception as err:
-            raise ValidationError({"detail": str(err)})
-
-    @action(detail=False, methods=["get"])
-    def by_staff(self, request):
-        """
-        Get all documents for a specific staff member.
-        Query params:
-        - staff_id: Staff member ID (required)
-        """
-        staff_id = request.query_params.get("staff_id")
-        if not staff_id:
-            return Response(
-                {"error": "staff_id query parameter is required."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        school = getattr(request.user, "school", None)
-        if not school:
-            return Response(
-                {"error": "No school associated with user."},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        try:
-            staff_member = Staff.objects.get(id=int(staff_id), school=school)
-        except (Staff.DoesNotExist, ValueError):
-            raise NotFound("Staff member not found.")
-
-        documents = StaffDocument.objects.filter(staff=staff_member).order_by("-created_at")
-        page = self.paginate_queryset(documents)
-        if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-
-        serializer = self.get_serializer(documents, many=True)
-        return Response(serializer.data)
+        payroll.status = PayrollRecord.STATUS_PROCESSED
+        payroll.save(update_fields=["status", "updated_at"])
+        return Response({"id": payroll.id, "status": payroll.status, "paid_at": payroll.paid_at})

@@ -191,7 +191,6 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
     const notification = new Notification(sender, {
       body,
       tag: `chat-${incoming.id}`,
-      renotify: true,
     });
 
     notification.onclick = () => {

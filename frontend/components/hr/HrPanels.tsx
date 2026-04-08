@@ -1,10 +1,195 @@
-﻿"use client";
+"use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import * as XLSX from "xlsx";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 
-type ApiList<T> = T[] | { results?: T[]; data?: T[] };
+type ApiList<T> = T[] | { count?: number; next?: string | null; previous?: string | null; results?: T[]; data?: T[] };
+
+type PaginationMeta = {
+  count: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrevious: boolean;
+};
+
+type OtherDocumentEntry = {
+  id: string;
+  name: string;
+  file?: File;
+};
+
+const STAFF_IMPORT_HEADERS = [
+  "Staff No",
+  "Role Name",
+  "Department Name",
+  "Designation Name",
+  "First Name",
+  "Last Name",
+  "Email",
+  "Phone",
+  "Gender",
+  "Marital Status",
+  "Date Of Birth",
+  "Joining Date",
+  "Emergency Mobile",
+  "Driving License",
+  "EPF No",
+  "Current Address",
+  "Permanent Address",
+  "Qualification",
+  "Experience",
+  "Bank Account Name",
+  "Bank Account Number",
+  "Bank Name",
+  "Bank Branch",
+  "IFSC Code",
+  "Bank Contact Mobile",
+  "Basic Salary",
+  "Allowance",
+  "Deduction",
+  "Contract Type",
+  "Location",
+  "Facebook URL",
+  "Twitter URL",
+  "LinkedIn URL",
+  "Instagram URL",
+  "Show Public",
+] as const;
+
+type ImportLookupRow = Record<string, string>;
+
+function normalizeImportKey(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function downloadBlobFile(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function buildStaffTemplateWorkbook() {
+  const blankRow = Array.from({ length: STAFF_IMPORT_HEADERS.length }, () => "");
+  const sheet = XLSX.utils.aoa_to_sheet([Array.from(STAFF_IMPORT_HEADERS), blankRow]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Staff Import");
+  return workbook;
+}
+
+function createStaffImportTemplateBlob() {
+  const workbook = buildStaffTemplateWorkbook();
+  const buffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
+  return new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+async function parseSpreadsheetRows(file: File): Promise<ImportLookupRow[]> {
+  const workbook = file.name.toLowerCase().endsWith(".csv")
+    ? XLSX.read(await file.text(), { type: "string" })
+    : XLSX.read(await file.arrayBuffer(), { type: "array" });
+
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) {
+    return [];
+  }
+
+  const sheet = workbook.Sheets[firstSheetName];
+  if (!sheet) {
+    return [];
+  }
+
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+    blankrows: false,
+    defval: "",
+    raw: false,
+  });
+
+  return rows.map((row) => {
+    const normalizedRow: ImportLookupRow = {};
+    Object.entries(row).forEach(([key, value]) => {
+      normalizedRow[key] = String(value ?? "").trim();
+    });
+    return normalizedRow;
+  });
+}
+
+function normalizeImportRow(row: ImportLookupRow) {
+  const normalized = new Map<string, string>();
+  Object.entries(row).forEach(([key, value]) => {
+    normalized.set(normalizeImportKey(key), value.trim());
+  });
+  return normalized;
+}
+
+function getImportValue(row: Map<string, string>, aliases: string[]) {
+  for (const alias of aliases) {
+    const value = row.get(normalizeImportKey(alias)) || "";
+    if (value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function parseImportBoolean(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (["1", "true", "yes", "y", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "n", "off"].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+function normalizeImportDate(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return trimmed;
+  }
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10);
+  }
+  return trimmed;
+}
+
+function normalizeImportAmount(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.replace(/[,₹\s]/g, "");
+}
+
+function incrementStaffNo(value: string) {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(.*?)(\d+)$/);
+  if (!match) {
+    return trimmed ? `${trimmed}2` : "2";
+  }
+  const prefix = match[1];
+  const nextNumber = String(Number(match[2]) + 1);
+  return `${prefix}${nextNumber}`;
+}
+
+function isBlankImportRow(row: ImportLookupRow) {
+  return Object.values(row).every((value) => !String(value || "").trim());
+}
 
 function listData<T>(value: ApiList<T>): T[] {
   if (Array.isArray(value)) {
@@ -31,6 +216,78 @@ function listData<T>(value: ApiList<T>): T[] {
   return [];
 }
 
+function listPaginationMeta<T>(value: ApiList<T>, pageSize: number): PaginationMeta {
+  const payload = value as { count?: unknown; next?: unknown; previous?: unknown };
+  const fallbackCount = listData(value).length;
+  const count = typeof payload.count === "number" ? payload.count : fallbackCount;
+  const totalPages = Math.max(1, Math.ceil(count / pageSize));
+  return {
+    count,
+    totalPages,
+    hasNext: Boolean(payload.next),
+    hasPrevious: Boolean(payload.previous),
+  };
+}
+
+function buildPageButtons(currentPage: number, totalPages: number, windowSize = 5): number[] {
+  if (totalPages <= windowSize) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const half = Math.floor(windowSize / 2);
+  let start = Math.max(1, currentPage - half);
+  const end = Math.min(totalPages, start + windowSize - 1);
+  start = Math.max(1, end - windowSize + 1);
+
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index);
+}
+
+function normalizeNextPath(nextRaw: string): string {
+  if (nextRaw.startsWith("http")) {
+    try {
+      const nextUrl = new URL(nextRaw);
+      return `${nextUrl.pathname}${nextUrl.search}`;
+    } catch {
+      return "";
+    }
+  }
+  return nextRaw;
+}
+
+function makeOtherDocumentId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function parseOtherDocuments(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter((item) => item.length > 0);
+  }
+
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  const raw = value.trim();
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((item) => String(item || "").trim())
+        .filter((item) => item.length > 0);
+    }
+  } catch {
+    // Keep backward compatibility with legacy single-string values.
+  }
+
+  return [raw];
+}
+
 async function apiGet<T>(path: string): Promise<T> {
   return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
 }
@@ -55,30 +312,16 @@ async function apiDelete(path: string): Promise<void> {
   await apiRequestWithRefresh<void>(path, { method: "DELETE", headers: { "Content-Type": "application/json" } });
 }
 
-async function fetchAllPages<T>(path: string): Promise<T[]> {
+async function fetchAllPages<T>(path: string, maxPages = 50): Promise<T[]> {
   const merged: T[] = [];
   let nextPath = path;
 
-  for (let i = 0; i < 80 && nextPath; i += 1) {
-    const data = await apiGet<ApiList<T> & { next?: string | null }>(nextPath);
-    merged.push(...listData<T>(data));
+  for (let i = 0; i < maxPages && nextPath; i += 1) {
+    const data = await apiGet<ApiList<T>>(nextPath);
+    merged.push(...listData(data));
 
     const nextRaw = (data as { next?: string | null }).next;
-    if (!nextRaw) {
-      nextPath = "";
-      continue;
-    }
-
-    if (nextRaw.startsWith("http")) {
-      try {
-        const nextUrl = new URL(nextRaw);
-        nextPath = `${nextUrl.pathname}${nextUrl.search}`;
-      } catch {
-        nextPath = "";
-      }
-    } else {
-      nextPath = nextRaw;
-    }
+    nextPath = nextRaw ? normalizeNextPath(nextRaw) : "";
   }
 
   return merged;
@@ -90,6 +333,23 @@ function fieldStyle() {
 
 function buttonStyle(color = "var(--primary)") {
   return { height: 34, border: `1px solid ${color}`, background: color, color: "#fff", borderRadius: 8, padding: "0 10px", cursor: "pointer" } as const;
+}
+
+function actionButtonStyle(color: string) {
+  return {
+    minHeight: 34,
+    border: `1px solid ${color}`,
+    background: color,
+    color: "#fff",
+    borderRadius: 999,
+    padding: "0 12px",
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: 13,
+    fontWeight: 600,
+  } as const;
 }
 
 function boxStyle() {
@@ -131,6 +391,7 @@ type Designation = {
 
 type Staff = {
   id: number;
+  user?: number | null;
   role: number | null;
   staff_no: string;
   first_name: string;
@@ -167,7 +428,7 @@ type Staff = {
   eleventh_certificate: string;
   aadhar_card: string;
   driving_license_doc: string;
-  other_document: string;
+  other_document: string | string[] | null;
   casual_leave: number;
   medical_leave: number;
   maternity_leave: number;
@@ -176,6 +437,7 @@ type Staff = {
   designation: number | null;
   join_date: string;
   basic_salary: string;
+  custom_field?: Record<string, unknown> | null;
   status: "active" | "inactive" | "terminated";
 };
 
@@ -243,6 +505,11 @@ type LeaveRequest = {
   status: "pending" | "approved" | "rejected";
 };
 type MePayload = {
+  id?: number;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
   is_superuser: boolean;
   is_school_admin: boolean;
   permission_codes: string[];
@@ -265,14 +532,23 @@ type AttendanceReport = {
 type PayrollRecord = {
   id: number;
   staff: number;
+  staff_name?: string;
+  staff_no?: string;
   payroll_month: number;
   payroll_year: number;
   basic_salary: string;
   allowance: string;
+  allowance_items?: Array<{ label: string; amount: string }>;
   deduction: string;
+  deduction_items?: Array<{ label: string; amount: string }>;
   net_salary: string;
   status: "draft" | "processed" | "paid";
   paid_at: string | null;
+};
+
+type PayrollComponentItem = {
+  label: string;
+  amount: string;
 };
 
 type PayrollSummary = {
@@ -283,9 +559,37 @@ type PayrollSummary = {
   total_net_salary: string;
 };
 
+type PayrollSettings = {
+  id: number;
+  school: number;
+  school_name: string;
+  school_url: string;
+  logo_url: string;
+  signature_url: string;
+  default_allowance_items: PayrollComponentItem[];
+  default_deduction_items: PayrollComponentItem[];
+  default_allowance: string;
+  default_deduction: string;
+  updated_at: string;
+};
+
+type BulkPayrollResponse = {
+  detail: string;
+  created_count: number;
+  updated_count: number;
+  skipped_existing: number;
+  skipped_paid: number;
+  skipped_invalid: number;
+  total_staff: number;
+};
+
 export function HrDepartmentsPanel() {
   const [rows, setRows] = useState<Department[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [totalRows, setTotalRows] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [isActive, setIsActive] = useState(true);
@@ -297,12 +601,6 @@ export function HrDepartmentsPanel() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; description?: string }>({});
   const formBoxRef = useRef<HTMLDivElement | null>(null);
-
-  const filteredRows = useMemo(() => {
-    if (statusFilter === "all") return rows;
-    if (statusFilter === "active") return rows.filter((item) => item.is_active);
-    return rows.filter((item) => !item.is_active);
-  }, [rows, statusFilter]);
 
   const validateName = (raw: string): string | null => {
     const value = raw.trim();
@@ -330,12 +628,23 @@ export function HrDepartmentsPanel() {
     setError(message);
   };
 
-  const load = async () => {
+  const load = async (page = 1) => {
     try {
       setLoading(true);
       setError("");
-      const data = await apiGet<ApiList<Department>>("/api/v1/hr/departments/");
+      const params = new URLSearchParams();
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize));
+      params.set("ordering", "name");
+      if (statusFilter === "active") params.set("is_active", "true");
+      if (statusFilter === "inactive") params.set("is_active", "false");
+
+      const data = await apiGet<ApiList<Department>>(`/api/v1/hr/departments/?${params.toString()}`);
       setRows(listData(data));
+      const meta = listPaginationMeta(data, pageSize);
+      setCurrentPage(page);
+      setTotalRows(meta.count);
+      setTotalPages(meta.totalPages);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load departments.";
       setError(message || "Unable to load departments.");
@@ -345,8 +654,8 @@ export function HrDepartmentsPanel() {
   };
 
   useEffect(() => {
-    void load();
-  }, []);
+    void load(1);
+  }, [statusFilter, pageSize]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -376,7 +685,7 @@ export function HrDepartmentsPanel() {
       setName("");
       setDescription("");
       setIsActive(true);
-      await load();
+      await load(currentPage);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to save department.";
       applyServerError(message || "Unable to save department.");
@@ -392,7 +701,8 @@ export function HrDepartmentsPanel() {
       setDeletingId(id);
       await apiDelete(`/api/v1/hr/departments/${id}/`);
       setToast("Department deleted successfully.");
-      await load();
+      const targetPage = rows.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage;
+      await load(targetPage);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to delete department.";
       setError(message || "Unable to delete department.");
@@ -405,8 +715,42 @@ export function HrDepartmentsPanel() {
     <div className="legacy-panel">
       {breadcrumb("Departments")}
       <section className="admin-visitor-area up_st_admin_visitor"><div className="container-fluid p-0">
-        <div ref={formBoxRef} className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
-          <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Department" : "Add Department"}</h3>
+        <div
+          ref={formBoxRef}
+          className={`white-box ${editingId ? "editing-highlight" : ""}`}
+          style={{ ...boxStyle(), marginBottom: 12, scrollMarginTop: 12 }}
+        >
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>{editingId ? "Editing Department" : "Add Department"}</h3>
+          {editingId ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+              <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 13 }}>
+                You are updating the selected department. Use Save changes when you are done.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingId(null);
+                  setName("");
+                  setDescription("");
+                  setIsActive(true);
+                  setError("");
+                  setToast("");
+                  setFieldErrors({});
+                }}
+                style={{
+                  height: 34,
+                  border: "1px solid var(--line)",
+                  background: "transparent",
+                  color: "var(--text)",
+                  borderRadius: 999,
+                  padding: "0 12px",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel edit
+              </button>
+            </div>
+          ) : null}
           <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 8 }}>
             <div>
               <input
@@ -438,7 +782,7 @@ export function HrDepartmentsPanel() {
                 Active departments are available for new assignments; inactive departments stay in history only.
               </p>
             </div>
-            <button type="submit" style={buttonStyle()} disabled={saving}>{saving ? "Saving..." : editingId ? "Update" : "Save"}</button>
+            <button type="submit" style={buttonStyle()} disabled={saving}>{saving ? "Saving..." : editingId ? "Save changes" : "Save"}</button>
           </form>
           {error && <p style={{ color: "var(--warning)", marginTop: 8 }}>{error}</p>}
           {toast ? <p style={{ color: "#16a34a", marginTop: 8 }}>{toast}</p> : null}
@@ -467,7 +811,7 @@ export function HrDepartmentsPanel() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Name</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Description</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Status</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th></tr></thead>
             <tbody>
-              {filteredRows.map((row) => (
+              {rows.map((row) => (
                 <tr key={row.id}>
                   <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.name}</td>
                   <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.description || "-"}</td>
@@ -491,9 +835,9 @@ export function HrDepartmentsPanel() {
                     <div style={{ display: "flex", gap: 6 }}>
                       <button
                         type="button"
-                        title="Edit department"
-                        aria-label="Edit department"
-                        style={{ ...buttonStyle("#0ea5e9"), width: 34, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                        title="Edit department details"
+                        aria-label="Edit department details"
+                        style={actionButtonStyle("#0ea5e9")}
                         onClick={() => {
                           setEditingId(row.id);
                           setName(row.name);
@@ -502,32 +846,42 @@ export function HrDepartmentsPanel() {
                           formBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
                         }}
                       >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <path d="M12 20h9" />
-                          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-                        </svg>
+                        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M12 20h9" />
+                            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                          </svg>
+                        </span>
+                        <span>Edit details</span>
                       </button>
                       <button
                         type="button"
                         title="Delete department"
                         aria-label="Delete department"
-                        style={{ ...buttonStyle("#dc2626"), width: 34, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                        style={actionButtonStyle("#dc2626")}
                         disabled={deletingId === row.id}
                         onClick={() => void removeDepartment(row.id)}
                       >
-                        {deletingId === row.id ? "..." : (
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M3 6h18" />
-                            <path d="M8 6V4h8v2" />
-                            <path d="M19 6l-1 14H6L5 6" />
-                          </svg>
+                        {deletingId === row.id ? (
+                          <span>Deleting...</span>
+                        ) : (
+                          <>
+                            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M3 6h18" />
+                                <path d="M8 6V4h8v2" />
+                                <path d="M19 6l-1 14H6L5 6" />
+                              </svg>
+                            </span>
+                            <span>Delete</span>
+                          </>
                         )}
                       </button>
                     </div>
                   </td>
                 </tr>
               ))}
-              {!loading && filteredRows.length === 0 ? (
+              {!loading && rows.length === 0 ? (
                 <tr>
                   <td colSpan={4} style={{ padding: 12, color: "var(--text-muted)", borderBottom: "1px solid var(--line)" }}>
                     No departments found for selected filter.
@@ -536,6 +890,40 @@ export function HrDepartmentsPanel() {
               ) : null}
             </tbody>
           </table>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, gap: 10, flexWrap: "wrap" }}>
+            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              Showing {rows.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalRows)} of {totalRows}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <select
+                aria-label="Items per page"
+                value={String(pageSize)}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                style={{ ...fieldStyle(), width: 110, height: 34 }}
+              >
+                <option value="10">10 / page</option>
+                <option value="25">25 / page</option>
+                <option value="50">50 / page</option>
+                <option value="100">100 / page</option>
+              </select>
+              <button type="button" style={buttonStyle("#334155")} disabled={currentPage <= 1 || loading} onClick={() => void load(currentPage - 1)}>Previous</button>
+              {buildPageButtons(currentPage, totalPages).map((page) => (
+                <button
+                  key={page}
+                  type="button"
+                  style={buttonStyle(page === currentPage ? "var(--primary)" : "#64748b")}
+                  disabled={loading}
+                  onClick={() => void load(page)}
+                >
+                  {page}
+                </button>
+              ))}
+              <button type="button" style={buttonStyle("#334155")} disabled={currentPage >= totalPages || loading} onClick={() => void load(currentPage + 1)}>Next</button>
+            </div>
+          </div>
         </div>
       </div></section>
     </div>
@@ -547,6 +935,10 @@ export function HrDesignationsPanel() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [departmentFilter, setDepartmentFilter] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [totalRows, setTotalRows] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [departmentId, setDepartmentId] = useState("");
   const [name, setName] = useState("");
   const [isActive, setIsActive] = useState(true);
@@ -558,24 +950,6 @@ export function HrDesignationsPanel() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ department?: string; name?: string }>({});
   const formBoxRef = useRef<HTMLDivElement | null>(null);
-
-  const sortedRows = useMemo(() => {
-    const departmentName = (id: number) => (departments.find((item) => item.id === id)?.name || "").toLowerCase();
-    return [...rows].sort((a, b) => {
-      const deptCompare = departmentName(a.department).localeCompare(departmentName(b.department));
-      if (deptCompare !== 0) return deptCompare;
-      return a.name.localeCompare(b.name);
-    });
-  }, [rows, departments]);
-
-  const filteredRows = useMemo(() => {
-    return sortedRows.filter((row) => {
-      if (statusFilter === "active" && !row.is_active) return false;
-      if (statusFilter === "inactive" && row.is_active) return false;
-      if (departmentFilter !== "all" && String(row.department) !== departmentFilter) return false;
-      return true;
-    });
-  }, [sortedRows, statusFilter, departmentFilter]);
 
   const validateDepartment = (value: string): string | null => {
     if (!value) return "Department is required.";
@@ -606,16 +980,28 @@ export function HrDesignationsPanel() {
     setError(message);
   };
 
-  const load = async () => {
+  const load = async (page = 1) => {
     try {
       setLoading(true);
       setError("");
-      const [designationData, departmentData] = await Promise.all([
-        apiGet<ApiList<Designation>>("/api/v1/hr/designations/"),
-        apiGet<ApiList<Department>>("/api/v1/hr/departments/?is_active=true"),
+      const params = new URLSearchParams();
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize));
+      params.set("ordering", "name");
+      if (statusFilter === "active") params.set("is_active", "true");
+      if (statusFilter === "inactive") params.set("is_active", "false");
+      if (departmentFilter !== "all") params.set("department", departmentFilter);
+
+      const [designationData, departmentList] = await Promise.all([
+        apiGet<ApiList<Designation>>(`/api/v1/hr/designations/?${params.toString()}`),
+        fetchAllPages<Department>("/api/v1/hr/departments/?is_active=true&page_size=100"),
       ]);
       setRows(listData(designationData));
-      setDepartments(listData(departmentData));
+      setDepartments(departmentList);
+      const meta = listPaginationMeta(designationData, pageSize);
+      setCurrentPage(page);
+      setTotalRows(meta.count);
+      setTotalPages(meta.totalPages);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load designations.";
       setError(message || "Unable to load designations.");
@@ -625,8 +1011,8 @@ export function HrDesignationsPanel() {
   };
 
   useEffect(() => {
-    void load();
-  }, []);
+    void load(1);
+  }, [statusFilter, departmentFilter, pageSize]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -657,7 +1043,7 @@ export function HrDesignationsPanel() {
       setDepartmentId("");
       setName("");
       setIsActive(true);
-      await load();
+      await load(currentPage);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to save designation.";
       applyServerError(message || "Unable to save designation.");
@@ -673,7 +1059,8 @@ export function HrDesignationsPanel() {
       setDeletingId(id);
       await apiDelete(`/api/v1/hr/designations/${id}/`);
       setToast("Designation deleted successfully.");
-      await load();
+      const targetPage = rows.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage;
+      await load(targetPage);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to delete designation.";
       setError(message || "Unable to delete designation.");
@@ -686,8 +1073,42 @@ export function HrDesignationsPanel() {
     <div className="legacy-panel">
       {breadcrumb("Designations")}
       <section className="admin-visitor-area up_st_admin_visitor"><div className="container-fluid p-0">
-        <div ref={formBoxRef} className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
-          <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Designation" : "Add Designation"}</h3>
+        <div
+          ref={formBoxRef}
+          className={`white-box ${editingId ? "editing-highlight" : ""}`}
+          style={{ ...boxStyle(), marginBottom: 12, scrollMarginTop: 12 }}
+        >
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>{editingId ? "Editing Designation" : "Add Designation"}</h3>
+          {editingId ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+              <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 13 }}>
+                You are updating the selected designation. Use Save changes when you are done.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingId(null);
+                  setDepartmentId("");
+                  setName("");
+                  setIsActive(true);
+                  setError("");
+                  setToast("");
+                  setFieldErrors({});
+                }}
+                style={{
+                  height: 34,
+                  border: "1px solid var(--line)",
+                  background: "transparent",
+                  color: "var(--text)",
+                  borderRadius: 999,
+                  padding: "0 12px",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel edit
+              </button>
+            </div>
+          ) : null}
           <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto auto", gap: 8 }}>
             <div>
               <label style={{ display: "block", marginBottom: 4, fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
@@ -727,7 +1148,7 @@ export function HrDesignationsPanel() {
                 Active designations are available in staff assignment; inactive designations remain for records.
               </p>
             </div>
-            <button type="submit" style={buttonStyle()} disabled={saving}>{saving ? "Saving..." : editingId ? "Update" : "Save"}</button>
+            <button type="submit" style={buttonStyle()} disabled={saving}>{saving ? "Saving..." : editingId ? "Save changes" : "Save"}</button>
           </form>
           {error && <p style={{ color: "var(--warning)", marginTop: 8 }}>{error}</p>}
           {toast ? <p style={{ color: "#16a34a", marginTop: 8 }}>{toast}</p> : null}
@@ -772,7 +1193,7 @@ export function HrDesignationsPanel() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Department</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Designation</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Status</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th></tr></thead>
             <tbody>
-              {filteredRows.map((row) => {
+              {rows.map((row) => {
                 const department = departments.find((item) => item.id === row.department);
                 return (
                   <tr key={row.id}>
@@ -798,9 +1219,9 @@ export function HrDesignationsPanel() {
                       <div style={{ display: "flex", gap: 6 }}>
                         <button
                           type="button"
-                          title="Edit designation"
-                          aria-label="Edit designation"
-                          style={{ ...buttonStyle("#0ea5e9"), width: 34, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                          title="Edit designation details"
+                          aria-label="Edit designation details"
+                          style={actionButtonStyle("#0ea5e9")}
                           onClick={() => {
                             setEditingId(row.id);
                             setDepartmentId(String(row.department));
@@ -809,25 +1230,35 @@ export function HrDesignationsPanel() {
                             formBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
                           }}
                         >
-                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                            <path d="M12 20h9" />
-                            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-                          </svg>
+                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                              <path d="M12 20h9" />
+                              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                            </svg>
+                          </span>
+                          <span>Edit details</span>
                         </button>
                         <button
                           type="button"
                           title="Delete designation"
                           aria-label="Delete designation"
-                          style={{ ...buttonStyle("#dc2626"), width: 34, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                          style={actionButtonStyle("#dc2626")}
                           disabled={deletingId === row.id}
                           onClick={() => void removeDesignation(row.id)}
                         >
-                          {deletingId === row.id ? "..." : (
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                              <path d="M3 6h18" />
-                              <path d="M8 6V4h8v2" />
-                              <path d="M19 6l-1 14H6L5 6" />
-                            </svg>
+                          {deletingId === row.id ? (
+                            <span>Deleting...</span>
+                          ) : (
+                            <>
+                              <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                  <path d="M3 6h18" />
+                                  <path d="M8 6V4h8v2" />
+                                  <path d="M19 6l-1 14H6L5 6" />
+                                </svg>
+                              </span>
+                              <span>Delete</span>
+                            </>
                           )}
                         </button>
                       </div>
@@ -835,7 +1266,7 @@ export function HrDesignationsPanel() {
                   </tr>
                 );
               })}
-              {!loading && filteredRows.length === 0 ? (
+              {!loading && rows.length === 0 ? (
                 <tr>
                   <td colSpan={4} style={{ padding: 12, color: "var(--text-muted)", borderBottom: "1px solid var(--line)" }}>
                     No designations found for selected filters.
@@ -844,6 +1275,40 @@ export function HrDesignationsPanel() {
               ) : null}
             </tbody>
           </table>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, gap: 10, flexWrap: "wrap" }}>
+            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              Showing {rows.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalRows)} of {totalRows}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <select
+                aria-label="Items per page"
+                value={String(pageSize)}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                style={{ ...fieldStyle(), width: 110, height: 34 }}
+              >
+                <option value="10">10 / page</option>
+                <option value="25">25 / page</option>
+                <option value="50">50 / page</option>
+                <option value="100">100 / page</option>
+              </select>
+              <button type="button" style={buttonStyle("#334155")} disabled={currentPage <= 1 || loading} onClick={() => void load(currentPage - 1)}>Previous</button>
+              {buildPageButtons(currentPage, totalPages).map((page) => (
+                <button
+                  key={page}
+                  type="button"
+                  style={buttonStyle(page === currentPage ? "var(--primary)" : "#64748b")}
+                  disabled={loading}
+                  onClick={() => void load(page)}
+                >
+                  {page}
+                </button>
+              ))}
+              <button type="button" style={buttonStyle("#334155")} disabled={currentPage >= totalPages || loading} onClick={() => void load(currentPage + 1)}>Next</button>
+            </div>
+          </div>
         </div>
       </div></section>
     </div>
@@ -862,6 +1327,8 @@ export function HrStaffPanel() {
   const [success, setSuccess] = useState("");
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
+  const [importingStaff, setImportingStaff] = useState(false);
+  const [showImportStaffPopup, setShowImportStaffPopup] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<{
     staff_no?: string;
     role?: string;
@@ -870,11 +1337,8 @@ export function HrStaffPanel() {
     join_date?: string;
     date_of_birth?: string;
     phone?: string;
-    current_address?: string;
-    permanent_address?: string;
     emergency_mobile?: string;
     staff_photo?: string;
-    other_document?: string;
     epf_no?: string;
     basic_salary?: string;
     contract_type?: string;
@@ -883,7 +1347,6 @@ export function HrStaffPanel() {
     bank_mobile_no?: string;
     bank_name?: string;
     bank_branch?: string;
-    ifsc_code?: string;
     facebook_url?: string;
     twitter_url?: string;
     linkedin_url?: string;
@@ -923,6 +1386,10 @@ export function HrStaffPanel() {
   const [basicSalary, setBasicSalary] = useState("0.00");
   const [allowance, setAllowance] = useState("0.00");
   const [deduction, setDeduction] = useState("0.00");
+  const [staffPayrollDefaults, setStaffPayrollDefaults] = useState<{ allowance_items: PayrollComponentItem[]; deduction_items: PayrollComponentItem[] }>({
+    allowance_items: [],
+    deduction_items: [],
+  });
   const [contractType, setContractType] = useState<"" | "permanent" | "contract">("");
   const [location, setLocation] = useState("");
 
@@ -944,7 +1411,7 @@ export function HrStaffPanel() {
   const [eleventhCertificate, setEleventhCertificate] = useState("");
   const [aadharCard, setAadharCard] = useState("");
   const [drivingLicenseDoc, setDrivingLicenseDoc] = useState("");
-  const [otherDocument, setOtherDocument] = useState("");
+  const [otherDocuments, setOtherDocuments] = useState<OtherDocumentEntry[]>([]);
 
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [joiningLetterFile, setJoiningLetterFile] = useState<File | null>(null);
@@ -952,7 +1419,6 @@ export function HrStaffPanel() {
   const [eleventhCertFile, setEleventhCertFile] = useState<File | null>(null);
   const [aadharFile, setAadharFile] = useState<File | null>(null);
   const [drivingLicenseFile, setDrivingLicenseFile] = useState<File | null>(null);
-  const [otherDocFile, setOtherDocFile] = useState<File | null>(null);
 
   const staffPhotoRef = useRef<HTMLInputElement | null>(null);
   const importStaffRef = useRef<HTMLInputElement | null>(null);
@@ -969,6 +1435,41 @@ export function HrStaffPanel() {
     if (!departmentId) return designations;
     return designations.filter((item) => item.department === Number(departmentId));
   }, [departmentId, designations]);
+
+  const roleLookupByName = useMemo(() => {
+    const lookup = new Map<string, number>();
+    roles.forEach((role) => {
+      lookup.set(normalizeImportKey(role.name), role.id);
+    });
+    return lookup;
+  }, [roles]);
+
+  const departmentLookupByName = useMemo(() => {
+    const lookup = new Map<string, number>();
+    departments.forEach((department) => {
+      lookup.set(normalizeImportKey(department.name), department.id);
+    });
+    return lookup;
+  }, [departments]);
+
+  const designationLookupByName = useMemo(() => {
+    const lookup = new Map<string, number[]>();
+    designations.forEach((designation) => {
+      const key = normalizeImportKey(designation.name);
+      const existing = lookup.get(key) || [];
+      existing.push(designation.id);
+      lookup.set(key, existing);
+    });
+    return lookup;
+  }, [designations]);
+
+  const designationLookupByDepartment = useMemo(() => {
+    const lookup = new Map<string, number>();
+    designations.forEach((designation) => {
+      lookup.set(`${designation.department}::${normalizeImportKey(designation.name)}`, designation.id);
+    });
+    return lookup;
+  }, [designations]);
 
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
@@ -989,8 +1490,6 @@ export function HrStaffPanel() {
       bank_account_no: "bank",
       bank_name: "bank",
       bank_branch: "bank",
-      bank_mobile_no: "bank",
-      ifsc_code: "bank",
       facebook_url: "social",
       twitter_url: "social",
       linkedin_url: "social",
@@ -1076,12 +1575,7 @@ export function HrStaffPanel() {
       }
     }
     if (!validateMobile(phone)) nextErrors.phone = phone.trim().length > 12 ? "Mobile number must not exceed 12 digits." : "Mobile number must contain digits only.";
-    if (!phone.trim()) nextErrors.phone = "Mobile number is required.";
     if (!validateMobile(emergencyMobile)) nextErrors.emergency_mobile = emergencyMobile.trim().length > 12 ? "Mobile number must not exceed 12 digits." : "Mobile number must contain digits only.";
-    if (!staffPhoto.trim()) nextErrors.staff_photo = "Staff photo is required.";
-    if (!currentAddress.trim()) nextErrors.current_address = "Current address is required.";
-    if (!permanentAddress.trim()) nextErrors.permanent_address = "Permanent address is required.";
-    if (!otherDocument.trim()) nextErrors.other_document = "Signature upload is required.";
 
     if (!bankAccountName.trim()) nextErrors.bank_account_name = "Account holder name is required";
     if (!bankAccountNo.trim()) {
@@ -1092,9 +1586,9 @@ export function HrStaffPanel() {
     if (!bankName.trim()) nextErrors.bank_name = "Bank name is required";
     if (!bankBranch.trim()) nextErrors.bank_branch = "Branch name is required";
     if (!ifscCode.trim()) {
-      nextErrors.ifsc_code = "IFSC code is required.";
+      nextErrors.bank_branch = "IFSC code is required.";
     } else if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode.trim().toUpperCase())) {
-      nextErrors.ifsc_code = "Enter a valid IFSC code (e.g., HDFC0001234).";
+      nextErrors.bank_branch = "Enter a valid IFSC code (e.g., HDFC0001234).";
     }
 
     if (!basicSalary.trim()) {
@@ -1145,18 +1639,6 @@ export function HrStaffPanel() {
       setFieldErrors((prev) => ({ ...prev, phone: message }));
       return "phone";
     }
-    if (lowered.includes("current address")) {
-      setFieldErrors((prev) => ({ ...prev, current_address: message }));
-      return "current_address";
-    }
-    if (lowered.includes("permanent address")) {
-      setFieldErrors((prev) => ({ ...prev, permanent_address: message }));
-      return "permanent_address";
-    }
-    if (lowered.includes("signature") || lowered.includes("other document")) {
-      setFieldErrors((prev) => ({ ...prev, other_document: message }));
-      return "other_document";
-    }
     if (lowered.includes("account holder")) {
       setFieldErrors((prev) => ({ ...prev, bank_account_name: message }));
       return "bank_account_name";
@@ -1172,10 +1654,6 @@ export function HrStaffPanel() {
     if (lowered.includes("branch")) {
       setFieldErrors((prev) => ({ ...prev, bank_branch: message }));
       return "bank_branch";
-    }
-    if (lowered.includes("ifsc")) {
-      setFieldErrors((prev) => ({ ...prev, ifsc_code: message }));
-      return "ifsc_code";
     }
     if (lowered.includes("salary")) {
       setFieldErrors((prev) => ({ ...prev, basic_salary: message }));
@@ -1266,32 +1744,277 @@ export function HrStaffPanel() {
     setAadharFile(null);
     setDrivingLicenseDoc("");
     setDrivingLicenseFile(null);
-    setOtherDocument("");
-    setOtherDocFile(null);
+    setOtherDocuments([]);
   };
 
-  const handleImportStaffCsv = async (file: File) => {
-    const text = await file.text();
-    const lines = text.split(/\r?\n/).filter((line) => line.trim());
-    if (lines.length < 2) {
-      setError("CSV file is empty.");
+  const handleDownloadStaffTemplate = () => {
+    const blob = createStaffImportTemplateBlob();
+    downloadBlobFile("staff-import-template.xlsx", blob);
+    setError("");
+    setSuccess("Sample Excel template downloaded.");
+  };
+
+  const openImportStaffPopup = () => {
+    setShowImportStaffPopup(true);
+    setError("");
+    setSuccess("");
+    setToast("");
+  };
+
+  const closeImportStaffPopup = () => {
+    if (importingStaff) {
       return;
     }
+    setShowImportStaffPopup(false);
+  };
 
-    const headers = lines[0].split(",").map((item) => item.trim().toLowerCase());
-    const values = lines[1].split(",").map((item) => item.trim());
-    const map = new Map<string, string>();
-    headers.forEach((header, idx) => map.set(header, values[idx] || ""));
+  useEffect(() => {
+    if (editingStaffId) {
+      setShowImportStaffPopup(false);
+    }
+  }, [editingStaffId]);
 
-    setFirstName(map.get("first_name") || firstName);
-    setLastName(map.get("last_name") || lastName);
-    setEmail(map.get("email") || email);
-    setPhone(map.get("phone") || phone);
-    setDepartmentId(map.get("department_id") || departmentId);
-    setDesignationId(map.get("designation_id") || designationId);
-    setRoleId(map.get("role_id") || roleId);
-    setJoinDate(map.get("join_date") || joinDate);
-    setToast("Imported first CSV row into the form. Review and save.");
+  const handleImportStaffFile = async (file: File) => {
+    try {
+      setError("");
+      setSuccess("");
+      setToast("");
+      setImportingStaff(true);
+
+      const rows = (await parseSpreadsheetRows(file)).filter((row) => !isBlankImportRow(row));
+      if (rows.length === 0) {
+        setError("The selected file does not contain any staff rows.");
+        return;
+      }
+
+      const needsAutoStaffNo = rows.some((row) => !getImportValue(normalizeImportRow(row), ["Staff No", "Staff Number", "staff_no", "staff number"]));
+      let nextGeneratedStaffNo = needsAutoStaffNo ? (await apiGet<{ staff_no: string }>("/api/v1/hr/staff/next-staff-no/")).staff_no || "" : "";
+      let importedCount = 0;
+      const failures: Array<{ rowNumber: number; message: string }> = [];
+
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        const normalizedRow = normalizeImportRow(row);
+        const rowNumber = index + 2;
+        const rowPrefix = `Row ${rowNumber}`;
+
+        const staffNoInput = getImportValue(normalizedRow, ["Staff No", "Staff Number", "staff_no", "staff number"]);
+        const staffNo = staffNoInput || nextGeneratedStaffNo;
+        if (!staffNo) {
+          failures.push({ rowNumber, message: `${rowPrefix}: staff number could not be generated.` });
+          continue;
+        }
+        if (!staffNoInput) {
+          nextGeneratedStaffNo = incrementStaffNo(nextGeneratedStaffNo || staffNo);
+        }
+
+        const roleIdValue = getImportValue(normalizedRow, ["Role Id", "Role ID", "role_id"]);
+        const roleNameValue = getImportValue(normalizedRow, ["Role Name", "Role", "role_name"]);
+        let resolvedRoleId: number | null = null;
+        if (roleIdValue) {
+          const parsedRoleId = Number(roleIdValue);
+          if (Number.isFinite(parsedRoleId) && parsedRoleId > 0) {
+            resolvedRoleId = parsedRoleId;
+          } else {
+            failures.push({ rowNumber, message: `${rowPrefix}: role id must be numeric.` });
+            continue;
+          }
+        } else if (roleNameValue) {
+          resolvedRoleId = roleLookupByName.get(normalizeImportKey(roleNameValue)) || null;
+          if (!resolvedRoleId) {
+            failures.push({ rowNumber, message: `${rowPrefix}: role \"${roleNameValue}\" was not found.` });
+            continue;
+          }
+        } else {
+          failures.push({ rowNumber, message: `${rowPrefix}: role is required.` });
+          continue;
+        }
+
+        const departmentIdValue = getImportValue(normalizedRow, ["Department Id", "Department ID", "department_id"]);
+        const departmentNameValue = getImportValue(normalizedRow, ["Department Name", "Department", "department_name"]);
+        let resolvedDepartmentId: number | null = null;
+        if (departmentIdValue) {
+          const parsedDepartmentId = Number(departmentIdValue);
+          if (Number.isFinite(parsedDepartmentId) && parsedDepartmentId > 0) {
+            resolvedDepartmentId = parsedDepartmentId;
+          } else {
+            failures.push({ rowNumber, message: `${rowPrefix}: department id must be numeric.` });
+            continue;
+          }
+        } else if (departmentNameValue) {
+          resolvedDepartmentId = departmentLookupByName.get(normalizeImportKey(departmentNameValue)) || null;
+          if (!resolvedDepartmentId) {
+            failures.push({ rowNumber, message: `${rowPrefix}: department \"${departmentNameValue}\" was not found.` });
+            continue;
+          }
+        }
+
+        const designationIdValue = getImportValue(normalizedRow, ["Designation Id", "Designation ID", "designation_id"]);
+        const designationNameValue = getImportValue(normalizedRow, ["Designation Name", "Designation", "designation_name"]);
+        let resolvedDesignationId: number | null = null;
+        if (designationIdValue) {
+          const parsedDesignationId = Number(designationIdValue);
+          if (Number.isFinite(parsedDesignationId) && parsedDesignationId > 0) {
+            resolvedDesignationId = parsedDesignationId;
+          } else {
+            failures.push({ rowNumber, message: `${rowPrefix}: designation id must be numeric.` });
+            continue;
+          }
+        } else if (designationNameValue) {
+          if (resolvedDepartmentId) {
+            const departmentScopedId = designationLookupByDepartment.get(`${resolvedDepartmentId}::${normalizeImportKey(designationNameValue)}`);
+            if (departmentScopedId) {
+              resolvedDesignationId = departmentScopedId;
+            }
+          }
+          if (!resolvedDesignationId) {
+            const matches = designationLookupByName.get(normalizeImportKey(designationNameValue)) || [];
+            if (matches.length === 1) {
+              resolvedDesignationId = matches[0];
+            } else if (matches.length > 1 && !resolvedDepartmentId) {
+              failures.push({ rowNumber, message: `${rowPrefix}: designation \"${designationNameValue}\" is ambiguous. Add department name.` });
+              continue;
+            } else {
+              failures.push({ rowNumber, message: `${rowPrefix}: designation \"${designationNameValue}\" was not found.` });
+              continue;
+            }
+          }
+        }
+
+        const emailValue = getImportValue(normalizedRow, ["Email", "Email Address", "email"]);
+        const firstNameValue = getImportValue(normalizedRow, ["First Name", "first_name"]);
+        const lastNameValue = getImportValue(normalizedRow, ["Last Name", "last_name"]);
+        const phoneValue = getImportValue(normalizedRow, ["Phone", "Mobile", "phone"]);
+        const emergencyMobileValue = getImportValue(normalizedRow, ["Emergency Mobile", "emergency_mobile"]);
+        const genderValue = getImportValue(normalizedRow, ["Gender", "gender"]);
+        const maritalStatusValue = getImportValue(normalizedRow, ["Marital Status", "marital_status"]);
+        const dateOfBirthValue = normalizeImportDate(getImportValue(normalizedRow, ["Date Of Birth", "DOB", "date_of_birth"]));
+        const joinDateValue = normalizeImportDate(getImportValue(normalizedRow, ["Joining Date", "Join Date", "join_date"]));
+        const drivingLicenseValue = getImportValue(normalizedRow, ["Driving License", "driving_license"]);
+        const epfNoValue = getImportValue(normalizedRow, ["EPF No", "epf_no"]);
+        const currentAddressValue = getImportValue(normalizedRow, ["Current Address", "current_address"]);
+        const permanentAddressValue = getImportValue(normalizedRow, ["Permanent Address", "permanent_address"]);
+        const qualificationValue = getImportValue(normalizedRow, ["Qualification", "qualification"]);
+        const experienceValue = getImportValue(normalizedRow, ["Experience", "experience"]);
+        const bankAccountNameValue = getImportValue(normalizedRow, ["Bank Account Name", "Account Holder Name", "bank_account_name"]);
+        const bankAccountNoValue = getImportValue(normalizedRow, ["Bank Account Number", "Account Number", "bank_account_no"]);
+        const bankNameValue = getImportValue(normalizedRow, ["Bank Name", "bank_name"]);
+        const bankBranchValue = getImportValue(normalizedRow, ["Bank Branch", "Branch Name", "bank_branch"]);
+        const ifscCodeValue = getImportValue(normalizedRow, ["IFSC Code", "ifsc_code"]);
+        const bankMobileValue = getImportValue(normalizedRow, ["Bank Contact Mobile", "Bank Mobile", "bank_mobile_no"]);
+        const basicSalaryValue = normalizeImportAmount(getImportValue(normalizedRow, ["Basic Salary", "basic_salary"]));
+        const allowanceValue = normalizeImportAmount(getImportValue(normalizedRow, ["Allowance", "allowance"]));
+        const deductionValue = normalizeImportAmount(getImportValue(normalizedRow, ["Deduction", "deduction"]));
+        const contractTypeValue = getImportValue(normalizedRow, ["Contract Type", "contract_type"]);
+        const locationValue = getImportValue(normalizedRow, ["Location", "location"]);
+        const facebookUrlValue = getImportValue(normalizedRow, ["Facebook URL", "facebook_url"]);
+        const twitterUrlValue = getImportValue(normalizedRow, ["Twitter URL", "twitter_url"]);
+        const linkedinUrlValue = getImportValue(normalizedRow, ["LinkedIn URL", "linkedin_url"]);
+        const instagramUrlValue = getImportValue(normalizedRow, ["Instagram URL", "instagram_url"]);
+        const showPublicValue = parseImportBoolean(getImportValue(normalizedRow, ["Show Public", "show_public"]));
+
+        const rowErrors: string[] = [];
+        if (!firstNameValue) rowErrors.push("first name is required");
+        if (!emailValue) rowErrors.push("email is required");
+        if (!joinDateValue) rowErrors.push("joining date is required");
+        if (!bankAccountNameValue) rowErrors.push("bank account name is required");
+        if (!bankAccountNoValue) rowErrors.push("bank account number is required");
+        if (!bankNameValue) rowErrors.push("bank name is required");
+        if (!bankBranchValue) rowErrors.push("bank branch is required");
+        if (!basicSalaryValue) rowErrors.push("basic salary is required");
+        if (!contractTypeValue) {
+          rowErrors.push("contract type is required");
+        } else if (!["permanent", "contract"].includes(contractTypeValue.toLowerCase())) {
+          rowErrors.push("contract type must be Permanent or Contract");
+        }
+        if (bankAccountNoValue && !/^\d{6,30}$/.test(bankAccountNoValue)) rowErrors.push("bank account number must contain 6 to 30 digits");
+        if (ifscCodeValue && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCodeValue.toUpperCase())) rowErrors.push("ifsc code must be valid");
+        if (basicSalaryValue && (!Number.isFinite(Number(basicSalaryValue)) || Number(basicSalaryValue) <= 0)) rowErrors.push("basic salary must be greater than 0");
+        if (phoneValue && !validateMobile(phoneValue)) rowErrors.push("phone number must contain digits only and be at most 12 digits");
+        if (emergencyMobileValue && !validateMobile(emergencyMobileValue)) rowErrors.push("emergency mobile must contain digits only and be at most 12 digits");
+        if (genderValue && !["male", "female", "other"].includes(genderValue.toLowerCase())) rowErrors.push("gender must be Male, Female, or Other");
+        if (maritalStatusValue && !["single", "married"].includes(maritalStatusValue.toLowerCase())) rowErrors.push("marital status must be Single or Married");
+        if (facebookUrlValue && !validateOptionalUrl(facebookUrlValue)) rowErrors.push("facebook url must be a valid URL");
+        if (twitterUrlValue && !validateOptionalUrl(twitterUrlValue)) rowErrors.push("twitter url must be a valid URL");
+        if (linkedinUrlValue && !validateOptionalUrl(linkedinUrlValue)) rowErrors.push("linkedin url must be a valid URL");
+        if (instagramUrlValue && !validateOptionalUrl(instagramUrlValue)) rowErrors.push("instagram url must be a valid URL");
+
+        if (rowErrors.length > 0) {
+          failures.push({ rowNumber, message: `${rowPrefix}: ${rowErrors.join(", ")}.` });
+          continue;
+        }
+
+        const payload = {
+          staff_no: staffNo,
+          role: resolvedRoleId,
+          department: resolvedDepartmentId,
+          designation: resolvedDesignationId,
+          first_name: firstNameValue,
+          last_name: lastNameValue,
+          fathers_name: getImportValue(normalizedRow, ["Father Name", "Fathers Name", "fathers_name"]),
+          mothers_name: getImportValue(normalizedRow, ["Mother Name", "Mothers Name", "mothers_name"]),
+          email: emailValue,
+          phone: phoneValue,
+          emergency_mobile: emergencyMobileValue,
+          gender: ["male", "female", "other"].includes(genderValue.toLowerCase()) ? genderValue.toLowerCase() : "",
+          marital_status: ["single", "married"].includes(maritalStatusValue.toLowerCase()) ? maritalStatusValue.toLowerCase() : "",
+          date_of_birth: dateOfBirthValue || null,
+          join_date: joinDateValue,
+          driving_license: drivingLicenseValue,
+          epf_no: epfNoValue,
+          current_address: currentAddressValue,
+          permanent_address: permanentAddressValue,
+          qualification: qualificationValue,
+          experience: experienceValue,
+          bank_account_name: bankAccountNameValue,
+          bank_account_no: bankAccountNoValue,
+          bank_name: bankNameValue,
+          bank_branch: bankBranchValue,
+          bank_mobile_no: bankMobileValue,
+          custom_field: {
+            ifsc_code: ifscCodeValue.toUpperCase(),
+            allowance: allowanceValue || "0.00",
+            deduction: deductionValue || "0.00",
+          },
+          basic_salary: basicSalaryValue,
+          contract_type: contractTypeValue.toLowerCase(),
+          location: locationValue,
+          facebook_url: facebookUrlValue,
+          twitter_url: twitterUrlValue,
+          linkedin_url: linkedinUrlValue,
+          instagram_url: instagramUrlValue,
+          show_public: showPublicValue ?? false,
+          status: "active",
+          other_document: [],
+        };
+
+        try {
+          await apiPost("/api/v1/hr/staff/", payload);
+          importedCount += 1;
+          if (!staffNoInput) {
+            nextGeneratedStaffNo = incrementStaffNo(nextGeneratedStaffNo || staffNo);
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Unable to import staff row.";
+          failures.push({ rowNumber, message: `${rowPrefix}: ${message}` });
+        }
+      }
+
+      if (importedCount === 0) {
+        setError(failures[0]?.message || "Unable to import staff file.");
+        return;
+      }
+
+      if (failures.length > 0) {
+        setSuccess(`Imported ${importedCount} staff member${importedCount === 1 ? "" : "s"}.`);
+        setError(`${failures.length} row${failures.length === 1 ? "" : "s"} failed. First issue: ${failures[0].message}`);
+        return;
+      }
+
+      setSuccess(`Imported ${importedCount} staff member${importedCount === 1 ? "" : "s"} successfully.`);
+    } finally {
+      setImportingStaff(false);
+    }
   };
 
   const load = async () => {
@@ -1301,11 +2024,12 @@ export function HrStaffPanel() {
       setRolesLoading(true);
       setRolesError("");
 
-      const [roleDataResult, departmentDataResult, designationDataResult, nextStaffNoResult] = await Promise.allSettled([
+      const [roleDataResult, departmentDataResult, designationDataResult, nextStaffNoResult, payrollSettingsResult] = await Promise.allSettled([
         apiGet<unknown>("/api/v1/access-control/roles/"),
         apiGet<ApiList<Department>>("/api/v1/hr/departments/?is_active=true"),
         apiGet<ApiList<Designation>>("/api/v1/hr/designations/?is_active=true"),
         apiGet<{ staff_no?: string }>("/api/v1/hr/staff/next-staff-no/"),
+        apiGet<PayrollSettings>("/api/v1/hr/payroll/settings/"),
       ]);
 
       if (roleDataResult.status === "fulfilled") {
@@ -1340,6 +2064,15 @@ export function HrStaffPanel() {
         const nextValue = (nextStaffNoResult.value.staff_no || "").trim();
         setStaffNo((prev) => prev || nextValue);
       }
+      if (!editParam && payrollSettingsResult.status === "fulfilled") {
+        const settings = payrollSettingsResult.value;
+        setAllowance((prev) => (prev && Number(prev) > 0 ? prev : String(settings.default_allowance || "0.00")));
+        setDeduction((prev) => (prev && Number(prev) > 0 ? prev : String(settings.default_deduction || "0.00")));
+        setStaffPayrollDefaults({
+          allowance_items: Array.isArray(settings.default_allowance_items) ? settings.default_allowance_items : [],
+          deduction_items: Array.isArray(settings.default_deduction_items) ? settings.default_deduction_items : [],
+        });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load staff.";
       setError("Unable to load staff.");
@@ -1372,8 +2105,6 @@ export function HrStaffPanel() {
       setJoinDate(String(draft.joinDate || joinDate));
       setDateOfBirth(String(draft.dateOfBirth || ""));
       setBasicSalary(String(draft.basicSalary || "0.00"));
-      setAllowance(String(draft.allowance || "0.00"));
-      setDeduction(String(draft.deduction || "0.00"));
       setBankAccountName(String(draft.bankAccountName || ""));
       setBankAccountNo(String(draft.bankAccountNo || ""));
       setBankName(String(draft.bankName || ""));
@@ -1403,8 +2134,6 @@ export function HrStaffPanel() {
           joinDate,
           dateOfBirth,
           basicSalary,
-          allowance,
-          deduction,
           bankAccountName,
           bankAccountNo,
           bankName,
@@ -1431,8 +2160,6 @@ export function HrStaffPanel() {
     joinDate,
     dateOfBirth,
     basicSalary,
-    allowance,
-    deduction,
     bankAccountName,
     bankAccountNo,
     bankName,
@@ -1492,9 +2219,23 @@ export function HrStaffPanel() {
         setExperience(row.experience || "");
         setEpfNo(row.epf_no || "");
         setBasicSalary(String(row.basic_salary || "0.00"));
-        const custom = (row as unknown as { custom_field?: { allowance?: string | number; deduction?: string | number; ifsc_code?: string } }).custom_field || {};
+        const custom = (row as unknown as {
+          custom_field?: {
+            allowance?: string | number;
+            deduction?: string | number;
+            ifsc_code?: string;
+            payroll_defaults?: {
+              allowance_items?: PayrollComponentItem[];
+              deduction_items?: PayrollComponentItem[];
+            };
+          };
+        }).custom_field || {};
         setAllowance(String(custom.allowance || "0.00"));
         setDeduction(String(custom.deduction || "0.00"));
+        setStaffPayrollDefaults({
+          allowance_items: Array.isArray(custom.payroll_defaults?.allowance_items) ? custom.payroll_defaults?.allowance_items || [] : [],
+          deduction_items: Array.isArray(custom.payroll_defaults?.deduction_items) ? custom.payroll_defaults?.deduction_items || [] : [],
+        });
         setContractType((row.contract_type || "") as "" | "permanent" | "contract");
         setLocation(row.location || "");
         setBankAccountName(row.bank_account_name || "");
@@ -1513,7 +2254,12 @@ export function HrStaffPanel() {
         setEleventhCertificate(row.eleventh_certificate || "");
         setAadharCard(row.aadhar_card || "");
         setDrivingLicenseDoc(row.driving_license_doc || "");
-        setOtherDocument(row.other_document || "");
+        setOtherDocuments(
+          parseOtherDocuments(row.other_document).map((name) => ({
+            id: makeOtherDocumentId(),
+            name,
+          }))
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Unable to load staff details.");
       }
@@ -1575,6 +2321,10 @@ export function HrStaffPanel() {
           ifsc_code: ifscCode.trim().toUpperCase(),
           allowance: allowance.trim() || "0.00",
           deduction: deduction.trim() || "0.00",
+          payroll_defaults: {
+            allowance_items: staffPayrollDefaults.allowance_items,
+            deduction_items: staffPayrollDefaults.deduction_items,
+          },
         },
         facebook_url: facebookUrl.trim(),
         twitter_url: twitterUrl.trim(),
@@ -1586,7 +2336,7 @@ export function HrStaffPanel() {
         eleventh_certificate: eleventhCertificate.trim(),
         aadhar_card: aadharCard.trim(),
         driving_license_doc: drivingLicenseDoc.trim(),
-        other_document: otherDocument.trim(),
+        other_document: otherDocuments.map((doc) => doc.name.trim()).filter((name) => name.length > 0),
         status: "active",
       };
 
@@ -1644,27 +2394,114 @@ export function HrStaffPanel() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
             <h3 style={{ margin: 0 }}>{editingStaffId ? "Edit Staff Information" : "Staff Information"}</h3>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <input
-                ref={importStaffRef}
-                type="file"
-                accept=".csv,text/csv"
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  void handleImportStaffCsv(file).catch(() => {
-                    setError("Unable to import CSV file.");
-                  });
-                  e.target.value = "";
-                }}
-              />
-              <button type="button" style={buttonStyle("#7c3aed")} onClick={() => importStaffRef.current?.click()}>Import Staff</button>
-              <button type="submit" form="staff-form" style={buttonStyle()} disabled={saving || rolesLoading}>
+              {!editingStaffId ? (
+                <button type="button" style={buttonStyle("#7c3aed")} onClick={openImportStaffPopup} disabled={importingStaff || saving || rolesLoading}>
+                  {importingStaff ? "Importing..." : "Import Staff"}
+                </button>
+              ) : null}
+              <button type="submit" form="staff-form" style={buttonStyle()} disabled={saving || rolesLoading || importingStaff}>
                 {saving ? "Saving..." : editingStaffId ? "Update Staff" : "Save Staff"}
               </button>
-              <button type="button" style={buttonStyle("#6b7280")} onClick={resetForm} disabled={saving}>Reset Form</button>
+              <button type="button" style={buttonStyle("#6b7280")} onClick={resetForm} disabled={saving || importingStaff}>Reset Form</button>
             </div>
           </div>
+          {!editingStaffId ? (
+            <p style={{ marginTop: 0, marginBottom: 12, fontSize: 12, color: "var(--text-muted)" }}>
+              Import uses a sample Excel template. Fill one row per staff member, then upload the file from the popup.
+            </p>
+          ) : null}
+
+          {!editingStaffId && showImportStaffPopup ? (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="staff-import-popup-title"
+              onClick={closeImportStaffPopup}
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 80,
+                background: "rgba(15, 23, 42, 0.45)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: 16,
+              }}
+            >
+              <div
+                onClick={(event) => event.stopPropagation()}
+                style={{
+                  width: "min(560px, 100%)",
+                  background: "#fff",
+                  borderRadius: 16,
+                  border: "1px solid rgba(148, 163, 184, 0.25)",
+                  boxShadow: "0 24px 80px rgba(15, 23, 42, 0.24)",
+                  padding: 20,
+                  display: "grid",
+                  gap: 14,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+                  <div>
+                    <h3 id="staff-import-popup-title" style={{ margin: 0, fontSize: 20 }}>Import Staff</h3>
+                    <p style={{ margin: "6px 0 0 0", color: "var(--text-muted)", fontSize: 13 }}>
+                      Download the sample Excel first, or browse a completed file to bulk add staff members.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeImportStaffPopup}
+                    disabled={importingStaff}
+                    style={{
+                      border: "1px solid var(--line)",
+                      background: "transparent",
+                      color: "var(--text)",
+                      borderRadius: 999,
+                      width: 34,
+                      height: 34,
+                      cursor: "pointer",
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+                  <button type="button" style={buttonStyle("#0ea5e9")} onClick={handleDownloadStaffTemplate} disabled={importingStaff}>
+                    Download Sample Excel
+                  </button>
+                  <button type="button" style={buttonStyle("#7c3aed")} onClick={() => importStaffRef.current?.click()} disabled={importingStaff}>
+                    Browse Documents
+                  </button>
+                </div>
+
+                <input
+                  ref={importStaffRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) {
+                      return;
+                    }
+                    setShowImportStaffPopup(false);
+                    void handleImportStaffFile(file).catch(() => {
+                      setError("Unable to import staff file.");
+                    });
+                    e.target.value = "";
+                  }}
+                />
+
+                <div style={{ display: "grid", gap: 8, padding: 12, borderRadius: 12, background: "#f8fafc", border: "1px solid var(--line)" }}>
+                  <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 600 }}>Template tips</div>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
+                    Keep one staff per row. Use role and department names from the system, or leave staff number blank to auto-generate it.
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div style={{ display: "flex", gap: 8, borderBottom: "1px solid var(--line)", paddingBottom: 8, marginBottom: 12, flexWrap: "wrap" }}>
             {tabs.map((tab) => (
@@ -1711,7 +2548,7 @@ export function HrStaffPanel() {
 
                     {/* 3) Contact Details */}
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Email *</span><input type="email" value={email} onChange={(e) => { setEmail(e.target.value); clearFieldError("email"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.email ? "#dc2626" : "var(--line)" }} />{fieldErrors.email ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.email}</span> : null}</label>
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Mobile *</span><input value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 12)); clearFieldError("phone"); }} maxLength={12} style={{ ...fieldStyle(), borderColor: fieldErrors.phone ? "#dc2626" : "var(--line)" }} />{fieldErrors.phone ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.phone}</span> : null}</label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Mobile</span><input value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 12)); clearFieldError("phone"); }} maxLength={12} style={{ ...fieldStyle(), borderColor: fieldErrors.phone ? "#dc2626" : "var(--line)" }} />{fieldErrors.phone ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.phone}</span> : null}</label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Emergency Mobile</span><input value={emergencyMobile} onChange={(e) => { setEmergencyMobile(e.target.value.replace(/\D/g, "").slice(0, 12)); clearFieldError("emergency_mobile"); }} maxLength={12} style={{ ...fieldStyle(), borderColor: fieldErrors.emergency_mobile ? "#dc2626" : "var(--line)" }} />{fieldErrors.emergency_mobile ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.emergency_mobile}</span> : null}</label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Marital Status</span><select value={maritalStatus} onChange={(e) => setMaritalStatus(e.target.value as "" | "single" | "married")} style={fieldStyle()}><option value="">Marital Status</option><option value="single">Single</option><option value="married">Married</option></select></label>
 
@@ -1729,7 +2566,7 @@ export function HrStaffPanel() {
 
                     {/* 7) File Upload */}
                     <div style={{ display: "grid", gap: 6 }}>
-                      <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Staff Photo *</span>
+                      <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Staff Photo</span>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
                         <input readOnly value={staffPhoto || "Staff Photo"} style={{ ...fieldStyle(), borderColor: fieldErrors.staff_photo ? "#dc2626" : "var(--line)" }} />
                         <button type="button" style={buttonStyle("#7c3aed")} onClick={() => staffPhotoRef.current?.click()}>Browse</button>
@@ -1799,8 +2636,8 @@ export function HrStaffPanel() {
                 <section style={{ ...boxStyle(), padding: 12 }}>
                   <h4 style={{ margin: "0 0 10px 0", fontSize: 14, textTransform: "uppercase", color: "var(--text-muted)" }}>Additional Information</h4>
                   <div style={sectionGrid}>
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Current Address *</span><textarea value={currentAddress} onChange={(e) => { setCurrentAddress(e.target.value); clearFieldError("current_address"); }} style={{ width: "100%", minHeight: 84, border: `1px solid ${fieldErrors.current_address ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: 10 }} />{fieldErrors.current_address ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.current_address}</span> : null}</label>
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Permanent Address *</span><textarea value={permanentAddress} onChange={(e) => { setPermanentAddress(e.target.value); clearFieldError("permanent_address"); }} style={{ width: "100%", minHeight: 84, border: `1px solid ${fieldErrors.permanent_address ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: 10 }} />{fieldErrors.permanent_address ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.permanent_address}</span> : null}</label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Current Address</span><textarea value={currentAddress} onChange={(e) => setCurrentAddress(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Permanent Address</span><textarea value={permanentAddress} onChange={(e) => setPermanentAddress(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Qualifications</span><textarea value={qualification} onChange={(e) => setQualification(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Experience</span><textarea value={experience} onChange={(e) => setExperience(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
                   </div>
@@ -1828,6 +2665,9 @@ export function HrStaffPanel() {
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Deductions</span>
                   <input type="number" min="0" step="0.01" value={deduction} onChange={(e) => setDeduction(e.target.value)} style={fieldStyle()} />
                 </label>
+                <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "var(--text-muted)" }}>
+                  Payroll defaults linked: {staffPayrollDefaults.allowance_items.length} allowance components and {staffPayrollDefaults.deduction_items.length} deduction components.
+                </div>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Net Salary (Preview)</span>
                   <input readOnly value={salaryNetPreview} style={{ ...fieldStyle(), background: "#f8fafc" }} />
@@ -1908,80 +2748,217 @@ export function HrStaffPanel() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
                 <div style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Resume</span>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <input readOnly value={resume || "Resume"} style={fieldStyle()} />
-                    <button type="button" style={buttonStyle("#7c3aed")} onClick={() => resumeRef.current?.click()}>Browse</button>
+                    <button type="button" style={{ ...buttonStyle("#7c3aed"), flexShrink: 0 }} onClick={() => resumeRef.current?.click()}>Browse</button>
+                    {resume || resumeFile ? (
+                      <button type="button" style={{ ...buttonStyle("#dc2626"), flexShrink: 0, minWidth: 78, background: "#fff", color: "#dc2626" }} onClick={() => { setResume(""); setResumeFile(null); }}>
+                        Remove
+                      </button>
+                    ) : null}
                     <input ref={resumeRef} type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; if (file) { setResumeFile(file); setResume(file.name); } }} />
                   </div>
                   <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, DOC, DOCX, JPG, PNG</span>
-                  {resumeFile && <a href={URL.createObjectURL(resumeFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a>}
+                  {resumeFile ? <a href={URL.createObjectURL(resumeFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a> : null}
                 </div>
 
                 <div style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Joining Letter</span>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <input readOnly value={joiningLetter || "Joining Letter"} style={fieldStyle()} />
-                    <button type="button" style={buttonStyle("#7c3aed")} onClick={() => joiningLetterRef.current?.click()}>Browse</button>
+                    <button type="button" style={{ ...buttonStyle("#7c3aed"), flexShrink: 0 }} onClick={() => joiningLetterRef.current?.click()}>Browse</button>
+                    {joiningLetter || joiningLetterFile ? (
+                      <button type="button" style={{ ...buttonStyle("#dc2626"), flexShrink: 0, minWidth: 78, background: "#fff", color: "#dc2626" }} onClick={() => { setJoiningLetter(""); setJoiningLetterFile(null); }}>
+                        Remove
+                      </button>
+                    ) : null}
                     <input ref={joiningLetterRef} type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; if (file) { setJoiningLetterFile(file); setJoiningLetter(file.name); } }} />
                   </div>
                   <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, DOC, DOCX, JPG, PNG</span>
-                  {joiningLetterFile && <a href={URL.createObjectURL(joiningLetterFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a>}
+                  {joiningLetterFile ? <a href={URL.createObjectURL(joiningLetterFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a> : null}
                 </div>
 
                 <div style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>10th Certificate</span>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <input readOnly value={tenthCertificate || "10th Certificate"} style={fieldStyle()} />
-                    <button type="button" style={buttonStyle("#7c3aed")} onClick={() => tenthCertRef.current?.click()}>Browse</button>
+                    <button type="button" style={{ ...buttonStyle("#7c3aed"), flexShrink: 0 }} onClick={() => tenthCertRef.current?.click()}>Browse</button>
+                    {tenthCertificate || tenthCertFile ? (
+                      <button type="button" style={{ ...buttonStyle("#dc2626"), flexShrink: 0, minWidth: 78, background: "#fff", color: "#dc2626" }} onClick={() => { setTenthCertificate(""); setTenthCertFile(null); }}>
+                        Remove
+                      </button>
+                    ) : null}
                     <input ref={tenthCertRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; if (file) { setTenthCertFile(file); setTenthCertificate(file.name); } }} />
                   </div>
                   <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, JPG, JPEG, PNG</span>
-                  {tenthCertFile && <a href={URL.createObjectURL(tenthCertFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a>}
+                  {tenthCertFile ? <a href={URL.createObjectURL(tenthCertFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a> : null}
                 </div>
 
                 <div style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>11th/12th Certificate</span>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <input readOnly value={eleventhCertificate || "11th/12th Certificate"} style={fieldStyle()} />
-                    <button type="button" style={buttonStyle("#7c3aed")} onClick={() => eleventhCertRef.current?.click()}>Browse</button>
+                    <button type="button" style={{ ...buttonStyle("#7c3aed"), flexShrink: 0 }} onClick={() => eleventhCertRef.current?.click()}>Browse</button>
+                    {eleventhCertificate || eleventhCertFile ? (
+                      <button type="button" style={{ ...buttonStyle("#dc2626"), flexShrink: 0, minWidth: 78, background: "#fff", color: "#dc2626" }} onClick={() => { setEleventhCertificate(""); setEleventhCertFile(null); }}>
+                        Remove
+                      </button>
+                    ) : null}
                     <input ref={eleventhCertRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; if (file) { setEleventhCertFile(file); setEleventhCertificate(file.name); } }} />
                   </div>
                   <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, JPG, JPEG, PNG</span>
-                  {eleventhCertFile && <a href={URL.createObjectURL(eleventhCertFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a>}
+                  {eleventhCertFile ? <a href={URL.createObjectURL(eleventhCertFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a> : null}
                 </div>
 
                 <div style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Aadhar Card</span>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                     <input readOnly value={aadharCard || "Aadhar Card"} style={fieldStyle()} />
-                    <button type="button" style={buttonStyle("#7c3aed")} onClick={() => aadharRef.current?.click()}>Browse</button>
+                    <button type="button" style={{ ...buttonStyle("#7c3aed"), flexShrink: 0 }} onClick={() => aadharRef.current?.click()}>Browse</button>
+                    {aadharCard || aadharFile ? (
+                      <button type="button" style={{ ...buttonStyle("#dc2626"), flexShrink: 0, minWidth: 78, background: "#fff", color: "#dc2626" }} onClick={() => { setAadharCard(""); setAadharFile(null); }}>
+                        Remove
+                      </button>
+                    ) : null}
                     <input ref={aadharRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; if (file) { setAadharFile(file); setAadharCard(file.name); } }} />
                   </div>
                   <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, JPG, JPEG, PNG</span>
-                  {aadharFile && <a href={URL.createObjectURL(aadharFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a>}
+                  {aadharFile ? <a href={URL.createObjectURL(aadharFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a> : null}
                 </div>
 
-                <div style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Driving License</span>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
-                    <input readOnly value={drivingLicenseDoc || "Driving License"} style={fieldStyle()} />
-                    <button type="button" style={buttonStyle("#7c3aed")} onClick={() => drivingLicenseRef.current?.click()}>Browse</button>
-                    <input ref={drivingLicenseRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; if (file) { setDrivingLicenseFile(file); setDrivingLicenseDoc(file.name); } }} />
+                <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12, alignItems: "start" }}>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Driving License</span>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input readOnly value={drivingLicenseDoc || "Driving License"} style={fieldStyle()} />
+                      <button type="button" style={{ ...buttonStyle("#7c3aed"), flexShrink: 0 }} onClick={() => drivingLicenseRef.current?.click()}>Browse</button>
+                      {drivingLicenseDoc || drivingLicenseFile ? (
+                        <button type="button" style={{ ...buttonStyle("#dc2626"), flexShrink: 0, minWidth: 78, background: "#fff", color: "#dc2626" }} onClick={() => { setDrivingLicenseDoc(""); setDrivingLicenseFile(null); }}>
+                          Remove
+                        </button>
+                      ) : null}
+                      <input ref={drivingLicenseRef} type="file" accept=".pdf,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; if (file) { setDrivingLicenseFile(file); setDrivingLicenseDoc(file.name); } }} />
+                    </div>
+                    <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, JPG, JPEG, PNG</span>
+                    {drivingLicenseFile ? <a href={URL.createObjectURL(drivingLicenseFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a> : null}
                   </div>
-                  <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, JPG, JPEG, PNG</span>
-                  {drivingLicenseFile && <a href={URL.createObjectURL(drivingLicenseFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a>}
-                </div>
 
-                <div style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Signature Upload *</span>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
-                    <input readOnly value={otherDocument || "Signature Upload"} style={{ ...fieldStyle(), borderColor: fieldErrors.other_document ? "#dc2626" : "var(--line)" }} />
-                    <button type="button" style={buttonStyle("#7c3aed")} onClick={() => otherDocRef.current?.click()}>Browse</button>
-                    <input ref={otherDocRef} type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png" style={{ display: "none" }} onChange={(e) => { const file = e.target.files?.[0]; if (file) { setOtherDocFile(file); setOtherDocument(file.name); clearFieldError("other_document"); } }} />
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Other Documents</span>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                      <input
+                        readOnly
+                        value={otherDocuments.length > 0 ? `${otherDocuments.length} document(s) selected` : "Other Documents"}
+                        style={fieldStyle()}
+                      />
+                      <button type="button" style={{ ...buttonStyle("#7c3aed"), flexShrink: 0 }} onClick={() => otherDocRef.current?.click()}>Browse</button>
+                      {otherDocuments.length > 0 ? (
+                        <button
+                          type="button"
+                          style={{ ...buttonStyle("#dc2626"), flexShrink: 0, minWidth: 78, background: "#fff", color: "#dc2626" }}
+                          onClick={() => {
+                            setOtherDocuments([]);
+                          }}
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                      <input
+                        ref={otherDocRef}
+                        type="file"
+                        multiple
+                        accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const files = Array.from(e.target.files || []);
+                          if (files.length === 0) return;
+
+                          setOtherDocuments((prev) => {
+                            const next = [...prev];
+                            files.forEach((file) => {
+                              const fileName = file.name.trim();
+                              if (!fileName) return;
+                              const existingIndex = next.findIndex((item) => item.name.toLowerCase() === fileName.toLowerCase());
+                              const nextItem: OtherDocumentEntry = {
+                                id: makeOtherDocumentId(),
+                                name: fileName,
+                                file,
+                              };
+                              if (existingIndex >= 0) {
+                                next[existingIndex] = nextItem;
+                              } else {
+                                next.push(nextItem);
+                              }
+                            });
+                            return next;
+                          });
+
+                          e.target.value = "";
+                        }}
+                      />
+                    </div>
+                    <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, DOC, DOCX, JPG, PNG</span>
+                    {otherDocuments.length > 0 ? (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: 8, border: "1px solid var(--line)", borderRadius: 10, background: "#fafafa" }}>
+                        {otherDocuments.map((document) => (
+                          <div
+                            key={document.id}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 8,
+                              maxWidth: "100%",
+                              padding: "7px 10px",
+                              borderRadius: 999,
+                              border: "1px solid rgba(124, 58, 237, 0.18)",
+                              background: "#fff",
+                              boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
+                            }}
+                          >
+                            <span
+                              title={document.name}
+                              style={{
+                                fontSize: 12,
+                                color: "var(--text)",
+                                maxWidth: 220,
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                              }}
+                            >
+                              {document.name}
+                            </span>
+                            <button
+                              type="button"
+                              aria-label={`Remove ${document.name}`}
+                              title={`Remove ${document.name}`}
+                              style={{
+                                width: 20,
+                                height: 20,
+                                borderRadius: "50%",
+                                border: "none",
+                                background: "#eef2ff",
+                                color: "#7c3aed",
+                                cursor: "pointer",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontSize: 14,
+                                lineHeight: 1,
+                                padding: 0,
+                                flexShrink: 0,
+                              }}
+                              onClick={() => {
+                                setOtherDocuments((prev) => prev.filter((item) => item.id !== document.id));
+                              }}
+                            >
+                              x
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
-                  <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, DOC, DOCX, JPG, PNG</span>
-                  {otherDocFile && <a href={URL.createObjectURL(otherDocFile)} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "#7c3aed", textDecoration: "underline" }}>Preview / Download</a>}
-                  {fieldErrors.other_document ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.other_document}</span> : null}
                 </div>
               </div>
             )}
@@ -2018,18 +2995,42 @@ export function HrStaffDirectoryPanel() {
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 25;
+  const [pageSize, setPageSize] = useState(25);
+  const [totalRows, setTotalRows] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
-  const load = async () => {
+  const load = async (page = 1) => {
     try {
       setLoading(true);
       setError("");
+
+      const params = new URLSearchParams();
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize));
+
+      if (searchQuery.trim()) {
+        params.set("search", searchQuery.trim());
+      }
+      if (filterRole) {
+        params.set("role", filterRole);
+      }
+      if (filterDepartment) {
+        params.set("department", filterDepartment);
+      }
+      if (filterDesignation) {
+        params.set("designation", filterDesignation);
+      }
+      if (filterStatus === "active") {
+        params.set("status", "active");
+      } else if (filterStatus === "inactive") {
+        params.set("status", "inactive");
+      }
 
       const [roleResult, departmentResult, designationResult, staffResult] = await Promise.allSettled([
         apiGet<ApiList<Role>>("/api/v1/access-control/roles/"),
         apiGet<ApiList<Department>>("/api/v1/hr/departments/?is_active=true"),
         apiGet<ApiList<Designation>>("/api/v1/hr/designations/?is_active=true"),
-        fetchAllPages<Staff>("/api/v1/hr/staff/"),
+        apiGet<ApiList<Staff>>(`/api/v1/hr/staff/?${params.toString()}`),
       ]);
 
       // Process roles
@@ -2061,12 +3062,17 @@ export function HrStaffDirectoryPanel() {
 
       // Process staff
       if (staffResult.status === "fulfilled") {
-        setRows(staffResult.value);
+        const staffData = staffResult.value;
+        setRows(listData(staffData));
+        const meta = listPaginationMeta(staffData, pageSize);
+        setTotalRows(meta.count);
+        setTotalPages(meta.totalPages);
+        setCurrentPage(page);
       } else {
         setRows([]);
+        setTotalRows(0);
+        setTotalPages(1);
       }
-
-      setCurrentPage(1);
 
       const dropdownFailures = [roleResult, departmentResult, designationResult].filter((r) => r.status === "rejected");
       const staffFailed = staffResult.status === "rejected";
@@ -2085,8 +3091,8 @@ export function HrStaffDirectoryPanel() {
   };
 
   useEffect(() => {
-    void load();
-  }, []);
+    void load(currentPage);
+  }, [currentPage, pageSize, searchQuery, filterDepartment, filterRole, filterDesignation, filterStatus]);
 
   const filteredDesignationOptions = useMemo(() => {
     const activeDesignations = designations.filter((designation) => designation.is_active);
@@ -2096,75 +3102,13 @@ export function HrStaffDirectoryPanel() {
     return activeDesignations.filter((designation) => designation.department === Number(filterDepartment));
   }, [designations, filterDepartment]);
 
-  // Filtering & searching logic
-  const filteredRows = useMemo(() => {
-    let result = [...rows];
-
-    // Search filter (Staff No or Name)
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      result = result.filter((row) => {
-        const staffNo = (row.staff_no || "").toLowerCase();
-        const fullName = [row.first_name, row.last_name].filter(Boolean).join(" ").toLowerCase();
-        return staffNo.includes(query) || fullName.includes(query);
-      });
-    }
-
-    // Role filter
-    if (filterRole) {
-      result = result.filter((row) => row.role === Number(filterRole));
-    }
-
-    // Department filter
-    if (filterDepartment) {
-      result = result.filter((row) => row.department === Number(filterDepartment));
-    }
-
-    // Designation filter
-    if (filterDesignation) {
-      result = result.filter((row) => row.designation === Number(filterDesignation));
-    }
-
-    // Status filter
-    if (filterStatus === "active") {
-      result = result.filter((row) => row.status === "active");
-    } else if (filterStatus === "inactive") {
-      result = result.filter((row) => row.status !== "active");
-    }
-
-    // Sort by department name, then by name
-    result.sort((a, b) => {
-      const deptA = departments.find((d) => d.id === a.department)?.name || "";
-      const deptB = departments.find((d) => d.id === b.department)?.name || "";
-      if (deptA !== deptB) return deptA.localeCompare(deptB);
-
-      const nameA = [a.first_name, a.last_name].filter(Boolean).join(" ");
-      const nameB = [b.first_name, b.last_name].filter(Boolean).join(" ");
-      return nameA.localeCompare(nameB);
-    });
-
-    return result;
-  }, [rows, searchQuery, filterDepartment, filterRole, filterDesignation, filterStatus, departments]);
-
-  // Pagination
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / itemsPerPage));
-  const startIdx = (currentPage - 1) * itemsPerPage;
-  const endIdx = startIdx + itemsPerPage;
-  const paginatedRows = filteredRows.slice(startIdx, endIdx);
-
-  useEffect(() => {
-    if (currentPage > totalPages) {
-      setCurrentPage(totalPages);
-    }
-  }, [currentPage, totalPages]);
-
   const toggleStaffStatus = async (staffId: number, currentStatus: string) => {
     const newStatus = currentStatus === "active" ? "inactive" : "active";
     try {
       setTogglingStatusId(staffId);
       await apiPatch(`/api/v1/hr/staff/${staffId}/`, { status: newStatus });
       setSuccess(`Staff status updated to ${newStatus}.`);
-      await load();
+      await load(currentPage);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to update staff status.");
     } finally {
@@ -2172,14 +3116,13 @@ export function HrStaffDirectoryPanel() {
     }
   };
 
-  const deleteStaff = async (row: Staff) => {
-    const fullName = [row.first_name, row.last_name].filter(Boolean).join(" ").trim() || row.staff_no || `#${row.id}`;
-    if (!window.confirm(`Delete staff member \"${fullName}\" (${row.staff_no || "no staff no"})?`)) return;
+  const deleteStaff = async (staffId: number) => {
+    if (!window.confirm("Are you sure you want to delete this staff member?")) return;
     try {
       setLoading(true);
-      await apiDelete(`/api/v1/hr/staff/${row.id}/`);
+      await apiDelete(`/api/v1/hr/staff/${staffId}/`);
       setSuccess("Staff has been deleted successfully.");
-      await load();
+      await load(currentPage);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to delete staff.");
     } finally {
@@ -2195,7 +3138,7 @@ export function HrStaffDirectoryPanel() {
     setFilterStatus("all");
     setCurrentPage(1);
     setSuccess("");
-    await load();
+    await load(1);
   };
 
   return (
@@ -2311,8 +3254,11 @@ export function HrStaffDirectoryPanel() {
           </div>
 
           {/* Results info */}
-          <div style={{ marginBottom: 12, fontSize: 12, color: "var(--text-muted)" }}>
-            Showing {paginatedRows.length === 0 ? "0" : startIdx + 1}ΓÇô{Math.min(endIdx, filteredRows.length)} of {filteredRows.length} staff member{filteredRows.length !== 1 ? "s" : ""}
+          <div style={{ marginBottom: 12, fontSize: 12, color: "var(--text-muted)", display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <span>
+              Showing {rows.length === 0 ? 0 : (currentPage - 1) * pageSize + 1}-{Math.min(currentPage * pageSize, totalRows)} of {totalRows} staff member{totalRows !== 1 ? "s" : ""}
+            </span>
+            <span>Search and filters apply on the server.</span>
           </div>
 
           {/* Table */}
@@ -2331,14 +3277,14 @@ export function HrStaffDirectoryPanel() {
                 </tr>
               </thead>
               <tbody>
-                {paginatedRows.length === 0 ? (
+                {rows.length === 0 ? (
                   <tr>
                     <td colSpan={8} style={{ padding: 12, color: "var(--text-muted)", textAlign: "center" }}>
-                      {filteredRows.length === 0 ? "No staff found matching your filters." : "No staff found."}
+                      No staff found matching your filters.
                     </td>
                   </tr>
                 ) : (
-                  paginatedRows.map((row) => {
+                  rows.map((row) => {
                     const roleName = roles.find((r) => r.id === row.role)?.name || "-";
                     const departmentName = departments.find((d) => d.id === row.department)?.name || "-";
                     const designationName = designations.find((d) => d.id === row.designation)?.name || "-";
@@ -2426,7 +3372,7 @@ export function HrStaffDirectoryPanel() {
                                 alignItems: "center",
                                 justifyContent: "center",
                               }}
-                              onClick={() => void deleteStaff(row)}
+                              onClick={() => void deleteStaff(row.id)}
                               disabled={loading}
                             >
                               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -2446,19 +3392,40 @@ export function HrStaffDirectoryPanel() {
           </div>
 
           {/* Pagination */}
-          {totalPages > 1 && (
-            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>Rows per page</label>
+              <select
+                aria-label="Items per page"
+                value={String(pageSize)}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                style={{ ...fieldStyle(), width: 110, height: 34 }}
+              >
+                <option value="10">10 / page</option>
+                <option value="25">25 / page</option>
+                <option value="50">50 / page</option>
+                <option value="100">100 / page</option>
+              </select>
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                Page {currentPage} of {totalPages} · {totalRows} total
+              </span>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <button
                 type="button"
                 style={buttonStyle("#334155")}
                 onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                disabled={currentPage === 1}
+                disabled={currentPage === 1 || loading}
               >
-                ΓåÉ Previous
+                Previous
               </button>
 
               <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                {buildPageButtons(currentPage, totalPages).map((page) => (
                   <button
                     key={page}
                     type="button"
@@ -2473,6 +3440,7 @@ export function HrStaffDirectoryPanel() {
                       fontWeight: currentPage === page ? 600 : 400,
                     }}
                     onClick={() => setCurrentPage(page)}
+                    disabled={loading}
                   >
                     {page}
                   </button>
@@ -2483,12 +3451,12 @@ export function HrStaffDirectoryPanel() {
                 type="button"
                 style={buttonStyle("#334155")}
                 onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                disabled={currentPage === totalPages}
+                disabled={currentPage === totalPages || loading}
               >
-                Next ΓåÆ
+                Next
               </button>
             </div>
-          )}
+          </div>
         </div>
       </div></section>
     </div>
@@ -2497,6 +3465,10 @@ export function HrStaffDirectoryPanel() {
 
 export function HrLeaveTypesPanel() {
   const [rows, setRows] = useState<LeaveType[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [totalRows, setTotalRows] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [name, setName] = useState("");
   const [maxDays, setMaxDays] = useState("1");
   const [isPaid, setIsPaid] = useState(true);
@@ -2504,22 +3476,13 @@ export function HrLeaveTypesPanel() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [paidFilter, setPaidFilter] = useState<"all" | "paid" | "unpaid">("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; max_days_per_year?: string; is_active?: string }>({});
   const formRef = useRef<HTMLDivElement | null>(null);
-
-  const filteredRows = useMemo(() => {
-    return rows.filter((row) => {
-      if (paidFilter === "paid" && !row.is_paid) return false;
-      if (paidFilter === "unpaid" && row.is_paid) return false;
-      if (statusFilter === "active" && !row.is_active) return false;
-      if (statusFilter === "inactive" && row.is_active) return false;
-      return true;
-    });
-  }, [rows, paidFilter, statusFilter]);
 
   const clearFieldError = (field: keyof typeof fieldErrors) => {
     if (!fieldErrors[field]) return;
@@ -2567,19 +3530,35 @@ export function HrLeaveTypesPanel() {
     return null;
   };
 
-  const load = async () => {
+  const load = async (page = 1) => {
     try {
+      setLoading(true);
       setError("");
-      const data = await apiGet<ApiList<LeaveType>>("/api/v1/hr/leave-types/");
+      const params = new URLSearchParams();
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize));
+      params.set("ordering", "name");
+      if (paidFilter === "paid") params.set("is_paid", "true");
+      if (paidFilter === "unpaid") params.set("is_paid", "false");
+      if (statusFilter === "active") params.set("is_active", "true");
+      if (statusFilter === "inactive") params.set("is_active", "false");
+
+      const data = await apiGet<ApiList<LeaveType>>(`/api/v1/hr/leave-types/?${params.toString()}`);
       setRows(listData(data));
+      const meta = listPaginationMeta(data, pageSize);
+      setCurrentPage(page);
+      setTotalRows(meta.count);
+      setTotalPages(meta.totalPages);
     } catch {
       setError("Unable to load leave types.");
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    void load();
-  }, []);
+    void load(1);
+  }, [paidFilter, statusFilter, pageSize]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -2609,7 +3588,7 @@ export function HrLeaveTypesPanel() {
       setMaxDays("1");
       setIsPaid(true);
       setIsActive(true);
-      await load();
+      await load(currentPage);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Validation failed";
       const field = mapApiMessageToField(message);
@@ -2626,11 +3605,16 @@ export function HrLeaveTypesPanel() {
     <div className="legacy-panel">
       {breadcrumb("Types of Leaves")}
       <section className="admin-visitor-area up_st_admin_visitor"><div className="container-fluid p-0">
-        <div ref={formRef} className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
-          <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Leave Type" : "Add Different Types of Leaves"}</h3>
+        <div ref={formRef} className={`white-box ${editingId ? "editing-highlight" : ""}`} style={{ ...boxStyle(), marginBottom: 12, scrollMarginTop: 12 }}>
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>{editingId ? "Editing Leave Type" : "Add Different Types of Leaves"}</h3>
+          {editingId ? (
+            <p style={{ marginTop: 0, marginBottom: 12, color: "var(--text-muted)", fontSize: 13 }}>
+              You are editing an existing leave type. Use Save changes or cancel editing.
+            </p>
+          ) : null}
           <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1.2fr 180px auto auto auto", gap: 8, alignItems: "start" }}>
             <div style={{ display: "grid", gap: 4 }}>
-              <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Leave Reason *</label>
+              <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Leave Type Name *</label>
               <input value={name} onChange={(e) => { setName(e.target.value); clearFieldError("name"); }} placeholder="e.g. Casual Leave" style={{ ...fieldStyle(), borderColor: fieldErrors.name ? "#dc2626" : "var(--line)" }} />
               {fieldErrors.name ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.name}</span> : null}
             </div>
@@ -2647,8 +3631,7 @@ export function HrLeaveTypesPanel() {
               <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Status</span>
               <span style={{ display: "flex", alignItems: "center", gap: 6, height: 36 }}><input type="checkbox" checked={isActive} onChange={(e) => { setIsActive(e.target.checked); clearFieldError("is_active"); }} /> Active</span>
             </label>
-            <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
-              <button type="submit" style={buttonStyle()} disabled={saving}>{saving ? "Saving..." : editingId ? "Update" : "Save"}</button>
+            <div style={{ display: "flex", gap: 8, alignItems: "end", justifyContent: "flex-end", flexWrap: "wrap" }}>
               <button type="button" style={buttonStyle("#6b7280")} onClick={() => {
                 setEditingId(null);
                 setName("");
@@ -2659,8 +3642,9 @@ export function HrLeaveTypesPanel() {
                 setError("");
                 setToast("");
               }} disabled={saving}>
-                Reset
+                {editingId ? "Cancel edit" : "Reset"}
               </button>
+              <button type="submit" style={buttonStyle()} disabled={saving}>{saving ? "Saving..." : editingId ? "Save changes" : "Save"}</button>
             </div>
           </form>
           {fieldErrors.is_active ? <p style={{ color: "#dc2626", marginTop: 8, marginBottom: 0 }}>{fieldErrors.is_active}</p> : null}
@@ -2693,10 +3677,12 @@ export function HrLeaveTypesPanel() {
             </div>
           </div>
 
+          {loading ? <p style={{ marginTop: 0, marginBottom: 10, color: "var(--text-muted)" }}>Loading leave types...</p> : null}
+
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Name</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Max Days</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Paid</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Status</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th></tr></thead>
             <tbody>
-              {filteredRows.map((row) => (
+              {rows.map((row) => (
                 <tr key={row.id} style={{ background: row.is_active ? "transparent" : "#fef2f2" }}>
                   <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.name}</td>
                   <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.max_days_per_year}</td>
@@ -2717,7 +3703,7 @@ export function HrLeaveTypesPanel() {
                         setError("");
                         setToast("");
                         formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-                      }}>Edit</button>
+                      }}>Edit details</button>
                       <button
                         type="button"
                         style={buttonStyle("#dc2626")}
@@ -2729,7 +3715,8 @@ export function HrLeaveTypesPanel() {
                             .then(async () => {
                               setToast("Leave type deleted successfully.");
                               setError("");
-                              await load();
+                              const targetPage = rows.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage;
+                              await load(targetPage);
                             })
                             .catch((err) => {
                               setError(err instanceof Error ? err.message : "Validation failed");
@@ -2743,7 +3730,7 @@ export function HrLeaveTypesPanel() {
                   </td>
                 </tr>
               ))}
-              {filteredRows.length === 0 ? (
+              {!loading && rows.length === 0 ? (
                 <tr>
                   <td colSpan={5} style={{ padding: 12, textAlign: "center", color: "var(--text-muted)" }}>
                     No leave types found for the selected filters.
@@ -2752,6 +3739,40 @@ export function HrLeaveTypesPanel() {
               ) : null}
             </tbody>
           </table>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, gap: 10, flexWrap: "wrap" }}>
+            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              Showing {rows.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalRows)} of {totalRows}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <select
+                aria-label="Items per page"
+                value={String(pageSize)}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                style={{ ...fieldStyle(), width: 110, height: 34 }}
+              >
+                <option value="10">10 / page</option>
+                <option value="25">25 / page</option>
+                <option value="50">50 / page</option>
+                <option value="100">100 / page</option>
+              </select>
+              <button type="button" style={buttonStyle("#334155")} disabled={currentPage <= 1 || loading} onClick={() => void load(currentPage - 1)}>Previous</button>
+              {buildPageButtons(currentPage, totalPages).map((page) => (
+                <button
+                  key={page}
+                  type="button"
+                  style={buttonStyle(page === currentPage ? "var(--primary)" : "#64748b")}
+                  disabled={loading}
+                  onClick={() => void load(page)}
+                >
+                  {page}
+                </button>
+              ))}
+              <button type="button" style={buttonStyle("#334155")} disabled={currentPage >= totalPages || loading} onClick={() => void load(currentPage + 1)}>Next</button>
+            </div>
+          </div>
         </div>
       </div></section>
     </div>
@@ -2779,7 +3800,7 @@ export function HrLeaveDefinePanel() {
   const [leaveTypeFilter, setLeaveTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "role" | "staff" | "student">("all");
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   const formRef = useRef<HTMLDivElement | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{
     role?: string;
@@ -2850,6 +3871,9 @@ export function HrLeaveDefinePanel() {
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / itemsPerPage));
   const paginatedRows = filteredRows.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  const pageStart = filteredRows.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
+  const pageEnd = Math.min(currentPage * itemsPerPage, filteredRows.length);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -3167,13 +4191,40 @@ export function HrLeaveDefinePanel() {
     <div className="legacy-panel">
       {breadcrumb("Define Leave Policy")}
       <section className="admin-visitor-area up_st_admin_visitor"><div className="container-fluid p-0">
-        <div ref={formRef} className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
-          <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Leave Policy" : "Add Leave Policy"}</h3>
+        <div ref={formRef} className={`white-box ${editingId ? "editing-highlight" : ""}`} style={{ ...boxStyle(), marginBottom: 12, scrollMarginTop: 12, background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <h3 style={{ margin: 0 }}>{editingId ? "Editing Leave Policy" : "Leave Policy Setup"}</h3>
+                {editingId ? (
+                  <span style={{ display: "inline-flex", alignItems: "center", padding: "5px 10px", borderRadius: 999, background: "#fff7ed", color: "#9a3412", fontSize: 12, fontWeight: 600, border: "1px solid #fdba74" }}>
+                    Edit mode
+                  </span>
+                ) : null}
+              </div>
+              <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 13, maxWidth: 760 }}>
+                Define who gets a leave policy and set leave type and days in a clear single flow.
+              </p>
+            </div>
+            {editingId ? (
+              <span style={{ display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, background: "#eff6ff", color: "#1d4ed8", fontSize: 12, fontWeight: 600, border: "1px solid #bfdbfe" }}>
+                Update an existing rule
+              </span>
+            ) : null}
+          </div>
+          {editingId ? (
+            <p style={{ marginTop: 0, marginBottom: 12, color: "var(--text-muted)", fontSize: 13 }}>
+              You are editing an existing leave policy. Save changes or cancel editing to exit this mode.
+            </p>
+          ) : null}
           <form onSubmit={submit} style={{ display: "grid", gap: 16 }}>
             {/* Scope Selection */}
-            <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12, display: "grid", gap: 10 }}>
-              <h4 style={{ margin: 0, fontSize: 14 }}>1. Scope Selection</h4>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 12, padding: 14, display: "grid", gap: 12, background: "#ffffff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <h4 style={{ margin: 0, fontSize: 14 }}>Scope & Assignment</h4>
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Choose role or staff first, then narrow the scope if needed</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: isStudentRole ? "1.2fr 0.8fr" : "1fr", gap: 12, alignItems: "start" }}>
                 <div style={{ display: "grid", gap: 4 }}>
                   <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Role *</label>
                   <select
@@ -3210,7 +4261,28 @@ export function HrLeaveDefinePanel() {
                   {fieldErrors.role ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.role}</span> : null}
                 </div>
 
-                {isStudentRole ? (
+                <div style={{ display: "grid", gap: 4 }}>
+                  <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Staff *</label>
+                  <select
+                    id="leave-define-staff"
+                    value={staffId}
+                    onChange={(e) => { setStaffId(e.target.value); clearFieldError("staff"); if (e.target.value) setRoleId(""); }}
+                    style={{ ...fieldStyle(), borderColor: fieldErrors.staff ? "#dc2626" : "var(--line)" }}
+                    disabled={staffLoading || isStudentRole}
+                  >
+                    <option value="">{staffLoading ? "Loading staff..." : "Select Staff"}</option>
+                    {staffRows.map((item) => <option key={item.id} value={item.id}>{item.first_name} {item.last_name} ({item.staff_no})</option>)}
+                  </select>
+                  {fieldErrors.staff ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.staff}</span> : null}
+                </div>
+              </div>
+
+              {isStudentRole ? (
+                <div style={{ borderRadius: 10, border: "1px solid #dbeafe", background: "#eff6ff", padding: 12, display: "grid", gap: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: 13, color: "#1d4ed8" }}>Student scope</strong>
+                    <span style={{ fontSize: 12, color: "#1d4ed8" }}>Applies only when the selected role is Student</span>
+                  </div>
                   <div style={{ display: "grid", gap: 4 }}>
                     <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Scope</label>
                     <select
@@ -3224,75 +4296,14 @@ export function HrLeaveDefinePanel() {
                       <option value="individual">Individual Student</option>
                     </select>
                   </div>
-                ) : (
-                  <div style={{ display: "grid", gap: 4 }}>
-                    <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Staff *</label>
-                    <select
-                      id="leave-define-staff"
-                      value={staffId}
-                      onChange={(e) => { setStaffId(e.target.value); clearFieldError("staff"); if (e.target.value) setRoleId(""); }}
-                      style={{ ...fieldStyle(), borderColor: fieldErrors.staff ? "#dc2626" : "var(--line)" }}
-                      disabled={staffLoading || isStudentRole}
-                    >
-                      <option value="">{staffLoading ? "Loading staff..." : "Select Staff"}</option>
-                      {staffRows.map((item) => <option key={item.id} value={item.id}>{item.first_name} {item.last_name} ({item.staff_no})</option>)}
-                    </select>
-                    {fieldErrors.staff ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.staff}</span> : null}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Filters */}
-            <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12, display: "grid", gap: 10 }}>
-              <h4 style={{ margin: 0, fontSize: 14 }}>2. Search and Filters</h4>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-                <div style={{ display: "grid", gap: 4 }}>
-                  <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Search</label>
-                  <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search by role, staff, leave type" style={fieldStyle()} />
                 </div>
-                <div style={{ display: "grid", gap: 4 }}>
-                  <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Role Filter</label>
-                  <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} style={fieldStyle()}>
-                    <option value="all">All Roles</option>
-                    {roles.map((item) => <option key={item.id} value={String(item.id)}>{item.name}</option>)}
-                  </select>
-                </div>
-                <div style={{ display: "grid", gap: 4 }}>
-                  <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Staff Filter</label>
-                  <select value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)} style={fieldStyle()}>
-                    <option value="all">All Staff</option>
-                    {staffRows.map((item) => <option key={item.id} value={String(item.id)}>{item.first_name} {item.last_name} ({item.staff_no})</option>)}
-                  </select>
-                </div>
-                <div style={{ display: "grid", gap: 4 }}>
-                  <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Leave Type Filter</label>
-                  <select value={leaveTypeFilter} onChange={(e) => setLeaveTypeFilter(e.target.value)} style={fieldStyle()}>
-                    <option value="all">All Leave Types</option>
-                    {leaveTypes.map((item) => <option key={item.id} value={String(item.id)}>{item.name}</option>)}
-                  </select>
-                </div>
-                <div style={{ display: "grid", gap: 4 }}>
-                  <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Scope Filter</label>
-                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "role" | "staff" | "student")} style={fieldStyle()}>
-                    <option value="all">All Records</option>
-                    <option value="role">Role Based</option>
-                    <option value="staff">Staff Specific</option>
-                    <option value="student">Student Based</option>
-                  </select>
-                </div>
-                <div style={{ display: "flex", alignItems: "end" }}>
-                  <button type="button" style={buttonStyle("#6b7280")} onClick={() => { setSearchQuery(""); setRoleFilter("all"); setStaffFilter("all"); setLeaveTypeFilter("all"); setStatusFilter("all"); setCurrentPage(1); }}>
-                    Clear Filters
-                  </button>
-                </div>
-              </div>
+              ) : null}
             </div>
 
             {isStudentRole ? (
-              <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12, display: "grid", gap: 10 }}>
-                <h4 style={{ margin: 0, fontSize: 14 }}>3. Student Scope Details</h4>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ border: "1px solid var(--line)", borderRadius: 12, padding: 14, display: "grid", gap: 12, background: "#ffffff" }}>
+                <h4 style={{ margin: 0, fontSize: 14 }}>Student Scope Details</h4>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
                   {scopeType !== "all" ? (
                     <>
                       <div style={{ display: "grid", gap: 4 }}>
@@ -3337,7 +4348,7 @@ export function HrLeaveDefinePanel() {
                       </div>
                     </>
                   ) : (
-                    <div style={{ gridColumn: "1 / span 2", color: "var(--text-muted)", fontSize: 13 }}>
+                    <div style={{ gridColumn: "1 / -1", color: "var(--text-muted)", fontSize: 13 }}>
                       Leave will be applied to all students.
                     </div>
                   )}
@@ -3363,9 +4374,12 @@ export function HrLeaveDefinePanel() {
             ) : null}
 
             {/* Leave Details */}
-            <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12, display: "grid", gap: 10 }}>
-              <h4 style={{ margin: 0, fontSize: 14 }}>4. Leave Allocation Details</h4>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 12, padding: 14, display: "grid", gap: 12, background: "#ffffff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <h4 style={{ margin: 0, fontSize: 14 }}>Leave Allocation Details</h4>
+                <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Set the policy value and validity</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
                 <div style={{ display: "grid", gap: 4 }}>
                   <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Leave Type *</label>
                   <select id="leave-define-leave-type" value={leaveTypeId} onChange={(e) => { setLeaveTypeId(e.target.value); clearFieldError("leave_type"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.leave_type ? "#dc2626" : "var(--line)" }}>
@@ -3383,10 +4397,10 @@ export function HrLeaveDefinePanel() {
             </div>
 
             {/* Save Action */}
-            <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12, display: "flex", justifyContent: "flex-end" }}>
-              <div style={{ display: "flex", gap: 8 }}>
-                <button type="button" style={buttonStyle("#6b7280")} onClick={resetForm} disabled={saving || loading}>Reset</button>
-                <button type="submit" style={buttonStyle()} disabled={saving || loading}>{saving ? "Saving..." : editingId ? "Update" : "Save"}</button>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 12, padding: 14, display: "flex", justifyContent: "flex-end", background: "linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)" }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="button" style={buttonStyle("#6b7280")} onClick={resetForm} disabled={saving || loading}>{editingId ? "Cancel edit" : "Reset"}</button>
+                <button type="submit" style={buttonStyle()} disabled={saving || loading}>{saving ? "Saving..." : editingId ? "Save changes" : "Save"}</button>
               </div>
             </div>
           </form>
@@ -3394,19 +4408,77 @@ export function HrLeaveDefinePanel() {
           {toast ? <p style={{ color: "#16a34a", marginTop: 8 }}>{toast}</p> : null}
         </div>
 
-        <div className="white-box" style={boxStyle()}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
-            <h3 style={{ margin: 0 }}>Leave Allocation Rules</h3>
-            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-              Showing {paginatedRows.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filteredRows.length)} of {filteredRows.length}
+        <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+            <h4 style={{ margin: 0, fontSize: 14 }}>Search & Filters</h4>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Search is applied on the client for fast browsing</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 }}>
+            <div style={{ display: "grid", gap: 4 }}>
+              <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Search</label>
+              <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search by role, staff, leave type" style={fieldStyle()} />
+            </div>
+            <div style={{ display: "grid", gap: 4 }}>
+              <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Role Filter</label>
+              <select value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} style={fieldStyle()}>
+                <option value="all">All Roles</option>
+                {roles.map((item) => <option key={item.id} value={String(item.id)}>{item.name}</option>)}
+              </select>
+            </div>
+            <div style={{ display: "grid", gap: 4 }}>
+              <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Staff Filter</label>
+              <select value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)} style={fieldStyle()}>
+                <option value="all">All Staff</option>
+                {staffRows.map((item) => <option key={item.id} value={String(item.id)}>{item.first_name} {item.last_name} ({item.staff_no})</option>)}
+              </select>
+            </div>
+            <div style={{ display: "grid", gap: 4 }}>
+              <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Leave Type Filter</label>
+              <select value={leaveTypeFilter} onChange={(e) => setLeaveTypeFilter(e.target.value)} style={fieldStyle()}>
+                <option value="all">All Leave Types</option>
+                {leaveTypes.map((item) => <option key={item.id} value={String(item.id)}>{item.name}</option>)}
+              </select>
+            </div>
+            <div style={{ display: "grid", gap: 4 }}>
+              <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Record Type Filter</label>
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "role" | "staff" | "student")} style={fieldStyle()}>
+                <option value="all">All Records</option>
+                <option value="role">Role Based</option>
+                <option value="staff">Staff Specific</option>
+                <option value="student">Student Based</option>
+              </select>
+            </div>
+            <div style={{ display: "flex", alignItems: "end" }}>
+              <button type="button" style={buttonStyle("#6b7280")} onClick={() => { setSearchQuery(""); setRoleFilter("all"); setStaffFilter("all"); setLeaveTypeFilter("all"); setStatusFilter("all"); setCurrentPage(1); }}>
+                Clear Filters
+              </button>
             </div>
           </div>
-          <p style={{ marginTop: 0, marginBottom: 10, color: "var(--text-muted)", fontSize: 12 }}>
-            Priority order: staff-specific rules override student-based rules, which override role-based rules.
-          </p>
+        </div>
+
+        <div className="white-box" style={boxStyle()}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12, gap: 8, flexWrap: "wrap" }}>
+            <div style={{ display: "grid", gap: 4 }}>
+              <h3 style={{ margin: 0 }}>Leave Allocation Rules</h3>
+              <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 12 }}>
+                Priority order: staff-specific rules override student-based rules, which override role-based rules.
+              </p>
+            </div>
+            <div style={{ display: "inline-flex", alignItems: "center", padding: "6px 10px", borderRadius: 999, background: "#eff6ff", color: "#1d4ed8", fontSize: 12, fontWeight: 600, border: "1px solid #bfdbfe" }}>
+              Showing {pageStart} - {pageEnd} of {filteredRows.length}
+            </div>
+          </div>
           {loading ? <p style={{ marginTop: 0, color: "var(--text-muted)" }}>Loading leave policy data...</p> : null}
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Scope</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Leave Type</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Days</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Priority</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th></tr></thead>
+            <thead>
+              <tr style={{ background: "#f8fafc" }}>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Scope</th>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Leave Type</th>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Days</th>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Priority</th>
+                <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th>
+              </tr>
+            </thead>
             <tbody>
               {noLeaveDefinitions ? (
                 <tr>
@@ -3461,15 +4533,10 @@ export function HrLeaveDefinePanel() {
                           formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
                         }}
                       >
-                        Edit
+                        Edit details
                       </button>
                       <button type="button" style={buttonStyle("#dc2626")} onClick={() => {
-                        const scopeLabel = row.student_name
-                          ? row.student_name
-                          : row.staff_name
-                            ? row.staff_name
-                            : row.role_name || "rule";
-                        if (!window.confirm(`Delete leave policy for \"${scopeLabel}\" (${row.leave_type_name || row.leave_type})?`)) return;
+                        if (!window.confirm("Delete this leave policy?")) return;
                         void apiDelete(`/api/v1/hr/leave-defines/${row.id}/`).then(async () => {
                           setToast("Leave policy deleted successfully.");
                           await load();
@@ -3488,24 +4555,45 @@ export function HrLeaveDefinePanel() {
               ) : null}
             </tbody>
           </table>
-          {totalPages > 1 ? (
-            <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 14 }}>
-              <button type="button" style={buttonStyle("#334155")} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={currentPage === 1}>Previous</button>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 14, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", color: "var(--text-muted)", fontSize: 13 }}>
+              <label style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>Rows per page</label>
+              <select
+                aria-label="Items per page"
+                value={String(itemsPerPage)}
+                onChange={(e) => {
+                  const nextPageSize = Number(e.target.value);
+                  if (Number.isFinite(nextPageSize) && nextPageSize > 0) {
+                    setItemsPerPage(nextPageSize);
+                    setCurrentPage(1);
+                  }
+                }}
+                style={{ ...fieldStyle(), width: 110, height: 34 }}
+              >
+                <option value="10">10 / page</option>
+                <option value="25">25 / page</option>
+                <option value="50">50 / page</option>
+              </select>
+              <span>Page {currentPage} of {totalPages} · {filteredRows.length} total</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" style={buttonStyle("#334155")} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} disabled={currentPage === 1 || loading}>Previous</button>
               <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                {buildPageButtons(currentPage, totalPages).map((page) => (
                   <button
                     key={page}
                     type="button"
                     onClick={() => setCurrentPage(page)}
                     style={{ width: 34, height: 34, border: currentPage === page ? "1px solid var(--primary)" : "1px solid var(--line)", background: currentPage === page ? "var(--primary)" : "var(--surface)", color: currentPage === page ? "#fff" : "var(--text)", borderRadius: 6, cursor: "pointer" }}
+                    disabled={loading}
                   >
                     {page}
                   </button>
                 ))}
               </div>
-              <button type="button" style={buttonStyle("#334155")} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={currentPage === totalPages}>Next</button>
+              <button type="button" style={buttonStyle("#334155")} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))} disabled={currentPage === totalPages || loading}>Next</button>
             </div>
-          ) : null}
+          </div>
         </div>
       </div></section>
     </div>
@@ -3747,7 +4835,7 @@ export function HrStaffAttendancePanel() {
             <button type="button" style={buttonStyle("#0f766e")} onClick={() => setBulkStatus("F")} disabled={loading || saving}>Mark All Half Day</button>
             <button type="button" style={buttonStyle("#334155")} onClick={() => setBulkStatus("H")} disabled={loading || saving}>Mark All Holiday</button>
           </div>
-          {isWeekend ? <p style={{ color: "#d97706", marginTop: 8, marginBottom: 0 }}>Selected date is a weekend. You can use "Mark All Holiday" if this is a non-working day.</p> : null}
+          {isWeekend ? <p style={{ color: "#d97706", marginTop: 8, marginBottom: 0 }}>Selected date is a weekend. You can use &quot;Mark All Holiday&quot; if this is a non-working day.</p> : null}
           {error && <p style={{ color: "var(--warning)", marginTop: 8 }}>{error}</p>}
           {toast ? <p style={{ color: "#16a34a", marginTop: 8 }}>{toast}</p> : null}
         </div>
@@ -3868,6 +4956,10 @@ export function HrStaffAttendancePanel() {
 
 export function HrLeaveRequestsPanel() {
   const [rows, setRows] = useState<LeaveRequest[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [totalRows, setTotalRows] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
   const [staffRows, setStaffRows] = useState<Staff[]>([]);
   const [error, setError] = useState("");
@@ -3878,6 +4970,7 @@ export function HrLeaveRequestsPanel() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [currentUser, setCurrentUser] = useState<MePayload | null>(null);
+  const [applyOnBehalf, setApplyOnBehalf] = useState(false);
 
   const [applyDate] = useState(new Date().toISOString().slice(0, 10));
   const [staffId, setStaffId] = useState("");
@@ -3887,6 +4980,7 @@ export function HrLeaveRequestsPanel() {
   const [reason, setReason] = useState("");
   const [attachment, setAttachment] = useState("");
   const [attachmentFile, setAttachmentFile] = useState<File | null>(null);
+  const formRef = useRef<HTMLDivElement | null>(null);
   
   const [fieldErrors, setFieldErrors] = useState<{
     staff?: string;
@@ -3897,7 +4991,7 @@ export function HrLeaveRequestsPanel() {
     attachment?: string;
   }>({});
   
-  const minReasonLength = 20;
+  const minReasonLength = 1;
   const maxReasonLength = 500;
   const maxFileSize = 5 * 1024 * 1024; // 5MB
   const allowedFileTypes = ["application/pdf", "image/jpeg", "image/png"];
@@ -3911,20 +5005,72 @@ export function HrLeaveRequestsPanel() {
     || currentUser.permission_codes.includes("human_resource.apply_leave.delete")
   );
 
-  const load = async () => {
+  const ownStaffId = useMemo(() => {
+    if (!currentUser) return null;
+    const byUserId = typeof currentUser.id === "number"
+      ? staffRows.find((item) => item.user === currentUser.id)
+      : undefined;
+    if (byUserId) return byUserId.id;
+
+    const byEmail = currentUser.email
+      ? staffRows.find((item) => item.email && item.email.toLowerCase() === currentUser.email?.toLowerCase())
+      : undefined;
+    return byEmail?.id ?? null;
+  }, [currentUser, staffRows]);
+
+  const effectiveStaffId = useMemo(() => {
+    if (!canSelectStaff) {
+      return staffId ? Number(staffId) : null;
+    }
+    if (applyOnBehalf) {
+      return staffId ? Number(staffId) : null;
+    }
+    return ownStaffId;
+  }, [canSelectStaff, applyOnBehalf, staffId, ownStaffId]);
+
+  const effectiveStaffLabel = useMemo(() => {
+    const selected = staffRows.find((item) => item.id === effectiveStaffId);
+    if (selected) {
+      return `${selected.first_name} ${selected.last_name}`.trim() || selected.staff_no || "Your profile";
+    }
+
+    const currentUserName = currentUser
+      ? `${currentUser.first_name || ""} ${currentUser.last_name || ""}`.trim()
+      : "";
+
+    if (currentUserName) return currentUserName;
+    if (currentUser?.username?.trim()) return currentUser.username.trim();
+    if (currentUser?.email?.trim()) return currentUser.email.trim();
+
+    return "Your profile";
+  }, [staffRows, effectiveStaffId, currentUser]);
+
+  const load = async (page = 1, searchValue = search) => {
     try {
       setLoading(true);
       setError("");
+      const params = new URLSearchParams();
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize));
+      params.set("ordering", "-created_at");
+      if (searchValue.trim()) {
+        params.set("search", searchValue.trim());
+      }
+
       const [leaveData, typeData, meData, staffData] = await Promise.all([
-        apiGet<ApiList<LeaveRequest>>("/api/v1/hr/leave-requests/"),
-        apiGet<ApiList<LeaveType>>("/api/v1/hr/leave-types/?is_active=true"),
+        apiGet<ApiList<LeaveRequest>>(`/api/v1/hr/leave-requests/?${params.toString()}`),
+        fetchAllPages<LeaveType>("/api/v1/hr/leave-types/?is_active=true&page_size=100"),
         apiGet<MePayload>("/api/v1/auth/me/"),
-        apiGet<ApiList<Staff>>("/api/v1/hr/staff/?status=active"),
+        fetchAllPages<Staff>("/api/v1/hr/staff/?status=active&page_size=100"),
       ]);
       setRows(listData(leaveData));
-      setLeaveTypes(listData(typeData));
+      const meta = listPaginationMeta(leaveData, pageSize);
+      setCurrentPage(page);
+      setTotalRows(meta.count);
+      setTotalPages(meta.totalPages);
+      setLeaveTypes(typeData);
       setCurrentUser(meData);
-      setStaffRows(listData(staffData));
+      setStaffRows(staffData);
     } catch {
       setError("Unable to load leave requests.");
     } finally {
@@ -3933,14 +5079,24 @@ export function HrLeaveRequestsPanel() {
   };
 
   useEffect(() => {
-    void load();
+    void load(1);
   }, []);
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      void load(1, search);
+    }, 300);
+    return () => window.clearTimeout(handle);
+  }, [search, pageSize]);
 
   const validateForm = () => {
     const nextErrors: typeof fieldErrors = {};
 
-    if (canSelectStaff && !staffId.trim()) {
+    if (canSelectStaff && applyOnBehalf && !staffId.trim()) {
       nextErrors.staff = "Employee is required.";
+    }
+    if (canSelectStaff && !applyOnBehalf && !ownStaffId) {
+      nextErrors.staff = "Your staff profile is not linked. Enable 'Apply on behalf' and choose an employee.";
     }
     
     if (!leaveTypeId.trim()) {
@@ -3975,8 +5131,6 @@ export function HrLeaveRequestsPanel() {
     
     if (!reason.trim()) {
       nextErrors.reason = "Reason is required.";
-    } else if (reason.trim().length < minReasonLength) {
-      nextErrors.reason = `Reason must be at least ${minReasonLength} characters.`;
     }
     if (reason.trim() && reason.trim().length > maxReasonLength) {
       nextErrors.reason = `Reason cannot exceed ${maxReasonLength} characters.`;
@@ -3999,20 +5153,6 @@ export function HrLeaveRequestsPanel() {
     setFieldErrors((prev) => ({ ...prev, [field]: undefined }));
   };
 
-  const filteredRows = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) return rows;
-    return rows.filter((row) => {
-      const leaveType = leaveTypes.find((item) => item.id === row.leave_type);
-      return (
-        (leaveType?.name || "").toLowerCase().includes(term)
-        || row.from_date.includes(term)
-        || row.to_date.includes(term)
-        || row.status.toLowerCase().includes(term)
-      );
-    });
-  }, [rows, leaveTypes, search]);
-
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError("");
@@ -4026,18 +5166,8 @@ export function HrLeaveRequestsPanel() {
     
     try {
       setSaving(true);
-      const selectedLeaveType = leaveTypes.find((item) => item.id === Number(leaveTypeId));
-      if (selectedLeaveType && fromDate && toDate) {
-        const requestedDays = Math.floor((new Date(`${toDate}T00:00:00`).getTime() - new Date(`${fromDate}T00:00:00`).getTime()) / (1000 * 60 * 60 * 24)) + 1;
-        if (requestedDays > selectedLeaveType.max_days_per_year) {
-          const message = "Leave limit exceeded";
-          setFieldErrors((prev) => ({ ...prev, toDate: message }));
-          setError(message);
-          return;
-        }
-      }
       const payload = {
-        ...(canSelectStaff && staffId ? { staff: Number(staffId) } : {}),
+        ...(effectiveStaffId ? { staff: effectiveStaffId } : {}),
         leave_type: Number(leaveTypeId),
         from_date: fromDate,
         to_date: toDate,
@@ -4053,13 +5183,14 @@ export function HrLeaveRequestsPanel() {
       }
       setEditingId(null);
       setStaffId("");
+      setApplyOnBehalf(false);
       setLeaveTypeId("");
       setFromDate("");
       setToDate("");
       setReason("");
       setAttachment("");
       setAttachmentFile(null);
-      await load();
+      await load(currentPage);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to save leave request.";
       setError(message);
@@ -4068,13 +5199,12 @@ export function HrLeaveRequestsPanel() {
     }
   };
 
-  const deletePending = async (row: LeaveRequest) => {
-    const leaveTypeName = leaveTypes.find((item) => item.id === row.leave_type)?.name || `#${row.leave_type}`;
-    if (!window.confirm(`Delete pending leave request for ${leaveTypeName} (${row.from_date} to ${row.to_date})?`)) return;
+  const deletePending = async (id: number) => {
     try {
       setError("");
-      await apiDelete(`/api/v1/hr/leave-requests/${row.id}/`);
-      await load();
+      await apiDelete(`/api/v1/hr/leave-requests/${id}/`);
+      const targetPage = rows.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage;
+      await load(targetPage);
     } catch {
       setError("Unable to delete leave request.");
     }
@@ -4105,7 +5235,7 @@ export function HrLeaveRequestsPanel() {
       return;
     }
     if (action === "delete" && row.status === "pending") {
-      await deletePending(row);
+      await deletePending(row.id);
       return;
     }
     if (action === "approve" && row.status === "pending" && canModerateLeave) {
@@ -4114,7 +5244,7 @@ export function HrLeaveRequestsPanel() {
         const note = window.prompt("Approval note (optional):", "") || "";
         await apiPost(`/api/v1/hr/leave-requests/${row.id}/approve/`, { approval_note: note.trim() });
         setToast("Leave request approved successfully.");
-        await load();
+        await load(currentPage);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unable to approve leave request.";
         setError(message);
@@ -4127,7 +5257,7 @@ export function HrLeaveRequestsPanel() {
         const note = window.prompt("Rejection note (optional):", "") || "";
         await apiPost(`/api/v1/hr/leave-requests/${row.id}/reject/`, { approval_note: note.trim() });
         setToast("Leave request rejected successfully.");
-        await load();
+        await load(currentPage);
       } catch (err) {
         const message = err instanceof Error ? err.message : "Unable to reject leave request.";
         setError(message);
@@ -4149,16 +5279,19 @@ export function HrLeaveRequestsPanel() {
   const startEdit = (row: LeaveRequest) => {
     setEditingId(row.id);
     setStaffId(String(row.staff ?? ""));
+    setApplyOnBehalf(canSelectStaff && (!!row.staff && row.staff !== ownStaffId));
     setLeaveTypeId(String(row.leave_type));
     setFromDate(row.from_date);
     setToDate(row.to_date);
     setReason(row.reason || "");
     setAttachment(row.attachment || "");
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setStaffId("");
+    setApplyOnBehalf(false);
     setLeaveTypeId("");
     setFromDate("");
     setToDate("");
@@ -4174,8 +5307,13 @@ export function HrLeaveRequestsPanel() {
     <div className="legacy-panel">
       {breadcrumb("Apply Leave")}
       <section className="admin-visitor-area up_st_admin_visitor"><div className="container-fluid p-0">
-        <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
-          <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Leave Request" : "Apply for Leave"}</h3>
+        <div ref={formRef} className={`white-box ${editingId ? "editing-highlight" : ""}`} style={{ ...boxStyle(), marginBottom: 12, scrollMarginTop: 12 }}>
+          <h3 style={{ marginTop: 0, marginBottom: 8 }}>{editingId ? "Editing Leave Request" : "Apply for Leave"}</h3>
+          {editingId ? (
+            <p style={{ marginTop: 0, marginBottom: 12, color: "var(--text-muted)", fontSize: 13 }}>
+              You are editing a leave request. Save changes or cancel edit to exit edit mode.
+            </p>
+          ) : null}
           
           <form onSubmit={submit} style={{ display: "grid", gap: 16 }}>
             {/* Leave Details Section */}
@@ -4183,12 +5321,32 @@ export function HrLeaveRequestsPanel() {
               <h4 style={{ margin: 0, fontSize: 14 }}>1. Leave Details</h4>
               <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>
                 {canSelectStaff
-                  ? "Select the employee who is applying for leave."
+                  ? "By default this request is for you. Turn on 'Apply on behalf' only when submitting for someone else."
                   : "This request will be created for your linked staff profile."}
               </p>
+
+              {canSelectStaff ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <input
+                    id="apply-on-behalf"
+                    type="checkbox"
+                    checked={applyOnBehalf}
+                    onChange={(e) => {
+                      setApplyOnBehalf(e.target.checked);
+                      if (!e.target.checked) {
+                        setStaffId("");
+                        clearFieldError("staff");
+                      }
+                    }}
+                  />
+                  <label htmlFor="apply-on-behalf" style={{ fontSize: 13, color: "var(--text-muted)", cursor: "pointer" }}>
+                    Apply on behalf of another employee
+                  </label>
+                </div>
+              ) : null}
               
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                {canSelectStaff ? (
+                {canSelectStaff && applyOnBehalf ? (
                   <div style={{ display: "grid", gap: 4 }}>
                     <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Employee *</label>
                     <select
@@ -4202,11 +5360,22 @@ export function HrLeaveRequestsPanel() {
                     {fieldErrors.staff ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.staff}</span> : null}
                     <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Required for admin and school admin users.</span>
                   </div>
-                ) : null}
+                ) : (
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Applying For</label>
+                    <input value={effectiveStaffLabel} readOnly style={{ ...fieldStyle(), background: "#f7f7f7" }} />
+                    {canSelectStaff ? (
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Default is self-apply mode.</span>
+                    ) : (
+                      <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Auto-detected from your account.</span>
+                    )}
+                    {fieldErrors.staff ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.staff}</span> : null}
+                  </div>
+                )}
                 <div style={{ display: "grid", gap: 4 }}>
                   <label style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Application Date</label>
                   <input type="date" value={applyDate} readOnly style={{ ...fieldStyle(), background: "#f7f7f7" }} />
-                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Auto-filled with today's date</span>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Auto-filled with today&apos;s date</span>
                 </div>
                 
                 <div style={{ display: "grid", gap: 4 }}>
@@ -4314,9 +5483,9 @@ export function HrLeaveRequestsPanel() {
             </div>
 
             {/* Submit Section */}
-            <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button type="button" style={buttonStyle("#6b7280")} onClick={cancelEdit}>Reset</button>
-              <button type="submit" style={buttonStyle()} disabled={saving || loading}>{saving ? "Saving..." : editingId ? "Update" : "Submit Leave Request"}</button>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 12, display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" style={buttonStyle("#6b7280")} onClick={cancelEdit} disabled={saving || loading}>{editingId ? "Cancel edit" : "Reset"}</button>
+              <button type="submit" style={buttonStyle()} disabled={saving || loading}>{saving ? "Saving..." : editingId ? "Save changes" : "Submit Leave Request"}</button>
             </div>
           </form>
 
@@ -4333,14 +5502,14 @@ export function HrLeaveRequestsPanel() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Type</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>From</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>To</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Applied</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Status</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th></tr></thead>
             <tbody>
-              {filteredRows.length === 0 && (
+              {rows.length === 0 && (
                 <tr>
                   <td colSpan={6} style={{ padding: 12, textAlign: "center", color: "var(--text-muted)" }}>
                     {search ? "No leave requests match your search." : "No leave requests yet."}
                   </td>
                 </tr>
               )}
-              {filteredRows.map((row) => {
+              {rows.map((row) => {
                 const leaveType = leaveTypes.find((item) => item.id === row.leave_type);
                 return (
                   <tr key={row.id}>
@@ -4376,6 +5545,40 @@ export function HrLeaveRequestsPanel() {
               })}
             </tbody>
           </table>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, gap: 10, flexWrap: "wrap" }}>
+            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              Showing {rows.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalRows)} of {totalRows}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <select
+                aria-label="Items per page"
+                value={String(pageSize)}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                style={{ ...fieldStyle(), width: 110, height: 34 }}
+              >
+                <option value="10">10 / page</option>
+                <option value="25">25 / page</option>
+                <option value="50">50 / page</option>
+                <option value="100">100 / page</option>
+              </select>
+              <button type="button" style={buttonStyle("#334155")} disabled={currentPage <= 1 || loading} onClick={() => void load(currentPage - 1)}>Previous</button>
+              {buildPageButtons(currentPage, totalPages).map((page) => (
+                <button
+                  key={page}
+                  type="button"
+                  style={buttonStyle(page === currentPage ? "var(--primary)" : "#64748b")}
+                  disabled={loading}
+                  onClick={() => void load(page)}
+                >
+                  {page}
+                </button>
+              ))}
+              <button type="button" style={buttonStyle("#334155")} disabled={currentPage >= totalPages || loading} onClick={() => void load(currentPage + 1)}>Next</button>
+            </div>
+          </div>
         </div>
       </div></section>
     </div>
@@ -4385,66 +5588,196 @@ export function HrLeaveRequestsPanel() {
 export function HrPayrollPanel() {
   const [rows, setRows] = useState<PayrollRecord[]>([]);
   const [staffRows, setStaffRows] = useState<Staff[]>([]);
+  const [departmentRows, setDepartmentRows] = useState<Department[]>([]);
+  const [designationRows, setDesignationRows] = useState<Designation[]>([]);
   const [summary, setSummary] = useState<PayrollSummary | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [totalRows, setTotalRows] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   const [staffId, setStaffId] = useState("");
   const [month, setMonth] = useState(String(new Date().getMonth() + 1));
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [basicSalary, setBasicSalary] = useState("0.00");
   const [allowance, setAllowance] = useState("0.00");
+  const [allowanceItems, setAllowanceItems] = useState<PayrollComponentItem[]>([{ label: "", amount: "0.00" }]);
+  const [defaultAllowanceItems, setDefaultAllowanceItems] = useState<PayrollComponentItem[]>([{ label: "", amount: "0.00" }]);
   const [deduction, setDeduction] = useState("0.00");
+  const [deductionItems, setDeductionItems] = useState<PayrollComponentItem[]>([{ label: "", amount: "0.00" }]);
+  const [defaultDeductionItems, setDefaultDeductionItems] = useState<PayrollComponentItem[]>([{ label: "", amount: "0.00" }]);
   const [statusFilter, setStatusFilter] = useState<"" | "draft" | "processed" | "paid">("");
   const [searchStaffId, setSearchStaffId] = useState("");
   const [searchMonth, setSearchMonth] = useState("");
   const [searchYear, setSearchYear] = useState("");
+  const [bulkMonth, setBulkMonth] = useState(String(new Date().getMonth() + 1));
+  const [bulkYear, setBulkYear] = useState(String(new Date().getFullYear()));
+  const [bulkAllowance, setBulkAllowance] = useState("0.00");
+  const [bulkDeduction, setBulkDeduction] = useState("0.00");
+  const [bulkTargetScope, setBulkTargetScope] = useState<"all" | "selected">("all");
+  const [bulkSelectedStaffIds, setBulkSelectedStaffIds] = useState<string[]>([]);
+  const [activePayrollTab, setActivePayrollTab] = useState<"single" | "bulk" | "tracking" | "settings">("single");
+  const [bulkOverwriteExisting, setBulkOverwriteExisting] = useState(false);
+  const [bulkRunning, setBulkRunning] = useState(false);
+  const [bulkResult, setBulkResult] = useState<BulkPayrollResponse | null>(null);
+  const [bulkFixNote, setBulkFixNote] = useState("");
+  const [bulkDepartmentFilter, setBulkDepartmentFilter] = useState("");
+  const [bulkDesignationFilter, setBulkDesignationFilter] = useState("");
+  const [bulkStaffSearch, setBulkStaffSearch] = useState("");
+  const [payrollPreview, setPayrollPreview] = useState<PayrollRecord | null>(null);
+  const [savingPayrollSettings, setSavingPayrollSettings] = useState(false);
+  const [payslipSchoolName, setPayslipSchoolName] = useState("Eskoolia School");
+  const [payslipSchoolUrl, setPayslipSchoolUrl] = useState("");
+  const [payslipLogoUrl, setPayslipLogoUrl] = useState("");
+  const [payslipSignatureUrl, setPayslipSignatureUrl] = useState("");
+  const payrollSettingsLastSavedRef = useRef("");
+  const payrollSettingsHydratedRef = useRef(false);
+  const payrollSettingsAutoSaveTimerRef = useRef<number | null>(null);
 
-  const load = async (overrides?: Partial<{ statusFilter: string; searchStaffId: string; searchMonth: string; searchYear: string }>) => {
+  const formatCurrency = (value: string | number) => {
+    const num = Number(value || 0);
+    if (!Number.isFinite(num)) return "0.00";
+    return num.toFixed(2);
+  };
+
+  const componentTotal = (items: PayrollComponentItem[]) => {
+    return items.reduce((sum, item) => {
+      const amount = Number(item.amount || "0");
+      return sum + (Number.isFinite(amount) ? amount : 0);
+    }, 0);
+  };
+
+  const singleAllowanceTotal = useMemo(() => componentTotal(allowanceItems), [allowanceItems]);
+  const singleDeductionTotal = useMemo(() => componentTotal(deductionItems), [deductionItems]);
+
+  const payrollNetSalary = useMemo(() => {
+    const basic = Number(basicSalary || "0");
+    const allow = Number(allowance || "0");
+    const deduct = Number(deduction || "0");
+    if (!Number.isFinite(basic) || !Number.isFinite(allow) || !Number.isFinite(deduct)) return 0;
+    return basic + allow - deduct;
+  }, [basicSalary, allowance, deduction]);
+
+  const payrollNetSalaryText = payrollNetSalary < 0 ? "0.00" : payrollNetSalary.toFixed(2);
+
+  useEffect(() => {
+    const nextAllowance = singleAllowanceTotal.toFixed(2);
+    const nextDeduction = singleDeductionTotal.toFixed(2);
+    if (allowance !== nextAllowance) setAllowance(nextAllowance);
+    if (deduction !== nextDeduction) setDeduction(nextDeduction);
+  }, [singleAllowanceTotal, singleDeductionTotal, allowance, deduction]);
+
+  const bulkFilteredStaff = useMemo(() => {
+    const query = bulkStaffSearch.trim().toLowerCase();
+    return staffRows.filter((item) => {
+      if (bulkDepartmentFilter && String(item.department ?? "") !== bulkDepartmentFilter) return false;
+      if (bulkDesignationFilter && String(item.designation ?? "") !== bulkDesignationFilter) return false;
+      if (!query) return true;
+      const fullName = `${item.first_name} ${item.last_name}`.toLowerCase();
+      return fullName.includes(query) || item.staff_no.toLowerCase().includes(query);
+    });
+  }, [staffRows, bulkDepartmentFilter, bulkDesignationFilter, bulkStaffSearch]);
+
+  const bulkTargetStaff = useMemo(() => {
+    if (bulkTargetScope === "all") return staffRows;
+    const selectedSet = new Set(bulkSelectedStaffIds);
+    return staffRows.filter((item) => selectedSet.has(String(item.id)));
+  }, [bulkTargetScope, staffRows, bulkSelectedStaffIds]);
+
+  const bulkPreviewRows = useMemo(() => {
+    const commonAllowance = Number(bulkAllowance || "0");
+    const commonDeduction = Number(bulkDeduction || "0");
+    const safeAllowance = Number.isFinite(commonAllowance) ? commonAllowance : 0;
+    const safeDeduction = Number.isFinite(commonDeduction) ? commonDeduction : 0;
+    return bulkTargetStaff.map((staff) => {
+      const basic = Number(staff.basic_salary || "0");
+      const safeBasic = Number.isFinite(basic) ? basic : 0;
+      const net = safeBasic + safeAllowance - safeDeduction;
+      return {
+        id: staff.id,
+        staffNo: staff.staff_no,
+        name: `${staff.first_name} ${staff.last_name}`.trim(),
+        basic: safeBasic,
+        allowance: safeAllowance,
+        deduction: safeDeduction,
+        net,
+        isInvalid: net < 0,
+      };
+    });
+  }, [bulkTargetStaff, bulkAllowance, bulkDeduction]);
+
+  const bulkInvalidPreviewCount = useMemo(() => bulkPreviewRows.filter((row) => row.isInvalid).length, [bulkPreviewRows]);
+  const bulkValidPreviewCount = bulkPreviewRows.length - bulkInvalidPreviewCount;
+  const bulkPreviewNetTotal = useMemo(() => bulkPreviewRows.reduce((sum, row) => sum + row.net, 0), [bulkPreviewRows]);
+
+  const load = async (page = 1, overrides?: Partial<{ statusFilter: string; searchStaffId: string; searchMonth: string; searchYear: string }>) => {
     try {
+      setLoading(true);
       setError("");
+      setSuccess("");
       const effectiveStatus = overrides?.statusFilter ?? statusFilter;
       const effectiveStaff = overrides?.searchStaffId ?? searchStaffId;
       const effectiveMonth = overrides?.searchMonth ?? searchMonth;
       const effectiveYear = overrides?.searchYear ?? searchYear;
 
       const params = new URLSearchParams();
+      params.set("page", String(page));
+      params.set("page_size", String(pageSize));
+      params.set("ordering", "-created_at");
       if (effectiveStatus) params.set("status", effectiveStatus);
       if (effectiveStaff) params.set("staff", effectiveStaff);
       if (effectiveMonth) params.set("payroll_month", effectiveMonth);
       if (effectiveYear) params.set("payroll_year", effectiveYear);
       const suffix = params.toString() ? `?${params.toString()}` : "";
 
-      const [payrollData, staffData, summaryData] = await Promise.all([
+      const [payrollData, staffData, summaryData, departmentsData, designationsData, payrollSettingsData] = await Promise.all([
         apiGet<ApiList<PayrollRecord>>(`/api/v1/hr/payroll/${suffix}`),
-        apiGet<ApiList<Staff>>("/api/v1/hr/staff/?status=active"),
+        fetchAllPages<Staff>("/api/v1/hr/staff/?status=active&page_size=100"),
         apiGet<PayrollSummary>(`/api/v1/hr/payroll/summary/${suffix}`),
+        fetchAllPages<Department>("/api/v1/hr/departments/?is_active=true&page_size=100"),
+        fetchAllPages<Designation>("/api/v1/hr/designations/?is_active=true&page_size=100"),
+        apiGet<PayrollSettings>("/api/v1/hr/payroll/settings/"),
       ]);
-      const loadedStaffRows = listData(staffData);
-      const loadedRows = listData(payrollData);
-      loadedRows.sort((a, b) => {
-        if (a.payroll_year !== b.payroll_year) return a.payroll_year - b.payroll_year;
-        if (a.payroll_month !== b.payroll_month) return a.payroll_month - b.payroll_month;
-        const staffA = loadedStaffRows.find((item) => item.id === a.staff);
-        const staffB = loadedStaffRows.find((item) => item.id === b.staff);
-        const nameA = `${staffA?.first_name || ""} ${staffA?.last_name || ""}`.trim();
-        const nameB = `${staffB?.first_name || ""} ${staffB?.last_name || ""}`.trim();
-        return nameA.localeCompare(nameB, undefined, { sensitivity: "base", numeric: true });
-      });
-      setRows(loadedRows);
-      setStaffRows(loadedStaffRows);
+      setRows(listData(payrollData));
+      const meta = listPaginationMeta(payrollData, pageSize);
+      setCurrentPage(page);
+      setTotalRows(meta.count);
+      setTotalPages(meta.totalPages);
+      setStaffRows(staffData);
+      setDepartmentRows(departmentsData);
+      setDesignationRows(designationsData);
       setSummary(summaryData);
+      setPayslipSchoolName(payrollSettingsData.school_name || "Eskoolia School");
+      setPayslipSchoolUrl(payrollSettingsData.school_url || "");
+      setPayslipLogoUrl(payrollSettingsData.logo_url || "");
+      setPayslipSignatureUrl(payrollSettingsData.signature_url || "");
+      setDefaultAllowanceItems(cloneComponentItems(payrollSettingsData.default_allowance_items || []));
+      setDefaultDeductionItems(cloneComponentItems(payrollSettingsData.default_deduction_items || []));
+      payrollSettingsLastSavedRef.current = buildPayrollSettingsSnapshot({
+        school_name: payrollSettingsData.school_name || "Eskoolia School",
+        school_url: payrollSettingsData.school_url || "",
+        logo_url: payrollSettingsData.logo_url || "",
+        signature_url: payrollSettingsData.signature_url || "",
+        default_allowance_items: cloneComponentItems(payrollSettingsData.default_allowance_items || []),
+        default_deduction_items: cloneComponentItems(payrollSettingsData.default_deduction_items || []),
+      });
+      payrollSettingsHydratedRef.current = true;
     } catch {
       setError("Unable to load payroll records.");
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
-    void load();
-  }, []);
+    void load(1);
+  }, [pageSize]);
 
   const runSearch = async () => {
-    await load();
+    await load(1);
   };
 
   const resetSearch = async () => {
@@ -4453,13 +5786,205 @@ export function HrPayrollPanel() {
     setSearchStaffId(cleared.searchStaffId);
     setSearchMonth(cleared.searchMonth);
     setSearchYear(cleared.searchYear);
-    await load(cleared);
+    await load(1, cleared);
   };
+
+  const normalizeComponentItems = (items: PayrollComponentItem[]) => {
+    return items
+      .map((item) => ({
+        label: (item.label || "").trim(),
+        amount: formatCurrency(item.amount || "0"),
+      }))
+      .filter((item) => item.label || Number(item.amount) !== 0);
+  };
+
+  const cloneComponentItems = (items: PayrollComponentItem[]) => {
+    if (!Array.isArray(items) || items.length === 0) return [{ label: "", amount: "0.00" }];
+    return items.map((item) => ({
+      label: String(item.label || ""),
+      amount: formatCurrency(item.amount || "0"),
+    }));
+  };
+
+  const buildPayrollSettingsPayload = () => ({
+    school_name: payslipSchoolName.trim(),
+    school_url: payslipSchoolUrl.trim(),
+    logo_url: payslipLogoUrl.trim(),
+    signature_url: payslipSignatureUrl.trim(),
+    default_allowance_items: normalizeComponentItems(defaultAllowanceItems),
+    default_deduction_items: normalizeComponentItems(defaultDeductionItems),
+  });
+
+  const buildPayrollSettingsSnapshot = (payload: ReturnType<typeof buildPayrollSettingsPayload>) => JSON.stringify(payload);
+
+  const parseStaffDefaultItems = (value: unknown): PayrollComponentItem[] => {
+    if (!Array.isArray(value)) return [];
+    const normalized = value
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const row = entry as Record<string, unknown>;
+        const label = String(row.label ?? row.name ?? row.title ?? "").trim();
+        const amountSource = row.amount ?? row.value ?? "0";
+        const amount = formatCurrency(typeof amountSource === "number" ? amountSource : String(amountSource));
+        if (!label && Number(amount) === 0) return null;
+        return { label, amount };
+      })
+      .filter((item): item is PayrollComponentItem => Boolean(item));
+    return normalized;
+  };
+
+  const applyStaffPayrollDefaults = (nextStaffId: string) => {
+    setStaffId(nextStaffId);
+    const selected = staffRows.find((item) => String(item.id) === nextStaffId);
+    if (!selected) {
+      setBasicSalary("0.00");
+      setAllowanceItems(cloneComponentItems(defaultAllowanceItems));
+      setDeductionItems(cloneComponentItems(defaultDeductionItems));
+      return;
+    }
+
+    setBasicSalary(formatCurrency(selected.basic_salary || "0"));
+
+    const custom = selected.custom_field;
+    const payrollDefaults =
+      custom && typeof custom === "object"
+        ? (custom as { payroll_defaults?: unknown }).payroll_defaults
+        : undefined;
+
+    if (!payrollDefaults || typeof payrollDefaults !== "object") {
+      setAllowanceItems(cloneComponentItems(defaultAllowanceItems));
+      setDeductionItems(cloneComponentItems(defaultDeductionItems));
+      return;
+    }
+
+    const defaults = payrollDefaults as { allowance_items?: unknown; deduction_items?: unknown };
+    const staffAllowanceDefaults = parseStaffDefaultItems(defaults.allowance_items);
+    const staffDeductionDefaults = parseStaffDefaultItems(defaults.deduction_items);
+    setAllowanceItems(staffAllowanceDefaults.length > 0 ? staffAllowanceDefaults : cloneComponentItems(defaultAllowanceItems));
+    setDeductionItems(staffDeductionDefaults.length > 0 ? staffDeductionDefaults : cloneComponentItems(defaultDeductionItems));
+  };
+
+  const applyGlobalPayrollDefaultsToForm = () => {
+    setAllowanceItems(cloneComponentItems(defaultAllowanceItems));
+    setDeductionItems(cloneComponentItems(defaultDeductionItems));
+  };
+
+  const savePayrollSettings = async () => {
+    try {
+      setSavingPayrollSettings(true);
+      setError("");
+      setSuccess("");
+
+      const payload = buildPayrollSettingsPayload();
+
+      const updated = await apiPatch<PayrollSettings>("/api/v1/hr/payroll/settings/", payload);
+      setDefaultAllowanceItems(cloneComponentItems(updated.default_allowance_items || []));
+      setDefaultDeductionItems(cloneComponentItems(updated.default_deduction_items || []));
+      payrollSettingsLastSavedRef.current = buildPayrollSettingsSnapshot({
+        school_name: updated.school_name || payload.school_name,
+        school_url: updated.school_url || payload.school_url,
+        logo_url: updated.logo_url || payload.logo_url,
+        signature_url: updated.signature_url || payload.signature_url,
+        default_allowance_items: cloneComponentItems(updated.default_allowance_items || payload.default_allowance_items),
+        default_deduction_items: cloneComponentItems(updated.default_deduction_items || payload.default_deduction_items),
+      });
+      setSuccess("Payroll settings saved successfully.");
+    } catch {
+      setError("Unable to save payroll settings.");
+    } finally {
+      setSavingPayrollSettings(false);
+    }
+  };
+
+  const updateAllowanceItem = (index: number, key: "label" | "amount", value: string) => {
+    setDefaultAllowanceItems((prev) => prev.map((item, idx) => (idx === index ? { ...item, [key]: value } : item)));
+  };
+
+  const addAllowanceItem = () => {
+    setDefaultAllowanceItems((prev) => [...prev, { label: "", amount: "0.00" }]);
+  };
+
+  const removeAllowanceItem = (index: number) => {
+    setDefaultAllowanceItems((prev) => {
+      const next = prev.filter((_item, idx) => idx !== index);
+      return next.length > 0 ? next : [{ label: "", amount: "0.00" }];
+    });
+  };
+
+  const updateDeductionItem = (index: number, key: "label" | "amount", value: string) => {
+    setDefaultDeductionItems((prev) => prev.map((item, idx) => (idx === index ? { ...item, [key]: value } : item)));
+  };
+
+  const addDeductionItem = () => {
+    setDefaultDeductionItems((prev) => [...prev, { label: "", amount: "0.00" }]);
+  };
+
+  const removeDeductionItem = (index: number) => {
+    setDefaultDeductionItems((prev) => {
+      const next = prev.filter((_item, idx) => idx !== index);
+      return next.length > 0 ? next : [{ label: "", amount: "0.00" }];
+    });
+  };
+
+  useEffect(() => {
+    if (!payrollSettingsHydratedRef.current) return;
+    if (activePayrollTab !== "settings") return;
+
+    const payload = buildPayrollSettingsPayload();
+    const nextSnapshot = buildPayrollSettingsSnapshot(payload);
+    if (nextSnapshot === payrollSettingsLastSavedRef.current) return;
+
+    if (payrollSettingsAutoSaveTimerRef.current) {
+      window.clearTimeout(payrollSettingsAutoSaveTimerRef.current);
+    }
+
+    payrollSettingsAutoSaveTimerRef.current = window.setTimeout(() => {
+      void (async () => {
+        try {
+          setSavingPayrollSettings(true);
+          const updated = await apiPatch<PayrollSettings>("/api/v1/hr/payroll/settings/", payload);
+          payrollSettingsLastSavedRef.current = buildPayrollSettingsSnapshot({
+            school_name: updated.school_name || payload.school_name,
+            school_url: updated.school_url || payload.school_url,
+            logo_url: updated.logo_url || payload.logo_url,
+            signature_url: updated.signature_url || payload.signature_url,
+            default_allowance_items: cloneComponentItems(updated.default_allowance_items || payload.default_allowance_items),
+            default_deduction_items: cloneComponentItems(updated.default_deduction_items || payload.default_deduction_items),
+          });
+          setSuccess("Payroll settings saved automatically.");
+        } catch {
+          setError("Unable to auto-save payroll settings.");
+        } finally {
+          setSavingPayrollSettings(false);
+        }
+      })();
+    }, 700);
+
+    return () => {
+      if (payrollSettingsAutoSaveTimerRef.current) {
+        window.clearTimeout(payrollSettingsAutoSaveTimerRef.current);
+      }
+    };
+  }, [
+    activePayrollTab,
+    payslipSchoolName,
+    payslipSchoolUrl,
+    payslipLogoUrl,
+    payslipSignatureUrl,
+    defaultAllowanceItems,
+    defaultDeductionItems,
+  ]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!staffId || !month || !year) {
       setError("Staff, month and year are required.");
+      setSuccess("");
+      return;
+    }
+    if (payrollNetSalary < 0) {
+      setError("Deduction cannot be greater than basic salary plus allowance.");
+      setSuccess("");
       return;
     }
     try {
@@ -4471,16 +5996,21 @@ export function HrPayrollPanel() {
         payroll_year: Number(year),
         basic_salary: basicSalary || "0.00",
         allowance: allowance || "0.00",
+        allowance_items: normalizeComponentItems(allowanceItems),
         deduction: deduction || "0.00",
+        deduction_items: normalizeComponentItems(deductionItems),
       });
       setStaffId("");
       setBasicSalary("0.00");
       setAllowance("0.00");
+      setAllowanceItems(cloneComponentItems(defaultAllowanceItems));
       setDeduction("0.00");
-      setSuccess("Payroll record saved successfully.");
-      await load();
+      setDeductionItems(cloneComponentItems(defaultDeductionItems));
+      setSuccess("Single payroll record created successfully.");
+      await load(currentPage);
     } catch {
       setError("Unable to save payroll record.");
+      setSuccess("");
     }
   };
 
@@ -4489,11 +6019,362 @@ export function HrPayrollPanel() {
       setError("");
       setSuccess("");
       await apiPost(`/api/v1/hr/payroll/${id}/mark-paid/`, {});
-      setSuccess("Payroll marked as paid.");
-      await load();
-    } catch {
-      setError("Unable to mark payroll as paid.");
+      setSuccess("Payroll marked as paid successfully.");
+      await load(currentPage);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to mark payroll as paid.";
+      setError(message || "Unable to mark payroll as paid.");
     }
+  };
+
+  const markApproved = async (id: number) => {
+    try {
+      setError("");
+      setSuccess("");
+      await apiPost(`/api/v1/hr/payroll/${id}/mark-processed/`, {});
+      setSuccess("Payroll approved successfully.");
+      await load(currentPage);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to approve payroll.";
+      setError(message || "Unable to approve payroll.");
+    }
+  };
+
+  const generateBulkPayroll = async () => {
+    if (!bulkMonth || !bulkYear) {
+      setError("Bulk payroll month and year are required.");
+      return;
+    }
+
+    if (bulkTargetScope === "selected" && bulkTargetStaff.length === 0) {
+      setError("Please select at least one staff member for selected-scope bulk generation.");
+      return;
+    }
+
+    const targetText = bulkTargetScope === "all" ? "all active staff" : `${bulkTargetStaff.length} selected staff`;
+    const proceed = window.confirm(`Generate payroll for ${targetText} for this period?`);
+    if (!proceed) return;
+
+    try {
+      setBulkRunning(true);
+      setError("");
+      setBulkResult(null);
+      const result = await apiPost<BulkPayrollResponse>("/api/v1/hr/payroll/bulk-generate/", {
+        payroll_month: Number(bulkMonth),
+        payroll_year: Number(bulkYear),
+        allowance: bulkAllowance || "0.00",
+        deduction: bulkDeduction || "0.00",
+        overwrite_existing: bulkOverwriteExisting,
+        staff_ids: bulkTargetScope === "selected" ? bulkTargetStaff.map((item) => item.id) : undefined,
+      });
+      setBulkResult(result);
+      setSearchMonth(String(bulkMonth));
+      setSearchYear(String(bulkYear));
+      await load(1, {
+        searchMonth: String(bulkMonth),
+        searchYear: String(bulkYear),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to generate bulk payroll.";
+      setError(message || "Unable to generate bulk payroll.");
+    } finally {
+      setBulkRunning(false);
+    }
+  };
+
+  const selectAllVisibleBulkStaff = () => {
+    const merged = new Set<string>(bulkSelectedStaffIds);
+    bulkFilteredStaff.forEach((item) => merged.add(String(item.id)));
+    setBulkSelectedStaffIds(Array.from(merged));
+  };
+
+  const clearBulkSelection = () => {
+    setBulkSelectedStaffIds([]);
+  };
+
+  const autoFixBulkInvalidRows = () => {
+    if (bulkPreviewRows.length === 0) {
+      setError("No preview rows available for auto-fix.");
+      return;
+    }
+    if (bulkInvalidPreviewCount === 0) {
+      setBulkFixNote("No invalid rows found. No changes were needed.");
+      return;
+    }
+
+    const minAllowedDeduction = bulkPreviewRows.reduce((minValue, row) => {
+      return Math.min(minValue, row.basic + row.allowance);
+    }, Number.POSITIVE_INFINITY);
+
+    const fixedDeduction = Math.max(0, minAllowedDeduction);
+    setBulkDeduction(fixedDeduction.toFixed(2));
+    setBulkFixNote(`Common deduction auto-adjusted to ${fixedDeduction.toFixed(2)} so all preview rows remain non-negative.`);
+    setError("");
+  };
+
+  const exportBulkPreviewCsv = () => {
+    if (bulkPreviewRows.length === 0) {
+      setError("No preview rows available to export.");
+      return;
+    }
+
+    const exportRows = bulkPreviewRows.map((row) => ({
+      "Staff Name": row.name,
+      "Staff No": row.staffNo,
+      "Payroll Month": bulkMonth,
+      "Payroll Year": bulkYear,
+      Basic: row.basic.toFixed(2),
+      Allowance: row.allowance.toFixed(2),
+      Deduction: row.deduction.toFixed(2),
+      Net: row.net.toFixed(2),
+      Validity: row.isInvalid ? "Invalid (negative net)" : "Valid",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Bulk Payroll Preview");
+    const buffer = XLSX.write(workbook, { bookType: "csv", type: "array" });
+    const blob = new Blob([buffer], { type: "text/csv;charset=utf-8;" });
+    const filename = `bulk-payroll-preview-${bulkYear}-${String(bulkMonth).padStart(2, "0")}.csv`;
+    downloadBlobFile(filename, blob);
+  };
+
+  const exportBulkInvalidRowsCsv = () => {
+    const invalidRows = bulkPreviewRows.filter((row) => row.isInvalid);
+    if (invalidRows.length === 0) {
+      setError("No invalid preview rows available to export.");
+      return;
+    }
+
+    const exportRows = invalidRows.map((row) => ({
+      "Staff Name": row.name,
+      "Staff No": row.staffNo,
+      "Payroll Month": bulkMonth,
+      "Payroll Year": bulkYear,
+      Basic: row.basic.toFixed(2),
+      Allowance: row.allowance.toFixed(2),
+      Deduction: row.deduction.toFixed(2),
+      Net: row.net.toFixed(2),
+      Issue: "Negative net salary",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Invalid Payroll Rows");
+    const buffer = XLSX.write(workbook, { bookType: "csv", type: "array" });
+    const blob = new Blob([buffer], { type: "text/csv;charset=utf-8;" });
+    const filename = `bulk-payroll-invalid-${bulkYear}-${String(bulkMonth).padStart(2, "0")}.csv`;
+    downloadBlobFile(filename, blob);
+  };
+
+  const previewPayrollTemplate = (row: PayrollRecord) => {
+    setPayrollPreview(row);
+  };
+
+  const downloadPayrollTemplate = (row: PayrollRecord) => {
+    const staff = staffRows.find((item) => item.id === row.staff);
+    const staffName = row.staff_name || (staff ? `${staff.first_name} ${staff.last_name}` : `Staff ${row.staff}`);
+    const staffNo = row.staff_no || staff?.staff_no || "";
+
+    const exportRows = [
+      { Field: "Staff Name", Value: staffName },
+      { Field: "Staff Number", Value: staffNo },
+      { Field: "Payroll Month", Value: String(row.payroll_month) },
+      { Field: "Payroll Year", Value: String(row.payroll_year) },
+      { Field: "Basic Salary", Value: formatCurrency(row.basic_salary) },
+      { Field: "Allowance", Value: formatCurrency(row.allowance) },
+      { Field: "Deduction", Value: formatCurrency(row.deduction) },
+      { Field: "Net Salary", Value: formatCurrency(row.net_salary) },
+      { Field: "Status", Value: row.status },
+      { Field: "Paid At", Value: row.paid_at || "-" },
+    ];
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Payroll Template");
+    const buffer = XLSX.write(workbook, { bookType: "csv", type: "array" });
+    const blob = new Blob([buffer], { type: "text/csv;charset=utf-8;" });
+    const safeStaff = (staffName || "staff").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase();
+    const filename = `payroll-template-${row.payroll_year}-${String(row.payroll_month).padStart(2, "0")}-${safeStaff || row.staff}.csv`;
+    downloadBlobFile(filename, blob);
+  };
+
+  const getComponentLines = (row: PayrollRecord, type: "allowance" | "deduction") => {
+    const raw = type === "allowance" ? row.allowance_items : row.deduction_items;
+    if (Array.isArray(raw) && raw.length > 0) {
+      return raw
+        .map((item) => ({
+          label: String(item.label || "Component").trim() || "Component",
+          amount: formatCurrency(item.amount || "0"),
+        }))
+        .filter((item) => item.label || Number(item.amount) !== 0);
+    }
+    return [{
+      label: type === "allowance" ? "Allowance" : "Deduction",
+      amount: formatCurrency(type === "allowance" ? row.allowance : row.deduction),
+    }];
+  };
+
+  const downloadPayrollPdf = async (row: PayrollRecord) => {
+    const { jsPDF } = await import("jspdf");
+    const doc = new jsPDF();
+    const staffName = row.staff_name || String(row.staff);
+    const staffNo = row.staff_no || "-";
+    const allowanceLines = getComponentLines(row, "allowance");
+    const deductionLines = getComponentLines(row, "deduction");
+    let y = 18;
+
+    doc.setFontSize(16);
+    doc.text(payslipSchoolName || "Payroll Payslip", 14, y);
+    y += 7;
+    doc.setFontSize(14);
+    doc.text("Payroll Payslip", 14, y);
+    y += 7;
+    doc.setFontSize(10);
+    doc.text(`Month/Year: ${row.payroll_month}/${row.payroll_year}`, 14, y);
+    doc.text(`Status: ${row.status}`, 150, y);
+    if (payslipSchoolUrl) {
+      y += 6;
+      doc.text(`Website: ${payslipSchoolUrl}`, 14, y);
+    }
+    y += 11;
+
+    doc.setFontSize(11);
+    doc.text(`Employee: ${staffName}`, 14, y);
+    y += 7;
+    doc.text(`Employee No: ${staffNo}`, 14, y);
+    y += 7;
+
+    doc.setDrawColor(209, 213, 219);
+    doc.rect(14, y, 182, 84);
+
+    let lineY = y + 10;
+    doc.text("Basic Salary", 20, lineY);
+    doc.text(formatCurrency(row.basic_salary), 175, lineY, { align: "right" });
+    lineY += 8;
+
+    allowanceLines.forEach((line) => {
+      doc.text(`Allowance - ${line.label}`, 20, lineY);
+      doc.text(line.amount, 175, lineY, { align: "right" });
+      lineY += 7;
+    });
+
+    deductionLines.forEach((line) => {
+      doc.text(`Deduction - ${line.label}`, 20, lineY);
+      doc.text(line.amount, 175, lineY, { align: "right" });
+      lineY += 7;
+    });
+
+    doc.setFontSize(12);
+    doc.setTextColor(37, 99, 235);
+    doc.text("Net Salary", 20, y + 75);
+    doc.text(formatCurrency(row.net_salary), 175, y + 75, { align: "right" });
+    doc.setTextColor(17, 24, 39);
+
+    doc.setFontSize(9);
+    doc.text(`Paid At: ${row.paid_at || "-"}`, 14, y + 92);
+    doc.text(`School URL: ${payslipSchoolUrl || "-"}`, 14, y + 98);
+    doc.text(`Logo URL: ${payslipLogoUrl || "-"}`, 14, y + 104);
+    doc.text(`Signature URL: ${payslipSignatureUrl || "-"}`, 14, y + 110);
+    doc.text("Generated by Eskoolia Payroll", 14, y + 116);
+
+    const safeStaff = (staffName || "staff").replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase();
+    doc.save(`payroll-payslip-${row.payroll_year}-${String(row.payroll_month).padStart(2, "0")}-${safeStaff || row.staff}.pdf`);
+  };
+
+  const printPayrollPayslip = (row: PayrollRecord) => {
+    const salaryBasic = formatCurrency(row.basic_salary);
+    const salaryNet = formatCurrency(row.net_salary);
+    const staffName = row.staff_name || String(row.staff);
+    const staffNo = row.staff_no || "-";
+    const allowanceLines = getComponentLines(row, "allowance");
+    const deductionLines = getComponentLines(row, "deduction");
+
+    const printWindow = window.open("", "_blank", "width=900,height=700");
+    if (!printWindow) {
+      setError("Popup blocked. Please allow popups to print payslip.");
+      return;
+    }
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Payslip ${row.payroll_month}/${row.payroll_year}</title>
+  <style>
+    body { font-family: Arial, sans-serif; color: #111827; margin: 24px; }
+    .card { border: 1px solid #d1d5db; border-radius: 10px; padding: 18px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .title { font-size: 22px; font-weight: 700; margin: 0; }
+    .sub { font-size: 12px; color: #6b7280; margin-top: 4px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+    .item { font-size: 13px; }
+    .label { color: #6b7280; margin-right: 6px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { border: 1px solid #d1d5db; padding: 8px; font-size: 13px; }
+    th { background: #f3f4f6; text-align: left; }
+    .amount { text-align: right; }
+    .net { font-weight: 700; background: #eef2ff; }
+    .footer { margin-top: 22px; display: flex; justify-content: space-between; font-size: 12px; color: #6b7280; }
+    @media print { body { margin: 10mm; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div>
+        <p class="title">${payslipSchoolName || "Payroll Payslip"}</p>
+        ${payslipSchoolUrl ? `<p class="sub">${payslipSchoolUrl}</p>` : ""}
+        <p class="sub">Month ${row.payroll_month} / ${row.payroll_year}</p>
+      </div>
+      <div class="item"><span class="label">Status:</span><strong style="text-transform: capitalize;">${row.status}</strong></div>
+    </div>
+
+    ${payslipLogoUrl ? `<div style="margin-bottom:12px;"><img src="${payslipLogoUrl}" alt="School Logo" style="max-height:72px;" /></div>` : ""}
+
+    <div class="grid">
+      <div class="item"><span class="label">Employee:</span><strong>${staffName}</strong></div>
+      <div class="item"><span class="label">Employee No:</span><strong>${staffNo}</strong></div>
+      <div class="item"><span class="label">Payroll Month:</span><strong>${row.payroll_month}</strong></div>
+      <div class="item"><span class="label">Payroll Year:</span><strong>${row.payroll_year}</strong></div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Component</th>
+          <th class="amount">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Basic Salary</td>
+          <td class="amount">${salaryBasic}</td>
+        </tr>
+        ${allowanceLines.map((line) => `<tr><td>Allowance - ${line.label}</td><td class="amount">${line.amount}</td></tr>`).join("")}
+        ${deductionLines.map((line) => `<tr><td>Deduction - ${line.label}</td><td class="amount">${line.amount}</td></tr>`).join("")}
+        <tr class="net">
+          <td>Net Salary</td>
+          <td class="amount">${salaryNet}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    ${payslipSignatureUrl ? `<div style="margin-top:18px;"><img src="${payslipSignatureUrl}" alt="Authorized Signature" style="max-height:54px;" /><div style="font-size:12px;color:#6b7280;">Authorized Signature</div></div>` : ""}
+
+    <div class="footer">
+      <span>Paid At: ${row.paid_at || "-"}</span>
+      <span>Generated by Eskoolia Payroll</span>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
   };
 
   return (
@@ -4501,86 +6382,710 @@ export function HrPayrollPanel() {
       {breadcrumb("Payroll")}
       <section className="admin-visitor-area up_st_admin_visitor"><div className="container-fluid p-0">
         <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
-          <h3 style={{ marginTop: 0, marginBottom: 12 }}>Add Payroll</h3>
-          <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "1fr 100px 100px 1fr 1fr 1fr auto", gap: 8 }}>
-            <select value={staffId} onChange={(e) => setStaffId(e.target.value)} style={fieldStyle()}>
-              <option value="">Staff</option>
-              {staffRows.map((item) => <option key={item.id} value={item.id}>{item.first_name} {item.last_name} ({item.staff_no})</option>)}
-            </select>
-            <input type="number" min="1" max="12" value={month} onChange={(e) => setMonth(e.target.value)} placeholder="Month" style={fieldStyle()} />
-            <input type="number" min="2000" max="2100" value={year} onChange={(e) => setYear(e.target.value)} placeholder="Year" style={fieldStyle()} />
-            <input type="number" min="0" step="0.01" value={basicSalary} onChange={(e) => setBasicSalary(e.target.value)} placeholder="Basic salary" style={fieldStyle()} />
-            <input type="number" min="0" step="0.01" value={allowance} onChange={(e) => setAllowance(e.target.value)} placeholder="Allowance" style={fieldStyle()} />
-            <input type="number" min="0" step="0.01" value={deduction} onChange={(e) => setDeduction(e.target.value)} placeholder="Deduction" style={fieldStyle()} />
-            <button type="submit" style={buttonStyle()}>Save</button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              style={buttonStyle(activePayrollTab === "single" ? "var(--primary)" : "#64748b")}
+              onClick={() => setActivePayrollTab("single")}
+            >
+              Single Entry
+            </button>
+            <button
+              type="button"
+              style={buttonStyle(activePayrollTab === "bulk" ? "var(--primary)" : "#64748b")}
+              onClick={() => setActivePayrollTab("bulk")}
+            >
+              Bulk Generation
+            </button>
+            <button
+              type="button"
+              style={buttonStyle(activePayrollTab === "settings" ? "var(--primary)" : "#64748b")}
+              onClick={() => setActivePayrollTab("settings")}
+            >
+              Payroll Settings
+            </button>
+            <button
+              type="button"
+              style={buttonStyle(activePayrollTab === "tracking" ? "var(--primary)" : "#64748b")}
+              onClick={() => setActivePayrollTab("tracking")}
+            >
+              Tracking and Records
+            </button>
+          </div>
+        </div>
+
+        {error ? (
+          <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
+            <p style={{ color: "var(--warning)", margin: 0 }}>{error}</p>
+          </div>
+        ) : null}
+        {success ? (
+          <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
+            <p style={{ color: "#16a34a", margin: 0 }}>{success}</p>
+          </div>
+        ) : null}
+
+        {activePayrollTab === "single" ? (
+        <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+            <div>
+              <h3 style={{ margin: 0 }}>Create Payroll Entry</h3>
+              <p style={{ margin: "6px 0 0 0", color: "var(--text-muted)", fontSize: 12 }}>
+                Add one month payroll for a staff member. Net salary is auto-calculated.
+              </p>
+            </div>
+            <div
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "6px 10px",
+                borderRadius: 999,
+                border: `1px solid ${payrollNetSalary < 0 ? "#fecaca" : "#c7d2fe"}`,
+                background: payrollNetSalary < 0 ? "#fef2f2" : "#eef2ff",
+                color: payrollNetSalary < 0 ? "#b91c1c" : "#4338ca",
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              Net Preview: {payrollNetSalaryText}
+            </div>
+          </div>
+
+          <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, alignItems: "end" }}>
+            <div>
+              <label htmlFor="payroll-staff" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Staff</label>
+              <select id="payroll-staff" value={staffId} onChange={(e) => applyStaffPayrollDefaults(e.target.value)} style={fieldStyle()}>
+                <option value="">Select Staff</option>
+                {staffRows.map((item) => <option key={item.id} value={item.id}>{item.first_name} {item.last_name} ({item.staff_no})</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="payroll-month" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Month</label>
+              <input id="payroll-month" type="number" min="1" max="12" value={month} onChange={(e) => setMonth(e.target.value)} placeholder="Month" style={fieldStyle()} />
+            </div>
+
+            <div>
+              <label htmlFor="payroll-year" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Year</label>
+              <input id="payroll-year" type="number" min="2000" max="2100" value={year} onChange={(e) => setYear(e.target.value)} placeholder="Year" style={fieldStyle()} />
+            </div>
+
+            <div>
+              <label htmlFor="payroll-basic" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Basic Salary</label>
+              <input id="payroll-basic" type="number" min="0" step="0.01" value={basicSalary} onChange={(e) => setBasicSalary(e.target.value)} placeholder="Basic Salary" style={fieldStyle()} />
+            </div>
+
+            <div>
+              <label htmlFor="payroll-allowance" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Total Allowance</label>
+              <input id="payroll-allowance" type="number" min="0" step="0.01" value={allowance} readOnly style={{ ...fieldStyle(), background: "#f8fafc" }} />
+            </div>
+
+            <div>
+              <label htmlFor="payroll-deduction" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Total Deduction</label>
+              <input id="payroll-deduction" type="number" min="0" step="0.01" value={deduction} readOnly style={{ ...fieldStyle(), background: "#f8fafc", borderColor: payrollNetSalary < 0 ? "#dc2626" : "var(--line)" }} />
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "transparent", marginBottom: 4 }} aria-hidden="true">Action</label>
+              <button type="submit" style={{ ...buttonStyle(), width: "100%", minWidth: 130 }} disabled={loading}>Save Payroll</button>
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "transparent", marginBottom: 4 }} aria-hidden="true">Action</label>
+              <button type="button" style={{ ...buttonStyle("#2563eb"), width: "100%", minWidth: 130 }} onClick={applyGlobalPayrollDefaultsToForm}>
+                Use Payroll Defaults
+              </button>
+            </div>
           </form>
-          {error && <p style={{ color: "var(--warning)", marginTop: 8 }}>{error}</p>}
-          {success && <p style={{ color: "#16a34a", marginTop: 8 }}>{success}</p>}
+
+          <p style={{ margin: "10px 0 0 0", color: "var(--text-muted)", fontSize: 12 }}>
+            Allowance and deduction defaults are managed in Payroll Settings tab.
+          </p>
+
+          {payrollNetSalary < 0 ? <p style={{ color: "#dc2626", marginTop: 8, marginBottom: 0, fontSize: 12 }}>Deduction cannot be greater than basic salary plus allowance.</p> : null}
+        </div>
+        ) : null}
+
+        {activePayrollTab === "bulk" ? (
+        <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+            <h3 style={{ margin: 0 }}>Bulk Payroll Generation</h3>
+            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Generate payroll for all active staff in one action</div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, alignItems: "end" }}>
+            <div>
+              <label htmlFor="bulk-payroll-scope" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Target Scope</label>
+              <select
+                id="bulk-payroll-scope"
+                value={bulkTargetScope}
+                onChange={(e) => {
+                  const nextScope = e.target.value as "all" | "selected";
+                  setBulkTargetScope(nextScope);
+                  if (nextScope === "all") {
+                    setBulkSelectedStaffIds([]);
+                  }
+                }}
+                style={fieldStyle()}
+              >
+                <option value="all">All Active Staff</option>
+                <option value="selected">Selected Staff Only</option>
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="bulk-payroll-month" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Month</label>
+              <input id="bulk-payroll-month" type="number" min="1" max="12" value={bulkMonth} onChange={(e) => setBulkMonth(e.target.value)} style={fieldStyle()} />
+            </div>
+
+            <div>
+              <label htmlFor="bulk-payroll-year" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Year</label>
+              <input id="bulk-payroll-year" type="number" min="2000" max="2100" value={bulkYear} onChange={(e) => setBulkYear(e.target.value)} style={fieldStyle()} />
+            </div>
+
+            <div>
+              <label htmlFor="bulk-payroll-allowance" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Common Allowance</label>
+              <input id="bulk-payroll-allowance" type="number" min="0" step="0.01" value={bulkAllowance} onChange={(e) => setBulkAllowance(e.target.value)} style={fieldStyle()} />
+            </div>
+
+            <div>
+              <label htmlFor="bulk-payroll-deduction" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Common Deduction</label>
+              <input id="bulk-payroll-deduction" type="number" min="0" step="0.01" value={bulkDeduction} onChange={(e) => setBulkDeduction(e.target.value)} style={fieldStyle()} />
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 40 }}>
+              <input
+                id="bulk-payroll-overwrite"
+                type="checkbox"
+                checked={bulkOverwriteExisting}
+                onChange={(e) => setBulkOverwriteExisting(e.target.checked)}
+              />
+              <label htmlFor="bulk-payroll-overwrite" style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>
+                Overwrite existing (except paid)
+              </label>
+            </div>
+
+            <div>
+              <button
+                type="button"
+                style={{ ...buttonStyle("#0f766e"), width: "100%", minWidth: 160 }}
+                disabled={bulkRunning || loading}
+                onClick={() => void generateBulkPayroll()}
+              >
+                {bulkRunning ? "Generating..." : "Generate Bulk Payroll"}
+              </button>
+            </div>
+          </div>
+
+          {bulkTargetScope === "selected" ? (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 8 }}>
+                <div>
+                  <label htmlFor="bulk-filter-department" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Department</label>
+                  <select
+                    id="bulk-filter-department"
+                    value={bulkDepartmentFilter}
+                    onChange={(e) => {
+                      setBulkDepartmentFilter(e.target.value);
+                      setBulkDesignationFilter("");
+                    }}
+                    style={fieldStyle()}
+                  >
+                    <option value="">All Departments</option>
+                    {departmentRows.map((item) => (
+                      <option key={item.id} value={item.id}>{item.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="bulk-filter-designation" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Designation</label>
+                  <select
+                    id="bulk-filter-designation"
+                    value={bulkDesignationFilter}
+                    onChange={(e) => setBulkDesignationFilter(e.target.value)}
+                    style={fieldStyle()}
+                  >
+                    <option value="">All Designations</option>
+                    {designationRows
+                      .filter((item) => !bulkDepartmentFilter || String(item.department) === bulkDepartmentFilter)
+                      .map((item) => (
+                        <option key={item.id} value={item.id}>{item.name}</option>
+                      ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label htmlFor="bulk-filter-search" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Search Staff</label>
+                  <input
+                    id="bulk-filter-search"
+                    type="text"
+                    value={bulkStaffSearch}
+                    onChange={(e) => setBulkStaffSearch(e.target.value)}
+                    placeholder="Name or staff no"
+                    style={fieldStyle()}
+                  />
+                </div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 8, flexWrap: "wrap" }}>
+                <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                  Visible staff: {bulkFilteredStaff.length} | Selected: {bulkSelectedStaffIds.length}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button type="button" style={buttonStyle("#2563eb")} onClick={selectAllVisibleBulkStaff}>Select All Visible</button>
+                  <button type="button" style={buttonStyle("#6b7280")} onClick={clearBulkSelection}>Clear Selection</button>
+                </div>
+              </div>
+
+              <label htmlFor="bulk-payroll-selected-staff" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>
+                Select Staff ({bulkSelectedStaffIds.length} selected)
+              </label>
+              <select
+                id="bulk-payroll-selected-staff"
+                multiple
+                value={bulkSelectedStaffIds}
+                onChange={(e) => {
+                  const selected = Array.from(e.target.selectedOptions).map((option) => option.value);
+                  setBulkSelectedStaffIds(selected);
+                }}
+                style={{ ...fieldStyle(), minHeight: 150 }}
+              >
+                {bulkFilteredStaff.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.first_name} {item.last_name} ({item.staff_no})
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+
+          <div style={{ marginTop: 10, border: "1px solid var(--line)", borderRadius: 8, padding: 10, background: "#f8fafc" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+              <h4 style={{ margin: 0 }}>Bulk Preview</h4>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                  Target: {bulkTargetScope === "all" ? "All Active Staff" : "Selected Staff Only"}
+                </div>
+                <button
+                  type="button"
+                  style={buttonStyle("#1d4ed8")}
+                  onClick={exportBulkPreviewCsv}
+                  disabled={bulkPreviewRows.length === 0}
+                >
+                  Export Preview CSV
+                </button>
+                <button
+                  type="button"
+                  style={buttonStyle("#b91c1c")}
+                  onClick={exportBulkInvalidRowsCsv}
+                  disabled={bulkInvalidPreviewCount === 0}
+                >
+                  Export Invalid Rows
+                </button>
+                <button
+                  type="button"
+                  style={buttonStyle("#c2410c")}
+                  onClick={autoFixBulkInvalidRows}
+                  disabled={bulkPreviewRows.length === 0}
+                >
+                  Auto-fix Invalid
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, marginBottom: 10 }}>
+              <div style={{ padding: 8, border: "1px solid var(--line)", borderRadius: 6, background: "#fff" }}>Rows: <strong>{bulkPreviewRows.length}</strong></div>
+              <div style={{ padding: 8, border: "1px solid var(--line)", borderRadius: 6, background: "#fff" }}>Valid: <strong style={{ color: "#065f46" }}>{bulkValidPreviewCount}</strong></div>
+              <div style={{ padding: 8, border: "1px solid var(--line)", borderRadius: 6, background: "#fff" }}>Invalid: <strong style={{ color: bulkInvalidPreviewCount > 0 ? "#b91c1c" : "#065f46" }}>{bulkInvalidPreviewCount}</strong></div>
+              <div style={{ padding: 8, border: "1px solid var(--line)", borderRadius: 6, background: "#fff" }}>Estimated Net: <strong>{bulkPreviewNetTotal.toFixed(2)}</strong></div>
+            </div>
+
+            {bulkInvalidPreviewCount > 0 ? (
+              <p style={{ margin: "0 0 8px 0", fontSize: 12, color: "#b91c1c" }}>
+                Warning: {bulkInvalidPreviewCount} rows have negative net salary and will be skipped during generation.
+              </p>
+            ) : null}
+            {bulkFixNote ? (
+              <p style={{ margin: "0 0 8px 0", fontSize: 12, color: "#065f46" }}>
+                {bulkFixNote}
+              </p>
+            ) : null}
+
+            <div style={{ overflowX: "auto", maxHeight: 260 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
+                <thead>
+                  <tr style={{ background: "#eef2ff" }}>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Staff</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Staff No</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid var(--line)" }}>Basic</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid var(--line)" }}>Allowance</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid var(--line)" }}>Deduction</th>
+                    <th style={{ textAlign: "right", padding: 8, borderBottom: "1px solid var(--line)" }}>Net</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bulkPreviewRows.slice(0, 25).map((row) => (
+                    <tr key={row.id} style={{ background: row.isInvalid ? "#fef2f2" : "transparent" }}>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.name || "-"}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.staffNo}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "right" }}>{row.basic.toFixed(2)}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "right" }}>{row.allowance.toFixed(2)}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "right" }}>{row.deduction.toFixed(2)}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "right", color: row.isInvalid ? "#b91c1c" : "inherit", fontWeight: row.isInvalid ? 700 : 500 }}>
+                        {row.net.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                  {bulkPreviewRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ padding: 10, textAlign: "center", color: "var(--text-muted)" }}>
+                        No rows to preview.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+            {bulkPreviewRows.length > 25 ? (
+              <p style={{ margin: "8px 0 0 0", color: "var(--text-muted)", fontSize: 12 }}>
+                Showing first 25 rows of {bulkPreviewRows.length} preview rows.
+              </p>
+            ) : null}
+          </div>
+
+          {bulkResult ? (
+            <div style={{ marginTop: 10, padding: 10, border: "1px solid var(--line)", borderRadius: 8, background: "#f8fafc", fontSize: 13 }}>
+              <strong>{bulkResult.detail}</strong>
+              <div style={{ marginTop: 6, color: "var(--text-muted)" }}>
+                Total staff: {bulkResult.total_staff} | Created: {bulkResult.created_count} | Updated: {bulkResult.updated_count} | Existing skipped: {bulkResult.skipped_existing} | Paid skipped: {bulkResult.skipped_paid} | Invalid skipped: {bulkResult.skipped_invalid}
+              </div>
+            </div>
+          ) : null}
+        </div>
+        ) : null}
+
+        {activePayrollTab === "settings" ? (
+        <>
+        <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
+          <h3 style={{ marginTop: 0, marginBottom: 10 }}>Payslip Branding Settings</h3>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8, marginBottom: 12 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>School Name</label>
+              <input type="text" value={payslipSchoolName} onChange={(e) => setPayslipSchoolName(e.target.value)} style={fieldStyle()} placeholder="School Name" />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>School URL</label>
+              <input type="text" value={payslipSchoolUrl} onChange={(e) => setPayslipSchoolUrl(e.target.value)} style={fieldStyle()} placeholder="https://your-school-site.com" />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>School Logo URL</label>
+              <input type="text" value={payslipLogoUrl} onChange={(e) => setPayslipLogoUrl(e.target.value)} style={fieldStyle()} placeholder="https://.../logo.png" />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Signature URL</label>
+              <input type="text" value={payslipSignatureUrl} onChange={(e) => setPayslipSignatureUrl(e.target.value)} style={fieldStyle()} placeholder="https://.../signature.png" />
+            </div>
+          </div>
+          {(payslipLogoUrl || payslipSignatureUrl) ? (
+            <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+              {payslipLogoUrl ? <img src={payslipLogoUrl} alt="School logo preview" style={{ maxHeight: 64, border: "1px solid var(--line)", borderRadius: 6, padding: 6, background: "#fff" }} /> : null}
+              {payslipSignatureUrl ? <img src={payslipSignatureUrl} alt="Signature preview" style={{ maxHeight: 48, border: "1px solid var(--line)", borderRadius: 6, padding: 6, background: "#fff" }} /> : null}
+            </div>
+          ) : null}
+          <div style={{ marginTop: 10 }}>
+            <button type="button" style={buttonStyle("#0f766e")} onClick={() => void savePayrollSettings()} disabled={savingPayrollSettings}>
+              {savingPayrollSettings ? "Saving..." : "Save Settings"}
+            </button>
+          </div>
         </div>
 
         <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
-          <h3 style={{ marginTop: 0, marginBottom: 10 }}>Search Criteria</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 120px 120px 180px auto auto", gap: 8 }}>
-            <select value={searchStaffId} onChange={(e) => setSearchStaffId(e.target.value)} style={fieldStyle()}>
-              <option value="">All Staff</option>
-              {staffRows.map((item) => <option key={item.id} value={item.id}>{item.first_name} {item.last_name} ({item.staff_no})</option>)}
-            </select>
-            <input type="number" min="1" max="12" value={searchMonth} onChange={(e) => setSearchMonth(e.target.value)} placeholder="Month" style={fieldStyle()} />
-            <input type="number" min="2000" max="2100" value={searchYear} onChange={(e) => setSearchYear(e.target.value)} placeholder="Year" style={fieldStyle()} />
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "" | "draft" | "processed" | "paid")} style={fieldStyle()}>
-              <option value="">All Status</option>
-              <option value="draft">Draft</option>
-              <option value="processed">Processed</option>
-              <option value="paid">Paid</option>
-            </select>
-            <button type="button" style={buttonStyle("#0ea5e9")} onClick={() => void runSearch()}>Search</button>
-            <button type="button" style={buttonStyle("#6b7280")} onClick={() => void resetSearch()}>Reset</button>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            <h3 style={{ margin: 0 }}>Payroll Default Components</h3>
+            <button type="button" style={buttonStyle("#1d4ed8")} onClick={applyGlobalPayrollDefaultsToForm}>Apply Defaults to Single Entry</button>
+          </div>
+          <p style={{ margin: "0 0 10px 0", color: "var(--text-muted)", fontSize: 12 }}>
+            These defaults are used when a staff member has no payroll_defaults set in employee profile.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <strong style={{ fontSize: 13 }}>Default Allowance Components</strong>
+                <button type="button" style={buttonStyle("#2563eb")} onClick={addAllowanceItem}>Add</button>
+              </div>
+              {defaultAllowanceItems.map((item, index) => (
+                <div key={`allowance-default-${index}`} style={{ display: "grid", gridTemplateColumns: "1fr 120px auto", gap: 6, marginBottom: 6 }}>
+                  <input
+                    type="text"
+                    value={item.label}
+                    onChange={(e) => updateAllowanceItem(index, "label", e.target.value)}
+                    placeholder="Label (e.g. HRA)"
+                    style={fieldStyle()}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={item.amount}
+                    onChange={(e) => updateAllowanceItem(index, "amount", e.target.value)}
+                    placeholder="Amount"
+                    style={fieldStyle()}
+                  />
+                  <button type="button" style={buttonStyle("#6b7280")} onClick={() => removeAllowanceItem(index)}>Remove</button>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <strong style={{ fontSize: 13 }}>Default Deduction Components</strong>
+                <button type="button" style={buttonStyle("#2563eb")} onClick={addDeductionItem}>Add</button>
+              </div>
+              {defaultDeductionItems.map((item, index) => (
+                <div key={`deduction-default-${index}`} style={{ display: "grid", gridTemplateColumns: "1fr 120px auto", gap: 6, marginBottom: 6 }}>
+                  <input
+                    type="text"
+                    value={item.label}
+                    onChange={(e) => updateDeductionItem(index, "label", e.target.value)}
+                    placeholder="Label (e.g. PF)"
+                    style={fieldStyle()}
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={item.amount}
+                    onChange={(e) => updateDeductionItem(index, "amount", e.target.value)}
+                    placeholder="Amount"
+                    style={fieldStyle()}
+                  />
+                  <button type="button" style={buttonStyle("#6b7280")} onClick={() => removeDeductionItem(index)}>Remove</button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              Save updates to persist Payroll Settings in backend.
+            </div>
+            <button type="button" style={buttonStyle("#0f766e")} onClick={() => void savePayrollSettings()} disabled={savingPayrollSettings}>
+              {savingPayrollSettings ? "Saving..." : "Save Payroll Settings"}
+            </button>
+          </div>
+        </div>
+        </>
+        ) : null}
+
+        {activePayrollTab === "tracking" ? (
+        <>
+        <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+            <h3 style={{ margin: 0 }}>Payroll Filters</h3>
+            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Use filters to view records by staff, month, year, and status</div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, alignItems: "end" }}>
+            <div>
+              <label htmlFor="payroll-filter-staff" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Staff</label>
+              <select id="payroll-filter-staff" value={searchStaffId} onChange={(e) => setSearchStaffId(e.target.value)} style={fieldStyle()}>
+                <option value="">All Staff</option>
+                {staffRows.map((item) => <option key={item.id} value={item.id}>{item.first_name} {item.last_name} ({item.staff_no})</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label htmlFor="payroll-filter-month" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Month</label>
+              <input id="payroll-filter-month" type="number" min="1" max="12" value={searchMonth} onChange={(e) => setSearchMonth(e.target.value)} placeholder="Month" style={fieldStyle()} />
+            </div>
+
+            <div>
+              <label htmlFor="payroll-filter-year" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Year</label>
+              <input id="payroll-filter-year" type="number" min="2000" max="2100" value={searchYear} onChange={(e) => setSearchYear(e.target.value)} placeholder="Year" style={fieldStyle()} />
+            </div>
+
+            <div>
+              <label htmlFor="payroll-filter-status" style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Status</label>
+              <select id="payroll-filter-status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "" | "draft" | "processed" | "paid")} style={fieldStyle()}>
+                <option value="">All Status</option>
+                <option value="draft">Draft</option>
+                <option value="processed">Processed</option>
+                <option value="paid">Paid</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "transparent", marginBottom: 4 }} aria-hidden="true">Action</label>
+              <button type="button" style={{ ...buttonStyle("#0ea5e9"), width: "100%", minWidth: 120 }} onClick={() => void runSearch()}>Search</button>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, color: "transparent", marginBottom: 4 }} aria-hidden="true">Action</label>
+              <button type="button" style={{ ...buttonStyle("#6b7280"), width: "100%", minWidth: 120 }} onClick={() => void resetSearch()}>Reset</button>
+            </div>
           </div>
         </div>
 
         {summary && (
           <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
             <h3 style={{ marginTop: 0, marginBottom: 10 }}>Payroll Summary</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 8 }}>
-              <div>Total: <strong>{summary.total_records}</strong></div>
-              <div>Basic: <strong>{summary.total_basic_salary}</strong></div>
-              <div>Allowance: <strong>{summary.total_allowance}</strong></div>
-              <div>Deduction: <strong>{summary.total_deduction}</strong></div>
-              <div>Net: <strong>{summary.total_net_salary}</strong></div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10 }}>
+              <div style={{ padding: 10, border: "1px solid var(--line)", borderRadius: 8, background: "#f8fafc" }}>Total Records<br /><strong>{summary.total_records}</strong></div>
+              <div style={{ padding: 10, border: "1px solid var(--line)", borderRadius: 8, background: "#f8fafc" }}>Total Basic<br /><strong>{summary.total_basic_salary}</strong></div>
+              <div style={{ padding: 10, border: "1px solid var(--line)", borderRadius: 8, background: "#f8fafc" }}>Total Allowance<br /><strong>{summary.total_allowance}</strong></div>
+              <div style={{ padding: 10, border: "1px solid var(--line)", borderRadius: 8, background: "#f8fafc" }}>Total Deduction<br /><strong>{summary.total_deduction}</strong></div>
+              <div style={{ padding: 10, border: "1px solid var(--line)", borderRadius: 8, background: "#f8fafc" }}>Total Net<br /><strong>{summary.total_net_salary}</strong></div>
             </div>
           </div>
         )}
 
         <div className="white-box" style={boxStyle()}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>No</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Staff</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Month</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Year</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Basic</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Allowance</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Deduction</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Net</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Status</th><th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th></tr></thead>
-            <tbody>
-              {rows.map((row, index) => {
-                const staff = staffRows.find((item) => item.id === row.staff);
-                return (
-                  <tr key={row.id}>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{index + 1}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{staff ? `${staff.first_name} ${staff.last_name}` : row.staff}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.payroll_month}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.payroll_year}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.basic_salary}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.allowance}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.deduction}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.net_salary}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)", textTransform: "capitalize" }}>{row.status}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                      {row.status !== "paid" ? (
-                        <button type="button" style={buttonStyle("#059669")} onClick={() => void markPaid(row.id)}>Mark Paid</button>
-                      ) : (
-                        <span style={{ color: "var(--text-muted)" }}>No action</span>
-                      )}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+            <h3 style={{ margin: 0 }}>Payroll Records</h3>
+            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              Showing {rows.length === 0 ? 0 : (currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, totalRows)} of {totalRows}
+            </div>
+          </div>
+
+          {loading ? <p style={{ color: "var(--text-muted)", marginTop: 0 }}>Loading payroll records...</p> : null}
+
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ background: "#f8fafc" }}>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>No</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Staff</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Month</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Year</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Basic</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Allowance</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Deduction</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Net</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Status</th>
+                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, index) => {
+                  const staff = staffRows.find((item) => item.id === row.staff);
+                  const staffName = row.staff_name || (staff ? `${staff.first_name} ${staff.last_name}` : String(row.staff));
+                  const statusLabel = row.status === "processed" ? "Approved" : row.status;
+                  return (
+                    <tr key={row.id}>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{totalRows - ((currentPage - 1) * pageSize + index)}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{staffName}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.payroll_month}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.payroll_year}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{formatCurrency(row.basic_salary)}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{formatCurrency(row.allowance)}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{formatCurrency(row.deduction)}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{formatCurrency(row.net_salary)}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)", textTransform: "capitalize" }}>{statusLabel}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button type="button" style={buttonStyle("#1d4ed8")} onClick={() => previewPayrollTemplate(row)}>Preview</button>
+                        <button type="button" style={buttonStyle("#7c3aed")} onClick={() => downloadPayrollTemplate(row)}>Download</button>
+                        <button type="button" style={buttonStyle("#0f766e")} onClick={() => void downloadPayrollPdf(row)}>PDF</button>
+                        {row.status === "draft" ? <button type="button" style={buttonStyle("#0ea5e9")} onClick={() => void markApproved(row.id)}>Approve</button> : null}
+                        {row.status === "processed" ? <button type="button" style={buttonStyle("#059669")} onClick={() => void markPaid(row.id)}>Mark Paid</button> : null}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!loading && rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} style={{ padding: 12, textAlign: "center", color: "var(--text-muted)" }}>
+                      No payroll records found.
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, gap: 10, flexWrap: "wrap" }}>
+            <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              Page {currentPage} of {totalPages}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+              <select
+                aria-label="Items per page"
+                value={String(pageSize)}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+                style={{ ...fieldStyle(), width: 110, height: 34 }}
+              >
+                <option value="10">10 / page</option>
+                <option value="25">25 / page</option>
+                <option value="50">50 / page</option>
+                <option value="100">100 / page</option>
+              </select>
+              <button type="button" style={buttonStyle("#334155")} disabled={currentPage <= 1 || loading} onClick={() => void load(currentPage - 1)}>Previous</button>
+              {buildPageButtons(currentPage, totalPages).map((page) => (
+                <button
+                  key={page}
+                  type="button"
+                  style={buttonStyle(page === currentPage ? "var(--primary)" : "#64748b")}
+                  disabled={loading}
+                  onClick={() => void load(page)}
+                >
+                  {page}
+                </button>
+              ))}
+              <button type="button" style={buttonStyle("#334155")} disabled={currentPage >= totalPages || loading} onClick={() => void load(currentPage + 1)}>Next</button>
+            </div>
+          </div>
         </div>
+        {activePayrollTab === "tracking" && payrollPreview ? (
+          <div className="white-box" style={{ ...boxStyle(), marginTop: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <h3 style={{ margin: 0 }}>Employee Payroll Preview</h3>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <button type="button" style={buttonStyle("#0b7285")} onClick={() => void downloadPayrollPdf(payrollPreview)}>Download PDF</button>
+                <button type="button" style={buttonStyle("#0f766e")} onClick={() => printPayrollPayslip(payrollPreview)}>Print Payslip</button>
+                <button type="button" style={buttonStyle("#6b7280")} onClick={() => setPayrollPreview(null)}>Close</button>
+              </div>
+            </div>
+            <div style={{ marginBottom: 10, color: "var(--text-muted)", fontSize: 12 }}>
+              Branding and school URL are configured in Payroll Settings tab.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+              <div>Staff: <strong>{payrollPreview.staff_name || payrollPreview.staff}</strong></div>
+              <div>Staff No: <strong>{payrollPreview.staff_no || "-"}</strong></div>
+              <div>Month: <strong>{payrollPreview.payroll_month}</strong></div>
+              <div>Year: <strong>{payrollPreview.payroll_year}</strong></div>
+              <div>Basic Salary: <strong>{formatCurrency(payrollPreview.basic_salary)}</strong></div>
+              <div>Allowance: <strong>{formatCurrency(payrollPreview.allowance)}</strong></div>
+              <div>Deduction: <strong>{formatCurrency(payrollPreview.deduction)}</strong></div>
+              <div>Net Salary: <strong>{formatCurrency(payrollPreview.net_salary)}</strong></div>
+              <div>Status: <strong style={{ textTransform: "capitalize" }}>{payrollPreview.status === "processed" ? "Approved" : payrollPreview.status}</strong></div>
+              <div>Paid At: <strong>{payrollPreview.paid_at || "-"}</strong></div>
+            </div>
+            <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 10 }}>
+                <h4 style={{ margin: "0 0 8px 0" }}>Allowance Breakdown</h4>
+                {getComponentLines(payrollPreview, "allowance").map((line, idx) => (
+                  <div key={`preview-allowance-${idx}`} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+                    <span>{line.label}</span>
+                    <strong>{line.amount}</strong>
+                  </div>
+                ))}
+              </div>
+              <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 10 }}>
+                <h4 style={{ margin: "0 0 8px 0" }}>Deduction Breakdown</h4>
+                {getComponentLines(payrollPreview, "deduction").map((line, idx) => (
+                  <div key={`preview-deduction-${idx}`} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+                    <span>{line.label}</span>
+                    <strong>{line.amount}</strong>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+        </>
+        ) : null}
       </div></section>
     </div>
   );

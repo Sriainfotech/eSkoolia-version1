@@ -233,7 +233,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
 
             {!loading && users.length === 0 && searchQuery && (
               <div className={styles.emptyState}>
-                <p>No users found matching "{searchQuery}"</p>
+                <p>No users found matching &quot;{searchQuery}&quot;</p>
               </div>
             )}
 

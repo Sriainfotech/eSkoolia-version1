@@ -8,7 +8,7 @@ from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 from rest_framework import serializers
 
-from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, Staff, StaffAttendance, StaffDocument
+from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance
 
 
 class DepartmentSerializer(serializers.ModelSerializer):
@@ -297,6 +297,52 @@ class StaffSerializer(serializers.ModelSerializer):
         if "other_document" in mutable_data:
             mutable_data["other_document"] = self._normalize_other_documents(mutable_data.get("other_document"))
         return super().to_internal_value(mutable_data)
+
+    def _apply_payroll_defaults(self, custom_field, school):
+        current = dict(custom_field or {})
+        if not school:
+            return current
+
+        settings = PayrollSettings.objects.filter(school=school).first()
+        if not settings:
+            return current
+
+        payroll_defaults = current.get("payroll_defaults")
+        if not isinstance(payroll_defaults, dict):
+            payroll_defaults = {}
+
+        allowance_items = payroll_defaults.get("allowance_items")
+        if not isinstance(allowance_items, list) or len(allowance_items) == 0:
+            payroll_defaults["allowance_items"] = settings.default_allowance_items or []
+
+        deduction_items = payroll_defaults.get("deduction_items")
+        if not isinstance(deduction_items, list) or len(deduction_items) == 0:
+            payroll_defaults["deduction_items"] = settings.default_deduction_items or []
+
+        if not str(current.get("allowance", "")).strip():
+            current["allowance"] = str(settings.default_allowance)
+        if not str(current.get("deduction", "")).strip():
+            current["deduction"] = str(settings.default_deduction)
+
+        current["payroll_defaults"] = payroll_defaults
+        return current
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        school = getattr(getattr(request, "user", None), "school", None)
+        validated_data["custom_field"] = self._apply_payroll_defaults(validated_data.get("custom_field"), school)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        if "custom_field" in validated_data:
+            existing_custom = instance.custom_field if isinstance(instance.custom_field, dict) else {}
+            incoming_custom = validated_data.get("custom_field") if isinstance(validated_data.get("custom_field"), dict) else {}
+            merged_custom = {**existing_custom, **incoming_custom}
+        else:
+            merged_custom = instance.custom_field if isinstance(instance.custom_field, dict) else {}
+
+        validated_data["custom_field"] = self._apply_payroll_defaults(merged_custom, instance.school)
+        return super().update(instance, validated_data)
 
     def validate(self, attrs):
         request = self.context.get("request")
@@ -894,17 +940,24 @@ class StaffAttendanceSerializer(serializers.ModelSerializer):
 
 
 class PayrollRecordSerializer(serializers.ModelSerializer):
+    staff_name = serializers.SerializerMethodField(read_only=True)
+    staff_no = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = PayrollRecord
         fields = [
             "id",
             "school",
             "staff",
+            "staff_name",
+            "staff_no",
             "payroll_month",
             "payroll_year",
             "basic_salary",
             "allowance",
+            "allowance_items",
             "deduction",
+            "deduction_items",
             "net_salary",
             "status",
             "paid_at",
@@ -914,6 +967,44 @@ class PayrollRecordSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "school", "net_salary", "created_by", "created_at", "updated_at"]
 
+    def get_staff_name(self, obj):
+        if not obj.staff:
+            return ""
+        return f"{(obj.staff.first_name or '').strip()} {(obj.staff.last_name or '').strip()}".strip()
+
+    def get_staff_no(self, obj):
+        return (obj.staff.staff_no or "") if obj.staff else ""
+
+    def _normalize_component_items(self, value, field_name):
+        if value in (None, ""):
+            return [], Decimal("0.00")
+        if not isinstance(value, list):
+            raise serializers.ValidationError({field_name: "Component items must be a list."})
+
+        cleaned_items = []
+        total = Decimal("0.00")
+        for item in value:
+            if not isinstance(item, dict):
+                raise serializers.ValidationError({field_name: "Each component must be an object."})
+
+            label = str(item.get("label", "")).strip()
+            raw_amount = item.get("amount", "0")
+            try:
+                amount = Decimal(str(raw_amount or "0"))
+            except (InvalidOperation, TypeError, ValueError):
+                raise serializers.ValidationError({field_name: "Component amount must be numeric."})
+
+            if amount < 0:
+                raise serializers.ValidationError({field_name: "Component amount cannot be negative."})
+
+            if not label and amount == 0:
+                continue
+
+            cleaned_items.append({"label": label or "Component", "amount": str(amount.quantize(Decimal("0.01")) )})
+            total += amount
+
+        return cleaned_items, total.quantize(Decimal("0.01"))
+
     def validate(self, attrs):
         request = self.context.get("request")
         school_id = request.user.school_id if request else None
@@ -921,6 +1012,27 @@ class PayrollRecordSerializer(serializers.ModelSerializer):
         basic_salary = attrs.get("basic_salary") if "basic_salary" in attrs else getattr(self.instance, "basic_salary", None)
         allowance = attrs.get("allowance") if "allowance" in attrs else getattr(self.instance, "allowance", None)
         deduction = attrs.get("deduction") if "deduction" in attrs else getattr(self.instance, "deduction", None)
+        incoming_allowance_items = attrs.get("allowance_items", serializers.empty)
+        incoming_deduction_items = attrs.get("deduction_items", serializers.empty)
+        existing_allowance_items = getattr(self.instance, "allowance_items", []) if self.instance else []
+        existing_deduction_items = getattr(self.instance, "deduction_items", []) if self.instance else []
+
+        allowance_items_source = existing_allowance_items if incoming_allowance_items is serializers.empty else incoming_allowance_items
+        deduction_items_source = existing_deduction_items if incoming_deduction_items is serializers.empty else incoming_deduction_items
+
+        allowance_items, allowance_from_items = self._normalize_component_items(allowance_items_source, "allowance_items")
+        deduction_items, deduction_from_items = self._normalize_component_items(deduction_items_source, "deduction_items")
+
+        if allowance_items:
+            allowance = allowance_from_items
+        if deduction_items:
+            deduction = deduction_from_items
+
+        attrs["allowance_items"] = allowance_items
+        attrs["deduction_items"] = deduction_items
+        attrs["allowance"] = allowance
+        attrs["deduction"] = deduction
+
         if school_id and staff and staff.school_id != school_id:
             raise serializers.ValidationError({"staff": "Selected staff member does not belong to your school."})
 
@@ -945,3 +1057,70 @@ class PayrollSummarySerializer(serializers.Serializer):
     total_allowance = serializers.DecimalField(max_digits=14, decimal_places=2)
     total_deduction = serializers.DecimalField(max_digits=14, decimal_places=2)
     total_net_salary = serializers.DecimalField(max_digits=14, decimal_places=2)
+
+
+class PayrollSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PayrollSettings
+        fields = [
+            "id",
+            "school",
+            "school_name",
+            "school_url",
+            "logo_url",
+            "signature_url",
+            "default_allowance_items",
+            "default_deduction_items",
+            "default_allowance",
+            "default_deduction",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "school", "default_allowance", "default_deduction", "updated_at"]
+
+    def _normalize_component_items(self, value, field_name):
+        if value in (None, ""):
+            return [], Decimal("0.00")
+        if not isinstance(value, list):
+            raise serializers.ValidationError({field_name: "Component items must be a list."})
+
+        cleaned_items = []
+        total = Decimal("0.00")
+        for item in value:
+            if not isinstance(item, dict):
+                raise serializers.ValidationError({field_name: "Each component must be an object."})
+
+            label = str(item.get("label", "")).strip()
+            raw_amount = item.get("amount", "0")
+            try:
+                amount = Decimal(str(raw_amount or "0"))
+            except (InvalidOperation, TypeError, ValueError):
+                raise serializers.ValidationError({field_name: "Component amount must be numeric."})
+
+            if amount < 0:
+                raise serializers.ValidationError({field_name: "Component amount cannot be negative."})
+
+            if not label and amount == 0:
+                continue
+
+            cleaned_items.append({"label": label or "Component", "amount": str(amount.quantize(Decimal("0.01")) )})
+            total += amount
+
+        return cleaned_items, total.quantize(Decimal("0.01"))
+
+    def validate(self, attrs):
+        incoming_allowance_items = attrs.get("default_allowance_items", serializers.empty)
+        incoming_deduction_items = attrs.get("default_deduction_items", serializers.empty)
+        existing_allowance_items = getattr(self.instance, "default_allowance_items", []) if self.instance else []
+        existing_deduction_items = getattr(self.instance, "default_deduction_items", []) if self.instance else []
+
+        allowance_items_source = existing_allowance_items if incoming_allowance_items is serializers.empty else incoming_allowance_items
+        deduction_items_source = existing_deduction_items if incoming_deduction_items is serializers.empty else incoming_deduction_items
+
+        allowance_items, allowance_total = self._normalize_component_items(allowance_items_source, "default_allowance_items")
+        deduction_items, deduction_total = self._normalize_component_items(deduction_items_source, "default_deduction_items")
+
+        attrs["default_allowance_items"] = allowance_items
+        attrs["default_deduction_items"] = deduction_items
+        attrs["default_allowance"] = allowance_total
+        attrs["default_deduction"] = deduction_total
+        return attrs
