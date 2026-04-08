@@ -8,7 +8,7 @@ from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 from rest_framework import serializers
 
-from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance
+from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument
 
 
 class DepartmentSerializer(serializers.ModelSerializer):
@@ -135,7 +135,20 @@ class StaffDocumentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "staff", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        school_id = request.user.school_id if request else None
+        staff = attrs.get("staff") or getattr(self.instance, "staff", None)
+
+        if staff is None:
+            raise serializers.ValidationError({"staff": "Staff is required."})
+
+        if school_id and staff.school_id != school_id:
+            raise serializers.ValidationError({"staff": "Selected staff does not belong to your school."})
+
+        return attrs
 
     def validate_document_type(self, value):
         """Validate document type is one of allowed choices."""

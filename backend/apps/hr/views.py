@@ -18,7 +18,7 @@ from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 
-from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance
+from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument
 from .serializers import (
     DepartmentSerializer,
     DesignationSerializer,
@@ -558,6 +558,97 @@ class StaffViewSet(SchoolScopedModelViewSet):
         if not school and not request.user.is_superuser:
             raise PermissionDenied("School context is required.")
         return Response({"staff_no": self._generate_staff_no(school)})
+
+
+class StaffDocumentViewSet(SchoolScopedModelViewSet):
+    queryset = StaffDocument.objects.select_related("school", "staff").all()
+    serializer_class = StaffDocumentSerializer
+    filterset_fields = ["staff", "document_type"]
+    search_fields = ["file_name", "file_path", "staff__first_name", "staff__last_name", "staff__staff_no"]
+    ordering_fields = ["created_at", "updated_at", "file_name"]
+    permission_codes = {"*": "human_resource.staff.view"}
+
+    def success_response(self, message, data=None, status_code=status.HTTP_200_OK):
+        return Response(
+            {
+                "success": True,
+                "message": message,
+                "data": data if data is not None else {},
+            },
+            status=status_code,
+        )
+
+    def error_response(self, message, status_code, errors=None):
+        return Response(
+            {
+                "success": False,
+                "message": message,
+                "errors": errors if errors is not None else {},
+            },
+            status=status_code,
+        )
+
+    def get_object(self):
+        try:
+            return super().get_object()
+        except (Http404, ValueError, TypeError, DjangoValidationError):
+            raise NotFound("Staff document not found")
+
+    def handle_exception(self, exc):
+        if isinstance(exc, (NotAuthenticated, AuthenticationFailed)):
+            return self.error_response(
+                "Authentication credentials were not provided or invalid",
+                status.HTTP_401_UNAUTHORIZED,
+            )
+
+        if isinstance(exc, PermissionDenied):
+            return self.error_response(
+                "You do not have permission to perform this action",
+                status.HTTP_403_FORBIDDEN,
+            )
+
+        if isinstance(exc, NotFound):
+            return self.error_response(str(exc.detail), status.HTTP_404_NOT_FOUND)
+
+        if isinstance(exc, ValidationError):
+            errors = exc.detail if isinstance(exc.detail, dict) else {}
+            message = "Validation failed"
+            if isinstance(exc.detail, dict) and exc.detail:
+                first_val = next(iter(exc.detail.values()))
+                if isinstance(first_val, list) and first_val:
+                    message = str(first_val[0])
+                elif isinstance(first_val, str):
+                    message = first_val
+            elif isinstance(exc.detail, list) and exc.detail:
+                message = str(exc.detail[0])
+            elif isinstance(exc.detail, str):
+                message = exc.detail
+
+            return self.error_response(message, status.HTTP_400_BAD_REQUEST, errors=errors)
+
+        return self.error_response("Internal server error", status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return self.success_response(
+            "Staff document created successfully",
+            serializer.data,
+            status_code=status.HTTP_201_CREATED,
+        )
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return self.success_response("Staff document updated successfully", serializer.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
 
 
 class LeaveTypeViewSet(SchoolScopedModelViewSet):

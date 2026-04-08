@@ -145,6 +145,47 @@ class Staff(models.Model):
         return f"{self.first_name} {self.last_name}".strip()
 
 
+class StaffDocument(models.Model):
+    DOCUMENT_RESUME = "resume"
+    DOCUMENT_JOINING_LETTER = "joining_letter"
+    DOCUMENT_TENTH_CERTIFICATE = "tenth_certificate"
+    DOCUMENT_ELEVENTH_CERTIFICATE = "eleventh_certificate"
+    DOCUMENT_AADHAR_CARD = "aadhar_card"
+    DOCUMENT_DRIVING_LICENSE = "driving_license"
+    DOCUMENT_OTHER = "other"
+    DOCUMENT_TYPE_CHOICES = [
+        (DOCUMENT_RESUME, "Resume"),
+        (DOCUMENT_JOINING_LETTER, "Joining Letter"),
+        (DOCUMENT_TENTH_CERTIFICATE, "Tenth Certificate"),
+        (DOCUMENT_ELEVENTH_CERTIFICATE, "Eleventh Certificate"),
+        (DOCUMENT_AADHAR_CARD, "Aadhar Card"),
+        (DOCUMENT_DRIVING_LICENSE, "Driving License"),
+        (DOCUMENT_OTHER, "Other"),
+    ]
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="staff_documents")
+    staff = models.ForeignKey(Staff, on_delete=models.CASCADE, related_name="documents")
+    document_type = models.CharField(max_length=32, choices=DOCUMENT_TYPE_CHOICES)
+    file_path = models.CharField(max_length=500)
+    file_name = models.CharField(max_length=255)
+    file_size = models.PositiveBigIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "hr_staff_documents"
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "staff", "document_type", "file_name"],
+                name="uq_hr_staff_document_scope",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.staff_id} - {self.get_document_type_display()}"
+
+
 class LeaveType(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="leave_types")
     name = models.CharField(max_length=80)
