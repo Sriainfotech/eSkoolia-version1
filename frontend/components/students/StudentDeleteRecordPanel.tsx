@@ -45,8 +45,9 @@ type ApiError = Error & {
 };
 
 type ConfirmState = {
-  mode: "soft-delete" | "restore" | "permanent-delete";
+  mode: "soft-delete" | "restore" | "permanent-delete" | "bulk-soft-delete" | "bulk-restore";
   student: StudentRow;
+  rows?: StudentRow[];
 } | null;
 
 function listData<T>(value: ApiList<T>): T[] {
@@ -159,6 +160,8 @@ export function StudentDeleteRecordPanel() {
   const [listLoading, setListLoading] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [confirmState, setConfirmState] = useState<ConfirmState>(null);
+  const [confirmText, setConfirmText] = useState("");
+  const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -175,12 +178,17 @@ export function StudentDeleteRecordPanel() {
     return sections.filter((item) => String(item.school_class) === classId);
   }, [sections, classId]);
 
+  const selectedRows = useMemo(() => students.filter((item) => selectedStudentIds.includes(item.id)), [students, selectedStudentIds]);
+  const selectedActiveRows = useMemo(() => selectedRows.filter((item) => !item.is_deleted && item.status !== "deleted"), [selectedRows]);
+  const selectedDeletedRows = useMemo(() => selectedRows.filter((item) => item.is_deleted || item.status === "deleted"), [selectedRows]);
+  const allVisibleSelected = students.length > 0 && students.every((item) => selectedStudentIds.includes(item.id));
+
   const validateSearch = (value: string) => {
     if (!value.trim()) {
       return "";
     }
     if (!/^[A-Za-z0-9 ]+$/.test(value.trim())) {
-      return "Please enter valid search text";
+      return "Please use letters, numbers, and spaces only";
     }
     return "";
   };
@@ -240,6 +248,7 @@ export function StudentDeleteRecordPanel() {
 
       const studentData = await apiGet<ApiList<StudentRow>>(`/api/v1/students/students/?${params.toString()}`);
       setStudents(listData(studentData));
+      setSelectedStudentIds([]);
     } catch (err) {
       setError(parseError(err));
     } finally {
@@ -293,8 +302,22 @@ export function StudentDeleteRecordPanel() {
     }
   }, [classId, sectionId, sectionOptions]);
 
+  useEffect(() => {
+    setSelectedStudentIds([]);
+  }, [classId, sectionId, deletedOnly, debouncedSearch, activeTab]);
+
   const openConfirm = (mode: "soft-delete" | "restore" | "permanent-delete", student: StudentRow) => {
     setConfirmState({ mode, student });
+    setConfirmText("");
+  };
+
+  const openBulkConfirm = (mode: "bulk-soft-delete" | "bulk-restore") => {
+    const rows = mode === "bulk-soft-delete" ? selectedActiveRows : selectedDeletedRows;
+    if (rows.length === 0) {
+      return;
+    }
+    setConfirmState({ mode, student: rows[0], rows });
+    setConfirmText("");
   };
 
   const closeConfirm = () => {
@@ -302,6 +325,19 @@ export function StudentDeleteRecordPanel() {
       return;
     }
     setConfirmState(null);
+    setConfirmText("");
+  };
+
+  const toggleStudentSelection = (studentId: number) => {
+    setSelectedStudentIds((prev) => (prev.includes(studentId) ? prev.filter((item) => item !== studentId) : [...prev, studentId]));
+  };
+
+  const toggleAllVisibleStudents = () => {
+    if (allVisibleSelected) {
+      setSelectedStudentIds((prev) => prev.filter((id) => !students.some((item) => item.id === id)));
+      return;
+    }
+    setSelectedStudentIds((prev) => Array.from(new Set([...prev, ...students.map((item) => item.id)])));
   };
 
   const performAction = async () => {
@@ -310,39 +346,57 @@ export function StudentDeleteRecordPanel() {
     }
 
     const { mode, student } = confirmState;
+    const rows = confirmState.rows || [student];
 
     try {
       setBusyId(student.id);
       setError("");
       setSuccess("");
 
-      if (mode === "soft-delete") {
-        await apiPost(`/api/v1/students/students/${student.id}/soft-delete/`);
+      if (mode === "soft-delete" || mode === "bulk-soft-delete") {
+        for (const row of rows) {
+          if (row.is_deleted || row.status === "deleted") {
+            continue;
+          }
+          await apiPost(`/api/v1/students/students/${row.id}/soft-delete/`);
+        }
         setStudents((prev) =>
           prev.map((row) =>
-            row.id === student.id
+            rows.some((item) => item.id === row.id)
               ? { ...row, is_deleted: true, is_active: false, status: "deleted" }
               : row,
           ),
         );
-        setSuccess("Student deleted successfully");
-      } else if (mode === "restore") {
-        await apiPost(`/api/v1/students/students/${student.id}/restore/`);
+        setSuccess(mode === "bulk-soft-delete" ? "Selected students deleted successfully" : "Student deleted successfully");
+      } else if (mode === "restore" || mode === "bulk-restore") {
+        for (const row of rows) {
+          if (!row.is_deleted && row.status !== "deleted") {
+            continue;
+          }
+          await apiPost(`/api/v1/students/students/${row.id}/restore/`);
+        }
         setStudents((prev) =>
           prev.map((row) =>
-            row.id === student.id
+            rows.some((item) => item.id === row.id)
               ? { ...row, is_deleted: false, is_active: true, status: "active" }
               : row,
           ),
         );
-        setSuccess("Student restored successfully");
+        setSuccess(mode === "bulk-restore" ? "Selected students restored successfully" : "Student restored successfully");
       } else {
+        const expectedName = fullName(student).toLowerCase();
+        if (confirmText.trim().toLowerCase() !== expectedName) {
+          setError(`Type ${fullName(student)} to confirm permanent deletion`);
+          return;
+        }
         await apiDelete(`/api/v1/students/students/${student.id}/permanent-delete/`);
         setStudents((prev) => prev.filter((row) => row.id !== student.id));
         setSuccess("Student permanently deleted successfully");
       }
 
       setConfirmState(null);
+      setConfirmText("");
+      setSelectedStudentIds([]);
       if (activeTab === "audit") {
         await loadAudits();
       }
@@ -365,6 +419,7 @@ export function StudentDeleteRecordPanel() {
   };
 
   const noRows = !listLoading && students.length === 0;
+  const selectedCount = selectedStudentIds.length;
 
   const actionLabel = (action: StudentAuditRow["action"]) => {
     if (action === "soft_delete") {
@@ -406,17 +461,17 @@ export function StudentDeleteRecordPanel() {
       <section className="admin-visitor-area up_st_admin_visitor">
         <div className="container-fluid p-0" style={{ display: "grid", gap: 12 }}>
           <div className="white-box" style={boxStyle()}>
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr auto", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div>
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder="Search by admission, roll, name"
-                  style={fieldStyle()}
+                  style={{ ...fieldStyle(), minWidth: 260 }}
                 />
                 {fieldErrors.search && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.search}</p>}
               </div>
-              <select value={classId} onChange={(event) => { setClassId(event.target.value); setSectionId(""); }} style={fieldStyle()}>
+              <select value={classId} onChange={(event) => { setClassId(event.target.value); setSectionId(""); }} style={{ ...fieldStyle(), minWidth: 160 }}>
                 <option value="">All Classes</option>
                 {classes.map((item) => (
                   <option key={item.id} value={item.id}>
@@ -424,7 +479,7 @@ export function StudentDeleteRecordPanel() {
                   </option>
                 ))}
               </select>
-              <select value={sectionId} onChange={(event) => setSectionId(event.target.value)} style={fieldStyle()}>
+              <select value={sectionId} onChange={(event) => setSectionId(event.target.value)} style={{ ...fieldStyle(), minWidth: 160 }}>
                 <option value="">All Sections</option>
                 {sectionOptions.map((item) => (
                   <option key={item.id} value={item.id}>
@@ -432,7 +487,7 @@ export function StudentDeleteRecordPanel() {
                   </option>
                 ))}
               </select>
-              <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
                 <input type="checkbox" checked={deletedOnly} onChange={(event) => setDeletedOnly(event.target.checked)} />
                 Deleted Only
               </label>
@@ -459,11 +514,42 @@ export function StudentDeleteRecordPanel() {
 
             {activeTab === "records" ? (
               <>
-                <h3 style={{ marginTop: 0, marginBottom: 12 }}>Delete Student Record</h3>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+                  <h3 style={{ margin: 0 }}>Delete Student Record</h3>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      style={buttonStyle("#b45309")}
+                      disabled={selectedActiveRows.length === 0}
+                      onClick={() => openBulkConfirm("bulk-soft-delete")}
+                    >
+                      Delete Selected
+                    </button>
+                    <button
+                      type="button"
+                      style={buttonStyle("#0284c7")}
+                      disabled={selectedDeletedRows.length === 0}
+                      onClick={() => openBulkConfirm("bulk-restore")}
+                    >
+                      Restore Selected
+                    </button>
+                    <button
+                      type="button"
+                      style={buttonStyle("#64748b")}
+                      disabled={selectedCount === 0}
+                      onClick={() => setSelectedStudentIds([])}
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+                </div>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
                       <tr>
+                        <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>
+                          <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisibleStudents} />
+                        </th>
                         <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Admission No</th>
                         <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Roll No</th>
                         <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Name</th>
@@ -477,8 +563,8 @@ export function StudentDeleteRecordPanel() {
                     <tbody>
                       {noRows ? (
                         <tr>
-                          <td colSpan={8} style={{ padding: 12, color: "var(--text-muted)" }}>
-                            No student records found
+                          <td colSpan={9} style={{ padding: 12, color: "var(--text-muted)" }}>
+                            No Records Found
                           </td>
                         </tr>
                       ) : (
@@ -490,6 +576,9 @@ export function StudentDeleteRecordPanel() {
 
                           return (
                             <tr key={row.id}>
+                              <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
+                                <input type="checkbox" checked={selectedStudentIds.includes(row.id)} onChange={() => toggleStudentSelection(row.id)} />
+                              </td>
                               <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.admission_no || "-"}</td>
                               <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.roll_no || "-"}</td>
                               <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{fullName(row)}</td>
@@ -521,7 +610,7 @@ export function StudentDeleteRecordPanel() {
                                     </button>
                                   )}
 
-                                  {currentUser?.is_superuser && (
+                                  {deleted && currentUser?.is_superuser && (
                                     <button
                                       type="button"
                                       disabled={busyId === row.id}
@@ -608,7 +697,7 @@ export function StudentDeleteRecordPanel() {
         >
           <div style={{ ...boxStyle(), maxWidth: 460, width: "100%" }}>
             <h3 style={{ marginTop: 0 }}>
-              {confirmState.mode === "restore"
+              {confirmState.mode === "restore" || confirmState.mode === "bulk-restore"
                 ? "Restore Student"
                 : confirmState.mode === "permanent-delete"
                   ? "Permanent Delete Student"
@@ -616,12 +705,28 @@ export function StudentDeleteRecordPanel() {
             </h3>
 
             <p style={{ margin: "0 0 12px", color: "var(--text-muted)" }}>
-              {confirmState.mode === "restore"
+              {confirmState.mode === "bulk-soft-delete"
+                ? `Are you sure you want to delete ${confirmState.rows?.length || 0} selected student records?`
+                : confirmState.mode === "bulk-restore"
+                  ? `Are you sure you want to restore ${confirmState.rows?.length || 0} selected student records?`
+                  : confirmState.mode === "restore"
                 ? `Are you sure you want to restore ${fullName(confirmState.student)}?`
                 : confirmState.mode === "permanent-delete"
-                  ? `Are you sure you want to permanently delete ${fullName(confirmState.student)}?`
+                  ? `Are you sure you want to permanently delete ${fullName(confirmState.student)}? This action cannot be undone.`
                   : "Are you sure you want to delete this student?"}
             </p>
+
+            {confirmState.mode === "permanent-delete" ? (
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Type {fullName(confirmState.student)} to confirm</label>
+                <input
+                  value={confirmText}
+                  onChange={(event) => setConfirmText(event.target.value)}
+                  placeholder={fullName(confirmState.student)}
+                  style={fieldStyle()}
+                />
+              </div>
+            ) : null}
 
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <button type="button" style={buttonStyle("#64748b")} onClick={closeConfirm} disabled={busyId !== null}>
@@ -629,9 +734,9 @@ export function StudentDeleteRecordPanel() {
               </button>
               <button
                 type="button"
-                style={buttonStyle(confirmState.mode === "restore" ? "#0284c7" : "#dc2626")}
+                style={buttonStyle(confirmState.mode === "restore" || confirmState.mode === "bulk-restore" ? "#0284c7" : "#dc2626")}
                 onClick={() => void performAction()}
-                disabled={busyId !== null}
+                disabled={busyId !== null || (confirmState.mode === "permanent-delete" && confirmText.trim().toLowerCase() !== fullName(confirmState.student).toLowerCase())}
               >
                 {busyId !== null ? "Processing..." : "Confirm"}
               </button>

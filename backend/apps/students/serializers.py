@@ -16,7 +16,19 @@ from .models import (
 )
 
 
+class PincodeLookupQuerySerializer(serializers.Serializer):
+    pincode = serializers.CharField()
+
+    def validate_pincode(self, value):
+        pincode = str(value or "").strip()
+        if not re.fullmatch(r"\d{6}", pincode):
+            raise serializers.ValidationError("Pincode must be exactly 6 digits.")
+        return pincode
+
+
 class StudentCategorySerializer(serializers.ModelSerializer):
+    NAME_PATTERN = re.compile(r"^[A-Za-z0-9 ]+$")
+
     def validate_name(self, value):
         name = str(value or "").strip()
         if not name:
@@ -25,6 +37,10 @@ class StudentCategorySerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Category name must be at least 2 characters.")
         if len(name) > 100:
             raise serializers.ValidationError("Category name must not exceed 100 characters.")
+        if not self.NAME_PATTERN.fullmatch(name):
+            raise serializers.ValidationError("Category name may contain only letters, numbers, and spaces.")
+        if not re.search(r"[A-Za-z0-9]", name):
+            raise serializers.ValidationError("Category name must include at least one letter or number.")
 
         request = self.context.get("request")
         school_id = getattr(getattr(request, "user", None), "school_id", None)
@@ -37,7 +53,7 @@ class StudentCategorySerializer(serializers.ModelSerializer):
         return name
 
     def validate_description(self, value):
-        description = str(value or "").strip()
+        description = strip_tags(str(value or "")).strip()
         if len(description) > 500:
             raise serializers.ValidationError("Description must not exceed 500 characters.")
         return description
@@ -46,6 +62,8 @@ class StudentCategorySerializer(serializers.ModelSerializer):
         code = str(value or "").strip()
         if not code:
             return None
+        if not re.fullmatch(r"[A-Za-z0-9 ]+", code):
+            raise serializers.ValidationError("Code may contain only letters, numbers, and spaces.")
 
         request = self.context.get("request")
         school_id = getattr(getattr(request, "user", None), "school_id", None)
@@ -74,16 +92,33 @@ class StudentCategorySerializer(serializers.ModelSerializer):
 class StudentGroupSerializer(serializers.ModelSerializer):
     students_count = serializers.IntegerField(read_only=True)
 
+    def _clean_text(self, value):
+        return strip_tags(str(value or "")).strip()
+
     def validate_name(self, value):
+        name = self._clean_text(value)
+        if not name:
+            raise serializers.ValidationError("Group name is required.")
+        if len(name) > 80:
+            raise serializers.ValidationError("Group name must not exceed 80 characters.")
+        if not re.search(r"[A-Za-z0-9]", name):
+            raise serializers.ValidationError("Group name must include at least one valid character.")
+
         request = self.context.get("request")
         school_id = getattr(getattr(request, "user", None), "school_id", None)
         if school_id:
-            queryset = StudentGroup.objects.filter(school_id=school_id, name__iexact=value.strip())
+            queryset = StudentGroup.objects.filter(school_id=school_id, name__iexact=name)
             if self.instance:
                 queryset = queryset.exclude(id=self.instance.id)
             if queryset.exists():
-                raise serializers.ValidationError("A group with this name already exists.")
-        return value
+                raise serializers.ValidationError("Group name already exists")
+        return name
+
+    def validate_description(self, value):
+        description = self._clean_text(value)
+        if len(description) > 255:
+            raise serializers.ValidationError("Description must not exceed 255 characters.")
+        return description
 
     class Meta:
         model = StudentGroup
@@ -188,6 +223,50 @@ class StudentPromoteRequestSerializer(serializers.Serializer):
     to_section = serializers.IntegerField(min_value=1, required=False, allow_null=True)
     to_academic_year = serializers.IntegerField(min_value=1, required=False, allow_null=True)
     note = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        from apps.core.models import AcademicYear, Class, Section
+
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        school_id = getattr(user, "school_id", None)
+
+        class_id = attrs.get("to_class")
+        section_id = attrs.get("to_section")
+        year_id = attrs.get("to_academic_year")
+        student_ids = attrs.get("student_ids", [])
+
+        # Remove accidental duplicates while preserving order.
+        attrs["student_ids"] = list(dict.fromkeys(student_ids))
+
+        class_qs = Class.objects.filter(id=class_id)
+        if user and not user.is_superuser and school_id:
+            class_qs = class_qs.filter(school_id=school_id)
+        if not class_qs.exists():
+            raise serializers.ValidationError({"to_class": "Please select a valid target class."})
+
+        if section_id:
+            section_qs = Section.objects.filter(id=section_id, school_class_id=class_id)
+            if not section_qs.exists():
+                raise serializers.ValidationError({"to_section": "Please select a valid target section for the selected class."})
+
+        if year_id:
+            year_qs = AcademicYear.objects.filter(id=year_id)
+            if user and not user.is_superuser and school_id:
+                year_qs = year_qs.filter(school_id=school_id)
+            year = year_qs.first()
+            if not year:
+                raise serializers.ValidationError({"to_academic_year": "Please select a valid target academic year."})
+
+            year_name = str(getattr(year, "name", "") or "").strip()
+            if not re.fullmatch(r"\d{4}-\d{4}", year_name):
+                raise serializers.ValidationError({"to_academic_year": "Academic year must follow YYYY-YYYY format."})
+
+            start_year, end_year = [int(part) for part in year_name.split("-")]
+            if end_year != start_year + 1:
+                raise serializers.ValidationError({"to_academic_year": "Academic year range is invalid."})
+
+        return attrs
 
 
 class StudentMultiClassRecordSerializer(serializers.ModelSerializer):
@@ -413,6 +492,12 @@ class StudentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Pincode must be exactly 6 digits")
         return pincode
 
+    def validate_district(self, value):
+        district = strip_tags(str(value or "")).strip()
+        if len(district) > 100:
+            raise serializers.ValidationError("District must not exceed 100 characters")
+        return district
+
     def validate_date_of_birth(self, value):
         if value and value > date.today():
             raise serializers.ValidationError("Date of birth cannot be in the future")
@@ -540,6 +625,7 @@ class StudentSerializer(serializers.ModelSerializer):
             "email",
             "address_line",
             "city",
+            "district",
             "state",
             "pincode",
             "photo",
@@ -575,3 +661,22 @@ class StudentSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class StudentListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Student
+        fields = [
+            "id",
+            "admission_no",
+            "roll_no",
+            "first_name",
+            "last_name",
+            "gender",
+            "current_class",
+            "current_section",
+            "is_disabled",
+            "is_active",
+            "created_at",
+        ]
+        read_only_fields = fields

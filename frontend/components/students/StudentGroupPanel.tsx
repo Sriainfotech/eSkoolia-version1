@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 
 type StudentGroup = {
@@ -32,8 +32,21 @@ type ToastConfig = {
   duration?: number;
 };
 
+const SEARCH_STATE_KEY = "students.group.uiState";
+
 function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
+}
+
+function totalCountFromApi<T>(value: ApiList<T>): number {
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+  return typeof value.count === "number" ? value.count : (value.results || []).length;
+}
+
+function sanitizePlainText(value: string) {
+  return value.replace(/<[^>]*>/g, "").trim();
 }
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -79,7 +92,7 @@ function fieldStyle(hasError = false) {
 function textareaStyle(hasError = false) {
   return {
     width: "100%",
-    minHeight: 80,
+    minHeight: 72,
     border: `1px solid ${hasError ? "#dc2626" : "var(--line)"}`,
     borderRadius: 8,
     padding: 10,
@@ -170,11 +183,13 @@ export function StudentGroupPanel() {
 
   // Search and sorting
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortBy, setSortBy] = useState<"name" | "count">("name");
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
 
   // Delete confirmation modal
   const [deleteConfirm, setDeleteConfirm] = useState<StudentGroup | null>(null);
@@ -189,32 +204,21 @@ export function StudentGroupPanel() {
     });
   };
 
-  const load = async () => {
+  const load = async (targetPage = currentPage, targetPageSize = pageSize, targetSearch = debouncedSearch, targetSort = sortBy) => {
     try {
       setLoading(true);
       setError("");
-
-      const allRows: StudentGroup[] = [];
-      const fetchPageSize = 100;
-      let page = 1;
-
-      while (page <= 100) {
-        const data = await apiGet<ApiList<StudentGroup>>(
-          `/api/v1/students/groups/?page=${page}&page_size=${fetchPageSize}`,
-        );
-        const pageRows = listData(data);
-
-        if (!pageRows.length) break;
-        allRows.push(...pageRows);
-
-        if (Array.isArray(data)) break;
-        if (typeof data.count === "number" && allRows.length >= data.count) break;
-        if (pageRows.length < fetchPageSize) break;
-
-        page += 1;
+      const params = new URLSearchParams();
+      params.set("page", String(targetPage));
+      params.set("page_size", String(targetPageSize));
+      if (targetSearch.trim()) {
+        params.set("search", targetSearch.trim());
       }
+      params.set("sort_by", targetSort);
 
-      setRows(allRows);
+      const data = await apiGet<ApiList<StudentGroup>>(`/api/v1/students/groups/?${params.toString()}`);
+      setRows(listData(data));
+      setTotalCount(totalCountFromApi(data));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to load groups";
       setError(message && message !== "401" ? message : "Unable to load student groups.");
@@ -224,8 +228,41 @@ export function StudentGroupPanel() {
   };
 
   useEffect(() => {
-    void load();
+    try {
+      const raw = window.sessionStorage.getItem(SEARCH_STATE_KEY);
+      if (!raw) return;
+      const state = JSON.parse(raw) as {
+        search?: string;
+        sortBy?: "name" | "count";
+        currentPage?: number;
+        pageSize?: number;
+      };
+      if (typeof state.search === "string") setSearch(state.search);
+      if (state.sortBy === "name" || state.sortBy === "count") setSortBy(state.sortBy);
+      if (typeof state.currentPage === "number" && state.currentPage > 0) setCurrentPage(state.currentPage);
+      if (typeof state.pageSize === "number" && [10, 25, 50].includes(state.pageSize)) setPageSize(state.pageSize);
+    } catch {
+      // Ignore persisted state parse issues and continue with defaults.
+    }
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    void load(currentPage, pageSize, debouncedSearch, sortBy);
+  }, [currentPage, pageSize, debouncedSearch, sortBy]);
+
+  useEffect(() => {
+    window.sessionStorage.setItem(
+      SEARCH_STATE_KEY,
+      JSON.stringify({ search, sortBy, currentPage, pageSize }),
+    );
+  }, [search, sortBy, currentPage, pageSize]);
 
   // Show toast notification
   useEffect(() => {
@@ -238,22 +275,24 @@ export function StudentGroupPanel() {
   // Validate form fields
   const validateForm = (): boolean => {
     const errors: Record<string, string> = {};
+    const normalizedName = sanitizePlainText(name);
+    const normalizedDescription = sanitizePlainText(description);
 
-    if (!name.trim()) {
+    if (!normalizedName) {
       errors.name = "Group name is required";
-    } else if (name.trim().length < 3) {
+    } else if (normalizedName.length < 3) {
       errors.name = "Minimum 3 characters required";
     } else {
       // Check for duplicate (exclude current editing group)
       const isDuplicate = rows.some(
-        (row) => row.name.toLowerCase() === name.trim().toLowerCase() && row.id !== editingId,
+        (row) => row.name.toLowerCase() === normalizedName.toLowerCase() && row.id !== editingId,
       );
       if (isDuplicate) {
-        errors.name = "Group already exists";
+        errors.name = "Group name already exists";
       }
     }
 
-    if (description.trim().length > 255) {
+    if (normalizedDescription.length > 255) {
       errors.description = "Maximum 255 characters allowed";
     }
 
@@ -282,7 +321,10 @@ export function StudentGroupPanel() {
       setError("");
       setSuccess("");
 
-      const payload = { name: name.trim(), description: description.trim() };
+      const payload = {
+        name: sanitizePlainText(name),
+        description: sanitizePlainText(description),
+      };
       const isEdit = !!editingId;
 
       if (isEdit) {
@@ -296,11 +338,15 @@ export function StudentGroupPanel() {
         type: "success",
       });
       reset();
-      await load();
+      await load(1, pageSize, debouncedSearch, sortBy);
       setCurrentPage(1);
     } catch (err) {
       const err_ = err as ApiError;
       const message = err_.details?.message || err_.message || "Unable to save group";
+      const fieldNameError = err_.details?.field_errors?.name;
+      if (fieldNameError) {
+        setFieldErrors((prev) => ({ ...prev, name: Array.isArray(fieldNameError) ? String(fieldNameError[0]) : String(fieldNameError) }));
+      }
       setError(message && message !== "401" ? message : "Unable to save student group.");
       setToast({ message: "✗ Failed to save group", type: "error" });
     } finally {
@@ -340,8 +386,7 @@ export function StudentGroupPanel() {
         reset();
       }
       setDeleteConfirm(null);
-      await load();
-      setCurrentPage(1);
+      await load(currentPage, pageSize, debouncedSearch, sortBy);
     } catch (err) {
       const err_ = err as ApiError;
       const message = err_.details?.message || err_.message;
@@ -357,25 +402,7 @@ export function StudentGroupPanel() {
     }
   };
 
-  // Filter and sort
-  const filteredRows = useMemo(() => {
-    let result = rows.filter((row) => row.name.toLowerCase().includes(search.toLowerCase()));
-
-    if (sortBy === "count") {
-      result.sort((a, b) => (b.students_count ?? 0) - (a.students_count ?? 0));
-    } else {
-      result.sort((a, b) => a.name.localeCompare(b.name));
-    }
-
-    return result;
-  }, [rows, search, sortBy]);
-
-  // Paginate
-  const totalPages = Math.ceil(filteredRows.length / pageSize);
-  const paginatedRows = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return filteredRows.slice(start, start + pageSize);
-  }, [filteredRows, currentPage, pageSize]);
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   useEffect(() => {
     setCurrentPage(1);
@@ -392,10 +419,55 @@ export function StudentGroupPanel() {
   }, [currentPage, totalPages]);
 
   const hasFieldErrors = Object.values(fieldErrors).some((value) => Boolean(value));
-  const isFormValid = name.trim().length >= 3 && description.trim().length <= 255 && !hasFieldErrors;
+  const isFormValid = sanitizePlainText(name).length >= 3 && sanitizePlainText(description).length <= 255 && !hasFieldErrors;
 
   return (
-    <div className="legacy-panel">
+    <div className="legacy-panel student-group-panel">
+      <style>{`
+        .student-group-panel button:focus,
+        .student-group-panel input:focus,
+        .student-group-panel textarea:focus,
+        .student-group-panel select:focus {
+          outline: 2px solid #5d87ff;
+          outline-offset: 2px;
+        }
+
+        @media (max-width: 900px) {
+          .student-group-panel .group-form-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .student-group-panel .group-filter-grid {
+            grid-template-columns: 1fr;
+            align-items: stretch;
+          }
+
+          .student-group-panel .group-form-actions {
+            width: 100%;
+          }
+
+          .student-group-panel .group-form-actions button {
+            width: 100%;
+          }
+
+          .student-group-panel .group-list-header {
+            align-items: flex-start;
+            gap: 8px;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .student-group-panel .group-table-actions {
+            justify-content: flex-start;
+            flex-wrap: wrap;
+          }
+
+          .student-group-panel .group-pagination {
+            flex-wrap: wrap;
+            justify-content: flex-start;
+          }
+        }
+      `}</style>
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -412,7 +484,7 @@ export function StudentGroupPanel() {
       </section>
 
       <section className="admin-visitor-area up_st_admin_visitor">
-        <div className="container-fluid p-0" style={{ display: "grid", gap: 16 }}>
+        <div className="container-fluid p-0" style={{ display: "grid", gap: 12 }}>
           {/* Toast Notification */}
           {toast && (
             <div style={toast.type === "success" ? successBoxStyle() : errorBoxStyle()}>
@@ -431,8 +503,8 @@ export function StudentGroupPanel() {
               )}
             </div>
 
-            <form onSubmit={submit} style={{ display: "grid", gap: 12 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+            <form onSubmit={submit} style={{ display: "grid", gap: 10 }}>
+              <div className="group-form-grid" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(220px, 1fr))", gap: 12, alignItems: "start" }}>
                 <div>
                   <label style={{ display: "block", fontSize: 13, marginBottom: 6, fontWeight: 500 }}>
                     Group Name <span style={{ color: "#dc2626" }}>*</span>
@@ -441,7 +513,7 @@ export function StudentGroupPanel() {
                     type="text"
                     value={name}
                     onChange={(e) => {
-                      setName(e.target.value);
+                      setName(e.target.value.replace(/<[^>]*>/g, ""));
                       clearFieldError("name");
                     }}
                     placeholder="Enter group name"
@@ -455,16 +527,16 @@ export function StudentGroupPanel() {
                   <label style={{ display: "block", fontSize: 13, marginBottom: 6, fontWeight: 500 }}>
                     Description <span style={{ fontSize: 11, color: "var(--text-muted)" }}>(optional)</span>
                   </label>
-                  <input
-                    type="text"
+                  <textarea
                     value={description}
                     onChange={(e) => {
-                      setDescription(e.target.value);
+                      setDescription(e.target.value.replace(/<[^>]*>/g, ""));
                       clearFieldError("description");
                     }}
                     placeholder="Enter description (max 255 characters)"
                     maxLength={255}
-                    style={fieldStyle(!!fieldErrors.description)}
+                    rows={3}
+                    style={textareaStyle(!!fieldErrors.description)}
                     disabled={saving}
                   />
                   <p style={{ fontSize: 11, margin: "4px 0 0 0", color: "var(--text-muted)" }}>
@@ -476,7 +548,7 @@ export function StudentGroupPanel() {
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <div className="group-form-actions" style={{ display: "flex", gap: 8, justifyContent: "flex-start", flexWrap: "wrap" }}>
                 {editingId && (
                   <button type="button" onClick={reset} style={secondaryBtnStyle(saving)}>
                     Cancel
@@ -497,34 +569,50 @@ export function StudentGroupPanel() {
 
           {/* List Section */}
           <div style={boxStyle()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div className="group-list-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
               <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>📋 Student Group List</h3>
-              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Total: {filteredRows.length}</span>
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Total: {totalCount}</span>
             </div>
 
             {/* Search and Sort */}
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 12, marginBottom: 16 }}>
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setCurrentPage(1);
-                }}
-                placeholder="🔍 Search by group name..."
-                style={fieldStyle()}
-              />
+            <div className="group-filter-grid" style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 12, marginBottom: 16, alignItems: "end" }}>
+              <div>
+                <label htmlFor="student-group-search" style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>
+                  Search Groups
+                </label>
+                <input
+                  id="student-group-search"
+                  type="text"
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  placeholder="Search by group name..."
+                  style={fieldStyle()}
+                />
+              </div>
 
-              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as "name" | "count")} style={fieldStyle()}>
-                <option value="name">Sort: Name (A-Z)</option>
-                <option value="count">Sort: Students Count</option>
-              </select>
+              <div>
+                <label htmlFor="student-group-sort" style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>
+                  Sort By
+                </label>
+                <select id="student-group-sort" value={sortBy} onChange={(e) => setSortBy(e.target.value as "name" | "count")} style={fieldStyle()}>
+                  <option value="name">Name (A-Z)</option>
+                  <option value="count">Students Count</option>
+                </select>
+              </div>
 
-              <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))} style={fieldStyle()}>
-                <option value={10}>10 per page</option>
-                <option value={25}>25 per page</option>
-                <option value={50}>50 per page</option>
-              </select>
+              <div>
+                <label htmlFor="student-group-page-size" style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>
+                  Rows
+                </label>
+                <select id="student-group-page-size" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))} style={{ ...fieldStyle(), color: "#333" }}>
+                  <option value={10}>10 per page</option>
+                  <option value={25}>25 per page</option>
+                  <option value={50}>50 per page</option>
+                </select>
+              </div>
             </div>
 
             {/* Table */}
@@ -533,15 +621,29 @@ export function StudentGroupPanel() {
                 <div style={{ fontSize: 18, marginBottom: 8 }}>⏳</div>
                 <div>Loading groups...</div>
               </div>
-            ) : paginatedRows.length === 0 ? (
+            ) : rows.length === 0 ? (
               <div style={{ textAlign: "center", padding: 40 }}>
                 <div style={{ fontSize: 48, marginBottom: 12 }}>📭</div>
                 <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>
-                  {filteredRows.length === 0 ? "No student groups found" : "No results"}
+                  {search.trim() ? "No groups found matching your search" : "No student groups found"}
                 </div>
                 <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-                  {filteredRows.length === 0 ? "Create one to get started." : "Try adjusting your search or filters."}
+                  {search.trim() ? "Try adjusting your search term." : "Create one to get started."}
                 </div>
+                {search.trim() ? (
+                  <div style={{ marginTop: 12 }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearch("");
+                        setCurrentPage(1);
+                      }}
+                      style={secondaryBtnStyle(false)}
+                    >
+                      Clear Search
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div style={{ overflowX: "auto" }}>
@@ -560,9 +662,22 @@ export function StudentGroupPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {paginatedRows.map((row) => (
+                    {rows.map((row) => (
                       <tr key={row.id} style={{ borderBottom: "1px solid var(--line)" }}>
-                        <td style={{ padding: 12, fontWeight: 500 }}>{row.name}</td>
+                        <td
+                          style={{
+                            padding: 12,
+                            fontWeight: 500,
+                            maxWidth: 320,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            wordBreak: "break-word",
+                          }}
+                          title={row.name}
+                        >
+                          {row.name}
+                        </td>
                         <td style={{ padding: 12, textAlign: "center" }}>
                           <span
                             style={{
@@ -578,11 +693,12 @@ export function StudentGroupPanel() {
                           </span>
                         </td>
                         <td style={{ padding: 12, textAlign: "center" }}>
-                          <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                          <div className="group-table-actions" style={{ display: "flex", gap: 6, justifyContent: "center" }}>
                             <button
                               type="button"
                               onClick={() => onEdit(row)}
                               style={secondaryBtnStyle(false)}
+                              aria-label={`Edit group ${row.name}`}
                               title="Edit group"
                             >
                               ✏️ Edit
@@ -595,6 +711,7 @@ export function StudentGroupPanel() {
                                 borderColor: "#fee2e2",
                                 color: "#dc2626",
                               }}
+                              aria-label={`Delete group ${row.name}`}
                               title="Delete group"
                             >
                               🗑 Delete
@@ -610,7 +727,7 @@ export function StudentGroupPanel() {
 
             {/* Pagination */}
             {totalPages > 1 && (
-              <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center", marginTop: 16 }}>
+              <div className="group-pagination" style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center", marginTop: 16 }}>
                 <button
                   onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
                   disabled={currentPage === 1}
@@ -619,7 +736,9 @@ export function StudentGroupPanel() {
                   ← Previous
                 </button>
 
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .slice(Math.max(0, currentPage - 4), Math.max(0, currentPage - 4) + 7)
+                  .map((page) => (
                   <button
                     key={page}
                     onClick={() => setCurrentPage(page)}

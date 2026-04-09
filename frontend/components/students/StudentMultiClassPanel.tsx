@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { Spinner } from "@/components/common/Spinner";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 
 type ApiList<T> = T[] | { results?: T[]; count?: number; next?: string | null; previous?: string | null };
@@ -30,6 +31,14 @@ type Section = {
 type Subject = {
   id: number;
   name: string;
+};
+
+type StudentSubjectAssignment = {
+  student: number;
+  subject_name: string;
+  subject?: number;
+  academic_year?: number;
+  section?: number;
 };
 
 type AcademicYear = {
@@ -107,6 +116,22 @@ function buttonStyle(color = "var(--primary)") {
   } as const;
 }
 
+function chipStyle() {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "4px 10px",
+    borderRadius: 999,
+    background: "#eff6ff",
+    color: "#1d4ed8",
+    border: "1px solid #bfdbfe",
+    fontSize: 12,
+    lineHeight: 1.2,
+    whiteSpace: "nowrap",
+  } as const;
+}
+
 function parseError(error: unknown): { message: string; fieldErrors: Record<string, string> } {
   const apiError = error as ApiError;
   const fieldErrorsRaw = apiError?.details?.field_errors || {};
@@ -154,16 +179,22 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
   const [debouncedSearchText, setDebouncedSearchText] = useState("");
   const [selectedSubjectIds, setSelectedSubjectIds] = useState<number[]>([]);
   const [isOptional, setIsOptional] = useState(false);
+  const [subjectDropdownOpen, setSubjectDropdownOpen] = useState(false);
 
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>(selectedStudentId ? [selectedStudentId] : []);
 
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [loadingStudents, setLoadingStudents] = useState(false);
+  const [loadingSections, setLoadingSections] = useState(false);
+  const [loadingAssignments, setLoadingAssignments] = useState(false);
   const [assigning, setAssigning] = useState(false);
 
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  const [assignmentMap, setAssignmentMap] = useState<Record<number, string[]>>({});
+  const subjectDropdownRef = useRef<HTMLDivElement | null>(null);
 
   const sectionsForClass = useMemo(() => {
     if (!classId) {
@@ -171,6 +202,22 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
     }
     return sections.filter((item) => String(item.school_class) === classId);
   }, [sections, classId]);
+
+  const selectedSubjects = useMemo(
+    () => subjects.filter((item) => selectedSubjectIds.includes(item.id)),
+    [subjects, selectedSubjectIds],
+  );
+
+  const subjectSummary = useMemo(() => {
+    if (selectedSubjects.length === 0) {
+      return "Select Subjects";
+    }
+    const labels = selectedSubjects.slice(0, 2).map((item) => item.name);
+    if (selectedSubjects.length > 2) {
+      labels.push(`+${selectedSubjects.length - 2} more`);
+    }
+    return labels.join(", ");
+  }, [selectedSubjects]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -183,19 +230,39 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
     };
   }, [searchText]);
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (subjectDropdownRef.current && !subjectDropdownRef.current.contains(event.target as Node)) {
+        setSubjectDropdownOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSubjectDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
+
   const loadMeta = async () => {
     try {
       setLoadingMeta(true);
       setError("");
-      const [yearData, classData, sectionData, subjectData] = await Promise.all([
+      const [yearData, classData, subjectData] = await Promise.all([
         apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
         apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
-        apiGet<ApiList<Section>>("/api/v1/core/sections/"),
         apiGet<ApiList<Subject>>("/api/v1/core/subjects/"),
       ]);
       setAcademicYears(listData(yearData));
       setClasses(listData(classData));
-      setSections(listData(sectionData));
+      setSections([]);
       setSubjects(listData(subjectData));
 
       const currentYear = listData(yearData).find((item) => item.is_current);
@@ -209,6 +276,26 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
     }
   };
 
+  const loadSectionsForClass = async (targetClassId: string) => {
+    if (!targetClassId) {
+      setSections([]);
+      setSectionId("");
+      return;
+    }
+
+    try {
+      setLoadingSections(true);
+      setSections([]);
+      setSectionId("");
+      const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
+      setSections(listData(data));
+    } catch {
+      setError("Unable to load sections for selected class.");
+    } finally {
+      setLoadingSections(false);
+    }
+  };
+
   const loadStudents = async () => {
     try {
       setLoadingStudents(true);
@@ -216,6 +303,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
 
       const params = new URLSearchParams();
       params.set("page", String(currentPage));
+      params.set("page_size", "25");
       if (classId) {
         params.set("class", classId);
       }
@@ -249,6 +337,38 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
     }
   };
 
+  const loadAssignments = async () => {
+    if (!academicYearId || !classId || !sectionId) {
+      setAssignmentMap({});
+      return;
+    }
+
+    try {
+      setLoadingAssignments(true);
+      const params = new URLSearchParams();
+      params.set("academic_year", academicYearId);
+      params.set("class", classId);
+      params.set("section", sectionId);
+      params.set("page_size", "500");
+      const data = await apiGet<ApiList<StudentSubjectAssignment>>(`/api/v1/students/subject-assignments/?${params.toString()}`);
+      const assignments = listData(data);
+      const nextMap: Record<number, string[]> = {};
+      for (const item of assignments) {
+        if (!nextMap[item.student]) {
+          nextMap[item.student] = [];
+        }
+        if (item.subject_name && !nextMap[item.student].includes(item.subject_name)) {
+          nextMap[item.student].push(item.subject_name);
+        }
+      }
+      setAssignmentMap(nextMap);
+    } catch {
+      setAssignmentMap({});
+    } finally {
+      setLoadingAssignments(false);
+    }
+  };
+
   useEffect(() => {
     void loadMeta();
   }, []);
@@ -258,6 +378,18 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
       void loadStudents();
     }
   }, [loadingMeta, currentPage, classId, sectionId, academicYearId, debouncedSearchText]);
+
+  useEffect(() => {
+    if (!loadingMeta && classId) {
+      void loadSectionsForClass(classId);
+    }
+  }, [loadingMeta, classId]);
+
+  useEffect(() => {
+    if (!loadingMeta) {
+      void loadAssignments();
+    }
+  }, [loadingMeta, academicYearId, classId, sectionId]);
 
   useEffect(() => {
     if (!classId) {
@@ -271,10 +403,15 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
 
   const validateForm = () => {
     const nextErrors: Record<string, string> = {};
+    if (!academicYearId) {
+      nextErrors.academic_year = "Please select an academic year";
+    }
     if (!classId) {
       nextErrors.class = "Please select a class";
     }
-    if (sectionId && classId && !sectionsForClass.some((item) => String(item.id) === sectionId)) {
+    if (!sectionId) {
+      nextErrors.section = "Please select a section";
+    } else if (classId && !sectionsForClass.some((item) => String(item.id) === sectionId)) {
       nextErrors.section = "Section does not belong to selected class";
     }
     if (selectedSubjectIds.length === 0) {
@@ -283,9 +420,15 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
     return nextErrors;
   };
 
-  const canSubmit = () => {
-    return !assigning && Object.keys(validateForm()).length === 0;
-  };
+  const isAssignEnabled = Boolean(
+    academicYearId &&
+      classId &&
+      sectionId &&
+      selectedSubjectIds.length > 0 &&
+      selectedStudentIds.length > 0 &&
+      !assigning &&
+      !loadingSections,
+  );
 
   const toggleStudentSelection = (studentId: number) => {
     setSelectedStudentIds((prev) => {
@@ -306,15 +449,9 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
     setSelectedStudentIds((prev) => Array.from(new Set([...prev, ...allIds])));
   };
 
-  const assignSubjects = async (mode: "individual" | "selected" | "class_section", studentId?: number) => {
+  const assignSubjects = async () => {
     const nextErrors = validateForm();
-    if (mode !== "class_section" && !sectionId) {
-      nextErrors.section = "Section does not belong to selected class";
-    }
-    if (mode === "individual" && !studentId) {
-      nextErrors.student_id = "Unable to load students. Please try again";
-    }
-    if (mode === "selected" && selectedStudentIds.length === 0) {
+    if (selectedStudentIds.length === 0) {
       nextErrors.student_ids = "Please select at least one student";
     }
 
@@ -335,25 +472,15 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
         section: Number(sectionId),
         subject_ids: selectedSubjectIds,
         is_optional: isOptional,
+        student_ids: selectedStudentIds,
       };
 
-      if (mode === "individual") {
-        await apiPost("/api/v1/students/subject-assignments/assign-individual/", {
-          ...payload,
-          student_id: studentId,
-        });
-      } else if (mode === "selected") {
-        await apiPost("/api/v1/students/subject-assignments/assign-bulk/", {
-          ...payload,
-          student_ids: selectedStudentIds,
-        });
-      } else {
-        await apiPost("/api/v1/students/subject-assignments/assign-bulk/", payload);
-      }
+      await apiPost("/api/v1/students/subject-assignments/assign-bulk/", payload);
 
       setSuccess("Subjects assigned successfully");
       setSelectedStudentIds([]);
       setFieldErrors({});
+      await loadAssignments();
     } catch (err) {
       const parsed = parseError(err);
       setError(parsed.message || "Failed to assign subjects");
@@ -402,7 +529,16 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
             <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(150px, 1fr))", gap: 8 }}>
               <div>
                 <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Academic Year *</label>
-                <select value={academicYearId} onChange={(event) => setAcademicYearId(event.target.value)} style={fieldStyle()}>
+                <select
+                  value={academicYearId}
+                  onChange={(event) => {
+                    setAcademicYearId(event.target.value);
+                    setSelectedStudentIds([]);
+                    setAssignmentMap({});
+                    setCurrentPage(1);
+                  }}
+                  style={fieldStyle()}
+                >
                   <option value="">Select Year</option>
                   {academicYears.map((item) => (
                     <option key={item.id} value={item.id}>
@@ -415,7 +551,17 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
 
               <div>
                 <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Class *</label>
-                <select value={classId} onChange={(event) => { setClassId(event.target.value); setCurrentPage(1); }} style={fieldStyle()}>
+                <select
+                  value={classId}
+                  onChange={(event) => {
+                    setClassId(event.target.value);
+                    setSectionId("");
+                    setSelectedStudentIds([]);
+                    setAssignmentMap({});
+                    setCurrentPage(1);
+                  }}
+                  style={fieldStyle()}
+                >
                   <option value="">Select Class</option>
                   {classes.map((item) => (
                     <option key={item.id} value={item.id}>
@@ -428,14 +574,29 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
 
               <div>
                 <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Section *</label>
-                <select value={sectionId} onChange={(event) => { setSectionId(event.target.value); setCurrentPage(1); }} style={fieldStyle()} disabled={!classId}>
-                  <option value="">Select Section</option>
+                <select
+                  value={sectionId}
+                  onChange={(event) => {
+                    setSectionId(event.target.value);
+                    setSelectedStudentIds([]);
+                    setAssignmentMap({});
+                    setCurrentPage(1);
+                  }}
+                  style={fieldStyle()}
+                  disabled={!classId || loadingSections}
+                >
+                  <option value="">{loadingSections ? "Loading sections..." : classId ? "Select Section" : "Select class first"}</option>
                   {sectionsForClass.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.name}
                     </option>
                   ))}
                 </select>
+                {loadingSections ? (
+                  <p style={{ margin: "6px 0 0", color: "var(--text-muted)", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <Spinner size={12} color="var(--primary)" /> Loading sections...
+                  </p>
+                ) : null}
                 {fieldErrors.section && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.section}</p>}
               </div>
 
@@ -458,33 +619,111 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
               </div>
             </div>
 
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: 12 }} ref={subjectDropdownRef}>
               <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Subjects * (Multi Select)</label>
-              <select
-                multiple
-                value={selectedSubjectIds.map(String)}
-                onChange={(event) => {
-                  const values = Array.from(event.target.selectedOptions).map((item) => Number(item.value));
-                  setSelectedSubjectIds(values);
-                }}
-                style={{ ...fieldStyle(), height: 120, padding: 8 }}
-              >
-                {subjects.map((item) => (
-                  <option key={item.id} value={item.id}>
+              <div style={{ position: "relative" }}>
+                <button
+                  type="button"
+                  onClick={() => setSubjectDropdownOpen((prev) => !prev)}
+                  style={{
+                    ...fieldStyle(),
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    background: "#fff",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{subjectSummary}</span>
+                  <span style={{ marginLeft: 10, color: "#64748b" }}>▾</span>
+                </button>
+
+                {subjectDropdownOpen ? (
+                  <div
+                    style={{
+                      position: "absolute",
+                      zIndex: 20,
+                      top: "calc(100% + 6px)",
+                      left: 0,
+                      right: 0,
+                      background: "#fff",
+                      border: "1px solid var(--line)",
+                      borderRadius: 12,
+                      boxShadow: "0 12px 32px rgba(15, 23, 42, 0.12)",
+                      overflow: "hidden",
+                    }}
+                  >
+                    <div style={{ maxHeight: 220, overflowY: "auto", padding: 8 }}>
+                      {subjects.map((item) => {
+                        const checked = selectedSubjectIds.includes(item.id);
+                        return (
+                          <label
+                            key={item.id}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10,
+                              padding: "10px 12px",
+                              borderRadius: 10,
+                              cursor: "pointer",
+                              background: checked ? "#eff6ff" : "transparent",
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setSelectedSubjectIds((prev) =>
+                                  prev.includes(item.id) ? prev.filter((subjectId) => subjectId !== item.id) : [...prev, item.id],
+                                );
+                              }}
+                            />
+                            <span style={{ fontSize: 14, color: "#334155" }}>{item.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: 10, borderTop: "1px solid var(--line)", background: "#f8fafc" }}>
+                      <button type="button" style={buttonStyle("#64748b")} disabled={selectedSubjectIds.length === 0} onClick={() => setSelectedSubjectIds([])}>
+                        Clear
+                      </button>
+                      <button type="button" style={buttonStyle()} onClick={() => setSubjectDropdownOpen(false)}>
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {selectedSubjects.slice(0, 3).map((item) => (
+                  <span key={item.id} style={chipStyle()}>
                     {item.name}
-                  </option>
+                  </span>
                 ))}
-              </select>
+                {selectedSubjects.length > 3 ? (
+                  <span style={{ ...chipStyle(), background: "#f8fafc", color: "#475569", borderColor: "#cbd5e1" }}>
+                    +{selectedSubjects.length - 3} more
+                  </span>
+                ) : null}
+              </div>
               {fieldErrors.subject_ids && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.subject_ids}</p>}
             </div>
 
-            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-              <button type="button" style={buttonStyle()} disabled={!canSubmit()} onClick={() => void assignSubjects("selected")}>
-                {assigning ? "Assigning..." : "Assign to Selected Students"}
+            <div style={{ marginTop: 24, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button type="button" style={buttonStyle()} disabled={!isAssignEnabled} onClick={() => void assignSubjects()}>
+                {assigning ? (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                    <Spinner size={14} />
+                    Assigning...
+                  </span>
+                ) : (
+                  "Assign Subjects to Selected Students"
+                )}
               </button>
-              <button type="button" style={buttonStyle("#0ea5e9")} disabled={!canSubmit()} onClick={() => void assignSubjects("class_section")}>
-                {assigning ? "Assigning..." : "Assign to Entire Class/Section"}
-              </button>
+              <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                {selectedStudentIds.length} selected
+              </span>
             </div>
           </div>
 
@@ -505,7 +744,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                     <th style={{ textAlign: "left", borderBottom: "1px solid var(--line)", padding: "8px 6px" }}>Admission No</th>
                     <th style={{ textAlign: "left", borderBottom: "1px solid var(--line)", padding: "8px 6px" }}>Roll No</th>
                     <th style={{ textAlign: "left", borderBottom: "1px solid var(--line)", padding: "8px 6px" }}>Student Name</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--line)", padding: "8px 6px" }}>Action</th>
+                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--line)", padding: "8px 6px" }}>Current Subjects</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -535,14 +774,22 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                         <td style={{ padding: "8px 6px", borderBottom: "1px solid #eef2f7" }}>{student.roll_no || "-"}</td>
                         <td style={{ padding: "8px 6px", borderBottom: "1px solid #eef2f7" }}>{studentLabel(student)}</td>
                         <td style={{ padding: "8px 6px", borderBottom: "1px solid #eef2f7" }}>
-                          <button
-                            type="button"
-                            style={buttonStyle("#16a34a")}
-                            disabled={!canSubmit()}
-                            onClick={() => void assignSubjects("individual", student.id)}
-                          >
-                            Assign
-                          </button>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {(assignmentMap[student.id] || []).length > 0 ? (
+                              <>
+                                {(assignmentMap[student.id] || []).slice(0, 3).map((subjectName) => (
+                                  <span key={subjectName} style={chipStyle()}>{subjectName}</span>
+                                ))}
+                                {(assignmentMap[student.id] || []).length > 3 ? (
+                                  <span style={{ ...chipStyle(), background: "#f8fafc", color: "#475569", borderColor: "#cbd5e1" }}>
+                                    +{(assignmentMap[student.id] || []).length - 3} more
+                                  </span>
+                                ) : null}
+                              </>
+                            ) : (
+                              <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Not assigned</span>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))
@@ -577,6 +824,8 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
           </div>
 
           {loadingMeta && <p style={{ margin: 0, color: "var(--text-muted)" }}>Loading data...</p>}
+          {loadingSections && <p style={{ margin: 0, color: "var(--text-muted)" }}><Spinner size={14} color="var(--primary)" /> Loading sections for selected class...</p>}
+          {loadingAssignments && <p style={{ margin: 0, color: "var(--text-muted)" }}><Spinner size={14} color="var(--primary)" /> Loading current subject assignments...</p>}
           {error && <p style={{ margin: 0, color: "var(--warning)" }}>{error}</p>}
           {success && <p style={{ margin: 0, color: "#0f766e" }}>{success}</p>}
         </div>

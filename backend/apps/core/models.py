@@ -214,6 +214,103 @@ class AssignVehicle(models.Model):
         return f"{self.vehicle.vehicle_no} - {self.route.title}"
 
 
+# ===== BUS TRACKING MODULE =====
+class BusStop(models.Model):
+    """Represents a stop on a transport route (school, neighborhood pickup points, etc.)"""
+    route = models.ForeignKey("TransportRoute", on_delete=models.CASCADE, related_name="stops")
+    stop_name = models.CharField(max_length=200)  # e.g., "Madhya Pur", "School"
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    stop_order = models.IntegerField()  # 1, 2, 3... (sequence on route)
+    arrival_time_window = models.CharField(max_length=50, blank=True, help_text="Expected arrival time e.g., '09:30-09:45'")
+    active_status = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "bus_stops"
+        ordering = ["route_id", "stop_order"]
+        constraints = [
+            models.UniqueConstraint(fields=["route", "stop_name"], name="uq_bus_stop_route_name"),
+        ]
+
+    def __str__(self):
+        return f"{self.route.title} - {self.stop_name}"
+
+
+class BusLocation(models.Model):
+    """Real-time GPS location data for a vehicle"""
+    vehicle = models.ForeignKey("Vehicle", on_delete=models.CASCADE, related_name="bus_locations")
+    latitude = models.DecimalField(max_digits=9, decimal_places=6)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6)
+    speed = models.IntegerField(default=0, help_text="Speed in km/h")
+    heading = models.IntegerField(default=0, help_text="Direction in degrees (0-360)")
+    accuracy = models.IntegerField(default=0, help_text="GPS accuracy in meters")
+    timestamp = models.DateTimeField(auto_now=True)  # Updated every location push
+    is_active = models.BooleanField(default=True)  # False if vehicle is offline
+
+    class Meta:
+        db_table = "bus_locations"
+        ordering = ["-timestamp"]
+
+    def __str__(self):
+        return f"{self.vehicle.vehicle_no} @ {self.latitude},{self.longitude}"
+
+
+class TransportAlert(models.Model):
+    """Alerts generated for bus status changes (stopped, late, near school)"""
+    ALERT_TYPE_CHOICES = [
+        ("stopped", "Bus Stopped >5 min"),
+        ("running_late", "Running Late"),
+        ("near_school", "Near School (<1km)"),
+        ("arrived", "Arrived at Destination"),
+        ("left", "Left Departure Point"),
+        ("mechanical", "Mechanical Issue"),
+        ("traffic", "Heavy Traffic Detected"),
+    ]
+
+    vehicle = models.ForeignKey("Vehicle", on_delete=models.CASCADE, related_name="bus_alerts")
+    route = models.ForeignKey("TransportRoute", on_delete=models.SET_NULL, null=True, blank=True, related_name="bus_alerts")
+    alert_type = models.CharField(max_length=20, choices=ALERT_TYPE_CHOICES)
+    message = models.TextField()
+    severity = models.CharField(max_length=10, choices=[("info", "Info"), ("warning", "Warning"), ("critical", "Critical")], default="info")
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    is_resolved = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "transport_alerts"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.vehicle.vehicle_no} - {self.alert_type} ({self.severity})"
+
+
+class BusRoutePickupUpdate(models.Model):
+    """Tracks pickup updates: when bus reaches a stop, marks students as picked up"""
+    stop = models.ForeignKey("BusStop", on_delete=models.CASCADE, related_name="pickups")
+    vehicle = models.ForeignKey("Vehicle", on_delete=models.CASCADE, related_name="stop_pickups")
+    student = models.ForeignKey("students.Student", on_delete=models.CASCADE, related_name="bus_pickups")
+    arrived_at = models.DateTimeField()
+    picked_up_at = models.DateTimeField(null=True, blank=True)  # When student actually boarded
+    status_choices = [
+        ("waiting", "Waiting for Bus"),
+        ("arrived", "Bus Arrived at Stop"),
+        ("picked_up", "Student Picked Up"),
+        ("missed", "Student Missed Bus"),
+    ]
+    status = models.CharField(max_length=20, choices=status_choices, default="waiting")
+
+    class Meta:
+        db_table = "bus_route_pickup_updates"
+        ordering = ["-arrived_at"]
+
+    def __str__(self):
+        return f"{self.student} - {self.stop.stop_name} ({self.status})"
+
+
 # ===== INVENTORY MODULE =====
 class ItemCategory(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="item_categories")

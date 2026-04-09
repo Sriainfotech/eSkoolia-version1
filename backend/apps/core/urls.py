@@ -9,6 +9,10 @@ from .views import (
     VehicleViewSet,
     TransportRouteViewSet,
     AssignVehicleViewSet,
+    BusStopViewSet,
+    BusLocationViewSet,
+    TransportAlertViewSet,
+    BusRoutePickupUpdateViewSet,
     ItemCategoryViewSet,
     ItemStoreViewSet,
     SupplierViewSet,
@@ -30,6 +34,12 @@ router.register("class-rooms", ClassRoomViewSet, basename="class-room")
 router.register("vehicles", VehicleViewSet, basename="vehicle")
 router.register("transport-routes", TransportRouteViewSet, basename="transport-route")
 router.register("assign-vehicles", AssignVehicleViewSet, basename="assign-vehicle")
+
+# Bus Tracking Module Routes
+router.register("bus-stops", BusStopViewSet, basename="bus-stop")
+router.register("bus-locations", BusLocationViewSet, basename="bus-location")
+router.register("transport-alerts", TransportAlertViewSet, basename="transport-alert")
+router.register("bus-pickups", BusRoutePickupUpdateViewSet, basename="bus-pickup")
 
 # Inventory Module Routes
 router.register("item-categories", ItemCategoryViewSet, basename="item-category")

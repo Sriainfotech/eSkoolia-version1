@@ -40,7 +40,10 @@ export function SidebarSection({ item, pathname, expanded, activeId, depth, onTo
         onClick={() => onActivate(item.id)}
         className={`${styles.item} ${isActive ? styles.itemActive : ""} ${depth > 0 ? styles.subItem : ""}`}
       >
-        <span>{item.name}</span>
+        <span className={styles.itemLabel}>
+          {item.icon ? <img src={item.icon} alt="" className={styles.itemIcon} aria-hidden="true" /> : null}
+          <span>{item.name}</span>
+        </span>
       </Link>
     );
   }
@@ -55,7 +58,10 @@ export function SidebarSection({ item, pathname, expanded, activeId, depth, onTo
         }}
         className={`${styles.item} ${isActive ? styles.itemActive : ""} ${depth > 0 ? styles.subItem : ""}`}
       >
-        <span>{item.name}</span>
+        <span className={styles.itemLabel}>
+          {item.icon ? <img src={item.icon} alt="" className={styles.itemIcon} aria-hidden="true" /> : null}
+          <span>{item.name}</span>
+        </span>
         {hasChildren ? <span className={styles.caret}>{isExpanded ? "-" : "+"}</span> : null}
       </button>
       {hasChildren && isExpanded ? (

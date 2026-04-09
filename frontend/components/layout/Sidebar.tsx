@@ -164,7 +164,9 @@ export function Sidebar() {
 
   return (
     <aside className={styles.aside}>
-      <div className={styles.brand}>Eskoolia</div>
+      <a href="/dashboard" className={styles.brandLink}>
+        <div className={styles.brand}>Eskoolia</div>
+      </a>
       <div className={styles.nav}>
         {menuItems.map((item) => (
           <SidebarSection

@@ -1,4 +1,6 @@
 from django.db import models
+from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 INQUIRY_STATUS_CHOICES = [
     ("new", "New"),
@@ -55,6 +57,14 @@ class AdmissionInquiry(models.Model):
     status = models.CharField(max_length=32, choices=INQUIRY_STATUS_CHOICES, default="new")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    def clean(self):
+        if self.follow_up_date and self.follow_up_date > timezone.localdate():
+            raise ValidationError({"follow_up_date": "Follow-up date cannot be in the future."})
+        if self.next_follow_up_date and self.next_follow_up_date < timezone.localdate():
+            raise ValidationError({"next_follow_up_date": "Next follow-up date cannot be in the past."})
+        if self.follow_up_date and self.next_follow_up_date and self.next_follow_up_date < self.follow_up_date:
+            raise ValidationError({"next_follow_up_date": "Next follow-up date must be on or after last follow-up date."})
 
     def __str__(self):
         return self.full_name

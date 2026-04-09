@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 
 type ApiList<T> = T[] | { results?: T[] };
@@ -48,6 +49,7 @@ type StudentCreatePayload = {
   email?: string;
   address_line?: string;
   city?: string;
+  district?: string;
   state?: string;
   pincode?: string;
   photo?: string;
@@ -60,11 +62,92 @@ type StudentCreatePayload = {
   is_active: boolean;
 };
 
+type StudentDetail = {
+  id: number;
+  admission_no: string;
+  roll_no?: string;
+  first_name: string;
+  last_name: string;
+  date_of_birth?: string;
+  academic_year?: number;
+  gender?: string;
+  custom_gender?: string;
+  blood_group?: string;
+  phone?: string;
+  email?: string;
+  address_line?: string;
+  city?: string;
+  district?: string;
+  state?: string;
+  pincode?: string;
+  photo?: string;
+  status?: "active" | "inactive" | "transferred" | "dropped";
+  category?: number | null;
+  guardian?: number | null;
+  current_class?: number | null;
+  current_section?: number | null;
+  is_disabled?: boolean;
+};
+
 type ApiError = Error & {
   details?: {
     field_errors?: Record<string, string | string[]>;
     message?: string;
   };
+};
+
+type PincodeLookupResponse = {
+  success?: boolean;
+  message?: string;
+  data?: {
+    pincode?: string;
+    state?: string;
+    district?: string;
+    city?: string;
+    city_options?: string[];
+    multiple_post_offices?: boolean;
+    selected_post_office?: {
+      name?: string;
+      branch_type?: string;
+      delivery_status?: string;
+      district?: string;
+      state?: string;
+      region?: string;
+      division?: string;
+      circle?: string;
+      taluk?: string;
+      block?: string;
+      country?: string;
+      pincode?: string;
+    };
+    post_offices?: Array<{
+      name?: string;
+      branch_type?: string;
+      delivery_status?: string;
+      district?: string;
+      state?: string;
+      region?: string;
+      division?: string;
+      circle?: string;
+      taluk?: string;
+      block?: string;
+      country?: string;
+      pincode?: string;
+    }>;
+  };
+};
+
+const DEFAULT_STATE_CITY_MAP: Record<string, string[]> = {
+  "Andhra Pradesh": ["Vijayawada", "Guntur", "Visakhapatnam"],
+  Telangana: ["Hyderabad", "Warangal", "Karimnagar"],
+  "Tamil Nadu": ["Chennai", "Coimbatore", "Madurai"],
+  Karnataka: ["Bengaluru", "Mysuru", "Mangaluru"],
+  Maharashtra: ["Mumbai", "Pune", "Nagpur"],
+  Gujarat: ["Ahmedabad", "Surat", "Vadodara"],
+  Rajasthan: ["Jaipur", "Jodhpur", "Kota"],
+  "Uttar Pradesh": ["Lucknow", "Kanpur", "Varanasi"],
+  "Madhya Pradesh": ["Bhopal", "Indore", "Gwalior"],
+  Kerala: ["Kochi", "Thiruvananthapuram", "Kozhikode"],
 };
 
 function listData<T>(value: ApiList<T>): T[] {
@@ -75,7 +158,7 @@ async function apiGet<T>(path: string): Promise<T> {
   return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
 }
 
-async function apiPost<T>(path: string, payload: unknown): Promise<T> {
+async function apiPostJson<T>(path: string, payload: unknown): Promise<T> {
   return apiRequestWithRefresh<T>(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -83,14 +166,39 @@ async function apiPost<T>(path: string, payload: unknown): Promise<T> {
   });
 }
 
-function fieldStyle() {
+async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
+  return apiRequestWithRefresh<T>(path, {
+    method: "POST",
+    body: formData,
+  });
+}
+
+async function apiPutJson<T>(path: string, payload: unknown): Promise<T> {
+  return apiRequestWithRefresh<T>(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+function fieldStyle(hasError = false) {
   return {
     width: "100%",
-    height: 38,
-    border: "1px solid var(--line)",
-    borderRadius: 8,
-    padding: "0 10px",
+    minHeight: 40,
+    border: `1px solid ${hasError ? "#dc2626" : "var(--line)"}`,
+    borderRadius: 10,
+    padding: "10px 12px",
+    lineHeight: 1.3,
     background: "#fff",
+  } as const;
+}
+
+function helperTextStyle() {
+  return {
+    margin: "4px 0 0",
+    color: "#64748b",
+    fontSize: 12,
+    lineHeight: 1.4,
   } as const;
 }
 
@@ -105,43 +213,58 @@ function boxStyle() {
 
 function buttonStyle(color = "var(--primary)") {
   return {
-    height: 36,
+    minHeight: 40,
     border: `1px solid ${color}`,
     background: color,
     color: "#fff",
-    borderRadius: 8,
+    borderRadius: 10,
     padding: "0 14px",
     cursor: "pointer",
     fontWeight: 600,
+    fontSize: 14,
   } as const;
 }
 
 function parseError(error: unknown) {
   const apiError = error as ApiError;
   const message = apiError?.details?.message;
-  if (message) {
-    return message;
-  }
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
+  if (message) return message;
+  if (error instanceof Error && error.message) return error.message;
   return "Unable to save student.";
 }
 
-// Validation helpers
+function parsePincodeError(error: unknown): string {
+  const apiError = error as ApiError;
+  const fieldError = apiError?.details?.field_errors?.pincode;
+  if (Array.isArray(fieldError) && fieldError.length > 0) return String(fieldError[0] || "").trim();
+  if (typeof fieldError === "string") return fieldError.trim();
+  if (apiError?.details?.message) return apiError.details.message.trim();
+  if (error instanceof Error && error.message) return error.message.trim();
+  return "";
+}
+
+function sanitizeText(value: string): string {
+  return value.replace(/<[^>]*>/g, "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
+}
+
 function isValidEmail(email: string): boolean {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email.trim());
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
 function isValidPhone(phone: string): boolean {
-  const phoneRegex = /^\d{10}$/; // Exactly 10 digits
-  return phoneRegex.test(phone.trim().replace(/\D/g, ""));
+  return /^\d{10}$/.test(phone.trim());
 }
 
 function isValidPincode(pincode: string): boolean {
-  const pincodeRegex = /^\d{6}$/; // Exactly 6 digits
-  return pincodeRegex.test(pincode.trim().replace(/\D/g, ""));
+  return /^\d{6}$/.test(pincode.trim());
+}
+
+function isLikelyValidClassName(value: string): boolean {
+  const clean = sanitizeText(value);
+  const lowered = clean.toLowerCase();
+  if (!clean || clean.length < 2) return false;
+  if (["abc", "adc", "asdf", "test", "demo"].includes(lowered)) return false;
+  return /[A-Za-z0-9]/.test(clean);
 }
 
 function isAlphabetsOnly(value: string): boolean {
@@ -156,7 +279,52 @@ function isValidNumericRoll(value: string): boolean {
   return /^\d+$/.test(value.trim());
 }
 
+async function compressImage(file: File, maxWidth = 1200, quality = 0.8): Promise<File> {
+  const src = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Unable to read image."));
+    reader.readAsDataURL(file);
+  });
+
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Invalid image."));
+    image.src = src;
+  });
+
+  let width = img.width;
+  let height = img.height;
+  if (width > maxWidth) {
+    height = Math.round((height * maxWidth) / width);
+    width = maxWidth;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Image processing is not supported in this browser.");
+  ctx.drawImage(img, 0, 0, width, height);
+
+  const outputType = file.type === "image/png" ? "image/png" : "image/jpeg";
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, outputType, quality));
+  if (!blob) throw new Error("Failed to compress image.");
+
+  return new File([blob], file.name.replace(/\s+/g, "_"), { type: outputType });
+}
+
 export function StudentAddPanel() {
+  const searchParams = useSearchParams();
+  const modeParam = (searchParams.get("mode") || "add").toLowerCase();
+  const isViewMode = modeParam === "view";
+  const isEditMode = modeParam === "edit";
+  const studentIdParam = searchParams.get("id") || "";
+  const studentId = /^\d+$/.test(studentIdParam) ? Number(studentIdParam) : null;
+  const isExistingStudentMode = Boolean(studentId && (isViewMode || isEditMode));
+
   const CLASS_AGE_RULES: Record<number, [number, number]> = {
     1: [5, 7],
     2: [6, 8],
@@ -191,11 +359,13 @@ export function StudentAddPanel() {
   const [email, setEmail] = useState("");
   const [addressLine, setAddressLine] = useState("");
   const [city, setCity] = useState("");
+  const [district, setDistrict] = useState("");
   const [stateName, setStateName] = useState("");
   const [pincode, setPincode] = useState("");
   const [photo, setPhoto] = useState("");
+  const [photoName, setPhotoName] = useState("");
+  const [photoUploading, setPhotoUploading] = useState(false);
   const [statusValue, setStatusValue] = useState<"active" | "inactive" | "transferred" | "dropped">("active");
-  const [religion, setReligion] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [guardianId, setGuardianId] = useState("");
   const [classId, setClassId] = useState("");
@@ -209,32 +379,69 @@ export function StudentAddPanel() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [sectionLoading, setSectionLoading] = useState(false);
+  const [sectionLoadError, setSectionLoadError] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [guardianValidationError, setGuardianValidationError] = useState("");
+  const [checkingAdmission, setCheckingAdmission] = useState(false);
+  const [admissionChecked, setAdmissionChecked] = useState(false);
+  const [pinLookupLoading, setPinLookupLoading] = useState(false);
+  const [pinLookupMessage, setPinLookupMessage] = useState("");
+  const [cityLoading, setCityLoading] = useState(false);
+  const [cityOptions, setCityOptions] = useState<string[]>([]);
+  const [stateCityMap, setStateCityMap] = useState<Record<string, string[]>>(DEFAULT_STATE_CITY_MAP);
+  const [manualAddressMode, setManualAddressMode] = useState(false);
+  const [lastPinLookup, setLastPinLookup] = useState("");
+  const [pendingSectionId, setPendingSectionId] = useState("");
 
-  const filteredSections = useMemo(() => {
-    if (!classId) return [];
-    return sections.filter((section) => String(section.school_class) === classId);
-  }, [sections, classId]);
+  const pinIsValid = /^\d{6}$/.test(pincode.trim());
 
-  const load = async () => {
+  const validAcademicYears = useMemo(
+    () => academicYears.filter((item) => /^\d{4}-\d{4}$/.test(String(item.name || "").trim())),
+    [academicYears],
+  );
+
+  const validCategories = useMemo(
+    () =>
+      categories.filter((item) => {
+        const name = String(item.name || "").trim();
+        const lowered = name.toLowerCase();
+        if (!name || name.length < 2) return false;
+        if (["abc", "asdf", "gk", "test", "demo"].includes(lowered)) return false;
+        return /^[A-Za-z0-9][A-Za-z0-9 ]{1,99}$/.test(name);
+      }),
+    [categories],
+  );
+
+  const validClasses = useMemo(
+    () =>
+      classes.filter((item) => {
+        const name = String(item.name || "");
+        return isLikelyValidClassName(name);
+      }),
+    [classes],
+  );
+
+  const stateOptions = useMemo(() => Object.keys(stateCityMap).sort((a, b) => a.localeCompare(b)), [stateCityMap]);
+
+  const canSubmit = !loading && !saving && !photoUploading && !sectionLoading && !classId ? false : !loading && !saving && !photoUploading && !sectionLoading;
+
+  const loadBaseLookups = async () => {
     try {
       setLoading(true);
       setError("");
-      const [yearData, categoryData, guardianData, classData, sectionData] = await Promise.all([
-        apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
-        apiGet<ApiList<StudentCategory>>("/api/v1/students/categories/"),
-        apiGet<ApiList<Guardian>>("/api/v1/students/guardians/"),
-        apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
-        apiGet<ApiList<Section>>("/api/v1/core/sections/"),
+      const [yearData, categoryData, guardianData, classData] = await Promise.all([
+        apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/?page_size=200"),
+        apiGet<ApiList<StudentCategory>>("/api/v1/students/categories/?page_size=200"),
+        apiGet<ApiList<Guardian>>("/api/v1/students/guardians/?page_size=200"),
+        apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/?page_size=200"),
       ]);
       setAcademicYears(listData(yearData));
       setCategories(listData(categoryData));
       setGuardians(listData(guardianData));
       setClasses(listData(classData));
-      setSections(listData(sectionData));
     } catch (loadError) {
       setError(parseError(loadError));
     } finally {
@@ -242,20 +449,206 @@ export function StudentAddPanel() {
     }
   };
 
+  const loadSectionsForClass = async (targetClassId: string) => {
+    if (!targetClassId) {
+      setSections([]);
+      setSectionId("");
+      setSectionLoadError("");
+      return;
+    }
+
+    try {
+      setSectionLoading(true);
+      setSectionLoadError("");
+      setSections([]);
+      setSectionId("");
+      const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
+      setSections(listData(data));
+    } catch (loadError) {
+      setSections([]);
+      setSectionLoadError(parseError(loadError) || "Unable to load sections for selected class.");
+    } finally {
+      setSectionLoading(false);
+    }
+  };
+
+  const loadStudentForMode = async (targetStudentId: number) => {
+    const data = await apiGet<StudentDetail>(`/api/v1/students/students/${targetStudentId}/`);
+    setAdmissionNo(String(data.admission_no || ""));
+    setRollNo(String(data.roll_no || ""));
+    setFirstName(String(data.first_name || ""));
+    setLastName(String(data.last_name || ""));
+    setDateOfBirth(String(data.date_of_birth || ""));
+    setAcademicYearId(data.academic_year ? String(data.academic_year) : "");
+    setGender(String(data.gender || "male"));
+    setCustomGender(String(data.custom_gender || ""));
+    setBloodGroup(String(data.blood_group || ""));
+    setPhone(String(data.phone || ""));
+    setEmail(String(data.email || ""));
+    setAddressLine(String(data.address_line || ""));
+    setCity(String(data.city || ""));
+    setDistrict(String(data.district || ""));
+    setStateName(String(data.state || ""));
+    setPincode(String(data.pincode || ""));
+    setPhoto(String(data.photo || ""));
+    setPhotoName(data.photo ? "Uploaded photo" : "");
+    setStatusValue(data.status || "active");
+    setCategoryId(data.category ? String(data.category) : "");
+    setGuardianId(data.guardian ? String(data.guardian) : "");
+    const nextClassId = data.current_class ? String(data.current_class) : "";
+    const nextSectionId = data.current_section ? String(data.current_section) : "";
+    setClassId(nextClassId);
+    setPendingSectionId(nextSectionId);
+    setIsDisabled(Boolean(data.is_disabled));
+    setAdmissionChecked(true);
+    setPinLookupMessage("");
+  };
+
+  const updateStateCityMap = (nextState: string, nextCities: string[]) => {
+    const cleanState = sanitizeText(nextState);
+    const cleanCities = Array.from(new Set(nextCities.map((value) => sanitizeText(value)).filter(Boolean)));
+    if (!cleanState || cleanCities.length === 0) return;
+    setStateCityMap((prev) => {
+      const existing = prev[cleanState] || [];
+      return {
+        ...prev,
+        [cleanState]: Array.from(new Set([...existing, ...cleanCities])).sort((a, b) => a.localeCompare(b)),
+      };
+    });
+  };
+
+  const loadCitiesForState = async (targetState: string) => {
+    const cleanState = sanitizeText(targetState);
+    if (!cleanState) {
+      setCityOptions([]);
+      setCity("");
+      return;
+    }
+
+    setCityLoading(true);
+    try {
+      await new Promise((resolve) => window.setTimeout(resolve, 120));
+      const uniqueOptions = Array.from(new Set(stateCityMap[cleanState] || [])).sort((a, b) => a.localeCompare(b));
+      setCityOptions(uniqueOptions);
+      setCity((prev) => (uniqueOptions.includes(prev) ? prev : uniqueOptions[0] || ""));
+    } finally {
+      setCityLoading(false);
+    }
+  };
+
+  const lookupAddressByPincode = async (pinCode: string) => {
+    const pin = pinCode.trim();
+    if (!/^\d{6}$/.test(pin) || pin === lastPinLookup) return;
+
+    setPinLookupLoading(true);
+    setPinLookupMessage("");
+    setSingleFieldError("pincode", "");
+    setLastPinLookup(pin);
+
+    try {
+      const response = await apiGet<PincodeLookupResponse>(`/api/v1/students/students/pincode-details/?pincode=${encodeURIComponent(pin)}`);
+      const data = response.data;
+      const resolvedState = sanitizeText(String(data?.state || ""));
+      const resolvedDistrict = sanitizeText(String(data?.district || ""));
+      const resolvedCity = sanitizeText(String(data?.city || ""));
+      const resolvedCityOptions = Array.from(new Set((data?.city_options || []).map((value) => sanitizeText(String(value))).filter(Boolean)));
+
+      if (!response.success || !resolvedState || !resolvedDistrict || (!resolvedCity && resolvedCityOptions.length === 0)) {
+        setSingleFieldError("pincode", "Invalid PIN Code");
+        setPinLookupMessage("Invalid PIN Code");
+        setManualAddressMode(true);
+        setStateName("");
+        setDistrict("");
+        setCity("");
+        setCityOptions([]);
+        return;
+      }
+
+      updateStateCityMap(resolvedState, resolvedCityOptions.length > 0 ? resolvedCityOptions : [resolvedCity]);
+      setManualAddressMode(false);
+      setStateName(resolvedState);
+      setDistrict(resolvedDistrict);
+
+      const nextCities = resolvedCityOptions.length > 0 ? resolvedCityOptions : [resolvedCity];
+      setCityOptions(nextCities);
+      setCity(nextCities.includes(resolvedCity) ? resolvedCity : nextCities[0]);
+
+      setPinLookupMessage(
+        data?.multiple_post_offices
+          ? `Address auto-filled from PIN code. Multiple post offices found; first city selected.`
+          : "Address auto-filled from PIN code.",
+      );
+      setSingleFieldError("pincode", "");
+      setSingleFieldError("state", "");
+      setSingleFieldError("district", "");
+      setSingleFieldError("city", "");
+    } catch (error) {
+      const message = parsePincodeError(error) || "Could not auto-fetch address. Please enter State, District, and City manually.";
+      if (/invalid pin code/i.test(message)) {
+        setSingleFieldError("pincode", "Invalid PIN Code");
+        setPinLookupMessage("Invalid PIN Code");
+        setStateName("");
+        setDistrict("");
+        setCity("");
+        setCityOptions([]);
+      } else {
+        setPinLookupMessage(message.includes("Pincode must be exactly 6 digits") ? message : "Could not auto-fetch address. Please enter State, District, and City manually.");
+      }
+      setManualAddressMode(true);
+    } finally {
+      setPinLookupLoading(false);
+    }
+  };
+
   useEffect(() => {
-    void load();
+    const loadAll = async () => {
+      try {
+        await loadBaseLookups();
+        if (isExistingStudentMode && studentId) {
+          await loadStudentForMode(studentId);
+        }
+      } catch (loadError) {
+        setError(parseError(loadError));
+      }
+    };
+    void loadAll();
   }, []);
 
   useEffect(() => {
     if (!classId) {
+      setSections([]);
       setSectionId("");
       return;
     }
-    const exists = filteredSections.some((section) => String(section.id) === sectionId);
-    if (!exists) {
-      setSectionId("");
+    void loadSectionsForClass(classId);
+  }, [classId]);
+
+  useEffect(() => {
+    if (!pendingSectionId || sections.length === 0) return;
+    const matched = sections.some((row) => String(row.id) === pendingSectionId);
+    if (matched) {
+      setSectionId(pendingSectionId);
+      setPendingSectionId("");
     }
-  }, [classId, filteredSections, sectionId]);
+  }, [pendingSectionId, sections]);
+
+  useEffect(() => {
+    if (!/^\d{6}$/.test(pincode.trim())) {
+      setPinLookupMessage("");
+      setLastPinLookup("");
+      setStateName("");
+      setDistrict("");
+      setCity("");
+      setCityOptions([]);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void lookupAddressByPincode(pincode);
+    }, 400);
+
+    return () => window.clearTimeout(timer);
+  }, [pincode]);
 
   const resetStudentForm = () => {
     setAdmissionNo("");
@@ -271,130 +664,150 @@ export function StudentAddPanel() {
     setEmail("");
     setAddressLine("");
     setCity("");
+    setDistrict("");
     setStateName("");
     setPincode("");
     setPhoto("");
+    setPhotoName("");
     setStatusValue("active");
-    setReligion("");
     setCategoryId("");
     setGuardianId("");
     setClassId("");
     setSectionId("");
+    setSections([]);
     setIsDisabled(false);
     setFieldErrors({});
+    setAdmissionChecked(false);
+    setPinLookupMessage("");
+    setPinLookupLoading(false);
+    setCityLoading(false);
+    setCityOptions([]);
+    setStateCityMap(DEFAULT_STATE_CITY_MAP);
+    setManualAddressMode(false);
+    setLastPinLookup("");
+  };
+
+  const setSingleFieldError = (field: string, message: string) => {
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      if (message) next[field] = message;
+      else delete next[field];
+      return next;
+    });
+  };
+
+  const runAdmissionAvailabilityCheck = async (valueOverride?: string): Promise<boolean> => {
+    const value = sanitizeText(typeof valueOverride === "string" ? valueOverride : admissionNo);
+    setAdmissionChecked(false);
+    if (!value) {
+      setSingleFieldError("admission_no", "Admission number is required");
+      return false;
+    }
+    if (!isValidAdmissionOrRoll(value)) {
+      setSingleFieldError("admission_no", "Admission number should contain only letters and numbers");
+      return false;
+    }
+
+    try {
+      setCheckingAdmission(true);
+      const query = new URLSearchParams({ admission_no: value });
+      if (isEditMode && studentId) query.set("exclude_id", String(studentId));
+      const payload = await apiGet<{ exists: boolean }>(`/api/v1/students/students/check-admission-no/?${query.toString()}`);
+      if (payload.exists) {
+        setSingleFieldError("admission_no", "Admission number already exists");
+        setAdmissionChecked(false);
+        return false;
+      } else {
+        setSingleFieldError("admission_no", "");
+        setAdmissionChecked(true);
+        return true;
+      }
+    } catch {
+      setSingleFieldError("admission_no", "Unable to verify admission number right now");
+      return false;
+    } finally {
+      setCheckingAdmission(false);
+    }
   };
 
   const validateClient = () => {
     const nextErrors: Record<string, string> = {};
 
-    // Admission number validation
-    if (!admissionNo.trim()) {
+    const validatePhoneInline = (value: string) => {
+      if (!value.trim()) return "Phone number is required";
+      if (!isValidPhone(value)) return "Phone number must be exactly 10 digits";
+      return "";
+    };
+
+    if (!sanitizeText(admissionNo)) {
       nextErrors.admission_no = "Admission number is required";
     } else if (!isValidAdmissionOrRoll(admissionNo)) {
-      nextErrors.admission_no = "Admission/Roll number should contain only numbers (or alphanumeric if needed)";
+      nextErrors.admission_no = "Admission number should contain only letters and numbers";
     }
 
-    // Roll number validation
     if (rollNo.trim() && !isValidNumericRoll(rollNo)) {
       nextErrors.roll_no = "Roll number must contain numbers only";
     }
 
-    // First name validation
-    if (!firstName.trim()) {
-      nextErrors.first_name = "First name is required";
-    } else if (!isAlphabetsOnly(firstName.trim())) {
-      nextErrors.first_name = "First name can only contain letters, spaces, and hyphens";
-    } else if (firstName.trim().length < 2) {
-      nextErrors.first_name = "First name must be at least 2 characters";
-    }
+    const cleanFirstName = sanitizeText(firstName);
+    const cleanLastName = sanitizeText(lastName);
+    if (!cleanFirstName) nextErrors.first_name = "First name is required";
+    else if (!isAlphabetsOnly(cleanFirstName)) nextErrors.first_name = "First name can contain only letters, spaces, apostrophe, and hyphen";
 
-    // Last name validation
-    if (!lastName.trim()) {
-      nextErrors.last_name = "Last name is required";
-    } else if (!isAlphabetsOnly(lastName.trim())) {
-      nextErrors.last_name = "Last name can only contain letters, spaces, and hyphens";
-    }
+    if (!cleanLastName) nextErrors.last_name = "Last name is required";
+    else if (!isAlphabetsOnly(cleanLastName)) nextErrors.last_name = "Last name can contain only letters, spaces, apostrophe, and hyphen";
 
-    // Date of birth validation
-    if (!dateOfBirth) {
-      nextErrors.dob = "Date of birth is required";
-    } else {
+    if (!dateOfBirth) nextErrors.dob = "Date of birth is required";
+    else {
       const dobDate = new Date(dateOfBirth);
       const now = new Date();
       if (dobDate > now) {
         nextErrors.dob = "Date of birth cannot be in the future";
       } else {
         const age = (now.getTime() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-        if (age < 3) {
-          const years = Math.floor(age);
-          const months = Math.round((age - years) * 12);
-          nextErrors.dob = `Student must be at least 3 years old (Currently ${years} years ${months} months old)`;
-        } else if (age > 25) {
-          nextErrors.dob = "Student age should not exceed 25 years";
-        } else if (classId) {
-          const selectedClass = classes.find((item) => String(item.id) === classId);
-          const className = String(selectedClass?.name || "");
-          const classMatch = className.match(/\d+/);
-          const classNumber = classMatch ? Number(classMatch[0]) : null;
-          if (classNumber && CLASS_AGE_RULES[classNumber]) {
-            const [minAge, maxAge] = CLASS_AGE_RULES[classNumber];
-            if (age < minAge || age > maxAge) {
-              nextErrors.dob = `Selected DOB does not match the required age for the selected class (Expected age: ${minAge}-${maxAge} years)`;
-            }
+        if (age < 3) nextErrors.dob = "Student must be at least 3 years old";
+        const selectedClass = validClasses.find((item) => String(item.id) === classId);
+        const className = String(selectedClass?.name || "");
+        const classMatch = className.match(/\d+/);
+        const classNumber = classMatch ? Number(classMatch[0]) : null;
+        if (classNumber && CLASS_AGE_RULES[classNumber]) {
+          const [minAge, maxAge] = CLASS_AGE_RULES[classNumber];
+          if (age < minAge || age > maxAge) {
+            nextErrors.dob = `Expected age for selected class is ${minAge}-${maxAge} years`;
           }
         }
       }
     }
 
-    // Academic year validation
-    if (!academicYearId) {
-      nextErrors.academic_year = "Academic year is required";
+    if (!academicYearId) nextErrors.academic_year = "Academic year is required";
+    else if (!validAcademicYears.some((row) => String(row.id) === academicYearId)) nextErrors.academic_year = "Please select a valid academic year";
+
+    if (!gender) nextErrors.gender = "Gender is required";
+    if (gender === "other" && !sanitizeText(customGender)) nextErrors.custom_gender = "Please specify custom gender";
+
+    if (!classId) nextErrors.class = "Class is required";
+    else if (!validClasses.some((row) => String(row.id) === classId)) nextErrors.class = "Please select a valid class";
+    if (!sectionId) nextErrors.section = "Section is required";
+    else if (!sections.some((item) => String(item.id) === sectionId)) nextErrors.section = "Selected section is invalid";
+
+    const phoneError = validatePhoneInline(phone);
+    if (phoneError) nextErrors.phone = phoneError;
+
+    if (!sanitizeText(stateName)) nextErrors.state = "State is required";
+    if (!sanitizeText(district)) nextErrors.district = "District is required";
+    if (!sanitizeText(city)) nextErrors.city = "City is required";
+    if (email.trim() && !isValidEmail(email)) nextErrors.email = "Please enter a valid email address";
+    if (pincode.trim() && !isValidPincode(pincode)) nextErrors.pincode = "Pincode must be exactly 6 digits";
+
+    if (categoryId && !validCategories.some((row) => String(row.id) === categoryId)) {
+      nextErrors.category = "Please select a valid category";
     }
 
-    // Gender validation
-    if (!gender) {
-      nextErrors.gender = "Gender is required";
-    } else if (gender === "other" && !customGender.trim()) {
-      nextErrors.custom_gender = "Please specify custom gender";
-    }
-
-    // Class validation
-    if (!classId) {
-      nextErrors.class = "Class is required";
-    }
-
-    // Section validation
-    if (!sectionId) {
-      nextErrors.section = "Section is required";
-    } else if (!filteredSections.some((item) => String(item.id) === sectionId)) {
-      nextErrors.section = "Selected section does not belong to selected class";
-    }
-
-    // Phone validation
-    if (!phone.trim()) {
-      nextErrors.phone = "Phone number is required";
-    } else if (!isValidPhone(phone.trim())) {
-      nextErrors.phone = "Phone number must be exactly 10 digits";
-    }
-
-    // Email validation
-    if (email.trim()) {
-      if (!isValidEmail(email.trim())) {
-        nextErrors.email = "Invalid email format";
-      }
-    }
-
-    // Pincode validation
-    if (pincode.trim()) {
-      if (!isValidPincode(pincode.trim())) {
-        nextErrors.pincode = "Pincode must be exactly 6 digits";
-      }
-    }
+    if (classId && sectionLoading) nextErrors.section = "Please wait until sections are loaded";
+    if (classId && !sectionLoading && sections.length === 0) nextErrors.section = "No sections found for selected class. Use refresh.";
 
     return nextErrors;
   };
-
-  const isFormValid = !loading && Object.keys(validateClient()).length === 0;
 
   const syncApiFieldErrors = (apiError: ApiError) => {
     const source = apiError.details?.field_errors || {};
@@ -406,145 +819,20 @@ export function StudentAddPanel() {
     setFieldErrors(mapped);
   };
 
-  const setSingleFieldError = (field: string, message: string) => {
-    setFieldErrors((prev) => {
-      const next = { ...prev };
-      if (message) {
-        next[field] = message;
-      } else {
-        delete next[field];
-      }
-      return next;
-    });
-  };
-
-  const runLiveValidation = (
-    field: "admission_no" | "roll_no" | "first_name" | "last_name" | "dob" | "phone" | "pincode",
-    valueOverride?: string,
-  ) => {
-    if (field === "admission_no") {
-      const value = typeof valueOverride === "string" ? valueOverride : admissionNo;
-      if (!value.trim()) {
-        setSingleFieldError("admission_no", "Admission number is required");
-      } else if (!isValidAdmissionOrRoll(value)) {
-        setSingleFieldError("admission_no", "Admission/Roll number should contain only numbers (or alphanumeric if needed)");
-      } else {
-        setSingleFieldError("admission_no", "");
-      }
-      return;
-    }
-
-    if (field === "roll_no") {
-      const value = typeof valueOverride === "string" ? valueOverride : rollNo;
-      if (value.trim() && !isValidNumericRoll(value)) {
-        setSingleFieldError("roll_no", "Roll number must contain numbers only");
-      } else {
-        setSingleFieldError("roll_no", "");
-      }
-      return;
-    }
-
-    if (field === "first_name") {
-      const value = typeof valueOverride === "string" ? valueOverride : firstName;
-      if (!value.trim()) {
-        setSingleFieldError("first_name", "First name is required");
-      } else if (!isAlphabetsOnly(value.trim())) {
-        setSingleFieldError("first_name", "First name can only contain letters, spaces, and hyphens");
-      } else if (value.trim().length < 2) {
-        setSingleFieldError("first_name", "First name must be at least 2 characters");
-      } else {
-        setSingleFieldError("first_name", "");
-      }
-      return;
-    }
-
-    if (field === "last_name") {
-      const value = typeof valueOverride === "string" ? valueOverride : lastName;
-      if (!value.trim()) {
-        setSingleFieldError("last_name", "Last name is required");
-      } else if (!isAlphabetsOnly(value.trim())) {
-        setSingleFieldError("last_name", "Last name can only contain letters, spaces, and hyphens");
-      } else {
-        setSingleFieldError("last_name", "");
-      }
-      return;
-    }
-
-    if (field === "dob") {
-      const value = typeof valueOverride === "string" ? valueOverride : dateOfBirth;
-      if (!value) {
-        setSingleFieldError("dob", "Date of birth is required");
-        return;
-      }
-      const dobDate = new Date(value);
-      const now = new Date();
-      if (dobDate > now) {
-        setSingleFieldError("dob", "Date of birth cannot be in the future");
-        return;
-      }
-      const age = (now.getTime() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-      if (age < 3) {
-        setSingleFieldError("dob", "Student must be at least 3 years old");
-        return;
-      }
-      const selectedClass = classes.find((item) => String(item.id) === classId);
-      const className = String(selectedClass?.name || "");
-      const classMatch = className.match(/\d+/);
-      const classNumber = classMatch ? Number(classMatch[0]) : null;
-      if (classNumber && CLASS_AGE_RULES[classNumber]) {
-        const [minAge, maxAge] = CLASS_AGE_RULES[classNumber];
-        if (age < minAge || age > maxAge) {
-          setSingleFieldError("dob", `Selected DOB does not match the required age for the selected class (Expected age: ${minAge}-${maxAge} years)`);
-          return;
-        }
-      }
-      setSingleFieldError("dob", "");
-      return;
-    }
-
-    if (field === "phone") {
-      const value = typeof valueOverride === "string" ? valueOverride : phone;
-      if (!value.trim()) {
-        setSingleFieldError("phone", "Phone number is required");
-      } else if (!isValidPhone(value.trim())) {
-        setSingleFieldError("phone", "Phone number must be exactly 10 digits");
-      } else {
-        setSingleFieldError("phone", "");
-      }
-      return;
-    }
-
-    if (field === "pincode") {
-      const value = typeof valueOverride === "string" ? valueOverride : pincode;
-      if (value.trim() && !isValidPincode(value.trim())) {
-        setSingleFieldError("pincode", "Pincode must be exactly 6 digits");
-      } else {
-        setSingleFieldError("pincode", "");
-      }
-    }
-  };
-
   const addGuardianInline = async () => {
     setGuardianValidationError("");
-    
-    // Validation
-    if (!newGuardianName.trim()) {
+    const guardianName = sanitizeText(newGuardianName);
+    const guardianPhone = newGuardianPhone.replace(/\D/g, "").slice(0, 10);
+
+    if (!guardianName) {
       setGuardianValidationError("Guardian name is required");
       return;
     }
-    if (!isAlphabetsOnly(newGuardianName.trim())) {
+    if (!isAlphabetsOnly(guardianName)) {
       setGuardianValidationError("Guardian name can only contain letters and spaces");
       return;
     }
-    if (newGuardianName.trim().length < 2) {
-      setGuardianValidationError("Guardian name must be at least 2 characters");
-      return;
-    }
-    if (!newGuardianPhone.trim()) {
-      setGuardianValidationError("Guardian phone is required");
-      return;
-    }
-    if (!isValidPhone(newGuardianPhone.trim())) {
+    if (!guardianPhone || !isValidPhone(guardianPhone)) {
       setGuardianValidationError("Guardian phone must be exactly 10 digits");
       return;
     }
@@ -555,11 +843,11 @@ export function StudentAddPanel() {
 
     try {
       setError("");
-      const created = await apiPost<Guardian>("/api/v1/students/guardians/", {
-        full_name: newGuardianName.trim(),
-        relation: newGuardianRelation.trim(),
-        phone: newGuardianPhone.trim(),
-        email: newGuardianEmail.trim(),
+      const created = await apiPostJson<Guardian>("/api/v1/students/guardians/", {
+        full_name: guardianName,
+        relation: sanitizeText(newGuardianRelation) || "Father",
+        phone: guardianPhone,
+        email: sanitizeText(newGuardianEmail),
       });
       setGuardians((prev) => [...prev, created]);
       setGuardianId(String(created.id));
@@ -567,89 +855,87 @@ export function StudentAddPanel() {
       setNewGuardianRelation("Father");
       setNewGuardianPhone("");
       setNewGuardianEmail("");
-      setGuardianValidationError("");
       setSuccess("Guardian added and selected successfully.");
     } catch (createError) {
       setGuardianValidationError(parseError(createError));
     }
   };
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    setSuccess("");
-    setError("");
-    setGuardianValidationError("");
-
-    // Validate all fields
-    const nextErrors = validateClient();
-    setFieldErrors(nextErrors);
-
-    // Check guardian quick-add validation: if any field is filled, all must be valid
-    const hasGuardianData = newGuardianName.trim() || newGuardianPhone.trim() || newGuardianEmail.trim();
-    if (hasGuardianData) {
-      if (!newGuardianName.trim()) {
-        setGuardianValidationError("Guardian name is required if filling guardian details");
-      } else if (!isAlphabetsOnly(newGuardianName.trim())) {
-        setGuardianValidationError("Guardian name can only contain letters and spaces");
-      } else if (newGuardianName.trim().length < 2) {
-        setGuardianValidationError("Guardian name must be at least 2 characters");
-      } else if (!newGuardianPhone.trim()) {
-        setGuardianValidationError("Guardian phone is required if filling guardian details");
-      } else if (!isValidPhone(newGuardianPhone.trim())) {
-        setGuardianValidationError("Guardian phone must be exactly 10 digits");
-      } else if (newGuardianEmail.trim() && !isValidEmail(newGuardianEmail.trim())) {
-        setGuardianValidationError("Guardian email format is invalid");
-      }
-    }
-
-    // Check if guardian validation failed
-    if (hasGuardianData && (
-      !newGuardianName.trim() ||
-      !isAlphabetsOnly(newGuardianName.trim()) ||
-      newGuardianName.trim().length < 2 ||
-      !newGuardianPhone.trim() ||
-      !isValidPhone(newGuardianPhone.trim()) ||
-      (newGuardianEmail.trim() && !isValidEmail(newGuardianEmail.trim()))
-    )) {
+  const uploadStudentPhoto = async (file: File) => {
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+      setSingleFieldError("photo", "Only JPEG and PNG files are allowed");
       return;
     }
-
-    if (Object.keys(nextErrors).length > 0) {
-      setError(`Please fix ${Object.keys(nextErrors).length} validation error(s)`);
-      // Scroll to first error with small delay to ensure DOM is ready
-      setTimeout(() => {
-        const firstErrorKey = Object.keys(nextErrors)[0];
-        const errorElement = document.querySelector(`[data-field="${firstErrorKey}"]`) as HTMLElement;
-        if (errorElement) {
-          errorElement.scrollIntoView({ behavior: "smooth", block: "center" });
-          const input = errorElement.querySelector("input, select, textarea") as HTMLElement;
-          if (input) input.focus();
-        }
-      }, 100);
+    if (file.size > 4 * 1024 * 1024) {
+      setSingleFieldError("photo", "Please choose an image up to 4MB before compression");
       return;
     }
 
     try {
+      setPhotoUploading(true);
+      setSingleFieldError("photo", "");
+      const compressed = await compressImage(file);
+      const formData = new FormData();
+      formData.append("photo", compressed);
+      const res = await apiPostForm<{ data?: { photo?: string } }>("/api/v1/students/students/upload-photo/", formData);
+      const uploadedUrl = String(res?.data?.photo || "");
+      if (!uploadedUrl) throw new Error("Photo upload failed");
+      setPhoto(uploadedUrl);
+      setPhotoName(file.name);
+      setSuccess("Photo uploaded securely.");
+    } catch (uploadError) {
+      setSingleFieldError("photo", parseError(uploadError));
+      setPhoto("");
+      setPhotoName("");
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (isViewMode) return;
+    setSuccess("");
+    setError("");
+    setGuardianValidationError("");
+
+    const nextErrors = validateClient();
+    setFieldErrors(nextErrors);
+
+    if (Object.keys(nextErrors).length > 0) {
+      setError(`Please fix ${Object.keys(nextErrors).length} validation error(s).`);
+      return;
+    }
+
+    if (!admissionChecked) {
+      const ok = await runAdmissionAvailabilityCheck();
+      if (!ok) {
+        setError("Please resolve admission number validation first.");
+        return;
+      }
+    }
+
+    try {
       setSaving(true);
-      setError("");
       const isStudentActive = !isDisabled && statusValue === "active";
       const payload: StudentCreatePayload = {
-        admission_no: admissionNo.trim(),
+        admission_no: sanitizeText(admissionNo),
         roll_no: rollNo.trim() || undefined,
-        first_name: firstName.trim(),
-        last_name: lastName.trim() || "",
-        date_of_birth: dateOfBirth,
+        first_name: sanitizeText(firstName),
+        last_name: sanitizeText(lastName),
+        date_of_birth: dateOfBirth || undefined,
         academic_year: Number(academicYearId),
         gender,
-        custom_gender: gender === "other" ? customGender.trim() : undefined,
+        custom_gender: gender === "other" ? sanitizeText(customGender) : undefined,
         blood_group: bloodGroup.trim() || undefined,
         phone: phone.trim() || undefined,
-        email: email.trim() || undefined,
-        address_line: addressLine.trim() || undefined,
-        city: city.trim() || undefined,
-        state: stateName.trim() || undefined,
+        email: sanitizeText(email) || undefined,
+        address_line: sanitizeText(addressLine) || undefined,
+        city: sanitizeText(city) || undefined,
+        district: sanitizeText(district) || undefined,
+        state: sanitizeText(stateName) || undefined,
         pincode: pincode.trim() || undefined,
-        photo: photo.trim() || undefined,
+        photo: photo || undefined,
         status: statusValue,
         category: categoryId ? Number(categoryId) : undefined,
         guardian: guardianId ? Number(guardianId) : undefined,
@@ -658,51 +944,49 @@ export function StudentAddPanel() {
         is_disabled: isDisabled,
         is_active: isStudentActive,
       };
-      const response = await apiPost<{ message?: string; warning?: string }>("/api/v1/students/students/", payload);
-      setSuccess(response?.warning ? `Student added successfully. ${response.warning}` : "Student added successfully");
-      resetStudentForm();
-      
-      // Redirect to student list after 1.5 seconds
-      setTimeout(() => {
-        if (typeof window !== "undefined") {
-          window.location.href = "/students/list";
-        }
-      }, 1500);
+
+      if (isEditMode && studentId) {
+        await apiPutJson<{ message?: string }>(`/api/v1/students/students/${studentId}/`, payload);
+        setSuccess("Student updated successfully.");
+        setTimeout(() => {
+          if (typeof window !== "undefined") {
+            window.location.href = "/students/list";
+          }
+        }, 800);
+      } else {
+        const response = await apiPostJson<{ message?: string; warning?: string }>("/api/v1/students/students/", payload);
+        setSuccess(response?.warning ? `Student added successfully. ${response.warning}` : "Student added successfully.");
+        resetStudentForm();
+        setTimeout(() => {
+          if (typeof window !== "undefined") {
+            window.location.href = "/students/list";
+          }
+        }, 1200);
+      }
     } catch (submitError) {
       syncApiFieldErrors(submitError as ApiError);
-      const errorMsg = parseError(submitError);
-      setError(errorMsg);
-      
-      // Handle specific errors
-      if (errorMsg.includes("Admission number already exists") || errorMsg.includes("admission")) {
-        setFieldErrors(prev => ({ ...prev, admission_no: "Admission number already exists" }));
-      }
+      setError(parseError(submitError));
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="legacy-panel">
+    <div className="legacy-panel student-add-panel-wrap">
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>Add Student</h1>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+            <h1 style={{ margin: 0, fontSize: 24 }}>
+              {isViewMode ? "View Student" : isEditMode ? "Edit Student" : "Add Student"}
+            </h1>
             <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
-              <div style={{ display: "flex", gap: 8 }}>
-                <Link href="/students/list" style={{ ...buttonStyle("#0ea5e9"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <Link href="/students/list" style={{ ...buttonStyle("#0f766e"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
                   Student List
                 </Link>
-                <Link href="/students/multi-class" style={{ ...buttonStyle("#16a34a"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
+                <Link href="/students/multi-class" style={{ ...buttonStyle("#1d4ed8"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
                   Student Subject Assignment
                 </Link>
-              </div>
-              <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
-                <span>Dashboard</span>
-                <span>/</span>
-                <span>Student Information</span>
-                <span>/</span>
-                <span>Add Student</span>
               </div>
             </div>
           </div>
@@ -711,359 +995,457 @@ export function StudentAddPanel() {
 
       <section className="admin-visitor-area up_st_admin_visitor">
         <div className="container-fluid p-0" style={{ display: "grid", gap: 12 }}>
-          <form onSubmit={submit}>
-            {/* Helper text for required fields */}
-            <div style={{ marginBottom: 12, padding: "8px 12px", backgroundColor: "#fef3c7", borderRadius: 8, fontSize: 12, color: "#92400e" }}>
-              <strong>*</strong> Fields marked with asterisk are required
-            </div>
+          <form onSubmit={submit} noValidate>
+            <p style={{ margin: "0 0 12px", color: "#334155", fontSize: 13 }}>
+              Required fields are marked with *.
+            </p>
 
+            <fieldset disabled={isViewMode} style={{ border: 0, margin: 0, padding: 0 }}>
             <div className="white-box" style={boxStyle()}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>Student Details</h3>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(160px, 1fr))", gap: 10 }}>
-                <div data-field="admission_no">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Admission No *</label>
-                  <input 
-                    value={admissionNo} 
+              <h3 style={{ marginTop: 0, marginBottom: 12 }}>Basic Information</h3>
+              <div className="student-grid">
+                <div className="field-admission" data-field="admission_no">
+                  <label htmlFor="admission_no" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Admission No *</label>
+                  <input
+                    id="admission_no"
+                    value={admissionNo}
                     onChange={(e) => {
-                      const value = e.target.value;
-                      setAdmissionNo(value);
-                      runLiveValidation("admission_no", value);
-                    }} 
-                    onBlur={() => runLiveValidation("admission_no")}
-                    style={fieldStyle()} 
+                      setAdmissionNo(e.target.value);
+                      setAdmissionChecked(false);
+                      setSingleFieldError("admission_no", "");
+                    }}
+                    onBlur={() => void runAdmissionAvailabilityCheck()}
+                    style={fieldStyle(Boolean(fieldErrors.admission_no))}
                     placeholder="e.g., ADM001"
+                    aria-invalid={Boolean(fieldErrors.admission_no)}
                   />
-                  {fieldErrors.admission_no && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.admission_no}</p>}
+                  <p style={helperTextStyle()}>Use letters and numbers only (example: ADM001).</p>
+                  {checkingAdmission ? <p style={{ margin: "4px 0 0", color: "#1d4ed8", fontSize: 12 }}>Checking availability...</p> : null}
+                  {fieldErrors.admission_no ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.admission_no}</p> : null}
                 </div>
+
                 <div data-field="roll_no">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Roll No</label>
-                  <input 
-                    value={rollNo} 
+                  <label htmlFor="roll_no" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Roll No</label>
+                  <input
+                    id="roll_no"
+                    value={rollNo}
                     onChange={(e) => {
                       const value = e.target.value.replace(/\D/g, "");
                       setRollNo(value);
-                      runLiveValidation("roll_no", value);
-                    }} 
-                    onBlur={() => runLiveValidation("roll_no")}
-                    style={fieldStyle()} 
-                    placeholder="Roll number"
+                      setSingleFieldError("roll_no", value && !isValidNumericRoll(value) ? "Roll number must contain numbers only" : "");
+                    }}
+                    style={fieldStyle(Boolean(fieldErrors.roll_no))}
                     inputMode="numeric"
                   />
-                  {fieldErrors.roll_no && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.roll_no}</p>}
+                  <p style={helperTextStyle()}>Digits only. This can be auto-generated if left blank.</p>
+                  {fieldErrors.roll_no ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.roll_no}</p> : null}
                 </div>
+
                 <div data-field="first_name">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>First Name *</label>
-                  <input 
-                    value={firstName} 
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setFirstName(value);
-                      runLiveValidation("first_name", value);
-                    }} 
-                    onBlur={() => runLiveValidation("first_name")}
-                    style={fieldStyle()} 
-                    placeholder="John"
-                  />
-                  {fieldErrors.first_name && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.first_name}</p>}
+                  <label htmlFor="first_name" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>First Name *</label>
+                  <input id="first_name" value={firstName} onChange={(e) => setFirstName(e.target.value)} style={fieldStyle(Boolean(fieldErrors.first_name))} />
+                  {fieldErrors.first_name ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.first_name}</p> : null}
                 </div>
+
                 <div data-field="last_name">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Last Name *</label>
-                  <input 
-                    value={lastName} 
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setLastName(value);
-                      runLiveValidation("last_name", value);
-                    }} 
-                    onBlur={() => runLiveValidation("last_name")}
-                    style={fieldStyle()} 
-                    placeholder="Doe"
-                  />
-                  {fieldErrors.last_name && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.last_name}</p>}
+                  <label htmlFor="last_name" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Last Name *</label>
+                  <input id="last_name" value={lastName} onChange={(e) => setLastName(e.target.value)} style={fieldStyle(Boolean(fieldErrors.last_name))} />
+                  {fieldErrors.last_name ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.last_name}</p> : null}
                 </div>
 
                 <div data-field="dob">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Date of Birth *</label>
-                  <input 
-                    type="date" 
-                    value={dateOfBirth} 
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setDateOfBirth(value);
-                      runLiveValidation("dob", value);
-                    }} 
-                    onBlur={() => runLiveValidation("dob")}
-                    style={fieldStyle()} 
-                  />
-                  {fieldErrors.dob && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.dob}</p>}
+                  <label htmlFor="dob" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Date of Birth *</label>
+                  <input id="dob" type="date" value={dateOfBirth} onChange={(e) => setDateOfBirth(e.target.value)} style={fieldStyle(Boolean(fieldErrors.dob))} />
+                  {fieldErrors.dob ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.dob}</p> : null}
                 </div>
+
                 <div data-field="academic_year">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Academic Year *</label>
-                  <select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={fieldStyle()}>
+                  <label htmlFor="academic_year" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Academic Year *</label>
+                  <select id="academic_year" value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={fieldStyle(Boolean(fieldErrors.academic_year))}>
                     <option value="">Select Academic Year</option>
-                    {academicYears.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
+                    {validAcademicYears.map((item) => (
+                      <option key={item.id} value={item.id}>{item.name}</option>
                     ))}
                   </select>
-                  {fieldErrors.academic_year && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.academic_year}</p>}
+                  <p style={helperTextStyle()}>Only valid academic years are listed.</p>
+                  {fieldErrors.academic_year ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.academic_year}</p> : null}
                 </div>
+
                 <div data-field="gender">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Gender *</label>
-                  <select value={gender} onChange={(e) => setGender(e.target.value)} style={fieldStyle()}>
-                    <option value="">Select Gender</option>
+                  <label htmlFor="gender" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Gender *</label>
+                  <select id="gender" value={gender} onChange={(e) => setGender(e.target.value)} style={fieldStyle(Boolean(fieldErrors.gender))}>
                     <option value="male">Male</option>
                     <option value="female">Female</option>
                     <option value="other">Other</option>
                   </select>
-                  {fieldErrors.gender && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.gender}</p>}
+                  {fieldErrors.gender ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.gender}</p> : null}
                 </div>
-                {gender === "other" && (
+
+                {gender === "other" ? (
                   <div data-field="custom_gender">
-                    <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Custom Gender *</label>
-                    <input 
-                      value={customGender} 
-                      onChange={(e) => setCustomGender(e.target.value)} 
-                      style={fieldStyle()} 
-                      placeholder="Please specify"
-                    />
-                    {fieldErrors.custom_gender && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.custom_gender}</p>}
+                    <label htmlFor="custom_gender" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Custom Gender *</label>
+                    <input id="custom_gender" value={customGender} onChange={(e) => setCustomGender(e.target.value)} style={fieldStyle(Boolean(fieldErrors.custom_gender))} />
+                    {fieldErrors.custom_gender ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.custom_gender}</p> : null}
                   </div>
-                )}
+                ) : null}
+
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Blood Group</label>
-                  <select value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)} style={fieldStyle()}>
+                  <label htmlFor="blood_group" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Blood Group</label>
+                  <select id="blood_group" value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)} style={fieldStyle()}>
                     <option value="">Select Blood Group</option>
-                    <option value="A+">A+</option>
-                    <option value="A-">A-</option>
-                    <option value="B+">B+</option>
-                    <option value="B-">B-</option>
-                    <option value="AB+">AB+</option>
-                    <option value="AB-">AB-</option>
-                    <option value="O+">O+</option>
-                    <option value="O-">O-</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Religion</label>
-                  <select value={religion} onChange={(e) => setReligion(e.target.value)} style={fieldStyle()}>
-                    <option value="">Select Religion</option>
-                    <option value="Islam">Islam</option>
-                    <option value="Hinduism">Hinduism</option>
-                    <option value="Christianity">Christianity</option>
-                    <option value="Buddhism">Buddhism</option>
-                    <option value="Sikhism">Sikhism</option>
-                    <option value="Judaism">Judaism</option>
-                    <option value="Other">Other</option>
-                  </select>
-                </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Category</label>
-                  <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} style={fieldStyle()}>
-                    <option value="">Select Category</option>
-                    {categories.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
+                    {"A+,A-,B+,B-,AB+,AB-,O+,O-".split(",").map((bg) => (
+                      <option key={bg} value={bg}>{bg}</option>
                     ))}
                   </select>
                 </div>
 
+                <div data-field="category">
+                  <label htmlFor="category" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Category</label>
+                  <select id="category" value={categoryId} onChange={(e) => setCategoryId(e.target.value)} style={fieldStyle(Boolean(fieldErrors.category))}>
+                    <option value="">Select Category</option>
+                    {validCategories.map((item) => (
+                      <option key={item.id} value={item.id}>{item.name}</option>
+                    ))}
+                  </select>
+                  {fieldErrors.category ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.category}</p> : null}
+                </div>
+
                 <div data-field="class">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Class *</label>
-                  <select value={classId} onChange={(e) => {
-                    const value = e.target.value;
-                    setClassId(value);
-                    if (dateOfBirth) {
-                      setTimeout(() => runLiveValidation("dob"), 0);
-                    }
-                  }} style={fieldStyle()}>
+                  <label htmlFor="class" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Class *</label>
+                  <select
+                    id="class"
+                    value={classId}
+                    onChange={(e) => setClassId(e.target.value)}
+                    style={fieldStyle(Boolean(fieldErrors.class))}
+                  >
                     <option value="">Select Class</option>
-                    {classes.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
+                    {validClasses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                   </select>
-                  {fieldErrors.class && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.class}</p>}
+                  <p style={helperTextStyle()}>Only valid classes are listed.</p>
+                  {fieldErrors.class ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.class}</p> : null}
                 </div>
+
                 <div data-field="section">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Section *</label>
-                  <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={fieldStyle()} disabled={!classId}>
-                    <option value="">{classId ? "Select Section" : "Select class first"}</option>
-                    {filteredSections.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
+                  <label htmlFor="section" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Section *</label>
+                  <select
+                    id="section"
+                    value={sectionId}
+                    onChange={(e) => setSectionId(e.target.value)}
+                    style={fieldStyle(Boolean(fieldErrors.section))}
+                    disabled={!classId || sectionLoading}
+                  >
+                    <option value="">{classId ? (sectionLoading ? "Loading sections..." : "Select Section") : "Select class first"}</option>
+                    {sections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                   </select>
-                  {fieldErrors.section && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.section}</p>}
+                  {sectionLoadError ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{sectionLoadError}</p> : null}
+                  {fieldErrors.section ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.section}</p> : null}
                 </div>
-                <div data-field="phone">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Phone *</label>
-                  <input 
-                    value={phone} 
+
+                <div data-field="photo">
+                  <label htmlFor="photo" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Student Photo (JPEG/PNG)</label>
+                  <input
+                    id="photo"
+                    type="file"
+                    accept="image/jpeg,image/png"
+                    style={fieldStyle(Boolean(fieldErrors.photo))}
                     onChange={(e) => {
-                      const value = e.target.value.replace(/[^0-9]/g, "").slice(0, 10);
-                      setPhone(value);
-                      runLiveValidation("phone", value);
-                    }} 
-                    onBlur={() => runLiveValidation("phone")}
-                    style={fieldStyle()} 
-                    placeholder="10-digit number"
-                    maxLength={10}
+                      const file = e.target.files?.[0];
+                      if (file) void uploadStudentPhoto(file);
+                    }}
                   />
-                  {fieldErrors.phone && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.phone}</p>}
+                  {photoName ? <p style={{ margin: "4px 0 0", color: "#0f766e", fontSize: 12 }}>Uploaded: {photoName}</p> : null}
+                  {fieldErrors.photo ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.photo}</p> : null}
                 </div>
-                <div data-field="email">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Email</label>
-                  <input 
-                    value={email} 
-                    onChange={(e) => setEmail(e.target.value)} 
-                    style={fieldStyle()} 
-                    placeholder="student@example.com"
-                    type="email"
-                  />
-                  {fieldErrors.email && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.email}</p>}
-                </div>
+
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Address Line</label>
-                  <input value={addressLine} onChange={(e) => setAddressLine(e.target.value)} style={fieldStyle()} />
-                </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>City</label>
-                  <input value={city} onChange={(e) => setCity(e.target.value)} style={fieldStyle()} />
-                </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>State</label>
-                  <input value={stateName} onChange={(e) => setStateName(e.target.value)} style={fieldStyle()} />
-                </div>
-                <div data-field="pincode">
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Pincode</label>
-                  <input 
-                    value={pincode} 
-                    onChange={(e) => {
-                      const value = e.target.value.replace(/[^0-9]/g, "").slice(0, 6);
-                      setPincode(value);
-                      runLiveValidation("pincode", value);
-                    }} 
-                    onBlur={() => runLiveValidation("pincode")}
-                    style={fieldStyle()} 
-                    placeholder="6-digit pincode"
-                    maxLength={6}
-                  />
-                  {fieldErrors.pincode && <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12, fontWeight: 500 }}>⚠ {fieldErrors.pincode}</p>}
-                </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Photo URL</label>
-                  <input value={photo} onChange={(e) => setPhoto(e.target.value)} style={fieldStyle()} />
-                </div>
-                <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Status</label>
-                  <select value={statusValue} onChange={(e) => setStatusValue(e.target.value as "active" | "inactive" | "transferred" | "dropped")} style={fieldStyle()}>
+                  <label htmlFor="status" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Status</label>
+                  <select id="status" value={statusValue} onChange={(e) => setStatusValue(e.target.value as "active" | "inactive" | "transferred" | "dropped")} style={fieldStyle()}>
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
                     <option value="transferred">Transferred</option>
                     <option value="dropped">Dropped</option>
                   </select>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 12, paddingTop: 24 }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-                    <input type="checkbox" checked={isDisabled} onChange={(e) => setIsDisabled(e.target.checked)} />
-                    Disabled
+
+                <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 26 }}>
+                  <label htmlFor="is_disabled" style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                    <input id="is_disabled" type="checkbox" checked={isDisabled} onChange={(e) => setIsDisabled(e.target.checked)} />
+                    Mark student disabled
                   </label>
                 </div>
               </div>
             </div>
 
             <div className="white-box" style={{ ...boxStyle(), marginTop: 12 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>Guardian Details (Quick Add)</h3>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(160px, 1fr))", gap: 10 }}>
+              <h3 style={{ marginTop: 0, marginBottom: 12 }}>Contact Information</h3>
+              <div className="student-grid">
+                <div data-field="phone">
+                  <label htmlFor="phone" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Phone *</label>
+                  <input
+                    id="phone"
+                    value={phone}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/[^0-9]/g, "").slice(0, 10);
+                      setPhone(value);
+                      if (!value) {
+                        setSingleFieldError("phone", "Phone number is required");
+                      } else if (!isValidPhone(value)) {
+                        setSingleFieldError("phone", "Phone number must be exactly 10 digits");
+                      } else {
+                        setSingleFieldError("phone", "");
+                      }
+                    }}
+                    onBlur={() => {
+                      if (!phone.trim()) {
+                        setSingleFieldError("phone", "Phone number is required");
+                      } else if (!isValidPhone(phone)) {
+                        setSingleFieldError("phone", "Phone number must be exactly 10 digits");
+                      } else {
+                        setSingleFieldError("phone", "");
+                      }
+                    }}
+                    style={fieldStyle(Boolean(fieldErrors.phone))}
+                    inputMode="numeric"
+                    maxLength={10}
+                  />
+                  <p style={helperTextStyle()}>Enter exactly 10 digits (numbers only).</p>
+                  {fieldErrors.phone ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.phone}</p> : null}
+                </div>
+
+                <div data-field="email">
+                  <label htmlFor="email" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Email</label>
+                  <input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} style={fieldStyle(Boolean(fieldErrors.email))} />
+                  <p style={helperTextStyle()}>Optional, but recommended for school communication.</p>
+                  {fieldErrors.email ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.email}</p> : null}
+                </div>
+
+                <div className="field-address">
+                  <label htmlFor="address_line" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Address Line</label>
+                  <input id="address_line" value={addressLine} onChange={(e) => setAddressLine(e.target.value)} style={fieldStyle()} />
+                  <p style={helperTextStyle()}>House no., street, and landmark.</p>
+                </div>
+
+                <div className="field-pincode" data-field="pincode">
+                  <label htmlFor="pincode" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Pincode</label>
+                  <input
+                    id="pincode"
+                    value={pincode}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/[^0-9]/g, "").slice(0, 6);
+                      setPincode(value);
+                      if (value.length < 6) {
+                        setSingleFieldError("pincode", "");
+                        setPinLookupMessage("");
+                      }
+                    }}
+                    style={fieldStyle(Boolean(fieldErrors.pincode))}
+                    inputMode="numeric"
+                    maxLength={6}
+                  />
+                  <p style={helperTextStyle()}>Enter 6 digits to auto-fill State, District, and City.</p>
+                  {pinLookupLoading ? <p style={{ margin: "4px 0 0", color: "#1d4ed8", fontSize: 12 }}>Fetching state, district, and city from PIN...</p> : null}
+                  {pinLookupMessage ? <p style={{ margin: "4px 0 0", color: pinLookupMessage.includes("auto-filled") ? "#0f766e" : "#92400e", fontSize: 12 }}>{pinLookupMessage}</p> : null}
+                  {fieldErrors.pincode ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.pincode}</p> : null}
+                  <button
+                    type="button"
+                    style={{ ...buttonStyle("#475569"), minHeight: 34, marginTop: 6 }}
+                    onClick={() => setManualAddressMode((prev) => !prev)}
+                  >
+                    {manualAddressMode ? "Use PIN Auto-Fill" : "Enter Address Manually"}
+                  </button>
+                </div>
+
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Full Name</label>
-                  <input value={newGuardianName} onChange={(e) => setNewGuardianName(e.target.value)} style={fieldStyle()} />
+                  <label htmlFor="state" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>State *</label>
+                  {manualAddressMode ? (
+                    <input id="state" value={stateName} onChange={(e) => setStateName(e.target.value)} style={fieldStyle(Boolean(fieldErrors.state))} placeholder="Enter state" />
+                  ) : (
+                    <select
+                      id="state"
+                      value={stateName}
+                      onChange={(e) => {
+                        const nextState = e.target.value;
+                        setStateName(nextState);
+                        setDistrict("");
+                        setCity("");
+                        void loadCitiesForState(nextState);
+                      }}
+                      style={fieldStyle(Boolean(fieldErrors.state))}
+                      disabled={!pinIsValid}
+                    >
+                      <option value="">Select State</option>
+                      {stateOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                    </select>
+                  )}
+                  {fieldErrors.state ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.state}</p> : null}
+                </div>
+
+                <div>
+                  <label htmlFor="district" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>District *</label>
+                  <input
+                    id="district"
+                    value={district}
+                    onChange={(e) => setDistrict(e.target.value)}
+                    style={fieldStyle(Boolean(fieldErrors.district))}
+                    placeholder={pinLookupLoading ? "Fetching district from PIN..." : "Enter district"}
+                    disabled={!manualAddressMode && !pinIsValid}
+                  />
+                  {fieldErrors.district ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.district}</p> : null}
+                </div>
+
+                <div>
+                  <label htmlFor="city" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>City *</label>
+                  {manualAddressMode || cityOptions.length === 0 ? (
+                    <input
+                      id="city"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      style={fieldStyle(Boolean(fieldErrors.city))}
+                      placeholder={cityLoading ? "Loading cities..." : "Enter city"}
+                      disabled={!manualAddressMode && !pinIsValid}
+                    />
+                  ) : (
+                    <select
+                      id="city"
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      style={fieldStyle(Boolean(fieldErrors.city))}
+                      disabled={cityLoading || !pinIsValid}
+                    >
+                      <option value="">{cityLoading ? "Loading cities..." : "Select City"}</option>
+                      {cityOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                    </select>
+                  )}
+                  {cityLoading ? <p style={{ margin: "4px 0 0", color: "#1d4ed8", fontSize: 12 }}>Loading city list...</p> : null}
+                  {fieldErrors.city ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.city}</p> : null}
+                </div>
+              </div>
+            </div>
+
+            <div className="white-box" style={{ ...boxStyle(), marginTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                <h3 style={{ marginTop: 0, marginBottom: 8 }}>Guardian Details</h3>
+                <span style={{ color: "#475569", fontSize: 12 }}>Optional: add guardian now or link later from guardian module.</span>
+              </div>
+              <div className="student-grid">
+                <div>
+                  <label htmlFor="guardian_select" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Select Existing Guardian</label>
+                  <select id="guardian_select" value={guardianId} onChange={(e) => setGuardianId(e.target.value)} style={fieldStyle()}>
+                    <option value="">Select Guardian</option>
+                    {guardians.map((g) => <option key={g.id} value={g.id}>{g.full_name} ({g.phone})</option>)}
+                  </select>
                 </div>
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Relation</label>
-                  <select value={newGuardianRelation} onChange={(e) => setNewGuardianRelation(e.target.value)} style={fieldStyle()}>
+                  <label htmlFor="new_guardian_name" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Guardian Name</label>
+                  <input id="new_guardian_name" value={newGuardianName} onChange={(e) => setNewGuardianName(e.target.value)} style={fieldStyle()} />
+                </div>
+                <div>
+                  <label htmlFor="new_guardian_relation" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Relation</label>
+                  <select id="new_guardian_relation" value={newGuardianRelation} onChange={(e) => setNewGuardianRelation(e.target.value)} style={fieldStyle()}>
                     <option value="Father">Father</option>
                     <option value="Mother">Mother</option>
                     <option value="Others">Others</option>
                   </select>
                 </div>
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Phone</label>
-                  <input value={newGuardianPhone} onChange={(e) => setNewGuardianPhone(e.target.value.replace(/\D/g, "").slice(0, 12))} maxLength={12} style={fieldStyle()} />
+                  <label htmlFor="new_guardian_phone" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Phone</label>
+                  <input id="new_guardian_phone" value={newGuardianPhone} onChange={(e) => setNewGuardianPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} maxLength={10} style={fieldStyle()} />
                 </div>
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Email</label>
-                  <input value={newGuardianEmail} onChange={(e) => setNewGuardianEmail(e.target.value)} style={fieldStyle()} />
+                  <label htmlFor="new_guardian_email" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Email</label>
+                  <input id="new_guardian_email" type="email" value={newGuardianEmail} onChange={(e) => setNewGuardianEmail(e.target.value)} style={fieldStyle()} />
                 </div>
               </div>
-              <div style={{ marginTop: 12 }}>
-                <button type="button" onClick={() => void addGuardianInline()} style={buttonStyle("#0ea5e9")}>
-                  Add Guardian
-                </button>
-              </div>
-            </div>
 
-            <div style={{ display: "flex", justifyContent: "center", marginTop: 20, gap: 12 }}>
-              <button 
-                type="submit" 
-                disabled={saving || loading} 
-                style={{
-                  ...buttonStyle(),
-                  opacity: saving || loading ? 0.6 : 1,
-                  cursor: saving || loading ? "not-allowed" : "pointer"
-                } as React.CSSProperties}
-              >
-                {saving ? "🔄 Saving student..." : "✓ Save Student"}
-              </button>
-              <Link 
-                href="/students/list" 
-                style={{ ...buttonStyle("#6b7280"), display: "inline-flex", alignItems: "center", textDecoration: "none" } as React.CSSProperties}
-              >
+              <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button type="button" onClick={() => void addGuardianInline()} style={buttonStyle("#0f766e")}>Add Guardian</button>
+              </div>
+              {guardianValidationError ? <p style={{ margin: "8px 0 0", color: "#dc2626", fontSize: 12 }}>{guardianValidationError}</p> : null}
+            </div>
+            </fieldset>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20, gap: 12, flexWrap: "wrap" }}>
+              <Link href="/students/list" style={{ ...buttonStyle("#6b7280"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
                 Cancel
               </Link>
+              {isViewMode && studentId ? (
+                <Link href={`/students/add?mode=edit&id=${studentId}`} style={{ ...buttonStyle("#1d4ed8"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
+                  Edit Student
+                </Link>
+              ) : (
+                <button type="submit" disabled={!canSubmit} style={{ ...buttonStyle("#1d4ed8"), opacity: !canSubmit ? 0.6 : 1 }}>
+                  {saving ? "Saving..." : isEditMode ? "Update Student" : "Save Student"}
+                </button>
+              )}
             </div>
           </form>
 
-          {loading && (
-            <div style={{ margin: 0, color: "var(--text-muted)", fontSize: 14, textAlign: "center", padding: "12px" }}>
-              <span>⏳ Loading form data...</span>
+          {loading ? (
+            <div style={{ margin: 0, color: "var(--text-muted)", fontSize: 14, textAlign: "center", padding: "12px" }}>Loading form data...</div>
+          ) : null}
+          {error ? (
+            <div style={{ margin: 0, color: "#b91c1c", fontSize: 13, backgroundColor: "#fee2e2", padding: "12px", borderRadius: 8, border: "1px solid #fecaca", fontWeight: 500 }}>
+              {error}
             </div>
-          )}
-          {error && (
-            <div style={{ 
-              margin: 0, 
-              color: "#dc2626", 
-              fontSize: 13,
-              backgroundColor: "#fee2e2",
-              padding: "12px",
-              borderRadius: 8,
-              border: "1px solid #fecaca",
-              fontWeight: 500
-            }}>
-              ✕ {error}
+          ) : null}
+          {success ? (
+            <div style={{ margin: 0, color: "#065f46", fontSize: 13, backgroundColor: "#d1fae5", padding: "12px", borderRadius: 8, border: "1px solid #a7f3d0", fontWeight: 500 }}>
+              {success}
             </div>
-          )}
-          {success && (
-            <div style={{ 
-              margin: 0, 
-              color: "#065f46", 
-              fontSize: 13,
-              backgroundColor: "#d1fae5",
-              padding: "12px",
-              borderRadius: 8,
-              border: "1px solid #a7f3d0",
-              fontWeight: 500
-            }}>
-              ✓ {success}
-            </div>
-          )}
+          ) : null}
         </div>
       </section>
+
+      <style jsx>{`
+        .student-add-panel-wrap {
+          overflow-x: hidden;
+        }
+
+        .student-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(190px, 1fr));
+          gap: 12px;
+        }
+
+        .field-address {
+          grid-column: span 2;
+        }
+
+        .field-admission,
+        .field-pincode {
+          grid-column: span 1;
+        }
+
+        input:focus,
+        select:focus,
+        button:focus,
+        a:focus {
+          outline: 3px solid #93c5fd;
+          outline-offset: 1px;
+        }
+
+        @media (max-width: 1100px) {
+          .student-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .field-address {
+            grid-column: span 2;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .student-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .field-address,
+          .field-admission,
+          .field-pincode {
+            grid-column: span 1;
+          }
+        }
+      `}</style>
     </div>
   );
 }

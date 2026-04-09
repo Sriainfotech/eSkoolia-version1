@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import (
     AcademicYear, Class, ClassPeriod, ClassRoom, Section, Subject, 
     Vehicle, TransportRoute, AssignVehicle,
+    BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate,
     ItemCategory, ItemStore, Supplier, Item, ItemReceive, ItemReceiveChild,
     ItemIssue, ItemSell, ItemSellChild
 )
@@ -354,6 +355,46 @@ class AssignVehicleSerializer(serializers.ModelSerializer):
         model = AssignVehicle
         fields = ["id", "school", "academic_year", "vehicle", "vehicle_no", "route", "route_title", "active_status", "created_at", "updated_at"]
         read_only_fields = ["id", "school", "academic_year", "created_at", "updated_at"]
+
+
+# ===== BUS TRACKING MODULE SERIALIZERS =====
+class BusStopSerializer(serializers.ModelSerializer):
+    route_title = serializers.CharField(source="route.title", read_only=True)
+
+    class Meta:
+        model = BusStop
+        fields = ["id", "route", "route_title", "stop_name", "latitude", "longitude", "stop_order", "arrival_time_window", "active_status", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class BusLocationSerializer(serializers.ModelSerializer):
+    vehicle_no = serializers.CharField(source="vehicle.vehicle_no", read_only=True)
+
+    class Meta:
+        model = BusLocation
+        fields = ["id", "vehicle", "vehicle_no", "latitude", "longitude", "speed", "heading", "accuracy", "timestamp", "is_active"]
+        read_only_fields = ["id", "timestamp"]
+
+
+class TransportAlertSerializer(serializers.ModelSerializer):
+    vehicle_no = serializers.CharField(source="vehicle.vehicle_no", read_only=True)
+    route_title = serializers.CharField(source="route.title", read_only=True, allow_null=True)
+
+    class Meta:
+        model = TransportAlert
+        fields = ["id", "vehicle", "vehicle_no", "route", "route_title", "alert_type", "message", "severity", "latitude", "longitude", "is_resolved", "created_at", "resolved_at"]
+        read_only_fields = ["id", "created_at"]
+
+
+class BusRoutePickupUpdateSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source="student.full_name", read_only=True)
+    stop_name = serializers.CharField(source="stop.stop_name", read_only=True)
+    vehicle_no = serializers.CharField(source="vehicle.vehicle_no", read_only=True)
+
+    class Meta:
+        model = BusRoutePickupUpdate
+        fields = ["id", "stop", "stop_name", "vehicle", "vehicle_no", "student", "student_name", "arrived_at", "picked_up_at", "status"]
+        read_only_fields = ["id"]
 
 
 # ===== INVENTORY MODULE SERIALIZERS =====

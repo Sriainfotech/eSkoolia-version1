@@ -50,10 +50,7 @@ export function Topbar() {
         background: "var(--surface)",
       }}
     >
-      <div>
-        <div style={{ fontSize: 14, color: "var(--text-muted)" }}>Workspace</div>
-        <div style={{ fontSize: 16, fontWeight: 700 }}>Migration Command Center</div>
-      </div>
+      <div />
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button
           onClick={handleLogout}

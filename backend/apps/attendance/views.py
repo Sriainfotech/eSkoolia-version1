@@ -420,12 +420,35 @@ class StudentAttendanceMonthlyReportAPIView(AttendanceTenantMixin, APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        try:
+            class_id_int = int(class_id)
+            section_id_int = int(section_id)
+            month_int = int(month)
+            year_int = int(year)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "class_id, section_id, month, year must be numeric."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if month_int < 1 or month_int > 12:
+            return Response(
+                {"detail": "month must be between 1 and 12."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if year_int < 2000 or year_int > 2100:
+            return Response(
+                {"detail": "year must be a valid 4-digit year."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         records = (
             StudentAttendance.objects.filter(
-                class_id=int(class_id),
-                section_id=int(section_id),
-                attendance_date__month=int(month),
-                attendance_date__year=int(year),
+                class_id=class_id_int,
+                section_id=section_id_int,
+                attendance_date__month=month_int,
+                attendance_date__year=year_int,
                 **self.school_filter(request),
             )
             .select_related("student")

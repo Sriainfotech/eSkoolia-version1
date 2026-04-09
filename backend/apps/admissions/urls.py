@@ -1,5 +1,7 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 from .views import (
+	AdmissionPincodeLookupAPIView,
 	AdmissionFollowUpViewSet,
 	AdmissionInquiryViewSet,
 	AdminSetupEntryViewSet,
@@ -28,4 +30,7 @@ router.register("certificate-templates", CertificateTemplateViewSet, basename="c
 router.register("id-cards", IdCardReadOnlyViewSet, basename="id-card")
 router.register("certificates", CertificateReadOnlyViewSet, basename="certificate")
 
-urlpatterns = router.urls
+urlpatterns = [
+	path("pincode-details/", AdmissionPincodeLookupAPIView.as_view(), name="admission-pincode-details"),
+	*router.urls,
+]

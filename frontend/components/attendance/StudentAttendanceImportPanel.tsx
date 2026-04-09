@@ -1,6 +1,8 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ConfirmationModal } from "@/components/common/ConfirmationModal";
+import { Spinner } from "@/components/common/Spinner";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { getAccessToken } from "@/lib/auth";
 import { API_BASE_URL } from "@/lib/api";
@@ -20,6 +22,43 @@ type ImportResponse = {
 
 async function apiGet<T>(path: string): Promise<T> {
   return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
+}
+
+function listData<T>(value: T[] | { results?: T[] } | null | undefined): T[] {
+  if (Array.isArray(value)) return value;
+  return value?.results || [];
+}
+
+function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatDisplayDate(value: string) {
+  if (!value) return "-";
+  const parts = value.split("-");
+  if (parts.length !== 3) return value;
+  return `${parts[2]}-${parts[1]}-${parts[0]}`;
+}
+
+function formatFileSize(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function getFileValidationError(file: File | null) {
+  if (!file) return "Please upload a file";
+  const isValidType = ["text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"].includes(file.type)
+    || /\.(csv|xlsx)$/i.test(file.name);
+  if (!isValidType) return "Upload a valid CSV or Excel file (.csv, .xlsx)";
+  const maxSizeBytes = 5 * 1024 * 1024;
+  if (file.size > maxSizeBytes) return "File size exceeds 5MB limit";
+  return "";
+}
+
+function getReadableClassName(schoolClass: SchoolClass) {
+  return schoolClass.class_name || schoolClass.name || `Class ${schoolClass.id}`;
 }
 
 function fieldStyle(hasError = false) {
@@ -72,11 +111,16 @@ export default function StudentAttendanceImportPanel() {
   const [sections, setSections] = useState<Section[]>([]);
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
-  const [attendanceDate, setAttendanceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [attendanceDate, setAttendanceDate] = useState(todayIsoDate());
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [sectionLoading, setSectionLoading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [queuedSubmit, setQueuedSubmit] = useState<{ classId: string; sectionId: string; attendanceDate: string; file: File } | null>(null);
+  const [fileDragFocus, setFileDragFocus] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   // Form validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -88,6 +132,8 @@ export default function StudentAttendanceImportPanel() {
   const [detailedErrors, setDetailedErrors] = useState<ImportError[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const today = useMemo(() => todayIsoDate(), []);
 
   // HELPER: Validate form
   const validateForm = (): boolean => {
@@ -102,31 +148,39 @@ export default function StudentAttendanceImportPanel() {
     if (!attendanceDate) {
       newErrors.attendanceDate = "Please select an attendance date";
     } else {
-      const selectedDate = new Date(attendanceDate);
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      if (selectedDate > today) {
+      if (attendanceDate > today) {
         newErrors.attendanceDate = "Cannot import attendance for future dates";
       }
     }
-    if (!file) {
-      newErrors.file = "Please upload a file";
-    } else {
-      // File format validation
-      const validFormats = [".csv", ".xlsx", ".xls"];
-      const hasValidFormat = validFormats.some((fmt) => file.name.toLowerCase().endsWith(fmt));
-      if (!hasValidFormat) {
-        newErrors.file = "Upload a valid CSV or Excel file (.csv, .xlsx, .xls)";
-      }
-      // File size validation (5MB max)
-      const fileSizeMB = file.size / (1024 * 1024);
-      if (fileSizeMB > 5) {
-        newErrors.file = `File size exceeds 5MB limit (current: ${fileSizeMB.toFixed(2)}MB)`;
-      }
+    const fileError = getFileValidationError(file);
+    if (fileError) {
+      newErrors.file = fileError;
     }
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
+  };
+
+  const loadSectionsForClass = async (targetClassId: string) => {
+    if (!targetClassId) {
+      setSections([]);
+      setSectionId("");
+      return;
+    }
+
+    try {
+      setSectionLoading(true);
+      setSections([]);
+      setSectionId("");
+      const data = await apiGet<Section[] | { results?: Section[] }>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
+      setSections(listData(data));
+      setApiError("");
+    } catch {
+      setApiError("Failed to load sections for selected class.");
+      setSections([]);
+    } finally {
+      setSectionLoading(false);
+    }
   };
 
   // Load data
@@ -134,12 +188,9 @@ export default function StudentAttendanceImportPanel() {
     const load = async () => {
       try {
         setLoading(true);
-        const [classData, sectionData] = await Promise.all([
-          apiGet<{ classes: SchoolClass[] }>("/api/v1/attendance/student-attendance/import/"),
-          apiGet<Section[] | { results?: Section[] }>("/api/v1/core/sections/"),
-        ]);
+        const classData = await apiGet<{ classes: SchoolClass[] }>("/api/v1/attendance/student-attendance/import/");
         setClasses(classData.classes || []);
-        setSections(Array.isArray(sectionData) ? sectionData : sectionData.results || []);
+        setSections([]);
         setApiError("");
       } catch {
         setApiError("Failed to load form data. Please refresh the page.");
@@ -155,6 +206,11 @@ export default function StudentAttendanceImportPanel() {
     if (!id) return [];
     return sections.filter((s) => s.school_class === id);
   }, [classId, sections]);
+
+  const selectedClass = useMemo(() => classes.find((item) => String(item.id) === classId), [classes, classId]);
+  const selectedSection = useMemo(() => filteredSections.find((item) => String(item.id) === sectionId), [filteredSections, sectionId]);
+  const selectedFileError = useMemo(() => getFileValidationError(file), [file]);
+  const canSubmit = Boolean(classId && sectionId && attendanceDate && file && !selectedFileError && !saving && !loading && !sectionLoading);
 
   // Drag & drop handlers
   const handleDrag = (e: React.DragEvent) => {
@@ -175,14 +231,14 @@ export default function StudentAttendanceImportPanel() {
     const droppedFiles = e.dataTransfer.files;
     if (droppedFiles?.[0]) {
       const droppedFile = droppedFiles[0];
-      const validFormats = [".csv", ".xlsx", ".xls"];
-      const isValid = validFormats.some((fmt) => droppedFile.name.toLowerCase().endsWith(fmt));
+      const fileError = getFileValidationError(droppedFile);
 
-      if (isValid) {
+      if (!fileError) {
         setFile(droppedFile);
         setErrors((prev) => ({ ...prev, file: "" }));
       } else {
-        setErrors((prev) => ({ ...prev, file: "Invalid file format. Upload CSV or Excel file." }));
+        setFile(null);
+        setErrors((prev) => ({ ...prev, file: fileError }));
       }
     }
   };
@@ -190,8 +246,17 @@ export default function StudentAttendanceImportPanel() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-      setFile(selectedFile);
-      setErrors((prev) => ({ ...prev, file: "" }));
+      const fileError = getFileValidationError(selectedFile);
+      setFile(fileError ? null : selectedFile);
+      setErrors((prev) => ({ ...prev, file: fileError }));
+    }
+  };
+
+  const clearSelectedFile = () => {
+    setFile(null);
+    setErrors((prev) => ({ ...prev, file: "" }));
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
   };
 
@@ -269,25 +334,56 @@ export default function StudentAttendanceImportPanel() {
     }
 
     try {
-      setSaving(true);
       setApiError("");
       setSuccessMessage("");
       setImportResult(null);
       setDetailedErrors([]);
 
-      const formData = new FormData();
-      formData.append("class", classId);
-      formData.append("section", sectionId);
-      formData.append("attendance_date", attendanceDate);
-      if (file) {
-        formData.append("file", file);
+      setQueuedSubmit({ classId, sectionId, attendanceDate, file });
+      setConfirmOpen(true);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Operation failed";
+
+      if (errorMsg === "401") {
+        setApiError("Session expired. Please log in again.");
+      } else if (errorMsg.includes("network") || errorMsg.includes("fetch")) {
+        setApiError("Network error. Check your internet connection.");
+      } else {
+        setApiError(errorMsg || "Something went wrong. Please try again.");
       }
+
+      setImportResult(null);
+      setDetailedErrors([]);
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!queuedSubmit) return;
+
+    try {
+      setSaving(true);
+      setConfirmOpen(false);
+      setApiError("");
+      setSuccessMessage("");
+      setImportResult(null);
+      setDetailedErrors([]);
+      setUploadProgress(20);
+
+      const formData = new FormData();
+      formData.append("class", queuedSubmit.classId);
+      formData.append("section", queuedSubmit.sectionId);
+      formData.append("attendance_date", queuedSubmit.attendanceDate);
+      formData.append("file", queuedSubmit.file);
+
+      setUploadProgress(55);
 
       const response = await apiRequestWithRefresh<ImportResponse>("/api/v1/attendance/student-attendance/bulk-store/", {
         method: "POST",
         headers: {},
         body: formData,
       });
+
+      setUploadProgress(85);
 
       // Handle different response scenarios
       if (response.data?.failed && response.data.failed > 0) {
@@ -305,6 +401,9 @@ export default function StudentAttendanceImportPanel() {
         if (fileInputRef.current) fileInputRef.current.value = "";
         setImportResult(null);
       }
+      setUploadProgress(100);
+      window.setTimeout(() => setUploadProgress(0), 500);
+      setQueuedSubmit(null);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Operation failed";
 
@@ -318,20 +417,19 @@ export default function StudentAttendanceImportPanel() {
 
       setImportResult(null);
       setDetailedErrors([]);
+      setUploadProgress(0);
     } finally {
       setSaving(false);
     }
   };
 
-  const isFormValid = classId && sectionId && attendanceDate && file;
-
   return (
     <div className="legacy-panel">
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
             <h1 style={{ margin: 0, fontSize: 24 }}>Student Attendance</h1>
-            <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+            <div style={{ display: "flex", gap: 8, color: "#475569", fontSize: 13, fontWeight: 500 }}>
               <span>Dashboard</span>
               <span>/</span>
               <span>Student Attendance</span>
@@ -344,37 +442,38 @@ export default function StudentAttendanceImportPanel() {
 
       <section className="admin-visitor-area up_st_admin_visitor">
         <div className="container-fluid p-0">
-          {/* Header with Download Button */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
             <h3 style={{ margin: 0 }}>Import Attendance</h3>
-            <button type="button" style={secondaryButtonStyle()} onClick={downloadSampleFile}>
-              ⬇ Download Sample File
-            </button>
           </div>
 
           {/* Main Form Box */}
           <div className="white-box" style={{ ...boxStyle(), marginBottom: 16 }}>
             <form onSubmit={submit}>
               {/* Class & Section Fields */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12, marginBottom: 16 }}>
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13, fontWeight: 600 }}>
+                  <label htmlFor="attendance-class" style={{ display: "block", marginBottom: 6, fontSize: 13, fontWeight: 600 }}>
                     Select Class <span style={{ color: "#dc2626" }}>*</span>
                   </label>
                   <select
+                    id="attendance-class"
                     value={classId}
                     onChange={(e) => {
-                      setClassId(e.target.value);
+                      const nextClassId = e.target.value;
+                      setClassId(nextClassId);
                       setSectionId("");
                       setErrors((prev) => ({ ...prev, classId: "" }));
+                      void loadSectionsForClass(nextClassId);
                     }}
                     disabled={loading}
+                    aria-label="Select class"
                     style={fieldStyle(!!errors.classId)}
                   >
                     <option value="">Select Class</option>
                     {classes.map((schoolClass) => (
                       <option key={schoolClass.id} value={schoolClass.id}>
-                        {schoolClass.class_name || schoolClass.name || `Class ${schoolClass.id}`}
+                        {getReadableClassName(schoolClass)}
                       </option>
                     ))}
                   </select>
@@ -382,19 +481,21 @@ export default function StudentAttendanceImportPanel() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", marginBottom: 6, fontSize: 13, fontWeight: 600 }}>
+                  <label htmlFor="attendance-section" style={{ display: "block", marginBottom: 6, fontSize: 13, fontWeight: 600 }}>
                     Select Section <span style={{ color: "#dc2626" }}>*</span>
                   </label>
                   <select
+                    id="attendance-section"
                     value={sectionId}
                     onChange={(e) => {
                       setSectionId(e.target.value);
                       setErrors((prev) => ({ ...prev, sectionId: "" }));
                     }}
-                    disabled={!classId || loading}
+                    disabled={!classId || loading || sectionLoading}
+                    aria-label="Select section"
                     style={fieldStyle(!!errors.sectionId)}
                   >
-                    <option value="">Select Section</option>
+                    <option value="">{sectionLoading ? "Loading sections..." : classId ? "Select Section" : "Select class first"}</option>
                     {filteredSections.map((section) => (
                       <option key={section.id} value={section.id}>
                         {section.name}
@@ -407,10 +508,11 @@ export default function StudentAttendanceImportPanel() {
 
               {/* Date Field */}
               <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "block", marginBottom: 6, fontSize: 13, fontWeight: 600 }}>
+                <label htmlFor="attendance-date" style={{ display: "block", marginBottom: 6, fontSize: 13, fontWeight: 600 }}>
                   Attendance Date <span style={{ color: "#dc2626" }}>*</span>
                 </label>
                 <input
+                  id="attendance-date"
                   type="date"
                   value={attendanceDate}
                   onChange={(e) => {
@@ -418,60 +520,117 @@ export default function StudentAttendanceImportPanel() {
                     setErrors((prev) => ({ ...prev, attendanceDate: "" }));
                   }}
                   disabled={loading}
+                  max={today}
+                  aria-label="Attendance date"
                   style={fieldStyle(!!errors.attendanceDate)}
                 />
+                <p style={{ margin: "6px 0 0", color: "var(--text-muted)", fontSize: 12 }}>Format: DD-MM-YYYY</p>
                 {errors.attendanceDate && <p style={{ color: "#dc2626", fontSize: 12, marginTop: 4 }}>📌 {errors.attendanceDate}</p>}
               </div>
 
               {/* Drag & Drop File Upload */}
               <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "block", marginBottom: 6, fontSize: 13, fontWeight: 600 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 6, flexWrap: "wrap" }}>
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 600 }}>
                   Upload File <span style={{ color: "#dc2626" }}>*</span>
-                </label>
+                  </label>
+                  <button type="button" style={secondaryButtonStyle()} onClick={downloadSampleFile} aria-label="Download sample file">
+                    ⬇ Download Sample File
+                  </button>
+                </div>
                 <div
                   onDragEnter={handleDrag}
                   onDragLeave={handleDrag}
                   onDragOver={handleDrag}
                   onDrop={handleDrop}
                   onClick={() => fileInputRef.current?.click()}
+                  onFocus={() => setFileDragFocus(true)}
+                  onBlur={() => setFileDragFocus(false)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      fileInputRef.current?.click();
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Upload attendance file. Press Enter or Space to open file picker."
                   style={{
-                    border: dragActive ? "2px dashed var(--primary)" : `2px dashed var(--line)`,
-                    borderRadius: 8,
+                    border: dragActive || fileDragFocus ? "2px dashed var(--primary)" : `2px dashed var(--line)`,
+                    borderRadius: 12,
                     padding: 24,
                     textAlign: "center",
                     cursor: "pointer",
-                    backgroundColor: dragActive ? "rgba(59, 130, 246, 0.05)" : "rgba(0,0,0,0.01)",
+                    backgroundColor: dragActive || fileDragFocus ? "rgba(59, 130, 246, 0.06)" : "rgba(0,0,0,0.01)",
                     transition: "all 0.2s ease",
+                    outline: "none",
                   }}
                 >
                   <div style={{ fontSize: 32, marginBottom: 8 }}>📁</div>
-                  <p style={{ margin: "0 0 4px 0", fontSize: 14, fontWeight: 500 }}>
-                    {file ? `✓ ${file.name}` : "Drag & drop your file here"}
+                  <p style={{ margin: "0 0 4px 0", fontSize: 14, fontWeight: 600 }}>
+                    {file ? file.name : "Drag & drop your file here"}
                   </p>
                   <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>
-                    or click to select (CSV or Excel, max 5MB)
+                    {file ? `${formatFileSize(file.size)} • CSV or Excel file` : "or click to select (.csv, .xlsx, max 5MB)"}
                   </p>
                 </div>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv,.xlsx,.xls"
+                  accept=".csv,.xlsx"
                   onChange={handleFileChange}
                   style={{ display: "none" }}
-                  disabled={loading}
+                  disabled={loading || saving}
+                  aria-label="Attendance file input"
                 />
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 8, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {file ? (
+                      <button type="button" style={secondaryButtonStyle()} onClick={clearSelectedFile} aria-label="Remove selected file">
+                        Remove File
+                      </button>
+                    ) : null}
+                  </div>
+                  <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>Allowed: CSV or XLSX only. Max size: 5MB.</p>
+                </div>
                 {errors.file && <p style={{ color: "#dc2626", fontSize: 12, marginTop: 4 }}>📌 {errors.file}</p>}
               </div>
 
               {/* Submit Button */}
-              <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 20 }}>
+              <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 28 }}>
                 <button
                   type="submit"
-                  disabled={saving || !isFormValid || loading}
-                  style={buttonStyle("var(--primary)", saving || !isFormValid || loading)}
+                  disabled={saving || !canSubmit || loading}
+                  style={buttonStyle("var(--primary)", saving || !canSubmit || loading)}
+                  aria-label="Import attendance"
                 >
-                  {saving ? "⏳ Importing..." : "📤 Import Attendance"}
+                  {saving ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                      <Spinner size={14} />
+                      Importing...
+                    </span>
+                  ) : (
+                    "📤 Import Attendance"
+                  )}
                 </button>
+              </div>
+
+              <div aria-live="polite" style={{ minHeight: 18, marginTop: 12 }}>
+                {saving ? (
+                  <div style={{ display: "grid", gap: 8 }}>
+                    <div style={{ height: 6, borderRadius: 999, background: "#e2e8f0", overflow: "hidden" }}>
+                      <div
+                        style={{
+                          width: `${uploadProgress}%`,
+                          height: "100%",
+                          background: "linear-gradient(90deg, var(--primary), #38bdf8)",
+                          transition: "width 0.2s ease",
+                        }}
+                      />
+                    </div>
+                    <p style={{ margin: 0, color: "var(--text-muted)", fontSize: 12 }}>Preparing import...</p>
+                  </div>
+                ) : null}
               </div>
             </form>
 
@@ -570,6 +729,29 @@ export default function StudentAttendanceImportPanel() {
           )}
         </div>
       </section>
+
+      <ConfirmationModal
+        isOpen={confirmOpen}
+        title="Confirm Attendance Import"
+        message={`Are you sure you want to import attendance for ${selectedClass ? getReadableClassName(selectedClass) : classId} - ${selectedSection?.name || sectionId} on ${formatDisplayDate(attendanceDate)}?`}
+        confirmLabel="Confirm Import"
+        cancelLabel="Cancel"
+        details={(
+          <div style={{ display: "grid", gap: 8, background: "#f8fafc", border: "1px solid var(--line)", borderRadius: 12, padding: 12, fontSize: 13 }}>
+            <div><strong>Class:</strong> {selectedClass ? getReadableClassName(selectedClass) : classId || "-"}</div>
+            <div><strong>Section:</strong> {selectedSection?.name || sectionId || "-"}</div>
+            <div><strong>Date:</strong> {formatDisplayDate(attendanceDate)}</div>
+            <div><strong>File:</strong> {file ? `${file.name} (${formatFileSize(file.size)})` : "-"}</div>
+          </div>
+        )}
+        onCancel={() => {
+          setConfirmOpen(false);
+          setQueuedSubmit(null);
+        }}
+        onConfirm={confirmImport}
+        isConfirming={saving}
+        loadingLabel="Importing..."
+      />
     </div>
   );
 }

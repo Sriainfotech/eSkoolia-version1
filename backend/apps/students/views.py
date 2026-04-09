@@ -1,16 +1,24 @@
 from django.db import IntegrityError, transaction
 import csv
 import io
+import os
 import re
+from uuid import uuid4
 from datetime import datetime
+from django.conf import settings
+from django.core.cache import cache
+from django.core.files.storage import default_storage
 from django.utils import timezone
 from django.db.models.deletion import ProtectedError
 from django.db.models import Count, Q
+import requests
 from rest_framework import permissions, status, viewsets
 from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
+from .forms import StudentValidationModelForm
 from .models import (
     Guardian,
     Student,
@@ -35,6 +43,8 @@ from .serializers import (
     StudentSubjectAssignmentSerializer,
     StudentPromoteRequestSerializer,
     StudentPromotionHistorySerializer,
+    PincodeLookupQuerySerializer,
+    StudentListSerializer,
     StudentSerializer,
     StudentTransferHistorySerializer,
 )
@@ -132,6 +142,37 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
                 return str(errors[0])
         return "Validation failed"
 
+    def get_queryset(self):
+        qs = super().get_queryset().order_by("name")
+        params = self.request.query_params
+        search = str(params.get("search") or params.get("q") or "").strip()
+        status_filter = str(params.get("status") or "").strip().lower()
+        name_filter = str(params.get("name") or "").strip()
+
+        if search:
+            qs = qs.filter(
+                Q(name__icontains=search)
+                | Q(code__icontains=search)
+                | Q(description__icontains=search)
+            )
+        if name_filter:
+            qs = qs.filter(name__icontains=name_filter)
+        if status_filter in {"active", "inactive"}:
+            qs = qs.filter(status=status_filter)
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="check-name")
+    def check_name(self, request):
+        name = str(request.query_params.get("name") or "").strip()
+        if not name:
+            return Response({"success": False, "message": "Category name is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = self.get_queryset().filter(name__iexact=name)
+        if getattr(self, "action", None) == "check_name" and self.request.query_params.get("exclude_id"):
+            queryset = queryset.exclude(id=self.request.query_params.get("exclude_id"))
+        exists = queryset.exists()
+        return Response({"success": True, "exists": exists, "message": "Category exists." if exists else "Category available."})
+
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
@@ -186,6 +227,34 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
 
+    @action(detail=False, methods=["patch"], url_path="bulk-status")
+    def bulk_status(self, request):
+        ids = request.data.get("ids") or []
+        status_value = str(request.data.get("status") or "").strip().lower()
+        if status_value not in {"active", "inactive"}:
+            return self._build_validation_error_response({}, "Status must be either active or inactive.")
+        if not isinstance(ids, list) or not ids:
+            return self._build_validation_error_response({}, "Select at least one category.")
+
+        queryset = self.get_queryset().filter(id__in=ids)
+        updated = queryset.update(status=status_value)
+        return Response({"success": True, "message": f"{updated} categories updated successfully."})
+
+    @action(detail=False, methods=["delete"], url_path="bulk-delete")
+    def bulk_delete(self, request):
+        ids = request.data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return self._build_validation_error_response({}, "Select at least one category.")
+
+        queryset = self.get_queryset().filter(id__in=ids)
+        blocked = queryset.filter(students__isnull=False).distinct()
+        if blocked.exists():
+            return self._build_validation_error_response({}, "One or more selected categories are assigned to students and cannot be deleted.")
+
+        count = queryset.count()
+        queryset.delete()
+        return Response({"success": True, "message": f"{count} categories deleted successfully."}, status=status.HTTP_200_OK)
+
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         if instance.students.exists():
@@ -213,11 +282,23 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = StudentGroup.objects.all()
+        search = str(self.request.query_params.get("search") or "").strip()
+        sort_by = str(self.request.query_params.get("sort_by") or "name").strip().lower()
+
         if user.is_superuser:
-            return qs.annotate(students_count=Count("students", distinct=True)).order_by("name")
-        if user.school_id:
-            return qs.filter(school_id=user.school_id).annotate(students_count=Count("students", distinct=True)).order_by("name")
-        return qs.none()
+            qs = qs.annotate(students_count=Count("students", distinct=True))
+        elif user.school_id:
+            qs = qs.filter(school_id=user.school_id).annotate(students_count=Count("students", distinct=True))
+        else:
+            return qs.none()
+
+        if search:
+            qs = qs.filter(name__icontains=search)
+
+        if sort_by == "count":
+            return qs.order_by("-students_count", "name")
+
+        return qs.order_by("name")
 
     def destroy(self, request, *args, **kwargs):
         """
@@ -267,12 +348,20 @@ class StudentViewSet(TenantScopedModelViewSet):
         "create": "student_info.add_student.view",
         "update": "student_info.add_student.view",
         "partial_update": "student_info.add_student.view",
+        "check_admission_no": "student_info.add_student.view",
+        "upload_photo": "student_info.add_student.view",
+        "pincode_details": "student_info.add_student.view",
         "destroy": "student_info.delete_student_record.view",
         "soft_delete": "student_info.delete_student_record.view",
         "restore": "student_info.delete_student_record.view",
         "permanent_delete": "student_info.delete_student_record.view",
         "promote": "student_info.student_promote.view",
     }
+
+    def get_serializer_class(self):
+        if getattr(self, "action", None) == "list":
+            return StudentListSerializer
+        return super().get_serializer_class()
 
     def get_queryset(self):
         user = self.request.user
@@ -285,12 +374,16 @@ class StudentViewSet(TenantScopedModelViewSet):
             "current_class",
             "current_section",
             "admission_inquiry",
-        ).prefetch_related("documents")
+        )
+
+        if getattr(self, "action", None) in {"retrieve", "create", "update", "partial_update"}:
+            qs = qs.prefetch_related("documents")
 
         search = (self.request.query_params.get("search") or "").strip()
-        class_id = self.request.query_params.get("class")
-        section_id = self.request.query_params.get("section")
+        class_id = self.request.query_params.get("class") or self.request.query_params.get("current_class")
+        section_id = self.request.query_params.get("section") or self.request.query_params.get("current_section")
         academic_year_id = self.request.query_params.get("academic_year")
+        is_active_param = (self.request.query_params.get("is_active") or "").strip().lower()
         include_deleted = (self.request.query_params.get("include_deleted") or "").strip().lower() in {"1", "true", "yes"}
         deleted_only = (self.request.query_params.get("deleted_only") or "").strip().lower() in {"1", "true", "yes"}
 
@@ -299,8 +392,40 @@ class StudentViewSet(TenantScopedModelViewSet):
         elif not include_deleted:
             qs = qs.filter(is_deleted=False)
 
-        if search and not re.fullmatch(r"[A-Za-z0-9 ]+", search):
+        if search and not re.fullmatch(r"[A-Za-z0-9 _\-./]+", search):
             raise ValidationError({"search": "Please enter valid search text"})
+
+        if class_id and not str(class_id).isdigit():
+            raise ValidationError({"current_class": "Please select a valid class."})
+        if section_id and not str(section_id).isdigit():
+            raise ValidationError({"current_section": "Please select a valid section."})
+        if academic_year_id and not str(academic_year_id).isdigit():
+            raise ValidationError({"academic_year": "Please select a valid academic year."})
+
+        from apps.core.models import AcademicYear, Class, Section
+
+        if class_id:
+            class_qs = Class.objects.filter(id=int(class_id))
+            if not user.is_superuser:
+                class_qs = class_qs.filter(school_id=user.school_id)
+            if not class_qs.exists():
+                raise ValidationError({"current_class": "Selected class is not available."})
+
+        if section_id:
+            section_qs = Section.objects.filter(id=int(section_id))
+            if class_id:
+                section_qs = section_qs.filter(school_class_id=int(class_id))
+            if not user.is_superuser:
+                section_qs = section_qs.filter(school_class__school_id=user.school_id)
+            if not section_qs.exists():
+                raise ValidationError({"current_section": "Selected section is not available."})
+
+        if academic_year_id:
+            year_qs = AcademicYear.objects.filter(id=int(academic_year_id))
+            if not user.is_superuser:
+                year_qs = year_qs.filter(school_id=user.school_id)
+            if not year_qs.exists():
+                raise ValidationError({"academic_year": "Selected academic year is not available."})
 
         if class_id:
             qs = qs.filter(current_class_id=class_id)
@@ -308,6 +433,10 @@ class StudentViewSet(TenantScopedModelViewSet):
             qs = qs.filter(current_section_id=section_id)
         if academic_year_id:
             qs = qs.filter(academic_year_id=academic_year_id)
+        if is_active_param in {"1", "true", "yes"}:
+            qs = qs.filter(is_active=True)
+        elif is_active_param in {"0", "false", "no"}:
+            qs = qs.filter(is_active=False)
         if search:
             qs = qs.filter(
                 Q(first_name__icontains=search)
@@ -329,6 +458,93 @@ class StudentViewSet(TenantScopedModelViewSet):
             "date_of_birth": "dob",
         }
         return aliases.get(field, field)
+
+    def _normalize_pincode_office(self, office):
+        office = office or {}
+        return {
+            "name": str(office.get("Name") or "").strip(),
+            "branch_type": str(office.get("BranchType") or "").strip(),
+            "delivery_status": str(office.get("DeliveryStatus") or "").strip(),
+            "district": str(office.get("District") or "").strip(),
+            "state": str(office.get("State") or "").strip(),
+            "region": str(office.get("Region") or "").strip(),
+            "division": str(office.get("Division") or "").strip(),
+            "circle": str(office.get("Circle") or "").strip(),
+            "taluk": str(office.get("Taluk") or "").strip(),
+            "block": str(office.get("Block") or "").strip(),
+            "country": str(office.get("Country") or "").strip(),
+            "pincode": str(office.get("Pincode") or "").strip(),
+        }
+
+    def _city_from_post_office_name(self, office):
+        raw_name = str((office or {}).get("name") or "").strip()
+        if not raw_name:
+            return ""
+
+        # Remove common India Post branch suffixes so UI gets clean city-like values.
+        cleaned = re.sub(r"\s*[-(]?\s*(?:S\.?O|B\.?O|H\.?O|G\.?P\.?O|SO|BO|HO|GPO)\s*[).-]*\s*$", "", raw_name, flags=re.IGNORECASE)
+        return cleaned.strip()
+
+    def _fetch_pincode_details(self, pincode):
+        cache_key = f"student_pincode_details:v2:{pincode}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+        }
+        response = requests.get(f"https://api.postalpincode.in/pincode/{pincode}", timeout=8, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+
+        if not isinstance(payload, list) or not payload:
+            raise ValidationError({"pincode": "Invalid PIN Code"})
+
+        entry = payload[0] or {}
+        if str(entry.get("Status") or "").strip().lower() != "success":
+            raise ValidationError({"pincode": "Invalid PIN Code"})
+
+        offices = entry.get("PostOffice") or []
+        normalized_offices = [self._normalize_pincode_office(office) for office in offices if office]
+        normalized_offices = [office for office in normalized_offices if office.get("name")]
+
+        if not normalized_offices:
+            raise ValidationError({"pincode": "Invalid PIN Code"})
+
+        selected_office = next((office for office in normalized_offices if office.get("district")), normalized_offices[0])
+        district = str(selected_office.get("district") or "").strip()
+        state = str(selected_office.get("state") or "").strip()
+
+        if not district or not state:
+            raise ValidationError({"pincode": "Invalid PIN Code"})
+
+        city_options = []
+        for office in normalized_offices:
+            city_candidate = self._city_from_post_office_name(office)
+            if city_candidate:
+                city_options.append(city_candidate)
+
+        # District fallback only when post-office names are unavailable.
+        if not city_options and district:
+            city_options = [district]
+
+        city_options = sorted(set(city_options), key=lambda value: value.lower())
+        city = city_options[0] if city_options else ""
+
+        result = {
+            "pincode": pincode,
+            "state": state,
+            "district": district,
+            "city": city,
+            "city_options": city_options,
+            "selected_post_office": selected_office,
+            "post_offices": normalized_offices,
+            "multiple_post_offices": len(normalized_offices) > 1,
+        }
+        cache.set(cache_key, result, 24 * 60 * 60)
+        return result
 
     def _normalize_field_errors(self, serializer_errors):
         normalized = {}
@@ -450,7 +666,44 @@ class StudentViewSet(TenantScopedModelViewSet):
             return "Possible duplicate found: same name, DOB and phone already exists"
         return None
 
+    def _build_model_form_data(self, data):
+        if hasattr(data, "dict"):
+            raw_data = data.dict()
+        else:
+            raw_data = dict(data or {})
+
+        normalized = {}
+        for key, value in raw_data.items():
+            if isinstance(value, (list, tuple)):
+                normalized[str(key)] = value[-1] if value else ""
+            else:
+                normalized[str(key)] = value
+
+        if "class" in normalized and "current_class" not in normalized:
+            normalized["current_class"] = normalized.get("class")
+        if "section" in normalized and "current_section" not in normalized:
+            normalized["current_section"] = normalized.get("section")
+        if "dob" in normalized and "date_of_birth" not in normalized:
+            normalized["date_of_birth"] = normalized.get("dob")
+
+        return normalized
+
+    def _validate_with_model_form(self, data, instance=None, partial=False):
+        form = StudentValidationModelForm(
+            data=self._build_model_form_data(data),
+            instance=instance,
+            partial=partial,
+            user=self.request.user,
+        )
+        if form.is_valid():
+            return None
+        return self._validation_response(form.errors)
+
     def create(self, request, *args, **kwargs):
+        form_error_response = self._validate_with_model_form(request.data)
+        if form_error_response:
+            return form_error_response
+
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
             return self._validation_response(serializer.errors)
@@ -477,6 +730,11 @@ class StudentViewSet(TenantScopedModelViewSet):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
+
+        form_error_response = self._validate_with_model_form(request.data, instance=instance, partial=partial)
+        if form_error_response:
+            return form_error_response
+
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         if not serializer.is_valid():
             return self._validation_response(serializer.errors)
@@ -499,9 +757,158 @@ class StudentViewSet(TenantScopedModelViewSet):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
 
+    @action(detail=False, methods=["get"], url_path="check-admission-no")
+    def check_admission_no(self, request):
+        admission_no = str(request.query_params.get("admission_no") or "").strip()
+        exclude_id = str(request.query_params.get("exclude_id") or "").strip()
+
+        if not admission_no:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Admission number is required.",
+                    "field_errors": {"admission_no": "Admission number is required."},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not re.fullmatch(r"[A-Za-z0-9]+", admission_no):
+            return Response(
+                {
+                    "success": False,
+                    "message": "Admission number should contain only letters and numbers.",
+                    "field_errors": {"admission_no": "Admission number should contain only letters and numbers."},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        queryset = self.get_queryset().filter(admission_no__iexact=admission_no)
+        if exclude_id.isdigit():
+            queryset = queryset.exclude(id=int(exclude_id))
+
+        exists = queryset.exists()
+        return Response(
+            {
+                "success": True,
+                "exists": exists,
+                "message": "Admission number already exists." if exists else "Admission number is available.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["get"], url_path="pincode-details")
+    def pincode_details(self, request):
+        serializer = PincodeLookupQuerySerializer(data=request.query_params)
+        if not serializer.is_valid():
+            field_errors = {}
+            for field, errors in serializer.errors.items():
+                field_errors[field] = [str(error) for error in (errors or [])] if isinstance(errors, (list, tuple)) else [str(errors)]
+            message = field_errors.get("pincode", ["Pincode must be exactly 6 digits."])[0]
+            return Response(
+                {
+                    "success": False,
+                    "message": message,
+                    "field_errors": field_errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        pincode = serializer.validated_data["pincode"]
+
+        try:
+            data = self._fetch_pincode_details(pincode)
+        except ValidationError as exc:
+            message = "Invalid PIN Code"
+            detail = exc.detail
+            if isinstance(detail, dict):
+                pincode_message = detail.get("pincode")
+                if isinstance(pincode_message, list) and pincode_message:
+                    message = str(pincode_message[0])
+                elif isinstance(pincode_message, str):
+                    message = pincode_message
+            return Response(
+                {
+                    "success": False,
+                    "message": message,
+                    "field_errors": {"pincode": message},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except requests.RequestException:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Unable to fetch pincode details right now.",
+                    "field_errors": {"pincode": "Unable to fetch pincode details right now."},
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Pincode details fetched successfully.",
+                "data": data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["post"], url_path="upload-photo", parser_classes=[MultiPartParser, FormParser])
+    def upload_photo(self, request):
+        image = request.FILES.get("photo")
+        if not image:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Photo file is required.",
+                    "field_errors": {"photo": "Photo file is required."},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        allowed_types = {"image/jpeg", "image/png"}
+        if image.content_type not in allowed_types:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Only JPEG and PNG files are allowed.",
+                    "field_errors": {"photo": "Only JPEG and PNG files are allowed."},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        max_size_bytes = 2 * 1024 * 1024
+        if image.size > max_size_bytes:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Photo size must be 2MB or less.",
+                    "field_errors": {"photo": "Photo size must be 2MB or less."},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ext = os.path.splitext(image.name or "")[1].lower()
+        if ext not in {".jpg", ".jpeg", ".png"}:
+            ext = ".jpg" if image.content_type == "image/jpeg" else ".png"
+
+        relative_path = f"student_photos/{uuid4().hex}{ext}"
+        saved_path = default_storage.save(relative_path, image)
+        normalized = str(saved_path).replace("\\", "/")
+        media_prefix = settings.MEDIA_URL if settings.MEDIA_URL.endswith("/") else f"{settings.MEDIA_URL}/"
+        photo_url = request.build_absolute_uri(f"{media_prefix}{normalized}")
+
+        return Response(
+            {
+                "success": True,
+                "message": "Photo uploaded successfully.",
+                "data": {"photo": photo_url},
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
     @action(detail=False, methods=["post"], url_path="promote")
     def promote(self, request):
-        serializer = StudentPromoteRequestSerializer(data=request.data)
+        serializer = StudentPromoteRequestSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
@@ -974,8 +1381,17 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
             "assigned_by",
         )
         student_id = self.request.query_params.get("student_id")
+        class_id = self.request.query_params.get("class") or self.request.query_params.get("school_class")
+        section_id = self.request.query_params.get("section")
+        academic_year_id = self.request.query_params.get("academic_year")
         if student_id:
             qs = qs.filter(student_id=student_id)
+        if class_id:
+            qs = qs.filter(school_class_id=class_id)
+        if section_id:
+            qs = qs.filter(section_id=section_id)
+        if academic_year_id:
+            qs = qs.filter(academic_year_id=academic_year_id)
         if user.is_superuser:
             return qs
         if user.school_id:

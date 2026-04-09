@@ -4,8 +4,15 @@
   color: #334155;
   padding: 14px 10px;
   min-height: 100vh;
+  height: 100vh;
+  position: sticky;
+  top: 0;
   overflow-y: auto;
   backdrop-filter: blur(12px);
+}
+
+.brandLink {
+  display: block;
 }
 
 .brand {
@@ -41,6 +48,61 @@
   font-size: 13px;
 }
 
+.itemLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.itemIcon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: block;
+  transform: translateY(0) scale(1);
+  transition: transform 360ms ease-in-out, filter 360ms ease-in-out;
+  will-change: transform;
+}
+
+.item:hover .itemIcon {
+  transform: translateY(-1px) scale(1.1);
+  filter: drop-shadow(0 3px 8px rgba(79, 70, 229, 0.24));
+}
+
+.itemActive .itemIcon {
+  filter: drop-shadow(0 0 8px rgba(6, 182, 212, 0.35));
+  animation: iconBreath 2.8s ease-in-out infinite;
+}
+
+.item:active .itemIcon {
+  transform: translateY(0) scale(0.96);
+}
+
+@keyframes iconBreath {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .itemIcon,
+  .item:hover .itemIcon {
+    transition: none;
+    transform: none;
+    filter: none;
+  }
+  .itemActive .itemIcon {
+    animation: none;
+  }
+}
+
 .item:hover {
   background: #eef4ff;
   color: #0f172a;
@@ -72,6 +134,8 @@
 @media (max-width: 900px) {
   .aside {
     min-height: auto;
+    height: auto;
+    position: static;
     border-right: none;
     border-bottom: 1px solid rgba(148, 163, 184, 0.28);
   }

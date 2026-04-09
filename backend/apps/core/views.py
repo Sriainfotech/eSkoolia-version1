@@ -2,8 +2,10 @@ from rest_framework import permissions, status, viewsets
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from django.db import IntegrityError
+from django.db.models import Case, IntegerField, Value, When
 from config.pagination import ApiPageNumberPagination
 from .models import AcademicYear, Class, ClassPeriod, ClassRoom, Section, Subject, Vehicle, TransportRoute, AssignVehicle
+from .models import BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate
 from .models import ItemCategory, ItemStore, Supplier, Item, ItemReceive, ItemIssue, ItemSell
 from .serializers import (
     AcademicYearSerializer,
@@ -15,6 +17,10 @@ from .serializers import (
     VehicleSerializer,
     TransportRouteSerializer,
     AssignVehicleSerializer,
+    BusStopSerializer,
+    BusLocationSerializer,
+    TransportAlertSerializer,
+    BusRoutePickupUpdateSerializer,
     ItemCategorySerializer,
     ItemStoreSerializer,
     SupplierSerializer,
@@ -78,7 +84,27 @@ class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Class.objects.prefetch_related("sections").order_by("numeric_order", "name", "id")
+        qs = Class.objects.prefetch_related("sections").annotate(
+            admission_order=Case(
+                When(name__iexact="Nursery", then=Value(0)),
+                When(name__iexact="LKG", then=Value(1)),
+                When(name__iexact="UKG", then=Value(2)),
+                When(name__iexact="1", then=Value(3)),
+                When(name__iexact="2", then=Value(4)),
+                When(name__iexact="3", then=Value(5)),
+                When(name__iexact="4", then=Value(6)),
+                When(name__iexact="5", then=Value(7)),
+                When(name__iexact="6", then=Value(8)),
+                When(name__iexact="7", then=Value(9)),
+                When(name__iexact="8", then=Value(10)),
+                When(name__iexact="9", then=Value(11)),
+                When(name__iexact="10", then=Value(12)),
+                When(name__iexact="11", then=Value(13)),
+                When(name__iexact="12", then=Value(14)),
+                default=Value(2000),
+                output_field=IntegerField(),
+            )
+        ).order_by("admission_order", "numeric_order", "name", "id")
         if user.is_superuser:
             return qs
         if user.school_id:
@@ -153,13 +179,20 @@ class SectionViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = Section.objects.select_related("school_class__school")
+        class_filter = (self.request.query_params.get("class") or self.request.query_params.get("school_class") or "").strip()
         if user.is_superuser:
             self._normalize_legacy_combined_sections(qs)
-            return Section.objects.select_related("school_class__school")
+            scoped = Section.objects.select_related("school_class__school")
+            if class_filter.isdigit():
+                scoped = scoped.filter(school_class_id=int(class_filter))
+            return scoped
         if user.school_id:
             scoped_qs = qs.filter(school_class__school_id=user.school_id)
             self._normalize_legacy_combined_sections(scoped_qs)
-            return Section.objects.select_related("school_class__school").filter(school_class__school_id=user.school_id)
+            scoped = Section.objects.select_related("school_class__school").filter(school_class__school_id=user.school_id)
+            if class_filter.isdigit():
+                scoped = scoped.filter(school_class_id=int(class_filter))
+            return scoped
         return qs.none()
 
     def create(self, request, *args, **kwargs):
@@ -511,6 +544,142 @@ class AssignVehicleViewSet(TenantQueryMixin, PermissionScopedViewSet):
             raise ValidationError({"academic_year": "No academic year found for your school. Please create one first."})
         
         serializer.save(school=school, academic_year=academic_year)
+
+
+# ===== BUS TRACKING MODULE VIEWSETS =====
+class BusStopViewSet(TenantQueryMixin, PermissionScopedViewSet):
+    model = BusStop
+    serializer_class = BusStopSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    permission_codes = {"*": "transport.route.view"}
+    
+    def get_queryset(self):
+        user = self.request.user
+        queryset = BusStop.objects.all()
+        if not user.is_superuser:
+            if user.school_id:
+                queryset = queryset.filter(route__school_id=user.school_id)
+            else:
+                return queryset.none()
+        route_id = self.request.query_params.get("route_id")
+        if route_id:
+            queryset = queryset.filter(route_id=route_id)
+        return queryset.select_related("route").order_by("stop_order")
+
+
+class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
+    model = BusLocation
+    serializer_class = BusLocationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    permission_codes = {"*": "transport.vehicle.view"}
+    
+    def get_queryset(self):
+        user = self.request.user
+        queryset = BusLocation.objects.all()
+        if not user.is_superuser:
+            if user.school_id:
+                queryset = queryset.filter(vehicle__school_id=user.school_id)
+            else:
+                return queryset.none()
+
+        route_id = self.request.query_params.get("route_id")
+        if route_id:
+            queryset = queryset.filter(vehicle__assignments__route_id=route_id)
+
+        vehicle_id = self.request.query_params.get("vehicle_id")
+        if vehicle_id:
+            queryset = queryset.filter(vehicle_id=vehicle_id)
+        return queryset.select_related("vehicle").order_by("-timestamp").distinct()
+    
+    def create(self, request, *args, **kwargs):
+        """Update or create bus location (called from mobile GPS tracker)"""
+        vehicle_id = request.data.get("vehicle")
+        if not vehicle_id:
+            return Response({"error": "vehicle_id required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get or create - update existing location
+        location, created = BusLocation.objects.update_or_create(
+            vehicle_id=vehicle_id,
+            defaults={
+                "latitude": request.data.get("latitude"),
+                "longitude": request.data.get("longitude"),
+                "speed": request.data.get("speed", 0),
+                "heading": request.data.get("heading", 0),
+                "accuracy": request.data.get("accuracy", 0),
+                "is_active": True,
+            }
+        )
+        serializer = self.get_serializer(location)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class TransportAlertViewSet(TenantQueryMixin, PermissionScopedViewSet):
+    model = TransportAlert
+    serializer_class = TransportAlertSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    permission_codes = {"*": "transport.vehicle.view"}
+    
+    def get_queryset(self):
+        user = self.request.user
+        queryset = TransportAlert.objects.all()
+        if not user.is_superuser:
+            if user.school_id:
+                queryset = queryset.filter(vehicle__school_id=user.school_id)
+            else:
+                return queryset.none()
+
+        vehicle_id = self.request.query_params.get("vehicle_id")
+        alert_type = self.request.query_params.get("alert_type")
+        is_resolved = self.request.query_params.get("is_resolved")
+        
+        if vehicle_id:
+            queryset = queryset.filter(vehicle_id=vehicle_id)
+        if alert_type:
+            queryset = queryset.filter(alert_type=alert_type)
+        if is_resolved is not None:
+            queryset = queryset.filter(is_resolved=(is_resolved.lower() == 'true'))
+        
+        return queryset.select_related("vehicle", "route").order_by("-created_at")
+    
+    def update(self, request, *args, **kwargs):
+        """Resolve alert by setting is_resolved & resolved_at"""
+        instance = self.get_object()
+        if request.data.get("is_resolved") and not instance.resolved_at:
+            from django.utils import timezone
+            instance.resolved_at = timezone.now()
+        return super().update(request, *args, **kwargs)
+
+
+class BusRoutePickupUpdateViewSet(TenantQueryMixin, PermissionScopedViewSet):
+    model = BusRoutePickupUpdate
+    serializer_class = BusRoutePickupUpdateSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    permission_codes = {"*": "transport.vehicle.view"}
+    
+    def get_queryset(self):
+        user = self.request.user
+        queryset = BusRoutePickupUpdate.objects.all()
+        if not user.is_superuser:
+            if user.school_id:
+                queryset = queryset.filter(vehicle__school_id=user.school_id)
+            else:
+                return queryset.none()
+
+        vehicle_id = self.request.query_params.get("vehicle_id")
+        stop_id = self.request.query_params.get("stop_id")
+        student_id = self.request.query_params.get("student_id")
+        status_filter = self.request.query_params.get("status")
+        
+        if vehicle_id:
+            queryset = queryset.filter(vehicle_id=vehicle_id)
+        if stop_id:
+            queryset = queryset.filter(stop_id=stop_id)
+        if student_id:
+            queryset = queryset.filter(student_id=student_id)
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        return queryset.select_related("stop", "vehicle", "student").order_by("-arrived_at")
 
 
 # ===== INVENTORY MODULE VIEWSETS =====

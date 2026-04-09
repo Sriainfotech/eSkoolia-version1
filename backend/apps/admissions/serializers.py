@@ -1,8 +1,10 @@
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from rest_framework import serializers
+from django.utils import timezone
+from django.utils.html import strip_tags
 
 from apps.access_control.models import Role
 from .models import (
@@ -19,7 +21,30 @@ from .models import (
 )
 
 
-PHONE_PATTERN = re.compile(r"^\d{1,12}$")
+PHONE_PATTERN = re.compile(r"^\d{10,12}$")
+NAME_PATTERN = re.compile(r"^[A-Za-z\s\-']+$")
+ALLOWED_VISITOR_FILE_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx"}
+MAX_VISITOR_FILE_SIZE = 5 * 1024 * 1024
+ALLOWED_COMPLAINT_FILE_EXTENSIONS = {".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png"}
+MAX_COMPLAINT_FILE_SIZE = 5 * 1024 * 1024
+ALLOWED_POSTAL_DISPATCH_FILE_EXTENSIONS = {".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png", ".xlsx"}
+MAX_POSTAL_DISPATCH_FILE_SIZE = 5 * 1024 * 1024
+
+
+class AdmissionPincodeLookupQuerySerializer(serializers.Serializer):
+    pincode = serializers.CharField()
+
+    def validate_pincode(self, value):
+        pincode = str(value or "").strip()
+        if not re.fullmatch(r"\d{6}", pincode):
+            raise serializers.ValidationError("Pincode must be exactly 6 digits.")
+        return pincode
+
+
+def _sanitize_text(value):
+    text = str(value or "")
+    text = re.sub(r"<script.*?>.*?</script>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    return strip_tags(text).strip()
 
 
 def _normalize_phone(value, field_name, required=False):
@@ -31,8 +56,8 @@ def _normalize_phone(value, field_name, required=False):
 
     if not phone.isdigit():
         raise serializers.ValidationError({field_name: "Phone number must contain digits only."})
-    if len(phone) > 12:
-        raise serializers.ValidationError({field_name: "Phone number must not exceed 12 digits."})
+    if len(phone) < 10 or len(phone) > 12:
+        raise serializers.ValidationError({field_name: "Phone number must be 10-12 digits"})
     if not PHONE_PATTERN.match(phone):
         raise serializers.ValidationError({field_name: "Enter a valid phone number."})
 
@@ -52,6 +77,23 @@ def _parse_time_value(value):
     return None
 
 
+def _is_meaningful_text(value):
+    text = str(value or "").strip()
+    if not text:
+        return True
+    if not re.search(r"[A-Za-z]", text):
+        return False
+    if re.search(r"(.)\1{2,}", text):
+        return False
+    lowered = re.sub(r"\s+", "", text.lower())
+    keyboard_patterns = ["qwerty", "asdf", "zxcv", "qazwsx", "poiuy", "lkjh", "mnbv", "abcdef", "abcd", "jkl"]
+    if any(pattern in lowered for pattern in keyboard_patterns):
+        return False
+    if len(lowered) >= 2 and re.fullmatch(r"(.)\1+", lowered):
+        return False
+    return True
+
+
 class AdmissionFollowUpSerializer(serializers.ModelSerializer):
     author_name = serializers.SerializerMethodField()
 
@@ -64,6 +106,27 @@ class AdmissionFollowUpSerializer(serializers.ModelSerializer):
         if obj.author:
             return obj.author.get_full_name() or obj.author.username
         return None
+
+    def validate(self, attrs):
+        response = _sanitize_text(attrs.get("response", getattr(self.instance, "response", "")))
+        note = _sanitize_text(attrs.get("note", getattr(self.instance, "note", "")))
+
+        if not response:
+            raise serializers.ValidationError({"response": "Response is required."})
+        if len(response) < 2:
+            raise serializers.ValidationError({"response": "Response must be at least 2 characters."})
+        if len(response) > 500:
+            raise serializers.ValidationError({"response": "Response must not exceed 500 characters."})
+        if not _is_meaningful_text(response):
+            raise serializers.ValidationError({"response": "Please enter a meaningful response."})
+        if len(note) > 1000:
+            raise serializers.ValidationError({"note": "Note must not exceed 1000 characters."})
+        if note and not _is_meaningful_text(note):
+            raise serializers.ValidationError({"note": "Please enter a meaningful note."})
+
+        attrs["response"] = response
+        attrs["note"] = note
+        return super().validate(attrs)
 
 
 class AdmissionFollowUpInlineSerializer(serializers.ModelSerializer):
@@ -125,13 +188,97 @@ class AdmissionInquirySerializer(serializers.ModelSerializer):
         return None
 
     def validate(self, attrs):
+        errors = {}
+
+        def incoming_or_instance(field_name, default=""):
+            if field_name in attrs:
+                return attrs.get(field_name)
+            if self.instance is not None:
+                return getattr(self.instance, field_name, default)
+            return default
+
+        full_name = _sanitize_text(incoming_or_instance("full_name", ""))
+        if not full_name:
+            errors["full_name"] = "Name is required."
+        elif len(full_name) < 2:
+            errors["full_name"] = "Name must be at least 2 characters."
+        elif len(full_name) > 100:
+            errors["full_name"] = "Name must not exceed 100 characters."
+        elif not NAME_PATTERN.match(full_name):
+            errors["full_name"] = "Name can only contain letters, spaces, hyphens and apostrophes."
+        elif not _is_meaningful_text(full_name):
+            errors["full_name"] = "Please enter a meaningful name."
+
+        query_date = incoming_or_instance("query_date", None)
+        next_follow_up_date = incoming_or_instance("next_follow_up_date", None)
+        follow_up_date = incoming_or_instance("follow_up_date", None)
+        assigned = _sanitize_text(incoming_or_instance("assigned", ""))
+        address = _sanitize_text(incoming_or_instance("address", ""))
+        description = _sanitize_text(incoming_or_instance("description", ""))
+        note = _sanitize_text(incoming_or_instance("note", ""))
+        reference = incoming_or_instance("reference", None)
+        source = incoming_or_instance("source", None)
+        no_of_child_raw = incoming_or_instance("no_of_child", 0)
+
+        if not query_date:
+            errors["query_date"] = "Query date is required."
+        elif query_date > timezone.localdate():
+            errors["query_date"] = "Query date cannot be in the future."
+
+        if not next_follow_up_date:
+            errors["next_follow_up_date"] = "Next follow-up date is required."
+        elif query_date and next_follow_up_date < query_date:
+            errors["next_follow_up_date"] = "Follow-up date must be on or after the Query Date."
+
+        if follow_up_date and next_follow_up_date and next_follow_up_date < follow_up_date:
+            errors["next_follow_up_date"] = "Next follow-up date must be on or after last follow-up date."
+
+        if not assigned:
+            errors["assigned"] = "Assigned staff member is required."
+        elif len(assigned) < 2:
+            errors["assigned"] = "Name must be at least 2 characters."
+        elif not _is_meaningful_text(assigned):
+            errors["assigned"] = "Please enter a meaningful name."
+
+        if not reference:
+            errors["reference"] = "Reference is required."
+        if not source:
+            errors["source"] = "Source is required."
+
+        try:
+            no_of_child = int(no_of_child_raw)
+        except (TypeError, ValueError):
+            no_of_child = 0
+        if no_of_child < 1:
+            errors["no_of_child"] = "Must be at least 1."
+        elif no_of_child > 20:
+            errors["no_of_child"] = "Cannot exceed 20."
+
+        if address and not _is_meaningful_text(address):
+            errors["address"] = "Please enter a meaningful address."
+        if description and not _is_meaningful_text(description):
+            errors["description"] = "Please enter a meaningful description."
+        if note and not _is_meaningful_text(note):
+            errors["note"] = "Please enter a meaningful note."
+
         phone = _normalize_phone(
-            attrs.get("phone", getattr(self.instance, "phone", "")),
+            _sanitize_text(incoming_or_instance("phone", "")),
             "phone",
-            required=False,
+            required=True,
         )
-        if "phone" in attrs:
-            attrs["phone"] = phone
+        if not re.fullmatch(r"[6-9]\d{9}", phone):
+            errors["phone"] = "Enter a valid 10-digit Indian mobile number starting with 6-9."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        attrs["full_name"] = full_name
+        attrs["phone"] = phone
+        attrs["assigned"] = assigned
+        attrs["address"] = address
+        attrs["description"] = description
+        attrs["note"] = note
+        attrs["no_of_child"] = no_of_child
         return super().validate(attrs)
 
 
@@ -207,11 +354,51 @@ class VisitorBookEntrySerializer(serializers.ModelSerializer):
             return str(obj.purpose or "")
 
     def validate(self, attrs):
+        errors = {}
+
+        is_partial = getattr(self, "partial", False)
+
+        def _incoming_or_instance(field_name, default=""):
+            if field_name in attrs:
+                return attrs.get(field_name)
+            if self.instance is not None:
+                return getattr(self.instance, field_name, default)
+            return default
+
+        required_map = {
+            "purpose": "Purpose is required.",
+            "name": "Name is required.",
+            "date": "Date is required.",
+            "in_time": "In time is required.",
+            "out_time": "Out time is required.",
+            "no_of_person": "Enter a valid number of persons",
+        }
+
+        for field_name, message in required_map.items():
+            if is_partial and field_name not in attrs:
+                continue
+            value = _incoming_or_instance(field_name)
+            text = str(value or "").strip() if field_name != "date" else value
+            if field_name == "date":
+                if not text:
+                    errors[field_name] = message
+            elif not text:
+                errors[field_name] = message
+
         if "purpose" in attrs:
             attrs["purpose"] = self._resolve_purpose_name(attrs.get("purpose"))
 
+        name_value = _sanitize_text(_incoming_or_instance("name", ""))
+        if "name" in attrs:
+            attrs["name"] = name_value
+        if name_value:
+            if len(name_value) < 2 or len(name_value) > 100:
+                errors["name"] = "Name must be between 2 and 100 characters."
+            elif not NAME_PATTERN.match(name_value):
+                errors["name"] = "Name must contain only letters, spaces, and hyphens"
+
         phone = _normalize_phone(
-            attrs.get("phone", getattr(self.instance, "phone", "")),
+            _sanitize_text(_incoming_or_instance("phone", "")),
             "phone",
             required=False,
         )
@@ -219,13 +406,42 @@ class VisitorBookEntrySerializer(serializers.ModelSerializer):
         in_time_value = str(attrs.get("in_time", getattr(self.instance, "in_time", "")) or "").strip()
         out_time_value = str(attrs.get("out_time", getattr(self.instance, "out_time", "")) or "").strip()
 
+        no_of_person = _incoming_or_instance("no_of_person", 0)
+        try:
+            person_count = int(no_of_person)
+        except (TypeError, ValueError):
+            person_count = 0
+        if person_count < 1 or person_count > 99:
+            errors["no_of_person"] = "Enter a valid number of persons"
+        if "no_of_person" in attrs:
+            attrs["no_of_person"] = person_count
+
         if "phone" in attrs:
             attrs["phone"] = phone
 
+        if date_value and date_value > timezone.localdate():
+            errors["date"] = "Date cannot be in the future."
+
         parsed_in_time = _parse_time_value(in_time_value)
         parsed_out_time = _parse_time_value(out_time_value)
-        if parsed_in_time and parsed_out_time and parsed_out_time < parsed_in_time:
-            raise serializers.ValidationError({"out_time": "Out time must be later than or equal to in time."})
+        if in_time_value and parsed_in_time is None:
+            errors["in_time"] = "Enter a valid in time."
+        if out_time_value and parsed_out_time is None:
+            errors["out_time"] = "Enter a valid out time."
+        if parsed_in_time and parsed_out_time and parsed_out_time <= parsed_in_time:
+            errors["out_time"] = "Out time must be after in time."
+
+        upload = attrs.get("file_upload")
+        if upload is not None:
+            filename = str(getattr(upload, "name", "") or "").lower()
+            extension = "." + filename.rsplit(".", 1)[1] if "." in filename else ""
+            if extension not in ALLOWED_VISITOR_FILE_EXTENSIONS:
+                errors["file_upload"] = "Unsupported file type. Allowed: PDF, JPG, PNG, DOC, DOCX."
+            elif getattr(upload, "size", 0) > MAX_VISITOR_FILE_SIZE:
+                errors["file_upload"] = "File size must be 5MB or less."
+
+        if errors:
+            raise serializers.ValidationError(errors)
 
         # Prevent duplicate visitor entries for the same phone, date, and in-time.
         if phone and date_value and in_time_value:
@@ -356,17 +572,84 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
             return str(obj.complaint_source or "")
 
     def validate(self, attrs):
+        errors = {}
+
+        def incoming_or_instance(field_name, default=""):
+            if field_name in attrs:
+                return attrs.get(field_name)
+            if self.instance is not None:
+                return getattr(self.instance, field_name, default)
+            return default
+
         if "complaint_type" in attrs:
             attrs["complaint_type"] = self._resolve_setup_name(attrs.get("complaint_type"), "2", "complaint_type")
         if "complaint_source" in attrs:
             attrs["complaint_source"] = self._resolve_setup_name(attrs.get("complaint_source"), "3", "complaint_source")
+
+        complaint_by = _sanitize_text(incoming_or_instance("complaint_by", ""))
+        action_taken = _sanitize_text(incoming_or_instance("action_taken", ""))
+        assigned = _sanitize_text(incoming_or_instance("assigned", ""))
+        description = _sanitize_text(incoming_or_instance("description", ""))
+        date_value = incoming_or_instance("date", None)
+
+        if not complaint_by:
+            errors["complaint_by"] = "Complaint By is required."
+        elif len(complaint_by) < 2:
+            errors["complaint_by"] = "Minimum 2 characters required."
+        elif len(complaint_by) > 100:
+            errors["complaint_by"] = "Complaint By must not exceed 100 characters."
+        elif not NAME_PATTERN.match(complaint_by):
+            errors["complaint_by"] = "Only letters, spaces, hyphens, apostrophes allowed."
+        elif not _is_meaningful_text(complaint_by):
+            errors["complaint_by"] = "Please enter meaningful text."
+
+        complaint_type_value = incoming_or_instance("complaint_type", "")
+        complaint_source_value = incoming_or_instance("complaint_source", "")
+        if not str(complaint_type_value or "").strip():
+            errors["complaint_type"] = "Please select a complaint type."
+        if not str(complaint_source_value or "").strip():
+            errors["complaint_source"] = "Please select a complaint source."
+
+        if not date_value:
+            errors["date"] = "Please select a date."
+        elif date_value > timezone.localdate():
+            errors["date"] = "Date cannot be in the future."
+
+        if action_taken and not _is_meaningful_text(action_taken):
+            errors["action_taken"] = "Please enter meaningful text."
+        if assigned and not _is_meaningful_text(assigned):
+            errors["assigned"] = "Please enter a valid name."
+        if description:
+            if len(description) < 10:
+                errors["description"] = "Description must be at least 10 characters."
+            elif not _is_meaningful_text(description):
+                errors["description"] = "Please enter meaningful text."
+
+        upload = attrs.get("file_upload")
+        if upload is not None:
+            filename = str(getattr(upload, "name", "") or "").lower()
+            extension = "." + filename.rsplit(".", 1)[1] if "." in filename else ""
+            if extension not in ALLOWED_COMPLAINT_FILE_EXTENSIONS:
+                errors["file_upload"] = "Invalid file type. Allowed: PDF, DOC, JPG, PNG."
+            elif getattr(upload, "size", 0) > MAX_COMPLAINT_FILE_SIZE:
+                errors["file_upload"] = "File size exceeds 5MB limit."
+
         phone = _normalize_phone(
-            attrs.get("phone", getattr(self.instance, "phone", "")),
+            _sanitize_text(incoming_or_instance("phone", "")),
             "phone",
             required=False,
         )
-        if "phone" in attrs:
-            attrs["phone"] = phone
+        if phone and len(phone) < 10:
+            errors["phone"] = "Phone must be at least 10 digits."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        attrs["complaint_by"] = complaint_by
+        attrs["action_taken"] = action_taken
+        attrs["assigned"] = assigned
+        attrs["description"] = description
+        attrs["phone"] = phone
         return super().validate(attrs)
 
     def get_file_url(self, obj):
@@ -484,6 +767,80 @@ class PostalDispatchEntrySerializer(serializers.ModelSerializer):
         url = obj.file.url
         return request.build_absolute_uri(url) if request else url
 
+    def validate(self, attrs):
+        errors = {}
+
+        def incoming_or_instance(field_name, default=""):
+            if field_name in attrs:
+                return attrs.get(field_name)
+            if self.instance is not None:
+                return getattr(self.instance, field_name, default)
+            return default
+
+        to_title = _sanitize_text(incoming_or_instance("to_title", ""))
+        reference_no = _sanitize_text(incoming_or_instance("reference_no", ""))
+        address = _sanitize_text(incoming_or_instance("address", ""))
+        from_title = _sanitize_text(incoming_or_instance("from_title", ""))
+        note = _sanitize_text(incoming_or_instance("note", ""))
+        dispatch_date = incoming_or_instance("date", None)
+        upload = attrs.get("file_upload")
+
+        if not to_title:
+            errors["to_title"] = "To Title is required."
+        elif len(to_title) < 3:
+            errors["to_title"] = "To Title must be at least 3 characters."
+        elif not _is_meaningful_text(to_title):
+            errors["to_title"] = "Please enter a meaningful To Title."
+
+        if not reference_no:
+            errors["reference_no"] = "Reference No is required."
+        elif len(reference_no) < 3:
+            errors["reference_no"] = "Reference No must be at least 3 characters."
+        elif not re.fullmatch(r"[A-Za-z0-9\-]+", reference_no):
+            errors["reference_no"] = "Reference No must be alphanumeric (letters, numbers, hyphens only)."
+
+        if not address:
+            errors["address"] = "Address is required."
+        elif len(address) < 5:
+            errors["address"] = "Address must be at least 5 characters."
+
+        if not from_title:
+            errors["from_title"] = "From Title is required."
+        elif len(from_title) < 3:
+            errors["from_title"] = "From Title must be at least 3 characters."
+        elif not _is_meaningful_text(from_title):
+            errors["from_title"] = "Please enter a meaningful From Title."
+
+        if note and len(note) > 500:
+            errors["note"] = "Note must not exceed 500 characters."
+
+        today = timezone.localdate()
+        min_allowed = today - timedelta(days=365)
+        if not dispatch_date:
+            errors["date"] = "Dispatch Date is required."
+        elif dispatch_date > today:
+            errors["date"] = "Dispatch Date cannot be in the future."
+        elif dispatch_date < min_allowed:
+            errors["date"] = "Dispatch Date cannot be older than 1 year."
+
+        if upload:
+            file_name = str(getattr(upload, "name", "")).lower()
+            extension = "." + file_name.rsplit(".", 1)[-1] if "." in file_name else ""
+            if extension not in ALLOWED_POSTAL_DISPATCH_FILE_EXTENSIONS:
+                errors["file_upload"] = "Invalid file type. Allowed: PDF, DOC, DOCX, JPG, PNG, XLSX."
+            elif getattr(upload, "size", 0) > MAX_POSTAL_DISPATCH_FILE_SIZE:
+                errors["file_upload"] = "File size exceeds 5MB limit."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        attrs["to_title"] = to_title
+        attrs["reference_no"] = reference_no
+        attrs["address"] = address
+        attrs["from_title"] = from_title
+        attrs["note"] = note
+        return super().validate(attrs)
+
     def create(self, validated_data):
         upload = validated_data.pop("file_upload", None)
         if upload is not None:
@@ -525,11 +882,67 @@ class PhoneCallLogEntrySerializer(serializers.ModelSerializer):
         return None
 
     def validate(self, attrs):
+        errors = {}
+
+        def incoming_or_instance(field_name, default=""):
+            if field_name in attrs:
+                return attrs.get(field_name)
+            if self.instance is not None:
+                return getattr(self.instance, field_name, default)
+            return default
+
+        caller_name = _sanitize_text(incoming_or_instance("name", ""))
+        description = _sanitize_text(incoming_or_instance("description", ""))
+        call_duration = _sanitize_text(incoming_or_instance("call_duration", ""))
+        from_date = incoming_or_instance("date", None)
+        to_date = incoming_or_instance("next_follow_up_date", None)
+        call_type = str(incoming_or_instance("call_type", "I") or "I").strip()
+
+        if not caller_name:
+            errors["name"] = "Name is required."
+        elif len(caller_name) < 2:
+            errors["name"] = "Name must be at least 2 characters."
+        elif len(caller_name) > 100:
+            errors["name"] = "Name must not exceed 100 characters."
+        elif not re.fullmatch(r"[A-Za-z0-9\s\-'.,()]+", caller_name):
+            errors["name"] = "Invalid characters in Name."
+        elif not _is_meaningful_text(caller_name):
+            errors["name"] = "Please enter a meaningful name."
+
         phone = _normalize_phone(
             attrs.get("phone", getattr(self.instance, "phone", "")),
             "phone",
             required=True,
         )
+
+        if from_date and from_date > timezone.localdate():
+            errors["date"] = "From Date cannot be in the future."
+
+        if to_date:
+            if to_date > timezone.localdate():
+                errors["next_follow_up_date"] = "To Date cannot be in the future."
+            elif from_date and to_date < from_date:
+                errors["next_follow_up_date"] = "To Date cannot be before From Date."
+
+        if call_duration:
+            if len(call_duration) > 8:
+                errors["call_duration"] = "Call Duration must not exceed 8 characters."
+            elif not re.fullmatch(r"([0-9]{1,2}):([0-5][0-9]):([0-5][0-9])", call_duration):
+                errors["call_duration"] = "Enter duration in HH:MM:SS format (e.g., 00:10:00)."
+
+        if len(description) > 500:
+            errors["description"] = "Description must not exceed 500 characters."
+
+        if call_type not in {"I", "O"}:
+            errors["call_type"] = "Call Type is invalid."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        attrs["name"] = caller_name
+        attrs["description"] = description
+        attrs["call_duration"] = call_duration
+        attrs["call_type"] = call_type
         attrs["phone"] = phone
         return super().validate(attrs)
 

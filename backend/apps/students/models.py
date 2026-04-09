@@ -85,6 +85,7 @@ class Student(models.Model):
     email = models.EmailField(blank=True)
     address_line = models.CharField(max_length=255, blank=True)
     city = models.CharField(max_length=100, blank=True)
+    district = models.CharField(max_length=100, blank=True)
     state = models.CharField(max_length=100, blank=True)
     pincode = models.CharField(max_length=20, blank=True)
     photo = models.URLField(max_length=500, blank=True)

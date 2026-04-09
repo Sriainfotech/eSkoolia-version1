@@ -1,7 +1,7 @@
 from calendar import monthrange
 
 from rest_framework import permissions, status
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -40,6 +40,54 @@ class SubjectAttendanceTenantMixin:
     def school_filter(self, request):
         return {} if request.user.is_superuser else {"school_id": request.user.school_id}
 
+    def _validate_positive_id(self, value, field_name):
+        if value is None:
+            return
+        if not isinstance(value, int) or value <= 0:
+            raise ValidationError({field_name: "Invalid selection."})
+
+    def _validate_selection_access(self, request, class_id=None, section_id=None, subject_id=None):
+        self._validate_positive_id(class_id, "class_id")
+        self._validate_positive_id(section_id, "section_id")
+        self._validate_positive_id(subject_id, "subject_id")
+
+        scope = self.school_filter(request)
+
+        class_obj = None
+        section_obj = None
+        subject_obj = None
+
+        if class_id is not None:
+            class_obj = Class.objects.filter(id=class_id, **scope).first()
+            if not class_obj:
+                raise ValidationError({"class_id": "Invalid class selection."})
+
+        if section_id is not None:
+            section_qs = Section.objects.filter(id=section_id)
+            if class_obj:
+                section_qs = section_qs.filter(school_class_id=class_obj.id)
+            if not request.user.is_superuser:
+                section_qs = section_qs.filter(school_class__school_id=request.user.school_id)
+            section_obj = section_qs.first()
+            if not section_obj:
+                raise ValidationError({"section_id": "Invalid section selection."})
+
+        if subject_id is not None:
+            subject_obj = Subject.objects.filter(id=subject_id, **scope).first()
+            if not subject_obj:
+                raise ValidationError({"subject_id": "Invalid subject selection."})
+
+        if class_obj and section_obj and subject_obj:
+            assignment_qs = ClassSubjectAssignment.objects.filter(
+                school_class_id=class_obj.id,
+                section_id=section_obj.id,
+                **scope,
+            )
+            if assignment_qs.exists() and not assignment_qs.filter(subject_id=subject_obj.id).exists():
+                raise ValidationError({"subject_id": "Selected subject is not assigned to this class and section."})
+
+        return class_obj, section_obj, subject_obj
+
 
 class SubjectAttendanceIndexAPIView(SubjectAttendanceTenantMixin, APIView):
     def get(self, request):
@@ -65,6 +113,8 @@ class SubjectAttendanceSearchAPIView(SubjectAttendanceTenantMixin, APIView):
         section_id = v.get("section_id") or v.get("section")
         subject_id = v.get("subject_id") or v.get("subject")
         attendance_date = v["attendance_date"]
+
+        self._validate_selection_access(request, class_id=class_id, section_id=section_id, subject_id=subject_id)
 
         classes = Class.objects.filter(**self.school_filter(request)).order_by("numeric_order", "name")
         sections = Section.objects.filter(school_class_id=class_id).order_by("name") if class_id else Section.objects.none()
@@ -106,9 +156,12 @@ class SubjectAttendanceSearchAPIView(SubjectAttendanceTenantMixin, APIView):
             if first:
                 attendance_type = first.attendance_type
 
-        class_info = Class.objects.filter(id=class_id).first()
-        section_info = Section.objects.filter(id=section_id).first()
-        subject_info = Subject.objects.filter(id=subject_id).first()
+        class_info = Class.objects.filter(id=class_id, **self.school_filter(request)).first()
+        section_info = Section.objects.filter(id=section_id).first() if request.user.is_superuser else Section.objects.filter(
+            id=section_id,
+            school_class__school_id=request.user.school_id,
+        ).first()
+        subject_info = Subject.objects.filter(id=subject_id, **self.school_filter(request)).first()
 
         student_rows = []
         for student in students:
@@ -165,6 +218,8 @@ class SubjectAttendanceStoreAPIView(SubjectAttendanceTenantMixin, APIView):
         attendance_date = v.get("date") or v.get("attendance_date")
         attendance_payload = v["attendance"]
 
+        self._validate_selection_access(request, class_id=class_id, section_id=section_id, subject_id=subject_id)
+
         for record_id, student_data in attendance_payload.items():
             student_id = student_data.get("student")
             s_class = student_data.get("class") or class_id
@@ -208,6 +263,8 @@ class SubjectAttendanceHolidayStoreAPIView(SubjectAttendanceTenantMixin, APIView
         serializer = SubjectAttendanceHolidayRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         v = serializer.validated_data
+
+        self._validate_selection_access(request, class_id=v["class_id"], section_id=v["section_id"], subject_id=v["subject_id"])
 
         students = Student.objects.filter(
             current_class_id=v["class_id"],
@@ -283,6 +340,8 @@ class SubjectAttendanceReportSearchAPIView(SubjectAttendanceTenantMixin, APIView
         section_id = v.get("section_id") or v.get("section")
         month = str(v["month"]).zfill(2)
         year = v["year"]
+
+        self._validate_selection_access(request, class_id=class_id, section_id=section_id)
 
         assign_subject = ClassSubjectAssignment.objects.filter(
             school_class_id=class_id,

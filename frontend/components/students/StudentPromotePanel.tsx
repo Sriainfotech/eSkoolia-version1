@@ -126,10 +126,30 @@ function fullName(row: StudentRow) {
   return `${row.first_name || ""} ${row.last_name || ""}`.trim() || "-";
 }
 
+function sanitizeLabel(value: string) {
+  return String(value || "").replace(/<[^>]*>/g, "").trim();
+}
+
+function formatClassDisplayName(name: string, id: number) {
+  const cleaned = sanitizeLabel(name);
+  if (!cleaned) {
+    return `Class ${id}`;
+  }
+  if (/^\d+$/.test(cleaned)) {
+    return `Class ${cleaned}`;
+  }
+  return cleaned
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
 export function StudentPromotePanel() {
   const [years, setYears] = useState<AcademicYear[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
-  const [sections, setSections] = useState<Section[]>([]);
+  const [currentSections, setCurrentSections] = useState<Section[]>([]);
+  const [promoteSections, setPromoteSections] = useState<Section[]>([]);
   const [students, setStudents] = useState<StudentRow[]>([]);
 
   const [currentYearId, setCurrentYearId] = useState("");
@@ -144,6 +164,8 @@ export function StudentPromotePanel() {
 
   const [loadingCriteria, setLoadingCriteria] = useState(true);
   const [loadingStudents, setLoadingStudents] = useState(false);
+  const [loadingCurrentSections, setLoadingCurrentSections] = useState(false);
+  const [loadingPromoteSections, setLoadingPromoteSections] = useState(false);
   const [promoting, setPromoting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -159,6 +181,16 @@ export function StudentPromotePanel() {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
 
+  const validAcademicYears = useMemo(
+    () => years.filter((item) => /^\d{4}-\d{4}$/.test(sanitizeLabel(item.name))),
+    [years],
+  );
+
+  const normalizedClasses = useMemo(
+    () => classes.map((item) => ({ ...item, display_name: formatClassDisplayName(item.name, item.id) })),
+    [classes],
+  );
+
   useEffect(() => {
     const load = async () => {
       try {
@@ -167,16 +199,35 @@ export function StudentPromotePanel() {
         const [yearData, classData, sectionData] = await Promise.all([
           apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
           apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
-          apiGet<ApiList<Section>>("/api/v1/core/sections/"),
+          apiGet<ApiList<Section>>("/api/v1/core/sections/?page_size=200"),
         ]);
         const loadedYears = listData(yearData);
         setYears(loadedYears);
         setClasses(listData(classData));
-        setSections(listData(sectionData));
+        const allSections = listData(sectionData);
+        setCurrentSections(allSections);
+        setPromoteSections(allSections);
 
-        const current = loadedYears.find((item) => item.is_current);
+        const current = loadedYears.find((item) => item.is_current && /^\d{4}-\d{4}$/.test(sanitizeLabel(item.name)));
         if (current) {
           setCurrentYearId(String(current.id));
+
+          const [start] = sanitizeLabel(current.name).split("-");
+          const nextStart = Number(start) + 1;
+          const nextYear = loadedYears.find((item) => sanitizeLabel(item.name) === `${nextStart}-${nextStart + 1}`);
+          if (nextYear) {
+            setPromoteYearId(String(nextYear.id));
+          }
+        }
+
+        if (!current) {
+          const now = new Date();
+          const startYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+          const suggested = `${startYear + 1}-${startYear + 2}`;
+          const suggestedYear = loadedYears.find((item) => sanitizeLabel(item.name) === suggested);
+          if (suggestedYear) {
+            setPromoteYearId(String(suggestedYear.id));
+          }
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "";
@@ -188,18 +239,74 @@ export function StudentPromotePanel() {
     void load();
   }, []);
 
-  const currentSections = useMemo(() => {
-    if (!currentClassId) return [];
-    return sections.filter((item) => Number(item.school_class) === Number(currentClassId));
-  }, [sections, currentClassId]);
+  const loadSectionsForClass = async (targetClassId: string, type: "current" | "promote") => {
+    if (!targetClassId) {
+      if (type === "current") {
+        setCurrentSections([]);
+        setCurrentSectionId("");
+      } else {
+        setPromoteSections([]);
+        setPromoteSectionId("");
+      }
+      return;
+    }
 
-  const promoteSections = useMemo(() => {
-    if (!promoteClassId) return [];
-    return sections.filter((item) => Number(item.school_class) === Number(promoteClassId));
-  }, [sections, promoteClassId]);
+    try {
+      if (type === "current") {
+        setLoadingCurrentSections(true);
+        setCurrentSectionId("");
+      } else {
+        setLoadingPromoteSections(true);
+        setPromoteSectionId("");
+      }
 
-  const classMap = useMemo(() => new Map(classes.map((item) => [item.id, item.name])), [classes]);
-  const sectionMap = useMemo(() => new Map(sections.map((item) => [item.id, item.name])), [sections]);
+      const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
+      const nextSections = listData(data);
+      if (type === "current") {
+        setCurrentSections(nextSections);
+      } else {
+        setPromoteSections(nextSections);
+      }
+    } catch {
+      setError("Unable to load sections for selected class.");
+    } finally {
+      if (type === "current") {
+        setLoadingCurrentSections(false);
+      } else {
+        setLoadingPromoteSections(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (currentClassId) {
+        void loadSectionsForClass(currentClassId, "current");
+      } else {
+        setCurrentSections([]);
+        setCurrentSectionId("");
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [currentClassId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (promoteClassId) {
+        void loadSectionsForClass(promoteClassId, "promote");
+      } else {
+        setPromoteSections([]);
+        setPromoteSectionId("");
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [promoteClassId]);
+
+  const classMap = useMemo(() => new Map(normalizedClasses.map((item) => [item.id, item.display_name])), [normalizedClasses]);
+  const sectionMap = useMemo(() => {
+    const merged = [...currentSections, ...promoteSections];
+    return new Map(merged.map((item) => [item.id, sanitizeLabel(item.name)]));
+  }, [currentSections, promoteSections]);
 
   const searchedRows = useMemo(() => {
     return students.filter((row) => {
@@ -249,9 +356,16 @@ export function StudentPromotePanel() {
       errors.class = "Next class cannot be the same as current class";
     }
 
+    const selectedYear = validAcademicYears.find((item) => String(item.id) === promoteYearId);
+    if (promoteYearId && !selectedYear) {
+      errors.year = "Please select a valid academic year";
+    }
+
     setPromoteErrors(errors);
     return Object.keys(errors).length === 0;
   };
+
+  const canSearch = Boolean(currentClassId && currentSectionId && !loadingStudents && !loadingCurrentSections);
 
   const search = async () => {
     if (!validateSearch()) {
@@ -358,12 +472,20 @@ export function StudentPromotePanel() {
   };
 
   return (
-    <div className="legacy-panel">
+    <div className="legacy-panel student-promote-panel">
+      <style>{`
+        .student-promote-panel button:focus,
+        .student-promote-panel select:focus,
+        .student-promote-panel input:focus {
+          outline: 2px solid #5D87FF;
+          outline-offset: 2px;
+        }
+      `}</style>
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>🎓 Student Promote</h1>
-            <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+            <h1 style={{ margin: 0, fontSize: 24 }}><span aria-hidden="true" style={{ color: "#5D87FF" }}>🎓</span> Student Promote</h1>
+            <div style={{ display: "flex", gap: 8, color: "#666666", fontSize: 13 }}>
               <span>Dashboard</span>
               <span>/</span>
               <span>Student Information</span>
@@ -390,21 +512,23 @@ export function StudentPromotePanel() {
 
           {/* Search Criteria Section */}
           <div className="white-box" style={boxStyle()}>
-            <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 16, fontWeight: 600 }}>🔍 Search Criteria</h3>
+            <h3 style={{ marginTop: 0, marginBottom: 10, fontSize: 16, fontWeight: 600 }}><span aria-hidden="true" style={{ color: "#5D87FF" }}>🔍</span> Search Criteria</h3>
+            <p style={{ margin: "0 0 12px", color: "var(--text-muted)", fontSize: 13 }}>Select criteria to view students</p>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(150px, 1fr)) auto", gap: 12, marginBottom: 12 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(180px, 1fr)) auto", gap: 12, marginBottom: 6, alignItems: "end" }}>
               <div>
                 <label style={{ display: "block", fontSize: 13, marginBottom: 6, fontWeight: 500 }}>Academic Year</label>
                 <select
+                  aria-label="Current academic year"
                   value={currentYearId}
                   onChange={(e) => setCurrentYearId(e.target.value)}
                   style={fieldStyle()}
                   disabled={loadingCriteria}
                 >
                   <option value="">Select Academic Year</option>
-                  {years.map((item) => (
+                  {validAcademicYears.map((item) => (
                     <option key={item.id} value={item.id}>
-                      {item.name}
+                      {sanitizeLabel(item.name)}
                     </option>
                   ))}
                 </select>
@@ -415,18 +539,19 @@ export function StudentPromotePanel() {
                   Current Class <span style={{ color: "#dc2626" }}>*</span>
                 </label>
                 <select
+                  aria-label="Current class"
                   value={currentClassId}
                   onChange={(e) => {
                     setCurrentClassId(e.target.value);
-                    setCurrentSectionId("");
+                    setCurrentSections([]);
                     setSearchErrors((prev) => ({ ...prev, class: "" }));
                   }}
                   style={fieldStyle(!!searchErrors.class)}
                 >
                   <option value="">Select Class</option>
-                  {classes.map((item) => (
+                  {normalizedClasses.map((item) => (
                     <option key={item.id} value={item.id}>
-                      {item.name}
+                      {item.display_name}
                     </option>
                   ))}
                 </select>
@@ -438,35 +563,38 @@ export function StudentPromotePanel() {
                   Current Section <span style={{ color: "#dc2626" }}>*</span>
                 </label>
                 <select
+                  aria-label="Current section"
                   value={currentSectionId}
                   onChange={(e) => {
                     setCurrentSectionId(e.target.value);
                     setSearchErrors((prev) => ({ ...prev, section: "" }));
                   }}
                   style={fieldStyle(!!searchErrors.section)}
-                  disabled={!currentClassId}
+                  disabled={!currentClassId || loadingCurrentSections}
                 >
-                  <option value="">Select Section</option>
+                  <option value="">{loadingCurrentSections ? "Loading sections..." : currentClassId ? "Select Section" : "Select Class First"}</option>
                   {currentSections.map((item) => (
                     <option key={item.id} value={item.id}>
-                      {item.name}
+                      {sanitizeLabel(item.name)}
                     </option>
                   ))}
                 </select>
                 {searchErrors.section && <p style={{ color: "#dc2626", fontSize: 12, margin: "4px 0 0 0" }}>{searchErrors.section}</p>}
               </div>
 
-              <div />
-
               <button
                 type="button"
                 onClick={() => void search()}
-                style={btnStyle("var(--primary)", loadingStudents)}
-                disabled={loadingStudents}
+                style={btnStyle("var(--primary)", !canSearch)}
+                disabled={!canSearch}
+                aria-label="Search students"
               >
                 {loadingStudents ? "⏳ Fetching..." : "🔍 Search"}
               </button>
             </div>
+            {!currentClassId || !currentSectionId ? (
+              <p style={{ margin: 0, fontSize: 12, color: "#dc2626" }}>Please select Class and Section to continue</p>
+            ) : null}
           </div>
 
           {/* Students Table Section */}
@@ -489,6 +617,7 @@ export function StudentPromotePanel() {
                             type="checkbox"
                             onChange={(e) => setAll(e.target.checked)}
                             checked={paginatedRows.length > 0 && paginatedRows.every((row) => checked[row.id])}
+                            aria-label="Select all students on current page"
                           />
                           All
                         </label>
@@ -507,6 +636,7 @@ export function StudentPromotePanel() {
                             type="checkbox"
                             checked={!!checked[row.id]}
                             onChange={(e) => setChecked((prev) => ({ ...prev, [row.id]: e.target.checked }))}
+                            aria-label={`Select ${fullName(row)}`}
                           />
                         </td>
                         <td style={{ padding: 12, fontWeight: 500 }}>{row.admission_no || "-"}</td>
@@ -578,7 +708,7 @@ export function StudentPromotePanel() {
                   <div style={{ background: "#fff", padding: 12, borderRadius: 6, border: "1px solid var(--line)" }}>
                     <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Next Academic Year</div>
                     <div style={{ fontSize: 14, fontWeight: 500 }}>
-                      {promoteYearId ? years.find((y) => String(y.id) === promoteYearId)?.name || "N/A" : "Not selected"}
+                      {promoteYearId ? validAcademicYears.find((y) => String(y.id) === promoteYearId)?.name || "N/A" : "Not selected"}
                     </div>
                   </div>
                 </div>
@@ -591,6 +721,7 @@ export function StudentPromotePanel() {
                     Next Academic Year <span style={{ color: "#dc2626" }}>*</span>
                   </label>
                   <select
+                    aria-label="Next academic year"
                     value={promoteYearId}
                     onChange={(e) => {
                       setPromoteYearId(e.target.value);
@@ -599,11 +730,11 @@ export function StudentPromotePanel() {
                     style={fieldStyle(!!promoteErrors.year)}
                   >
                     <option value="">Select Year</option>
-                    {years
+                    {validAcademicYears
                       .filter((item) => !currentYearId || String(item.id) !== currentYearId)
                       .map((item) => (
                         <option key={item.id} value={item.id}>
-                          {item.name}
+                          {sanitizeLabel(item.name)}
                         </option>
                       ))}
                   </select>
@@ -615,18 +746,19 @@ export function StudentPromotePanel() {
                     Next Class <span style={{ color: "#dc2626" }}>*</span>
                   </label>
                   <select
+                    aria-label="Next class"
                     value={promoteClassId}
                     onChange={(e) => {
                       setPromoteClassId(e.target.value);
-                      setPromoteSectionId("");
+                      setPromoteSections([]);
                       setPromoteErrors((prev) => ({ ...prev, class: "" }));
                     }}
                     style={fieldStyle(!!promoteErrors.class)}
                   >
                     <option value="">Select Class</option>
-                    {classes.map((item) => (
+                    {normalizedClasses.map((item) => (
                       <option key={item.id} value={item.id}>
-                        {item.name}
+                        {item.display_name}
                       </option>
                     ))}
                   </select>
@@ -638,18 +770,19 @@ export function StudentPromotePanel() {
                     Next Section <span style={{ color: "#dc2626" }}>*</span>
                   </label>
                   <select
+                    aria-label="Next section"
                     value={promoteSectionId}
                     onChange={(e) => {
                       setPromoteSectionId(e.target.value);
                       setPromoteErrors((prev) => ({ ...prev, section: "" }));
                     }}
                     style={fieldStyle(!!promoteErrors.section)}
-                    disabled={!promoteClassId}
+                    disabled={!promoteClassId || loadingPromoteSections}
                   >
-                    <option value="">Select Section</option>
+                    <option value="">{loadingPromoteSections ? "Loading sections..." : promoteClassId ? "Select Section" : "Select Class First"}</option>
                     {promoteSections.map((item) => (
                       <option key={item.id} value={item.id}>
-                        {item.name}
+                        {sanitizeLabel(item.name)}
                       </option>
                     ))}
                   </select>
@@ -662,6 +795,7 @@ export function StudentPromotePanel() {
                     onClick={() => void promote()}
                     style={btnStyle("#16a34a", promoting || !selectedIds.length)}
                     disabled={promoting || !selectedIds.length}
+                    aria-label="Promote selected students"
                   >
                     {promoting ? "⏳ Promoting..." : "⬆ Promote"}
                   </button>
@@ -670,10 +804,31 @@ export function StudentPromotePanel() {
             </div>
           ) : loadingStudents ? (
             <div className="white-box" style={boxStyle()}>
-              <div style={{ textAlign: "center", padding: 40, color: "var(--text-muted)" }}>
-                <div style={{ fontSize: 24, marginBottom: 12 }}>⏳</div>
-                <div>Fetching students...</div>
-              </div>
+              <div style={{ marginBottom: 10, color: "var(--text-muted)", fontSize: 13 }}>Loading students...</div>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ padding: 10, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Student</th>
+                    <th style={{ padding: 10, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Class/Section</th>
+                    <th style={{ padding: 10, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Array.from({ length: 5 }).map((_, index) => (
+                    <tr key={index}>
+                      <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>
+                        <div style={{ height: 12, width: "70%", borderRadius: 999, background: "#e2e8f0" }} />
+                      </td>
+                      <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>
+                        <div style={{ height: 12, width: "60%", borderRadius: 999, background: "#e2e8f0" }} />
+                      </td>
+                      <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>
+                        <div style={{ height: 12, width: "45%", borderRadius: 999, background: "#e2e8f0" }} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           ) : students.length === 0 && currentClassId && currentSectionId ? (
             <div className="white-box" style={boxStyle()}>
@@ -687,7 +842,7 @@ export function StudentPromotePanel() {
             <div className="white-box" style={boxStyle()}>
               <div style={{ textAlign: "center", padding: 40 }}>
                 <div style={{ fontSize: 48, marginBottom: 12 }}>🔎</div>
-                <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Search to begin</div>
+                <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Select criteria to view students</div>
                 <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Select class and section above, then click Search to view students.</div>
               </div>
             </div>
@@ -701,14 +856,15 @@ export function StudentPromotePanel() {
           <div style={{ background: "#fff", borderRadius: "var(--radius)", padding: 24, maxWidth: 400, boxShadow: "0 10px 15px rgba(0,0,0,0.1)" }}>
             <h3 style={{ margin: "0 0 12px 0", fontSize: 18, fontWeight: 600 }}>⚠️ Confirm Promotion</h3>
             <p style={{ margin: "0 0 20px 0", color: "var(--text-muted)", lineHeight: 1.6 }}>
-              Are you sure you want to promote <strong>{selectedIds.length}</strong> student{selectedIds.length !== 1 ? "s" : ""} to{" "}
-              <strong>{classMap.get(Number(promoteClassId)) || "N/A"}</strong>?
+              You are about to promote <strong>{selectedIds.length}</strong> student{selectedIds.length !== 1 ? "s" : ""} from{" "}
+              <strong>{classMap.get(Number(currentClassId)) || "N/A"}</strong> ({validAcademicYears.find((item) => String(item.id) === currentYearId)?.name || "N/A"}) to{" "}
+              <strong>{classMap.get(Number(promoteClassId)) || "N/A"}</strong> ({validAcademicYears.find((item) => String(item.id) === promoteYearId)?.name || "N/A"}). Proceed?
             </p>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={() => setShowConfirm(false)} style={secondaryBtnStyle(false)}>
+              <button onClick={() => setShowConfirm(false)} style={secondaryBtnStyle(false)} aria-label="Cancel promotion">
                 Cancel
               </button>
-              <button onClick={() => void promoteConfirmed()} style={btnStyle("#16a34a", promoting)} disabled={promoting}>
+              <button onClick={() => void promoteConfirmed()} style={btnStyle("#16a34a", promoting)} disabled={promoting} aria-label="Confirm promotion">
                 {promoting ? "Promoting..." : "Confirm"}
               </button>
             </div>

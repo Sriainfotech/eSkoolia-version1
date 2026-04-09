@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
-//import { RequiredFieldMarker } from "@/components/layout/RequiredFieldMarker";
+import "leaflet/dist/leaflet.css";
+import "react-toastify/dist/ReactToastify.css";
+import { RequiredFieldMarker } from "@/components/layout/RequiredFieldMarker";
 
 export const metadata: Metadata = {
   title: "School ERP",

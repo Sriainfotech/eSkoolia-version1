@@ -1,15 +1,17 @@
 export type SidebarItem = {
   id: string;
   name: string;
+  icon?: string;
   route?: string;
   children?: SidebarItem[];
 };
 
 export const sidebarMenu: SidebarItem[] = [
-  { id: "dashboard", name: "Dashboard", route: "/dashboard" },
+  { id: "dashboard", name: "Dashboard", icon: "/icons/sidebar/dashboard.svg", route: "/dashboard" },
   {
     id: "role-permission",
     name: "Role Permission",
+    icon: "/icons/sidebar/role-permission.svg",
     children: [
       { id: "roles", name: "Role", route: "/roles" },
       { id: "assign-permission", name: "Assign Permission", route: "/roles/assign-permission" },
@@ -24,6 +26,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "administration",
     name: "Admin Section",
+    icon: "/icons/sidebar/admin-section.svg",
     children: [
       { id: "admission-query", name: "Admission Query", route: "/administration/admission-query" },
       { id: "visitor-book", name: "Visitor Book", route: "/administration/visitor-book" },
@@ -41,6 +44,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "student-info",
     name: "Student Info",
+    icon: "/icons/sidebar/student-info.svg",
     children: [
       { id: "student-category", name: "Student Category", route: "/students/category" },
       { id: "add-student", name: "Add Student", route: "/students/add" },
@@ -66,6 +70,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "academics",
     name: "Academics",
+    icon: "/icons/sidebar/academics.svg",
     children: [
       { id: "core-setup", name: "Core Setup", route: "/academics/core-setup" },
       { id: "assign-class-teacher", name: "Assign Class Teacher", route: "/academics/assign-class-teacher" },
@@ -88,6 +93,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "examination",
     name: "Examination",
+    icon: "/icons/sidebar/examination.svg",
     children: [
       { id: "exam-type", name: "Exam Type", route: "/exams/exam-type" },
       { id: "exam-setup", name: "Exam Setup", route: "/exams/setup" },
@@ -108,6 +114,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "reports",
     name: "Reports",
+    icon: "/icons/sidebar/reports.svg",
     children: [
       { id: "student-report", name: "Student Report", route: "/reports/student" },
       { id: "student-list-report", name: "Student List", route: "/reports/student-list" },
@@ -127,6 +134,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "fees",
     name: "Fees",
+    icon: "/icons/sidebar/fees.svg",
     children: [
       { id: "fees-group", name: "Fees Group", route: "/fees/groups" },
       { id: "fees-type", name: "Fees Type", route: "/fees/types" },
@@ -139,6 +147,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "library",
     name: "Library",
+    icon: "/icons/sidebar/library.svg",
     children: [
       { id: "book-categories", name: "Book Categories", route: "/library/categories" },
       { id: "books", name: "Books", route: "/library/books" },
@@ -149,17 +158,20 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "transport",
     name: "Transport",
+    icon: "/icons/sidebar/transport.svg",
     children: [
+      { id: "bus-tracking", name: "Live Bus Tracking", route: "/transport/bus-tracking" },
       { id: "vehicles", name: "Vehicles", route: "/transport/vehicles" },
       { id: "transport-routes", name: "Routes", route: "/transport/routes" },
       { id: "assign-vehicles", name: "Assign Vehicles", route: "/transport/assign-vehicles" },
       { id: "student-transport-report", name: "Student Transport Report", route: "/transport/student-report" },
     ],
   },
-  { id: "inventory", name: "Inventory", route: "/inventory" },
+  { id: "inventory", name: "Inventory", icon: "/icons/sidebar/inventory.svg", route: "/inventory" },
   {
     id: "behaviour-records",
     name: "Behaviour Records",
+    icon: "/icons/sidebar/behaviour-records.svg",
     children: [
       { id: "behaviour-assign-incident", name: "Assign Incident", route: "/behaviour/assign-incident" },
       { id: "behaviour-incident", name: "Incident", route: "/behaviour/incidents" },
@@ -189,6 +201,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "human-resource",
     name: "Human Resource",
+    icon: "/icons/sidebar/human-resource.svg",
     children: [
       { id: "hr-departments", name: "HR Departments", route: "/hr/departments" },
       { id: "hr-designations", name: "HR Designations", route: "/hr/designations" },
@@ -204,6 +217,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "finance",
     name: "Accounts",
+    icon: "/icons/sidebar/accounts.svg",
     children: [
       { id: "chart-of-accounts", name: "Chart Of Accounts", route: "/finance/chart-of-accounts" },
       { id: "bank-accounts", name: "Bank Accounts", route: "/finance/bank-accounts" },
@@ -214,6 +228,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "utilities",
     name: "Utilities",
+    icon: "/icons/sidebar/utilities.svg",
     children: [
       { id: "chat", name: "Chat", route: "/utilities/chat" },
       { id: "communication", name: "Communication", route: "/utilities/communication" },
@@ -222,6 +237,7 @@ export const sidebarMenu: SidebarItem[] = [
   {
     id: "settings",
     name: "Settings Section",
+    icon: "/icons/sidebar/settings-section.svg",
     children: [
       { id: "general-settings", name: "General Settings", route: "/setup" },
       { id: "schools", name: "Schools", route: "/setup/schools" },

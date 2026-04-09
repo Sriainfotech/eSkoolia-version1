@@ -182,3 +182,27 @@ class SubjectAttendanceReportSearchRequestSerializer(serializers.Serializer):
     section = serializers.IntegerField(required=False)
     month = serializers.CharField()
     year = serializers.IntegerField()
+
+    def validate_month(self, value):
+        month = str(value).strip()
+        if not month.isdigit():
+            raise serializers.ValidationError("Month must be numeric.")
+        month_num = int(month)
+        if month_num < 1 or month_num > 12:
+            raise serializers.ValidationError("Month must be between 1 and 12.")
+        return f"{month_num:02d}"
+
+    def validate_year(self, value):
+        if int(value) < 1900 or int(value) > 2100:
+            raise serializers.ValidationError("Year is out of valid range.")
+        return int(value)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        class_id = attrs.get("class_id") or attrs.get("class")
+        section_id = attrs.get("section_id") or attrs.get("section")
+        if not class_id:
+            raise serializers.ValidationError({"class_id": "Class is required."})
+        if not section_id:
+            raise serializers.ValidationError({"section_id": "Section is required."})
+        return attrs

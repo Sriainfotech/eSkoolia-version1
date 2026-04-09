@@ -1,7 +1,12 @@
 from django.db import IntegrityError, transaction
+from datetime import datetime
+import re
+import requests
+from django.core.cache import cache
 from rest_framework import mixins, permissions, status, viewsets
 from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
+from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
@@ -23,6 +28,7 @@ from .models import (
     VisitorBookEntry,
 )
 from .serializers import (
+    AdmissionPincodeLookupQuerySerializer,
     AdmissionFollowUpSerializer,
     AdmissionInquirySerializer,
     AdminSetupEntrySerializer,
@@ -87,6 +93,147 @@ class DuplicateSafeWriteMixin:
             return super().partial_update(request, *args, **kwargs)
         except IntegrityError as exc:
             self._raise_integrity_validation_error(exc)
+
+
+class AdmissionPincodeLookupAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _has_access(self, user):
+        if user.is_superuser:
+            return True
+        if not hasattr(user, "has_permission_code"):
+            return False
+        return user.has_permission_code("admin_section.admission_query.view")
+
+    def _normalize_post_office(self, office):
+        office = office or {}
+        return {
+            "name": str(office.get("Name") or "").strip(),
+            "branch_type": str(office.get("BranchType") or "").strip(),
+            "delivery_status": str(office.get("DeliveryStatus") or "").strip(),
+            "district": str(office.get("District") or "").strip(),
+            "state": str(office.get("State") or "").strip(),
+            "region": str(office.get("Region") or "").strip(),
+            "division": str(office.get("Division") or "").strip(),
+            "circle": str(office.get("Circle") or "").strip(),
+            "taluk": str(office.get("Taluk") or "").strip(),
+            "block": str(office.get("Block") or "").strip(),
+            "country": str(office.get("Country") or "").strip(),
+            "pincode": str(office.get("Pincode") or "").strip(),
+        }
+
+    def get(self, request):
+        if not self._has_access(request.user):
+            raise PermissionDenied("You do not have permission to perform this action.")
+
+        serializer = AdmissionPincodeLookupQuerySerializer(data=request.query_params)
+        if not serializer.is_valid():
+            field_errors = {
+                field: [str(error) for error in (errors or [])] if isinstance(errors, (list, tuple)) else [str(errors)]
+                for field, errors in serializer.errors.items()
+            }
+            message = field_errors.get("pincode", ["Pincode must be exactly 6 digits."])[0]
+            return Response(
+                {
+                    "success": False,
+                    "message": message,
+                    "field_errors": field_errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        pincode = serializer.validated_data["pincode"]
+        cache_key = f"admission_pincode_details:v1:{pincode}"
+        cached = cache.get(cache_key)
+        if cached:
+            return Response({"success": True, "message": "Pincode details fetched successfully.", "data": cached})
+
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "application/json",
+        }
+        try:
+            upstream = requests.get(f"https://api.postalpincode.in/pincode/{pincode}", timeout=8, headers=headers)
+            upstream.raise_for_status()
+            payload = upstream.json()
+        except requests.RequestException:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Unable to fetch pincode details right now.",
+                    "field_errors": {"pincode": "Unable to fetch pincode details right now."},
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        if not isinstance(payload, list) or not payload:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Invalid PIN Code",
+                    "field_errors": {"pincode": "Invalid PIN Code"},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        entry = payload[0] or {}
+        if str(entry.get("Status") or "").strip().lower() != "success":
+            return Response(
+                {
+                    "success": False,
+                    "message": "Invalid PIN Code",
+                    "field_errors": {"pincode": "Invalid PIN Code"},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        raw_post_offices = entry.get("PostOffice") or []
+        post_offices = [self._normalize_post_office(item) for item in raw_post_offices if item]
+        post_offices = [item for item in post_offices if item.get("name")]
+
+        if not post_offices:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Invalid PIN Code",
+                    "field_errors": {"pincode": "Invalid PIN Code"},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        selected_post_office = post_offices[0]
+        state = str(selected_post_office.get("state") or "").strip()
+        district = str(selected_post_office.get("district") or "").strip()
+
+        if not state or not district:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Invalid PIN Code",
+                    "field_errors": {"pincode": "Invalid PIN Code"},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = {
+            "pincode": pincode,
+            "state": state,
+            "district": district,
+            "post_office": selected_post_office.get("name") or "",
+            "selected_post_office": selected_post_office,
+            "post_offices": post_offices,
+            "multiple_post_offices": len(post_offices) > 1,
+        }
+        cache.set(cache_key, data, 24 * 60 * 60)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Pincode details fetched successfully.",
+                "data": data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
@@ -159,9 +306,39 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
             instance.class_name = instance.school_class.name
             instance.save(update_fields=["class_name", "updated_at"])
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_create(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        headers = self.get_success_headers(serializer.data)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_update(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
 
 class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = AdmissionFollowUpSerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ["get", "post", "delete", "head", "options"]
     permission_codes = {
@@ -174,11 +351,18 @@ class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
     def get_queryset(self):
         user = self.request.user
         qs = AdmissionFollowUp.objects.select_related("inquiry__school", "author")
+        inquiry_id = self.request.query_params.get("inquiry")
         if user.is_superuser:
-            return qs
-        if user.school_id:
-            return qs.filter(inquiry__school_id=user.school_id)
-        return qs.none()
+            scoped = qs
+        elif user.school_id:
+            scoped = qs.filter(inquiry__school_id=user.school_id)
+        else:
+            return qs.none()
+
+        if inquiry_id:
+            scoped = scoped.filter(inquiry_id=inquiry_id)
+
+        return scoped.order_by("-created_at")
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -190,15 +374,36 @@ class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
 
         instance = serializer.save(author=user)
 
+        follow_up_raw = self.request.data.get("follow_up_date")
+        follow_up_date = timezone.localdate()
+        if follow_up_raw:
+            try:
+                follow_up_date = datetime.strptime(str(follow_up_raw), "%Y-%m-%d").date()
+            except ValueError as exc:
+                raise ValidationError({"follow_up_date": "Follow up date is invalid."}) from exc
+
         inquiry_updates = {
-            "follow_up_date": timezone.localdate(),
+            "follow_up_date": follow_up_date,
         }
 
         next_follow_up_date = self.request.data.get("next_follow_up_date")
         active_status = self.request.data.get("active_status") or self.request.data.get("status")
 
+        if follow_up_date > timezone.localdate():
+            raise ValidationError({"follow_up_date": "Follow-up date cannot be in the future."})
+
         if next_follow_up_date:
-            inquiry_updates["next_follow_up_date"] = next_follow_up_date
+            try:
+                parsed_next = datetime.strptime(str(next_follow_up_date), "%Y-%m-%d").date()
+            except ValueError as exc:
+                raise ValidationError({"next_follow_up_date": "Next follow up date is invalid."}) from exc
+            if parsed_next < timezone.localdate():
+                raise ValidationError({"next_follow_up_date": "Next follow-up date cannot be in the past."})
+            if parsed_next < follow_up_date:
+                raise ValidationError({"next_follow_up_date": "Next follow-up date must be on or after the follow-up date."})
+
+        if next_follow_up_date:
+            inquiry_updates["next_follow_up_date"] = parsed_next
         if active_status:
             inquiry_updates["active_status"] = active_status
 
@@ -207,6 +412,18 @@ class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
             inquiry_updates["status"] = instance.status_after
 
         AdmissionInquiry.objects.filter(pk=instance.inquiry_id).update(**inquiry_updates)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_create(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        headers = self.get_success_headers(serializer.data)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
 class VisitorBookEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
@@ -270,6 +487,35 @@ class VisitorBookEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
 
         raise ValidationError({"detail": "Unable to generate visitor ID. Please retry."})
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_create(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        headers = self.get_success_headers(serializer.data)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_update(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
 
 class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = ComplaintEntrySerializer
@@ -300,6 +546,35 @@ class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
         if not school and getattr(self.request, "school", None):
             school = self.request.school
         serializer.save(school=school, created_by=user)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_create(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        headers = self.get_success_headers(serializer.data)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_update(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
 
 
 class PostalReceiveEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
@@ -363,6 +638,35 @@ class PostalDispatchEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
             school = self.request.school
         serializer.save(school=school, created_by=user)
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_create(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        headers = self.get_success_headers(serializer.data)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_update(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
 
 class PhoneCallLogEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = PhoneCallLogEntrySerializer
@@ -391,6 +695,35 @@ class PhoneCallLogEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
         if not school and getattr(self.request, "school", None):
             school = self.request.school
         serializer.save(school=school, created_by=user)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_create(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        headers = self.get_success_headers(serializer.data)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=422)
+        try:
+            self.perform_update(serializer)
+        except IntegrityError as exc:
+            self._raise_integrity_validation_error(exc)
+        output = self.get_serializer(serializer.instance)
+        return Response(output.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
 
 
 class AdminSetupEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):

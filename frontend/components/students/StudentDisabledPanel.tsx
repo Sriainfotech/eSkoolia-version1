@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
 import { PaginationControls } from "@/components/common/PaginationControls";
@@ -28,6 +29,7 @@ type SchoolClass = { id: number; name: string };
 type Section = { id: number; school_class: number; name: string };
 type Guardian = { id: number; full_name: string; phone?: string };
 type StudentCategory = { id: number; name: string };
+type MePayload = { id: number; is_superuser: boolean; is_school_admin?: boolean };
 type ApiError = Error & { status?: number; details?: { message?: string; detail?: string } };
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -81,27 +83,40 @@ function buttonStyle(color = "var(--primary)") {
 }
 
 function fullName(student: StudentRow) {
-  return `${student.first_name || ""} ${student.last_name || ""}`.trim() || "-";
+  return `${student.first_name || ""} ${student.last_name || ""}`.trim() || "Data Not Available";
 }
 
 function formatDate(value?: string | null) {
   if (!value) {
-    return "-";
+    return "Data Not Available";
   }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    return value;
+    return value || "Data Not Available";
   }
   return date.toLocaleDateString();
 }
 
+function displayValue(value?: string | null) {
+  const text = String(value || "").trim();
+  return text || "Data Not Available";
+}
+
+const ADMISSION_PATTERN = /^ADM\d{4}$/i;
+
 export function StudentDisabledPanel() {
   const { page, pageSize, setPage, setPageSize } = usePersistentPagination("students.disabled", 1, 10);
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
+  const [sectionOptions, setSectionOptions] = useState<Section[]>([]);
   const [guardians, setGuardians] = useState<Guardian[]>([]);
   const [categories, setCategories] = useState<StudentCategory[]>([]);
+  const [currentUser, setCurrentUser] = useState<MePayload | null>(null);
   const [totalCount, setTotalCount] = useState(0);
 
   const [classId, setClassId] = useState("");
@@ -111,28 +126,42 @@ export function StudentDisabledPanel() {
   const [debouncedNameQuery, setDebouncedNameQuery] = useState("");
   const [debouncedAdmissionQuery, setDebouncedAdmissionQuery] = useState("");
   const [filterError, setFilterError] = useState("");
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
 
   const [busyId, setBusyId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<StudentRow | null>(null);
   const [enableCandidate, setEnableCandidate] = useState<StudentRow | null>(null);
+  const [bulkEnableConfirmOpen, setBulkEnableConfirmOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingSections, setLoadingSections] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [hoveredRowId, setHoveredRowId] = useState<number | null>(null);
+  const [hydratedFromUrl, setHydratedFromUrl] = useState(false);
 
-  const classMap = useMemo(() => new Map(classes.map((item) => [item.id, item.name])), [classes]);
+  const validClasses = useMemo(
+    () => classes.filter((item) => Number.isInteger(item.id) && item.id > 0 && /[A-Za-z]/.test(String(item.name || ""))),
+    [classes],
+  );
+  const classMap = useMemo(() => new Map(validClasses.map((item) => [item.id, item.name])), [validClasses]);
   const sectionMap = useMemo(() => new Map(sections.map((item) => [item.id, item.name])), [sections]);
   const guardianMap = useMemo(() => new Map(guardians.map((item) => [item.id, item])), [guardians]);
   const categoryMap = useMemo(() => new Map(categories.map((item) => [item.id, item.name])), [categories]);
+  const canViewPhone = !!(currentUser?.is_superuser || currentUser?.is_school_admin);
 
-  const filteredSections = useMemo(() => {
-    if (!classId) {
-      return [];
-    }
-    return sections.filter((item) => String(item.school_class) === classId);
-  }, [sections, classId]);
+  const allVisibleSelected = useMemo(
+    () => students.length > 0 && students.every((row) => selectedIds.includes(row.id)),
+    [students, selectedIds],
+  );
+
+  const selectedStudentsCount = selectedIds.length;
+
+  const isClassIdValid = !classId || /^\d+$/.test(classId);
+  const isSectionIdValid = !sectionId || /^\d+$/.test(sectionId);
+  const isAdmissionQueryValid = !admissionQuery.trim() || ADMISSION_PATTERN.test(admissionQuery.trim());
 
   const mapApiErrorMessage = (err: unknown, fallback: string) => {
     const apiErr = err as ApiError;
@@ -147,6 +176,17 @@ export function StudentDisabledPanel() {
     return message || fallback;
   };
 
+  const syncUrl = () => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (nameQuery.trim()) params.set("name", nameQuery.trim()); else params.delete("name");
+    if (admissionQuery.trim()) params.set("admission", admissionQuery.trim()); else params.delete("admission");
+    if (classId) params.set("class", classId); else params.delete("class");
+    if (sectionId) params.set("section", sectionId); else params.delete("section");
+    params.set("page", String(page));
+    params.set("page_size", String(pageSize));
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  };
+
   const loadStudents = async (targetPage = page, targetPageSize = pageSize) => {
     if (sectionId && !classId) {
       setFilterError("Please select class first");
@@ -154,15 +194,26 @@ export function StudentDisabledPanel() {
       return;
     }
 
+    if (!isClassIdValid || !isSectionIdValid) {
+      setFilterError("Please select valid class and section");
+      return;
+    }
+
+    if (!isAdmissionQueryValid) {
+      setFilterError("Admission Number must follow ADM#### format");
+      return;
+    }
+
     try {
       setLoading(true);
       setError("");
+      setFilterError("");
       const query = buildPaginationQuery(targetPage, targetPageSize, {
         is_disabled: "true",
         current_class: classId || undefined,
         current_section: sectionId || undefined,
         first_name: debouncedNameQuery.trim() || undefined,
-        admission_no: debouncedAdmissionQuery.trim() || undefined,
+        admission_no: isAdmissionQueryValid ? (debouncedAdmissionQuery.trim() || undefined) : undefined,
       });
       const studentData = await apiGet<ListApiResponse<StudentRow>>(`/api/v1/students/students/?${query}`);
       const items = extractListData(studentData);
@@ -176,6 +227,7 @@ export function StudentDisabledPanel() {
 
       setStudents(items);
       setTotalCount(safeCount);
+      setSelectedIds((prev) => prev.filter((id) => items.some((row) => row.id === id)));
     } catch (err) {
       const apiErr = err as ApiError;
       const message = mapApiErrorMessage(apiErr, "Unable to load disabled students.");
@@ -197,16 +249,18 @@ export function StudentDisabledPanel() {
     try {
       setLoading(true);
       setError("");
-      const [classData, sectionData, guardianData, categoryData] = await Promise.all([
+      const [classData, sectionData, guardianData, categoryData, meData] = await Promise.all([
         apiGet<ListApiResponse<SchoolClass>>("/api/v1/core/classes/"),
         apiGet<ListApiResponse<Section>>("/api/v1/core/sections/"),
         apiGet<ListApiResponse<Guardian>>("/api/v1/students/guardians/"),
         apiGet<ListApiResponse<StudentCategory>>("/api/v1/students/categories/"),
+        apiGet<MePayload>("/api/v1/auth/me/"),
       ]);
       setClasses(extractListData(classData));
       setSections(extractListData(sectionData));
       setGuardians(extractListData(guardianData));
       setCategories(extractListData(categoryData));
+      setCurrentUser(meData);
     } catch {
       setError("Unable to load filter options.");
     } finally {
@@ -217,6 +271,27 @@ export function StudentDisabledPanel() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (hydratedFromUrl) {
+      return;
+    }
+    const pageParam = searchParams.get("page");
+    const sizeParam = searchParams.get("page_size");
+    const classParam = searchParams.get("class");
+    const sectionParam = searchParams.get("section");
+    const nameParam = searchParams.get("name");
+    const admissionParam = searchParams.get("admission");
+
+    if (pageParam && /^\d+$/.test(pageParam)) setPage(Number(pageParam));
+    if (sizeParam && /^\d+$/.test(sizeParam)) setPageSize(Number(sizeParam));
+    if (classParam && /^\d+$/.test(classParam)) setClassId(classParam);
+    if (sectionParam && /^\d+$/.test(sectionParam)) setSectionId(sectionParam);
+    if (nameParam) setNameQuery(nameParam);
+    if (admissionParam) setAdmissionQuery(admissionParam.toUpperCase());
+
+    setHydratedFromUrl(true);
+  }, [hydratedFromUrl, searchParams, setPage, setPageSize]);
 
   useEffect(() => {
     const nameTimer = window.setTimeout(() => {
@@ -233,11 +308,46 @@ export function StudentDisabledPanel() {
   }, [nameQuery, admissionQuery]);
 
   useEffect(() => {
+    if (!hydratedFromUrl) {
+      return;
+    }
     const handle = window.setTimeout(() => {
       void loadStudents();
     }, 350);
     return () => window.clearTimeout(handle);
-  }, [page, pageSize, classId, sectionId, debouncedNameQuery, debouncedAdmissionQuery]);
+  }, [hydratedFromUrl, page, pageSize, classId, sectionId, debouncedNameQuery, debouncedAdmissionQuery]);
+
+  useEffect(() => {
+    if (!hydratedFromUrl) {
+      return;
+    }
+    syncUrl();
+  }, [hydratedFromUrl, nameQuery, admissionQuery, classId, sectionId, page, pageSize]);
+
+  useEffect(() => {
+    if (!classId || !/^\d+$/.test(classId)) {
+      setSectionId("");
+      setSectionOptions([]);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const fetchSections = async () => {
+        try {
+          setLoadingSections(true);
+          const payload = await apiGet<ListApiResponse<Section>>(`/api/v1/core/sections/?school_class=${classId}`);
+          setSectionOptions(extractListData(payload));
+        } catch {
+          setSectionOptions(sections.filter((item) => String(item.school_class) === classId));
+        } finally {
+          setLoadingSections(false);
+        }
+      };
+      void fetchSections();
+    }, 250);
+
+    return () => window.clearTimeout(timer);
+  }, [classId, sections]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
@@ -287,6 +397,51 @@ export function StudentDisabledPanel() {
     }
   };
 
+  const toggleSelectAllVisible = () => {
+    if (allVisibleSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !students.some((row) => row.id === id)));
+      return;
+    }
+    setSelectedIds((prev) => Array.from(new Set([...prev, ...students.map((row) => row.id)])));
+  };
+
+  const toggleRowSelection = (id: number) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+
+  const bulkEnableStudents = async () => {
+    if (selectedIds.length === 0) {
+      setBulkEnableConfirmOpen(false);
+      return;
+    }
+    try {
+      setBulkBusy(true);
+      setError("");
+      setSuccess("");
+
+      const results = await Promise.allSettled(
+        selectedIds.map((id) => apiPatch(`/api/v1/students/students/${id}/`, { is_disabled: false, is_active: true })),
+      );
+      const successCount = results.filter((result) => result.status === "fulfilled").length;
+      const failedCount = results.length - successCount;
+
+      await loadStudents(page, pageSize);
+      setSelectedIds([]);
+
+      if (failedCount > 0) {
+        setError(`${failedCount} student(s) could not be enabled.`);
+      }
+      if (successCount > 0) {
+        setSuccess(`${successCount} student(s) enabled successfully.`);
+      }
+    } catch (err) {
+      setError(mapApiErrorMessage(err, "Unable to bulk enable students."));
+    } finally {
+      setBulkBusy(false);
+      setBulkEnableConfirmOpen(false);
+    }
+  };
+
   return (
     <div className="legacy-panel">
       <section className="sms-breadcrumb mb-20">
@@ -302,12 +457,13 @@ export function StudentDisabledPanel() {
                   type="button"
                   onClick={() => void handleRefresh()}
                   disabled={loading || refreshing}
+                  aria-label="Refresh List"
                   style={{ ...buttonStyle(), opacity: loading || refreshing ? 0.7 : 1, cursor: loading || refreshing ? "not-allowed" : "pointer" }}
                 >
                   {refreshing ? "Refreshing..." : "🔄 Refresh"}
                 </button>
               </div>
-              <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+              <div style={{ display: "flex", gap: 8, color: "#666", fontSize: 13 }}>
                 <span>Dashboard</span>
                 <span>/</span>
                 <span>Student Information</span>
@@ -330,11 +486,13 @@ export function StudentDisabledPanel() {
                   setClassId(event.target.value); 
                   setSectionId(""); 
                   setFilterError("");
+                  setPage(1);
                 }} 
+                aria-label="Filter by class"
                 style={fieldStyle()}
               >
                 <option value="">Select Class</option>
-                {classes.map((item) => (
+                {validClasses.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
                   </option>
@@ -350,14 +508,17 @@ export function StudentDisabledPanel() {
                   }
                   setFilterError("");
                   setSectionId(event.target.value);
+                  setPage(1);
                 }} 
                 onFocus={() => {
                   if (!classId) setFilterError("Please select class first");
                 }}
+                disabled={!classId || loadingSections}
+                aria-label="Filter by section"
                 style={fieldStyle()}
               >
-                <option value="">Select Section</option>
-                {filteredSections.map((item) => (
+                <option value="">{loadingSections ? "Loading sections..." : classId ? "Select Section" : "Select Class First"}</option>
+                {sectionOptions.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.name}
                   </option>
@@ -384,13 +545,40 @@ export function StudentDisabledPanel() {
                     if (/^[A-Za-z\s]*$/.test(nextValue)) {
                       setNameQuery(nextValue);
                       setFilterError("");
+                      setPage(1);
                       return;
                     }
                     setFilterError("Name accepts only letters and spaces");
                   }} 
+                  aria-label="Search by student name"
                   placeholder="Search by name" 
-                  style={{ ...fieldStyle(), paddingLeft: 32 }} 
+                  style={{ ...fieldStyle(), paddingLeft: 32, paddingRight: 34 }} 
                 />
+                {nameQuery ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNameQuery("");
+                      setFilterError("");
+                      setPage(1);
+                    }}
+                    aria-label="Clear name search"
+                    style={{
+                      position: "absolute",
+                      right: 8,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      border: "none",
+                      background: "transparent",
+                      color: "#64748b",
+                      cursor: "pointer",
+                      fontSize: 16,
+                      lineHeight: 1,
+                    }}
+                  >
+                    ×
+                  </button>
+                ) : null}
               </div>
               <div style={{ position: "relative" }}>
                 <span
@@ -409,30 +597,86 @@ export function StudentDisabledPanel() {
                 <input 
                   value={admissionQuery} 
                   onChange={(event) => {
-                    const nextValue = event.target.value;
-                    if (/^[A-Za-z0-9]*$/.test(nextValue)) {
+                    const nextValue = event.target.value.toUpperCase();
+                    if (/^[A-Za-z0-9]*$/.test(nextValue) && nextValue.length <= 7) {
                       setAdmissionQuery(nextValue);
+                      if (!nextValue || ADMISSION_PATTERN.test(nextValue)) {
+                        setFilterError("");
+                      } else {
+                        setFilterError("Admission Number must follow ADM#### format");
+                      }
+                      setPage(1);
+                      return;
+                    }
+                    if (!nextValue) {
+                      setAdmissionQuery("");
                       setFilterError("");
                       return;
                     }
-                    setFilterError("Admission No accepts only letters and numbers");
+                    setFilterError("Use format like ADM1234");
                   }} 
+                  aria-label="Search by admission number"
                   placeholder="Search by admission no" 
-                  style={{ ...fieldStyle(), paddingLeft: 32 }} 
+                  style={{ ...fieldStyle(), paddingLeft: 32, paddingRight: 34 }} 
                 />
+                {admissionQuery ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAdmissionQuery("");
+                      setFilterError("");
+                      setPage(1);
+                    }}
+                    aria-label="Clear admission number search"
+                    style={{
+                      position: "absolute",
+                      right: 8,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      border: "none",
+                      background: "transparent",
+                      color: "#64748b",
+                      cursor: "pointer",
+                      fontSize: 16,
+                      lineHeight: 1,
+                    }}
+                  >
+                    ×
+                  </button>
+                ) : null}
               </div>
             </div>
             {filterError ? <p style={{ color: "#dc2626", margin: "8px 0 0" }}>{filterError}</p> : null}
           </div>
 
           <div className="white-box" style={boxStyle()}>
-            <h3 style={{ marginTop: 0, marginBottom: 12 }}>Disabled Students</h3>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+              <h3 style={{ margin: 0 }}>Disabled Students</h3>
+              <button
+                type="button"
+                style={{ ...buttonStyle("#0284c7"), opacity: selectedStudentsCount === 0 || bulkBusy ? 0.7 : 1, minWidth: 130 }}
+                disabled={selectedStudentsCount === 0 || bulkBusy}
+                onClick={() => setBulkEnableConfirmOpen(true)}
+                aria-label="Bulk enable selected students"
+                title="Enable selected students"
+              >
+                {bulkBusy ? "Enabling..." : `Bulk Enable (${selectedStudentsCount})`}
+              </button>
+            </div>
             {error && <p style={{ color: "var(--warning)", marginBottom: 10 }}>{error}</p>}
             {success && <p style={{ color: "#0f766e", marginBottom: 10 }}>{success}</p>}
             <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <table aria-label="Disabled students table" style={{ width: "100%", borderCollapse: "collapse", minWidth: 1180 }}>
                 <thead>
                   <tr>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)", width: 48 }}>
+                      <input
+                        type="checkbox"
+                        checked={allVisibleSelected}
+                        onChange={toggleSelectAllVisible}
+                        aria-label="Select all students on current page"
+                      />
+                    </th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Admission No</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Roll No</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Name</th>
@@ -441,27 +685,27 @@ export function StudentDisabledPanel() {
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Date Of Birth</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Gender</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Type</th>
-                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Phone</th>
-                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Actions</th>
+                    {canViewPhone ? <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Phone</th> : null}
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)", position: "sticky", right: 0, background: "var(--surface)", zIndex: 2 }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading ? (
                     <tr>
-                      <td colSpan={10} style={{ padding: 12, color: "var(--text-muted)", textAlign: "center" }}>
+                      <td colSpan={canViewPhone ? 11 : 10} style={{ padding: 12, color: "var(--text-muted)", textAlign: "center" }}>
                         Loading disabled students...
                       </td>
                     </tr>
                   ) : students.length === 0 ? (
                     <tr>
-                      <td colSpan={10} style={{ padding: 24, textAlign: "center" }}>
-                        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>No disabled students found</div>
+                      <td colSpan={canViewPhone ? 11 : 10} style={{ padding: 24, textAlign: "center" }}>
+                        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>No Disabled Students Found</div>
                         <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Try adjusting filters or search criteria</div>
                       </td>
                     </tr>
                   ) : (
                     students.map((row) => {
-                      const className = classMap.get(row.current_class || 0) || "-";
+                      const className = classMap.get(row.current_class || 0) || "Data Not Available";
                       const sectionName = sectionMap.get(row.current_section || 0);
                       const guardian = row.guardian ? guardianMap.get(row.guardian) : undefined;
                       const categoryName = row.category ? categoryMap.get(row.category) : undefined;
@@ -471,34 +715,47 @@ export function StudentDisabledPanel() {
                           key={row.id}
                           onMouseEnter={() => setHoveredRowId(row.id)}
                           onMouseLeave={() => setHoveredRowId(null)}
+                          tabIndex={0}
                           style={{ background: hoveredRowId === row.id ? "#f8fafc" : "transparent" }}
                         >
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.admission_no || "-"}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.roll_no || "-"}</td>
+                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.includes(row.id)}
+                              onChange={() => toggleRowSelection(row.id)}
+                              aria-label={`Select ${fullName(row)}`}
+                            />
+                          </td>
+                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(row.admission_no)}</td>
+                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(row.roll_no)}</td>
                           <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{fullName(row)}</td>
                           <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
                             {className}{sectionName ? ` (${sectionName})` : ""}
                           </td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{guardian?.full_name || "-"}</td>
+                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(guardian?.full_name)}</td>
                           <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{formatDate(row.date_of_birth)}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)", textTransform: "capitalize" }}>{row.gender || "-"}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{categoryName || "-"}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{guardian?.phone || "-"}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
+                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)", textTransform: "capitalize" }}>{displayValue(row.gender)}</td>
+                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(categoryName)}</td>
+                          {canViewPhone ? <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(guardian?.phone)}</td> : null}
+                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)", position: "sticky", right: 0, background: "var(--surface)" }}>
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                               <button
                                 type="button"
-                                disabled={busyId === row.id}
-                                style={buttonStyle("#0284c7")}
+                                disabled={busyId === row.id || bulkBusy}
+                                style={{ ...buttonStyle("#0284c7"), minWidth: 90 }}
                                 onClick={() => setEnableCandidate(row)}
+                                aria-label={`Enable ${fullName(row)}`}
+                                title="Enable student"
                               >
                                 Enable
                               </button>
                               <button
                                 type="button"
-                                disabled={busyId === row.id}
-                                style={buttonStyle("#dc2626")}
+                                disabled={busyId === row.id || bulkBusy}
+                                style={{ ...buttonStyle("#dc2626"), minWidth: 90 }}
                                 onClick={() => setDeleteCandidate(row)}
+                                aria-label={`Delete ${fullName(row)}`}
+                                title="Delete student"
                               >
                                 Delete
                               </button>
@@ -541,13 +798,35 @@ export function StudentDisabledPanel() {
       <ConfirmationModal
         isOpen={deleteCandidate !== null}
         title="Delete Student"
-        message={`Are you sure you want to delete ${deleteCandidate ? fullName(deleteCandidate) : "this student"}? This action cannot be undone.`}
+        message={`Are you sure you want to permanently delete ${deleteCandidate ? fullName(deleteCandidate) : "this student"}? This action cannot be undone.`}
         confirmLabel="Delete"
         cancelLabel="Cancel"
         isConfirming={deletingId !== null}
         onConfirm={() => deleteCandidate ? void remove(deleteCandidate.id) : undefined}
         onCancel={() => setDeleteCandidate(null)}
       />
+
+      <ConfirmationModal
+        isOpen={bulkEnableConfirmOpen}
+        title="Bulk Enable Students"
+        message={`Enable ${selectedStudentsCount} selected student(s)?`}
+        confirmLabel="Enable"
+        cancelLabel="Cancel"
+        isConfirming={bulkBusy}
+        onConfirm={() => void bulkEnableStudents()}
+        onCancel={() => setBulkEnableConfirmOpen(false)}
+      />
+
+      <style jsx>{`
+        :global(.legacy-panel input:focus),
+        :global(.legacy-panel select:focus),
+        :global(.legacy-panel button:focus),
+        :global(.legacy-panel a:focus),
+        :global(.legacy-panel tr:focus) {
+          outline: 2px solid #000;
+          outline-offset: 1px;
+        }
+      `}</style>
     </div>
   );
 }

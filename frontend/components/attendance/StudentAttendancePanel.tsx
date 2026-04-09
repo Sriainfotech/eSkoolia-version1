@@ -83,6 +83,7 @@ export default function StudentAttendancePanel() {
   const [years, setYears] = useState<AcademicYear[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
+  const [loadingSections, setLoadingSections] = useState(false);
 
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
@@ -95,6 +96,7 @@ export default function StudentAttendancePanel() {
   const [attendanceTypeBanner, setAttendanceTypeBanner] = useState("");
 
   const [error, setError] = useState("");
+  const [searching, setSearching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -103,36 +105,46 @@ export default function StudentAttendancePanel() {
   const [reportYear, setReportYear] = useState(String(new Date().getFullYear()));
   const [report, setReport] = useState<MonthlyReport[]>([]);
   const [reportLoaded, setReportLoaded] = useState(false);
+  const [reportLoading, setReportLoading] = useState(false);
+
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const validAcademicYears = useMemo(
+    () => years.filter((item) => /^(\d{4})(-\d{4})?$/.test(String(item.name || "").trim())),
+    [years],
+  );
+  const reportYearOptions = useMemo(() => {
+    const fromAcademicYears = validAcademicYears
+      .map((item) => {
+        const value = String(item.name || "").trim();
+        const match = value.match(/^(\d{4})(?:-(\d{4}))?$/);
+        return match ? Number(match[1]) : null;
+      })
+      .filter((item): item is number => item !== null);
+
+    const all = Array.from(new Set([new Date().getFullYear(), ...fromAcademicYears]));
+    return all.sort((a, b) => b - a);
+  }, [validAcademicYears]);
 
   useEffect(() => {
     const load = async () => {
       try {
         setError("");
-        const [yearData, classData, sectionData] = await Promise.allSettled([
+        const [yearData, classData] = await Promise.allSettled([
           apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
           apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
-          apiGet<ApiList<Section>>("/api/v1/core/sections/"),
         ]);
 
         const loadedYears = yearData.status === "fulfilled" ? listData(yearData.value) : [];
         const loadedClasses = classData.status === "fulfilled" ? listData(classData.value) : [];
-        let loadedSections: Section[] = sectionData.status === "fulfilled" ? listData(sectionData.value) : [];
-
-        // Fallback: some environments return sections nested under classes only.
-        if (!loadedSections.length) {
-          loadedSections = loadedClasses.flatMap((schoolClass) => {
-            const classWithSections = schoolClass as SchoolClass & { sections?: Array<{ id: number; name: string }> };
-            return (classWithSections.sections || []).map((section) => ({
-              id: section.id,
-              name: section.name,
-              school_class: schoolClass.id,
-            }));
-          });
-        }
 
         setYears(loadedYears);
         setClasses(loadedClasses);
-        setSections(loadedSections);
+        setSections([]);
+
+        const currentAcademicYear = loadedYears.find((item) => item.is_current && /^(\d{4})(-\d{4})?$/.test(String(item.name || "").trim()));
+        if (currentAcademicYear) {
+          setAcademicYearId(String(currentAcademicYear.id));
+        }
 
         if (!loadedClasses.length) {
           setError("Unable to load attendance criteria.");
@@ -145,11 +157,28 @@ export default function StudentAttendancePanel() {
     void load();
   }, []);
 
-  const filteredSections = useMemo(() => {
-    const id = Number(classId);
-    if (!id) return [];
-    return sections.filter((s) => s.school_class === id);
-  }, [classId, sections]);
+  const loadSectionsForClass = async (targetClassId: string) => {
+    if (!targetClassId) {
+      setSections([]);
+      setSectionId("");
+      return;
+    }
+    try {
+      setLoadingSections(true);
+      setSections([]);
+      setSectionId("");
+      const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
+      setSections(listData(data));
+    } catch {
+      setError("Unable to load sections for selected class.");
+    } finally {
+      setLoadingSections(false);
+    }
+  };
+
+  const isSearchDisabled = !classId || !sectionId || !attendanceDate || loadingSections || searching;
+
+  const isValidReportYear = useMemo(() => /^(\d{4})$/.test(reportYear), [reportYear]);
 
   const searchStudents = async () => {
     if (!classId || !sectionId || !attendanceDate) {
@@ -157,6 +186,7 @@ export default function StudentAttendancePanel() {
       return;
     }
     try {
+      setSearching(true);
       setError("");
       const data = await apiPost<{
         students: StudentRow[];
@@ -186,6 +216,8 @@ export default function StudentAttendancePanel() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       setError(message && message !== "401" ? message : "Failed to load students.");
+    } finally {
+      setSearching(false);
     }
   };
 
@@ -246,7 +278,13 @@ export default function StudentAttendancePanel() {
       setError("Class, section, month and year are required for report.");
       return;
     }
+    if (!isValidReportYear) {
+      setError("Please select a valid report year.");
+      return;
+    }
     try {
+      setReportLoading(true);
+      setError("");
       const data = await apiGet<MonthlyReport[]>(
         `/api/v1/attendance/student-attendance/report/?class_id=${classId}&section_id=${sectionId}&month=${reportMonth}&year=${reportYear}`
       );
@@ -255,13 +293,24 @@ export default function StudentAttendancePanel() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       setError(message && message !== "401" ? message : "Failed to load attendance report.");
+    } finally {
+      setReportLoading(false);
     }
   };
 
   const typeColor: Record<string, string> = { P: "#16a34a", A: "#dc2626", L: "#d97706", F: "#2563eb", H: "#6b7280" };
 
   return (
-    <div className="legacy-panel">
+    <div className="legacy-panel student-attendance-panel">
+      <style>{`
+        .student-attendance-panel button:focus,
+        .student-attendance-panel select:focus,
+        .student-attendance-panel input:focus,
+        .student-attendance-panel a:focus {
+          outline: 2px solid #4f46e5;
+          outline-offset: 2px;
+        }
+      `}</style>
       <LegacyBreadcrumb title="Student Attendance" />
       <section className="admin-visitor-area up_st_admin_visitor">
         <div className="container-fluid p-0">
@@ -269,25 +318,78 @@ export default function StudentAttendancePanel() {
           <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <div style={{ fontWeight: 600 }}>Search Students</div>
-              <Link href="/attendance/student/import" style={{ textDecoration: "none" }}>
-                <button type="button" style={btnStyle()}>Import Attendance</button>
-              </Link>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr)) auto", gap: 8 }}>
-              <select value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={fieldStyle()}>
+            <p style={{ margin: "0 0 10px", color: "var(--text-muted)", fontSize: 13 }}>
+              Workflow: Select criteria | Search students | Mark attendance | Generate monthly report.
+            </p>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <label style={{ minWidth: 150 }}>
+                <span style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Academic Year</span>
+              <select aria-label="Select academic year" value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={fieldStyle()}>
                 <option value="">Academic year</option>
-                {years.map((y) => <option key={y.id} value={y.id}>{y.name}</option>)}
+                {validAcademicYears.map((y) => <option key={y.id} value={y.id}>{y.name}</option>)}
               </select>
-              <select value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); setLoaded(false); setStudents([]); }} style={fieldStyle()}>
+              </label>
+              <label style={{ minWidth: 150 }}>
+                <span style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Class *</span>
+              <select
+                aria-label="Select class"
+                value={classId}
+                onChange={(e) => {
+                  const nextClassId = e.target.value;
+                  setClassId(nextClassId);
+                  setLoaded(false);
+                  setStudents([]);
+                  void loadSectionsForClass(nextClassId);
+                }}
+                style={fieldStyle()}
+              >
                 <option value="">Class</option>
                 {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
-              <select value={sectionId} onChange={(e) => { setSectionId(e.target.value); setLoaded(false); setStudents([]); }} style={fieldStyle()}>
-                <option value="">Section</option>
-                {filteredSections.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </label>
+              <label style={{ minWidth: 150 }}>
+                <span style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Section *</span>
+              <select
+                aria-label="Select section"
+                value={sectionId}
+                onChange={(e) => { setSectionId(e.target.value); setLoaded(false); setStudents([]); }}
+                style={fieldStyle()}
+                disabled={!classId || loadingSections}
+              >
+                <option value="">{loadingSections ? "Loading sections..." : classId ? "Section" : "Select class first"}</option>
+                {sections.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
-              <input type="date" value={attendanceDate} onChange={(e) => setAttendanceDate(e.target.value)} style={fieldStyle()} />
-              <button type="button" onClick={() => void searchStudents()} style={btnStyle()}>Search</button>
+              </label>
+              <label style={{ minWidth: 170 }}>
+                <span style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Attendance Date *</span>
+              <input
+                aria-label="Select attendance date"
+                type="date"
+                value={attendanceDate}
+                max={todayIso}
+                onChange={(e) => {
+                  const nextDate = e.target.value > todayIso ? todayIso : e.target.value;
+                  setAttendanceDate(nextDate);
+                  if (nextDate) {
+                    const [year, month] = nextDate.split("-");
+                    if (year && month) {
+                      setReportYear(year);
+                      setReportMonth(String(Number(month)));
+                    }
+                  }
+                }}
+                style={fieldStyle()}
+              />
+              </label>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+                <button type="button" disabled={isSearchDisabled} onClick={() => void searchStudents()} style={btnStyle()}>
+                  {searching ? "Searching..." : "Search"}
+                </button>
+                <Link href="/attendance/student/import" style={{ textDecoration: "none" }}>
+                  <button type="button" style={btnStyle("#6b7280")}>Import Attendance</button>
+                </Link>
+              </div>
             </div>
             {error && <p style={{ color: "var(--warning)", marginTop: 8 }}>{error}</p>}
           </div>
@@ -370,7 +472,7 @@ export default function StudentAttendancePanel() {
 
           <div className="white-box" style={boxStyle()}>
             <div style={{ fontWeight: 600, marginBottom: 10 }}>Monthly Attendance Report</div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
               <select value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} style={{ ...fieldStyle(), width: 140 }}>
                 {Array.from({ length: 12 }, (_, i) => (
                   <option key={i + 1} value={i + 1}>
@@ -378,8 +480,24 @@ export default function StudentAttendancePanel() {
                   </option>
                 ))}
               </select>
-              <input type="number" value={reportYear} onChange={(e) => setReportYear(e.target.value)} placeholder="Year" style={{ ...fieldStyle(), width: 120 }} />
-              <button type="button" onClick={() => void loadReport()} style={btnStyle()}>Generate Report</button>
+              <select
+                aria-label="Report year"
+                value={reportYear}
+                onChange={(e) => setReportYear(e.target.value.replace(/[^0-9]/g, "").slice(0, 4))}
+                style={{ ...fieldStyle(), width: 140 }}
+              >
+                {reportYearOptions.map((year) => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => void loadReport()}
+                style={btnStyle()}
+                disabled={reportLoading || !classId || !sectionId || !isValidReportYear}
+              >
+                {reportLoading ? "Generating..." : "Generate Report"}
+              </button>
             </div>
             {reportLoaded && (
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
