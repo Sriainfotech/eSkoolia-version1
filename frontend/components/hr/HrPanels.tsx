@@ -112,7 +112,7 @@ async function parseSpreadsheetRows(file: File): Promise<ImportLookupRow[]> {
     raw: false,
   });
 
-  return rows.map((row) => {
+  return rows.map((row: Record<string, unknown>) => {
     const normalizedRow: ImportLookupRow = {};
     Object.entries(row).forEach(([key, value]) => {
       normalizedRow[key] = String(value ?? "").trim();

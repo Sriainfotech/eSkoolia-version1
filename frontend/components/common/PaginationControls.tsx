@@ -6,6 +6,7 @@ type PaginationControlsProps = {
   totalItems: number;
   pageSize: number;
   loading?: boolean;
+  pageSizeOptions?: number[];
   onPageChange: (page: number) => void;
   onPageSizeChange: (size: number) => void;
 };
@@ -18,6 +19,7 @@ export function PaginationControls({
   totalItems,
   pageSize,
   loading = false,
+  pageSizeOptions = PAGE_SIZE_OPTIONS,
   onPageChange,
   onPageSizeChange,
 }: PaginationControlsProps) {
@@ -57,7 +59,7 @@ export function PaginationControls({
               color: "var(--text)",
             }}
           >
-            {PAGE_SIZE_OPTIONS.map((option) => (
+            {pageSizeOptions.map((option) => (
               <option key={option} value={option}>
                 {option}
               </option>

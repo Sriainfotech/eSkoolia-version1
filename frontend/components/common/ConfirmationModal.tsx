@@ -6,6 +6,7 @@ type ConfirmationModalProps = {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  loadingLabel?: string;
   isConfirming?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -17,6 +18,7 @@ export function ConfirmationModal({
   message,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
+  loadingLabel,
   isConfirming = false,
   onConfirm,
   onCancel,
@@ -82,7 +84,7 @@ export function ConfirmationModal({
               opacity: isConfirming ? 0.85 : 1,
             }}
           >
-            {isConfirming ? `${confirmLabel}...` : confirmLabel}
+            {isConfirming ? (loadingLabel || `${confirmLabel}...`) : confirmLabel}
           </button>
         </div>
       </div>
