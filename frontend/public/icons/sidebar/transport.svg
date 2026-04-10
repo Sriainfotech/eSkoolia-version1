@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <g>
+    <path d="M4 10c0-2.2 1.7-4 3.9-4h8.2c2.2 0 3.9 1.8 3.9 4v5H4v-5Z" fill="#F8FAFF" stroke="#4F46E5" stroke-width="1.6"/>
+    <circle cx="8" cy="16.5" r="1.5" fill="#EEF2FF" stroke="#4F46E5" stroke-width="1.4">
+      <animateTransform attributeName="transform" type="rotate" values="0 8 16.5;360 8 16.5" dur="1.2s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="16" cy="16.5" r="1.5" fill="#EEF2FF" stroke="#4F46E5" stroke-width="1.4">
+      <animateTransform attributeName="transform" type="rotate" values="0 16 16.5;360 16 16.5" dur="1.2s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+</svg>

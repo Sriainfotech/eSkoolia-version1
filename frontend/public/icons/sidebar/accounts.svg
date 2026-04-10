@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <rect x="4" y="4" width="7.5" height="16" rx="2" fill="#EEF2FF" stroke="#4F46E5" stroke-width="1.5"/>
+  <rect x="13" y="6" width="7" height="12" rx="1.8" fill="#F8FAFF" stroke="#4F46E5" stroke-width="1.5"/>
+  <rect x="6.2" y="13.2" width="2.2" height="2" rx="0.5" fill="#06B6D4">
+    <animate attributeName="opacity" values="1;0.35;1" dur="1.6s" repeatCount="indefinite"/>
+  </rect>
+</svg>

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <rect x="4" y="3.5" width="16" height="17" rx="2.2" fill="#F8FAFF" stroke="#4F46E5" stroke-width="1.6"/>
+  <g stroke-linecap="round">
+    <path d="M8 16v-2.5" stroke="#4F46E5" stroke-width="1.8">
+      <animate attributeName="d" values="M8 16v-2;M8 16v-5;M8 16v-2" dur="2s" repeatCount="indefinite"/>
+    </path>
+    <path d="M12 16V10" stroke="#06B6D4" stroke-width="1.8">
+      <animate attributeName="d" values="M12 16V11;M12 16V8;M12 16V11" dur="2s" begin="0.2s" repeatCount="indefinite"/>
+    </path>
+    <path d="M16 16v-4" stroke="#4F46E5" stroke-width="1.8">
+      <animate attributeName="d" values="M16 16v-3;M16 16v-6;M16 16v-3" dur="2s" begin="0.4s" repeatCount="indefinite"/>
+    </path>
+  </g>
+</svg>

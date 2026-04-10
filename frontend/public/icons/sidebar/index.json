@@ -1,0 +1,18 @@
+{
+  "dashboard": "/icons/sidebar/dashboard.svg",
+  "rolePermission": "/icons/sidebar/role-permission.svg",
+  "adminSection": "/icons/sidebar/admin-section.svg",
+  "studentInfo": "/icons/sidebar/student-info.svg",
+  "academics": "/icons/sidebar/academics.svg",
+  "examination": "/icons/sidebar/examination.svg",
+  "reports": "/icons/sidebar/reports.svg",
+  "fees": "/icons/sidebar/fees.svg",
+  "library": "/icons/sidebar/library.svg",
+  "transport": "/icons/sidebar/transport.svg",
+  "inventory": "/icons/sidebar/inventory.svg",
+  "behaviourRecords": "/icons/sidebar/behaviour-records.svg",
+  "humanResource": "/icons/sidebar/human-resource.svg",
+  "accounts": "/icons/sidebar/accounts.svg",
+  "utilities": "/icons/sidebar/utilities.svg",
+  "settingsSection": "/icons/sidebar/settings-section.svg"
+}

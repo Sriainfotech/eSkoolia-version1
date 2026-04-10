@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <rect x="3" y="3" width="18" height="18" rx="4" fill="#F8FAFF" stroke="#CBD5E1" stroke-width="1.4"/>
+  <g>
+    <rect x="7" y="13" width="2.4" height="5" rx="1" fill="#4F46E5">
+      <animate attributeName="height" values="4;7;4" dur="1.8s" repeatCount="indefinite"/>
+      <animate attributeName="y" values="14;11;14" dur="1.8s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="11" y="10" width="2.4" height="8" rx="1" fill="#06B6D4">
+      <animate attributeName="height" values="7;10;7" dur="1.8s" begin="0.2s" repeatCount="indefinite"/>
+      <animate attributeName="y" values="11;8;11" dur="1.8s" begin="0.2s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="15" y="12" width="2.4" height="6" rx="1" fill="#4F46E5">
+      <animate attributeName="height" values="5;8;5" dur="1.8s" begin="0.4s" repeatCount="indefinite"/>
+      <animate attributeName="y" values="13;10;13" dur="1.8s" begin="0.4s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+</svg>

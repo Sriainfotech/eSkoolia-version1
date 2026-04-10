@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <path d="M4 9.5 12 5l8 4.5v9L12 23l-8-4.5v-9Z" fill="#F8FAFF" stroke="#4F46E5" stroke-width="1.6"/>
+  <path d="M4 9.5 12 14l8-4.5" stroke="#64748B" stroke-width="1.4"/>
+  <rect x="10.3" y="2.8" width="3.4" height="2.4" rx="0.8" fill="#06B6D4">
+    <animate attributeName="y" values="2.8;3.8;2.8" dur="2s" repeatCount="indefinite"/>
+  </rect>
+</svg>
