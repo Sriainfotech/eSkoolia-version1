@@ -102,7 +102,7 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
 
-        academic_year_id = self.request.query_params.get("academic_year_id")
+        academic_year_id = self.request.query_params.get("academic_year_id") or self.request.query_params.get("academic_year")
         class_id = self.request.query_params.get("class_id")
         section_id = self.request.query_params.get("section_id")
         student_id = self.request.query_params.get("student_id")
@@ -588,14 +588,26 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
     def incident_wise_report(self, request):
         queryset = self.get_queryset().select_related("incident", "student")
 
-        grouped = defaultdict(lambda: {"assignment_count": 0, "total_points": 0, "students": []})
+        grouped = {}
         for row in queryset:
             key = row.incident_id
+            if key not in grouped:
+                grouped[key] = {
+                    "incident_id": row.incident_id,
+                    "incident_title": row.incident.title,
+                    "incident_description": row.incident.description or "",
+                    "per_point": row.incident.point,
+                    "is_negative": row.incident.point < 0,
+                    "assignment_count": 0,
+                    "total_points": 0,
+                    "students": [],
+                    "_student_ids": set(),
+                }
+
             entry = grouped[key]
-            entry["incident_id"] = row.incident_id
-            entry["incident_title"] = row.incident.title
             entry["assignment_count"] += 1
             entry["total_points"] += row.point
+            entry["_student_ids"].add(row.student_id)
             entry["students"].append(
                 {
                     "student_id": row.student_id,
@@ -604,7 +616,14 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
                 }
             )
 
-        return Response(list(grouped.values()))
+        response_data = []
+        for item in grouped.values():
+            item["unique_student_count"] = len(item["_student_ids"])
+            item.pop("_student_ids", None)
+            response_data.append(item)
+
+        response_data.sort(key=lambda row: (row["total_points"], row["incident_title"].lower()))
+        return Response(response_data)
 
 
 class AssignedIncidentCommentViewSet(SchoolScopedModelViewSet):
