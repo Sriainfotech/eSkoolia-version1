@@ -363,7 +363,22 @@ class BusStopSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BusStop
-        fields = ["id", "route", "route_title", "stop_name", "latitude", "longitude", "stop_order", "arrival_time_window", "active_status", "created_at", "updated_at"]
+        fields = [
+            "id",
+            "route",
+            "route_title",
+            "stop_name",
+            "latitude",
+            "longitude",
+            "stop_order",
+            "stop_type",
+            "scheduled_time",
+            "geofence_radius",
+            "arrival_time_window",
+            "active_status",
+            "created_at",
+            "updated_at",
+        ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
 

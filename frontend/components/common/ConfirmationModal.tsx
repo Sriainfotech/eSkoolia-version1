@@ -1,9 +1,12 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 type ConfirmationModalProps = {
   isOpen: boolean;
   title: string;
   message: string;
+  details?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   loadingLabel?: string;
@@ -16,6 +19,7 @@ export function ConfirmationModal({
   isOpen,
   title,
   message,
+  details,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
   loadingLabel,
@@ -51,6 +55,7 @@ export function ConfirmationModal({
       >
         <h3 style={{ margin: 0, marginBottom: 10 }}>{title}</h3>
         <p style={{ margin: 0, color: "var(--text-muted)", marginBottom: 16 }}>{message}</p>
+        {details ? <div style={{ marginBottom: 16 }}>{details}</div> : null}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button

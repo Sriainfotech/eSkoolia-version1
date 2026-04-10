@@ -333,6 +333,11 @@ export default function StudentAttendanceImportPanel() {
       return;
     }
 
+    if (!file) {
+      setApiError("Please upload a file before importing.");
+      return;
+    }
+
     try {
       setApiError("");
       setSuccessMessage("");

@@ -1,7 +1,9 @@
 from decimal import Decimal
 
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.db.models import Q
 
 
 class ExamType(models.Model):
@@ -253,6 +255,94 @@ class ExamRoutine(models.Model):
                 name="uq_exam_routine_scope_date_period",
             ),
         ]
+
+    def clean(self):
+        if not self.school_id:
+            return
+
+        if self.end_time <= self.start_time:
+            raise ValidationError({"detail": "End time must be later than start time.", "conflict_type": "invalid_time"})
+
+        from apps.communication.models import HolidayCalendar
+
+        holiday = (
+            HolidayCalendar.objects.filter(is_active=True)
+            .filter(Q(school_id=self.school_id) | Q(school_id__isnull=True))
+            .filter(holiday_date__lte=self.exam_date)
+            .filter(Q(end_date__isnull=True, holiday_date__gte=self.exam_date) | Q(end_date__gte=self.exam_date))
+            .order_by("holiday_date")
+            .first()
+        )
+        if holiday:
+            raise ValidationError(
+                {
+                    "detail": f"Cannot schedule on holiday: {holiday.holiday_title} ({self.exam_date}).",
+                    "conflict_type": "holiday_lockout",
+                }
+            )
+
+        overlap_filter = Q(start_time__lt=self.end_time) & Q(end_time__gt=self.start_time)
+        base_qs = ExamRoutine.objects.filter(school_id=self.school_id, exam_date=self.exam_date).filter(overlap_filter)
+        if self.pk:
+            base_qs = base_qs.exclude(pk=self.pk)
+
+        shared_rooms = {"EXAM-HALL", "AUDITORIUM", "SPORTS-HALL"}
+        room_value = (self.room or "").strip()
+        if room_value and room_value.upper() not in shared_rooms:
+            room_conflict = base_qs.filter(room__iexact=room_value).select_related("exam_term", "school_class", "section", "subject").first()
+            if room_conflict:
+                raise ValidationError(
+                    {
+                        "detail": (
+                            f"Room {room_value} is already booked for {room_conflict.exam_term.title}: "
+                            f"{room_conflict.school_class.name}-{room_conflict.section.name if room_conflict.section else 'All'} "
+                            f"{room_conflict.subject.name} at {room_conflict.start_time.strftime('%H:%M')}-{room_conflict.end_time.strftime('%H:%M')}."
+                        ),
+                        "conflict_type": "room_conflict",
+                    }
+                )
+
+        class_conflict_qs = base_qs.filter(school_class_id=self.school_class_id)
+        if self.section_id:
+            class_conflict_qs = class_conflict_qs.filter(section_id=self.section_id)
+        else:
+            class_conflict_qs = class_conflict_qs.filter(section_id__isnull=True)
+
+        class_conflict = class_conflict_qs.select_related("subject").first()
+        if class_conflict:
+            class_name = class_conflict.school_class.name
+            section_name = class_conflict.section.name if class_conflict.section else "All"
+            raise ValidationError(
+                {
+                    "detail": (
+                        f"Class {class_name}-{section_name} already has {class_conflict.subject.name} "
+                        f"in {class_conflict.room or 'N/A'} at "
+                        f"{class_conflict.start_time.strftime('%H:%M')}-{class_conflict.end_time.strftime('%H:%M')}."
+                    ),
+                    "conflict_type": "class_conflict",
+                }
+            )
+
+        if self.teacher_id:
+            teacher_conflict = base_qs.filter(teacher_id=self.teacher_id).select_related("school_class", "section", "subject", "teacher").first()
+            if teacher_conflict:
+                class_name = teacher_conflict.school_class.name
+                section_name = teacher_conflict.section.name if teacher_conflict.section else "All"
+                teacher_name = (
+                    f"{(teacher_conflict.teacher.first_name or '').strip()} {(teacher_conflict.teacher.last_name or '').strip()}".strip()
+                    if teacher_conflict.teacher
+                    else "Teacher"
+                )
+                raise ValidationError(
+                    {
+                        "detail": (
+                            f"Teacher {teacher_name} is already assigned to {class_name}-{section_name} "
+                            f"{teacher_conflict.subject.name} in {teacher_conflict.room or 'N/A'} at "
+                            f"{teacher_conflict.start_time.strftime('%H:%M')}-{teacher_conflict.end_time.strftime('%H:%M')}."
+                        ),
+                        "conflict_type": "teacher_conflict",
+                    }
+                )
 
 
 class ExamAttendance(models.Model):

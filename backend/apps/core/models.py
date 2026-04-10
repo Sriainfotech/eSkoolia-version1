@@ -217,11 +217,20 @@ class AssignVehicle(models.Model):
 # ===== BUS TRACKING MODULE =====
 class BusStop(models.Model):
     """Represents a stop on a transport route (school, neighborhood pickup points, etc.)"""
+    STOP_TYPE_CHOICES = [
+        ("start", "Start"),
+        ("middle", "Middle"),
+        ("end", "End"),
+    ]
+
     route = models.ForeignKey("TransportRoute", on_delete=models.CASCADE, related_name="stops")
     stop_name = models.CharField(max_length=200)  # e.g., "Madhya Pur", "School"
     latitude = models.DecimalField(max_digits=9, decimal_places=6)
     longitude = models.DecimalField(max_digits=9, decimal_places=6)
     stop_order = models.IntegerField()  # 1, 2, 3... (sequence on route)
+    stop_type = models.CharField(max_length=10, choices=STOP_TYPE_CHOICES, default="middle")
+    scheduled_time = models.TimeField(null=True, blank=True)
+    geofence_radius = models.IntegerField(default=100, help_text="Geofence radius in meters")
     arrival_time_window = models.CharField(max_length=50, blank=True, help_text="Expected arrival time e.g., '09:30-09:45'")
     active_status = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

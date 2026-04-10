@@ -1,8 +1,14 @@
+import math
+
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from django.utils import timezone
 from rest_framework import permissions, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from django.db import IntegrityError
-from django.db.models import Case, IntegerField, Value, When
+from django.db.models import Case, IntegerField, Q, Value, When
 from config.pagination import ApiPageNumberPagination
 from .models import AcademicYear, Class, ClassPeriod, ClassRoom, Section, Subject, Vehicle, TransportRoute, AssignVehicle
 from .models import BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate
@@ -517,6 +523,46 @@ class TransportRouteViewSet(TenantQueryMixin, PermissionScopedViewSet):
         
         serializer.save(school=school, academic_year=academic_year)
 
+    @action(detail=True, methods=["get"], url_path="builder")
+    def builder(self, request, pk=None):
+        route = self.get_object()
+        stops_qs = BusStop.objects.filter(route=route, active_status=True).order_by("stop_order", "id")
+        stops_data = BusStopSerializer(stops_qs, many=True).data
+
+        total_distance_km = 0.0
+        previous_stop = None
+        for stop in stops_qs:
+            if previous_stop is not None:
+                total_distance_km += self._haversine_km(
+                    float(previous_stop.latitude),
+                    float(previous_stop.longitude),
+                    float(stop.latitude),
+                    float(stop.longitude),
+                )
+            previous_stop = stop
+
+        return Response(
+            {
+                "id": route.id,
+                "title": route.title,
+                "fare": route.fare,
+                "active_status": route.active_status,
+                "total_stops": len(stops_data),
+                "total_distance_km": round(total_distance_km, 3),
+                "stops": stops_data,
+            }
+        )
+
+    def _haversine_km(self, lat1, lng1, lat2, lng2):
+        radius_km = 6371
+        lat_delta = math.radians(lat2 - lat1)
+        lng_delta = math.radians(lng2 - lng1)
+        a = (
+            math.sin(lat_delta / 2) ** 2
+            + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(lng_delta / 2) ** 2
+        )
+        return radius_km * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
+
 
 class AssignVehicleViewSet(TenantQueryMixin, PermissionScopedViewSet):
     model = AssignVehicle
@@ -566,6 +612,96 @@ class BusStopViewSet(TenantQueryMixin, PermissionScopedViewSet):
             queryset = queryset.filter(route_id=route_id)
         return queryset.select_related("route").order_by("stop_order")
 
+    def create(self, request, *args, **kwargs):
+        payload = request.data.copy()
+        self._validate_coordinates(payload)
+
+        route_id = payload.get("route")
+        stop_order = payload.get("stop_order")
+        if route_id and (stop_order is None or str(stop_order).strip() == ""):
+            max_order = BusStop.objects.filter(route_id=route_id).order_by("-stop_order").values_list("stop_order", flat=True).first() or 0
+            payload["stop_order"] = max_order + 1
+
+        serializer = self.get_serializer(data=payload)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def update(self, request, *args, **kwargs):
+        payload = request.data.copy()
+        self._validate_coordinates(payload)
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=payload, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        route_id = instance.route_id
+        response = super().destroy(request, *args, **kwargs)
+        remaining_stops = BusStop.objects.filter(route_id=route_id).order_by("stop_order", "id")
+        for index, stop in enumerate(remaining_stops, start=1):
+            if stop.stop_order != index:
+                stop.stop_order = index
+                stop.save(update_fields=["stop_order"])
+        return response
+
+    @action(detail=False, methods=["put"], url_path="reorder")
+    def reorder(self, request):
+        items = request.data.get("stops")
+        if not isinstance(items, list):
+            raise ValidationError({"stops": "Expected a list of stop order updates."})
+
+        stop_ids = [item.get("id") for item in items if item.get("id") is not None]
+        requested_orders = [item.get("stop_order") for item in items]
+        if len(stop_ids) != len(items):
+            raise ValidationError({"stops": "Each item must include id and stop_order."})
+        if any(order is None for order in requested_orders):
+            raise ValidationError({"stops": "Each item must include stop_order."})
+
+        stops = list(self.get_queryset().filter(id__in=stop_ids))
+        stop_by_id = {stop.id: stop for stop in stops}
+        if len(stop_by_id) != len(stop_ids):
+            raise ValidationError({"stops": "One or more stops were not found."})
+
+        route_ids = {stop.route_id for stop in stops}
+        if len(route_ids) != 1:
+            raise ValidationError({"stops": "Reorder supports one route at a time."})
+
+        for item in items:
+            stop = stop_by_id[item["id"]]
+            stop.stop_order = int(item["stop_order"])
+
+        BusStop.objects.bulk_update(stops, ["stop_order"])  # type: ignore[arg-type]
+        ordered = BusStop.objects.filter(route_id=stops[0].route_id).order_by("stop_order", "id")
+        for index, stop in enumerate(ordered, start=1):
+            if stop.stop_order != index:
+                stop.stop_order = index
+                stop.save(update_fields=["stop_order"])
+
+        return Response({"success": True})
+
+    def _validate_coordinates(self, payload):
+        latitude = payload.get("latitude")
+        longitude = payload.get("longitude")
+
+        if latitude is None or longitude is None:
+            return
+
+        try:
+            lat_value = float(latitude)
+            lng_value = float(longitude)
+        except (TypeError, ValueError):
+            raise ValidationError({"latitude": "Latitude/longitude must be numeric."})
+
+        if not (-90 <= lat_value <= 90):
+            raise ValidationError({"latitude": "Latitude must be between -90 and 90."})
+        if not (-180 <= lng_value <= 180):
+            raise ValidationError({"longitude": "Longitude must be between -180 and 180."})
+
 
 class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
     model = BusLocation
@@ -590,27 +726,295 @@ class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
         if vehicle_id:
             queryset = queryset.filter(vehicle_id=vehicle_id)
         return queryset.select_related("vehicle").order_by("-timestamp").distinct()
+
+    @action(detail=False, methods=["get"], url_path="eta")
+    def eta(self, request):
+        vehicle_id = request.query_params.get("vehicle_id")
+        if not vehicle_id:
+            return Response({"error": "vehicle_id required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        assignment = AssignVehicle.objects.filter(vehicle_id=vehicle_id, active_status=True).select_related("route").first()
+        if not assignment:
+            return Response({"vehicle_id": int(vehicle_id), "stops": [], "next_stop": None})
+
+        location = BusLocation.objects.filter(vehicle_id=vehicle_id).order_by("-timestamp").first()
+        route_stops = list(BusStop.objects.filter(route_id=assignment.route_id, active_status=True).order_by("stop_order", "id"))
+        pickup_updates = list(
+            BusRoutePickupUpdate.objects.filter(vehicle_id=vehicle_id, stop__route_id=assignment.route_id)
+            .select_related("stop")
+            .order_by("-arrived_at")
+        )
+
+        reached_stop_ids = set()
+        reached_time_by_stop = {}
+        for update in pickup_updates:
+            if update.status in ["arrived", "picked_up"]:
+                reached_stop_ids.add(update.stop_id)
+                timestamp = update.picked_up_at or update.arrived_at
+                if timestamp and update.stop_id not in reached_time_by_stop:
+                    reached_time_by_stop[update.stop_id] = timestamp
+
+        next_stop = None
+        for stop in route_stops:
+            if stop.id not in reached_stop_ids:
+                next_stop = stop
+                break
+
+        speed_kmh = 0
+        current_lat = None
+        current_lng = None
+        if location:
+            speed_kmh = max(0, int(location.speed or 0))
+            current_lat = float(location.latitude)
+            current_lng = float(location.longitude)
+
+        eta_rows = []
+        previous_upcoming_coords = (current_lat, current_lng)
+        cumulative_eta = 0
+        for stop in route_stops:
+            stop_lat = float(stop.latitude)
+            stop_lng = float(stop.longitude)
+            if stop.id in reached_stop_ids:
+                eta_rows.append(
+                    {
+                        "stop_id": stop.id,
+                        "stop_name": stop.stop_name,
+                        "stop_order": stop.stop_order,
+                        "scheduled_time": stop.scheduled_time.isoformat() if stop.scheduled_time else None,
+                        "status": "reached",
+                        "eta_minutes": None,
+                        "reached_at": reached_time_by_stop.get(stop.id).isoformat() if reached_time_by_stop.get(stop.id) else None,
+                    }
+                )
+                continue
+
+            status_value = "next" if next_stop and next_stop.id == stop.id else "upcoming"
+            eta_minutes = None
+
+            if previous_upcoming_coords[0] is not None and previous_upcoming_coords[1] is not None:
+                leg_distance = self._haversine_km(previous_upcoming_coords[0], previous_upcoming_coords[1], stop_lat, stop_lng)
+                if speed_kmh >= 5:
+                    leg_eta = max(1, round((leg_distance / speed_kmh) * 60))
+                    cumulative_eta += leg_eta
+                    eta_minutes = cumulative_eta
+
+            eta_rows.append(
+                {
+                    "stop_id": stop.id,
+                    "stop_name": stop.stop_name,
+                    "stop_order": stop.stop_order,
+                    "scheduled_time": stop.scheduled_time.isoformat() if stop.scheduled_time else None,
+                    "status": status_value,
+                    "eta_minutes": eta_minutes,
+                    "reached_at": None,
+                }
+            )
+
+            previous_upcoming_coords = (stop_lat, stop_lng)
+
+        return Response(
+            {
+                "vehicle_id": int(vehicle_id),
+                "route_id": assignment.route_id,
+                "next_stop":
+                    {
+                        "id": next_stop.id,
+                        "name": next_stop.stop_name,
+                        "order": next_stop.stop_order,
+                    }
+                    if next_stop
+                    else None,
+                "stops": eta_rows,
+            }
+        )
     
     def create(self, request, *args, **kwargs):
-        """Update or create bus location (called from mobile GPS tracker)"""
+        """Update or create bus location and compute live route progress metadata."""
         vehicle_id = request.data.get("vehicle")
         if not vehicle_id:
             return Response({"error": "vehicle_id required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        latitude = request.data.get("latitude")
+        longitude = request.data.get("longitude")
+        if latitude is None or longitude is None:
+            return Response({"error": "latitude and longitude required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            latitude_value = float(latitude)
+            longitude_value = float(longitude)
+            speed_value = int(request.data.get("speed", 0) or 0)
+            heading_value = int(request.data.get("heading", 0) or 0)
+            accuracy_value = int(request.data.get("accuracy", 0) or 0)
+        except (TypeError, ValueError):
+            return Response({"error": "Invalid numeric payload"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not (-90 <= latitude_value <= 90):
+            return Response({"error": "latitude must be between -90 and 90"}, status=status.HTTP_400_BAD_REQUEST)
+        if not (-180 <= longitude_value <= 180):
+            return Response({"error": "longitude must be between -180 and 180"}, status=status.HTTP_400_BAD_REQUEST)
+
+        vehicle = Vehicle.objects.filter(id=vehicle_id).first()
+        if not vehicle:
+            return Response({"error": "vehicle not found"}, status=status.HTTP_404_NOT_FOUND)
         
         # Get or create - update existing location
-        location, created = BusLocation.objects.update_or_create(
+        location, _created = BusLocation.objects.update_or_create(
             vehicle_id=vehicle_id,
             defaults={
-                "latitude": request.data.get("latitude"),
-                "longitude": request.data.get("longitude"),
-                "speed": request.data.get("speed", 0),
-                "heading": request.data.get("heading", 0),
-                "accuracy": request.data.get("accuracy", 0),
+                "latitude": latitude_value,
+                "longitude": longitude_value,
+                "speed": speed_value,
+                "heading": heading_value,
+                "accuracy": accuracy_value,
                 "is_active": True,
             }
         )
+
+        assignment = AssignVehicle.objects.filter(vehicle_id=vehicle_id, active_status=True).select_related("route").first()
+        next_stop = None
+        eta_minutes = None
+        distance_to_next_km = None
+        stop_reached_payload = None
+
+        if assignment:
+            route_stops = list(BusStop.objects.filter(route_id=assignment.route_id, active_status=True).order_by("stop_order", "id"))
+            reached_stop_ids = set(
+                BusRoutePickupUpdate.objects.filter(
+                    vehicle_id=vehicle_id,
+                    arrived_at__date=timezone.localdate(),
+                    status__in=["arrived", "picked_up"],
+                ).values_list("stop_id", flat=True)
+            )
+
+            for stop in route_stops:
+                if stop.id not in reached_stop_ids:
+                    next_stop = stop
+                    break
+
+            if next_stop:
+                distance_to_next_km = self._haversine_km(
+                    latitude_value,
+                    longitude_value,
+                    float(next_stop.latitude),
+                    float(next_stop.longitude),
+                )
+                if speed_value >= 5:
+                    eta_minutes = max(1, round((distance_to_next_km / max(speed_value, 1)) * 60))
+
+                geofence_m = max(1, int(next_stop.geofence_radius or 100))
+                if distance_to_next_km * 1000 <= geofence_m:
+                    now = timezone.now()
+                    from apps.students.models import Student
+
+                    students = Student.objects.filter(is_active=True, is_deleted=False).filter(
+                        Q(vehicle_id=vehicle_id) | Q(transport_route_id=assignment.route_id)
+                    )
+
+                    reached_count = 0
+                    for student in students:
+                        pickup, _pickup_created = BusRoutePickupUpdate.objects.get_or_create(
+                            stop_id=next_stop.id,
+                            vehicle_id=vehicle_id,
+                            student_id=student.id,
+                            defaults={
+                                "arrived_at": now,
+                                "picked_up_at": now,
+                                "status": "picked_up",
+                            },
+                        )
+                        if pickup.status != "picked_up":
+                            pickup.arrived_at = now
+                            pickup.picked_up_at = now
+                            pickup.status = "picked_up"
+                            pickup.save(update_fields=["arrived_at", "picked_up_at", "status"])
+                        reached_count += 1
+
+                    alert_message = f"{vehicle.vehicle_no} reached {next_stop.stop_name} - {reached_count} students marked picked up"
+                    alert = TransportAlert.objects.create(
+                        vehicle_id=vehicle_id,
+                        route_id=assignment.route_id,
+                        alert_type="arrived",
+                        message=alert_message,
+                        severity="info",
+                        latitude=latitude_value,
+                        longitude=longitude_value,
+                    )
+
+                    stop_reached_payload = {
+                        "stop_id": next_stop.id,
+                        "stop_name": next_stop.stop_name,
+                        "students_picked": reached_count,
+                        "timestamp": now.isoformat(),
+                    }
+
+                    self._broadcast_alert(alert)
+
         serializer = self.get_serializer(location)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        self._broadcast_location(serializer.data)
+        return Response(
+            {
+                "location": serializer.data,
+                "next_stop": {
+                    "id": next_stop.id,
+                    "name": next_stop.stop_name,
+                    "order": next_stop.stop_order,
+                }
+                if next_stop
+                else None,
+                "eta_minutes": eta_minutes,
+                "distance_to_next_km": round(distance_to_next_km, 3) if distance_to_next_km is not None else None,
+                "stop_reached": stop_reached_payload,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _broadcast_location(self, location_payload):
+        channel_layer = get_channel_layer()
+        if not channel_layer:
+            return
+        async_to_sync(channel_layer.group_send)(
+            "bus_location_all",
+            {
+                "type": "bus_location_update",
+                "location": location_payload,
+            },
+        )
+
+    def _broadcast_alert(self, alert):
+        channel_layer = get_channel_layer()
+        if not channel_layer:
+            return
+        async_to_sync(channel_layer.group_send)(
+            "bus_alerts_all",
+            {
+                "type": "alert_message",
+                "alert": {
+                    "id": alert.id,
+                    "vehicle": alert.vehicle_id,
+                    "vehicle_no": alert.vehicle.vehicle_no,
+                    "route": alert.route_id,
+                    "route_title": alert.route.title if alert.route else None,
+                    "alert_type": alert.alert_type,
+                    "message": alert.message,
+                    "severity": alert.severity,
+                    "latitude": float(alert.latitude) if alert.latitude is not None else None,
+                    "longitude": float(alert.longitude) if alert.longitude is not None else None,
+                    "is_resolved": alert.is_resolved,
+                    "created_at": alert.created_at.isoformat(),
+                    "resolved_at": alert.resolved_at.isoformat() if alert.resolved_at else None,
+                },
+            },
+        )
+
+    def _haversine_km(self, lat1, lng1, lat2, lng2):
+        radius_km = 6371
+        lat_delta = math.radians(lat2 - lat1)
+        lng_delta = math.radians(lng2 - lng1)
+        a = (
+            math.sin(lat_delta / 2) ** 2
+            + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(lng_delta / 2) ** 2
+        )
+        return radius_km * (2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)))
 
 
 class TransportAlertViewSet(TenantQueryMixin, PermissionScopedViewSet):

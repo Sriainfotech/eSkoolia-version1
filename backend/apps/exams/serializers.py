@@ -1,4 +1,7 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
+
+from apps.core.models import ClassRoom
 
 from .models import (
     AdmitCard,
@@ -344,6 +347,114 @@ class ExamRoutineSerializer(serializers.ModelSerializer):
         last = (obj.teacher.last_name or "").strip()
         full = f"{first} {last}".strip()
         return full or obj.teacher.username
+
+
+class ExamCommandCenterScheduleSerializer(serializers.ModelSerializer):
+    room_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
+    class_id = serializers.IntegerField(source="school_class_id", read_only=True)
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    section_name = serializers.CharField(source="section.name", read_only=True)
+    subject_name = serializers.CharField(source="subject.name", read_only=True)
+    teacher_name = serializers.SerializerMethodField(read_only=True)
+    exam_type_id = serializers.IntegerField(source="exam_term_id", read_only=True)
+
+    class Meta:
+        model = ExamRoutine
+        fields = [
+            "id",
+            "exam_term",
+            "exam_type_id",
+            "school_class",
+            "class_id",
+            "class_name",
+            "section",
+            "section_name",
+            "subject",
+            "subject_name",
+            "teacher",
+            "teacher_name",
+            "exam_period",
+            "exam_date",
+            "start_time",
+            "end_time",
+            "room",
+            "room_id",
+        ]
+
+    def get_teacher_name(self, obj):
+        if not obj.teacher_id:
+            return ""
+        first = (obj.teacher.first_name or "").strip()
+        last = (obj.teacher.last_name or "").strip()
+        return f"{first} {last}".strip() or obj.teacher.username
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        school_id = request.user.school_id if request and not request.user.is_superuser else None
+
+        room_id = attrs.pop("room_id", None)
+        room_value = (attrs.get("room") or getattr(self.instance, "room", "") or "").strip()
+        if room_id:
+            room_obj = ClassRoom.objects.filter(id=room_id)
+            if school_id:
+                room_obj = room_obj.filter(school_id=school_id)
+            room_obj = room_obj.first()
+            if not room_obj:
+                raise serializers.ValidationError({"room_id": "Selected room does not belong to your school."})
+            room_value = room_obj.room_no
+        attrs["room"] = room_value
+
+        exam_term = attrs.get("exam_term") or getattr(self.instance, "exam_term", None)
+        school_class = attrs.get("school_class") or getattr(self.instance, "school_class", None)
+        section = attrs.get("section") if "section" in attrs else getattr(self.instance, "section", None)
+        subject = attrs.get("subject") or getattr(self.instance, "subject", None)
+        teacher = attrs.get("teacher") if "teacher" in attrs else getattr(self.instance, "teacher", None)
+        exam_period = attrs.get("exam_period") if "exam_period" in attrs else getattr(self.instance, "exam_period", None)
+        exam_date = attrs.get("exam_date") or getattr(self.instance, "exam_date", None)
+        start_time = attrs.get("start_time") or getattr(self.instance, "start_time", None)
+        end_time = attrs.get("end_time") or getattr(self.instance, "end_time", None)
+
+        if school_id:
+            if exam_term and exam_term.school_id != school_id:
+                raise serializers.ValidationError({"exam_term": "Selected exam type does not belong to your school."})
+            if school_class and school_class.school_id != school_id:
+                raise serializers.ValidationError({"school_class": "Selected class does not belong to your school."})
+            if section and section.school_class_id != school_class.id:
+                raise serializers.ValidationError({"section": "Selected section does not belong to selected class."})
+            if subject and subject.school_id != school_id:
+                raise serializers.ValidationError({"subject": "Selected subject does not belong to your school."})
+            if teacher and teacher.school_id != school_id:
+                raise serializers.ValidationError({"teacher": "Selected teacher does not belong to your school."})
+            if exam_period and exam_period.school_id != school_id:
+                raise serializers.ValidationError({"exam_period": "Selected period does not belong to your school."})
+
+        if not all([exam_term, school_class, subject, exam_date, start_time, end_time]):
+            return attrs
+
+        school = request.user.school if request and request.user.school_id else getattr(self.instance, "school", None)
+        tentative = ExamRoutine(
+            pk=self.instance.pk if self.instance else None,
+            school=school,
+            academic_year=getattr(self.instance, "academic_year", None),
+            exam_term=exam_term,
+            school_class=school_class,
+            section=section,
+            subject=subject,
+            teacher=teacher,
+            exam_period=exam_period,
+            exam_date=exam_date,
+            start_time=start_time,
+            end_time=end_time,
+            room=room_value,
+        )
+        try:
+            tentative.clean()
+        except DjangoValidationError as exc:
+            if hasattr(exc, "message_dict"):
+                raise serializers.ValidationError(exc.message_dict)
+            raise serializers.ValidationError({"detail": exc.messages})
+
+        return attrs
 
 
 class ExamRoutineRowSerializer(serializers.Serializer):

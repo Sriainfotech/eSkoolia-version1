@@ -1,5 +1,5 @@
-import { BehaviourAssignIncidentPanel } from "@/components/behaviour/BehaviourPanels";
+import BehaviourAssignIncidentRefactorPanel from "@/components/behaviour/BehaviourAssignIncidentRefactorPanel";
 
 export default function BehaviourAssignIncidentPage() {
-  return <BehaviourAssignIncidentPanel />;
+  return <BehaviourAssignIncidentRefactorPanel />;
 }

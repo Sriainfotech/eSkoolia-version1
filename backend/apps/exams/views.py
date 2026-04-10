@@ -1,4 +1,6 @@
 from decimal import Decimal
+from datetime import date as dt_date
+from calendar import monthrange
 
 from django.db import transaction
 from django.db.models import Avg
@@ -14,7 +16,9 @@ from rest_framework.views import APIView
 from apps.core.models import AcademicYear, Class, ClassRoom, Section, Subject
 from apps.hr.models import Staff
 from apps.students.models import Student
+from apps.communication.models import HolidayCalendar
 
+from .forms import ExamTypeModelForm
 from .models import (
     AdmitCard,
     AdmitCardSetting,
@@ -52,6 +56,7 @@ from .serializers import (
     ExamResultPublishSearchRequestSerializer,
     ExamResultPublishStoreRequestSerializer,
     ExamRoutineSerializer,
+    ExamCommandCenterScheduleSerializer,
     ExamRoutineStoreRequestSerializer,
     ExamPlanGenerateRequestSerializer,
     ExamPlanSearchRequestSerializer,
@@ -254,7 +259,11 @@ class ExamTypeStoreAPIView(ExamTenantMixin, APIView):
 
         school = self.get_school(request)
         current_year = self.get_current_academic_year(school.id)
-        title = serializer.validated_data["exam_type_title"].strip()
+        title_form = ExamTypeModelForm(data={"title": serializer.validated_data["exam_type_title"]})
+        if not title_form.is_valid():
+            return Response({"exam_type_title": title_form.errors.get("title", ["Invalid exam name."])}, status=status.HTTP_400_BAD_REQUEST)
+
+        title = title_form.cleaned_data["title"]
         is_average = self.parse_is_average(serializer.validated_data.get("is_average"))
         average_mark = serializer.validated_data.get("average_mark", Decimal("0.00"))
 
@@ -305,7 +314,11 @@ class ExamTypeUpdateAPIView(ExamTenantMixin, APIView):
         if not exam_type:
             return Response({"detail": "Exam type not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        title = serializer.validated_data["exam_type_title"].strip()
+        title_form = ExamTypeModelForm(data={"title": serializer.validated_data["exam_type_title"]})
+        if not title_form.is_valid():
+            return Response({"exam_type_title": title_form.errors.get("title", ["Invalid exam name."])}, status=status.HTTP_400_BAD_REQUEST)
+
+        title = title_form.cleaned_data["title"]
         is_average = self.parse_is_average(serializer.validated_data.get("is_average"))
         average_mark = serializer.validated_data.get("average_mark", Decimal("0.00"))
 
@@ -602,6 +615,201 @@ class ExamScheduleStoreAPIView(ExamTenantMixin, APIView):
 
         ExamRoutine.objects.bulk_create(rows)
         return Response({"message": "Exam routine has been assigned successfully"}, status=status.HTTP_201_CREATED)
+
+
+class ExamCommandCenterAPIView(ExamTenantMixin, APIView):
+    """Resource timeline API for exam master command center."""
+
+    def _normalize_payload(self, request_data):
+        payload = request_data.copy()
+        if "exam_type_id" in payload and "exam_term" not in payload:
+            payload["exam_term"] = payload.get("exam_type_id")
+        if "class_id" in payload and "school_class" not in payload:
+            payload["school_class"] = payload.get("class_id")
+        if "section_id" in payload and "section" not in payload:
+            payload["section"] = payload.get("section_id")
+        if "subject_id" in payload and "subject" not in payload:
+            payload["subject"] = payload.get("subject_id")
+        if "teacher_id" in payload and "teacher" not in payload:
+            payload["teacher"] = payload.get("teacher_id")
+        if "period" in payload and "exam_period" not in payload:
+            payload["exam_period"] = payload.get("period")
+        payload.setdefault("room", "")
+        return payload
+
+    def get(self, request):
+        exam_type_id = request.query_params.get("exam_type_id")
+        selected_date = request.query_params.get("date")
+        class_id = request.query_params.get("class_id")
+        section_id = request.query_params.get("section_id")
+        room_id = request.query_params.get("room_id")
+
+        if not selected_date:
+            return Response({"detail": "date is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            parsed_date = dt_date.fromisoformat(selected_date)
+        except ValueError:
+            return Response({"detail": "Invalid date format."}, status=status.HTTP_400_BAD_REQUEST)
+
+        schedules = ExamRoutine.objects.filter(**self.school_filter(request), exam_date=parsed_date).select_related(
+            "exam_term",
+            "school_class",
+            "section",
+            "subject",
+            "teacher",
+            "exam_period",
+        )
+
+        if exam_type_id not in (None, ""):
+            schedules = schedules.filter(exam_term_id=exam_type_id)
+        if class_id not in (None, ""):
+            schedules = schedules.filter(school_class_id=class_id)
+        if section_id not in (None, "", "0"):
+            schedules = schedules.filter(section_id=section_id)
+
+        room_map_qs = ClassRoom.objects.filter(**self.school_filter(request)).only("id", "room_no")
+        room_map = {row.room_no.upper(): row.id for row in room_map_qs}
+
+        if room_id not in (None, "", "0"):
+            room_obj = ClassRoom.objects.filter(id=room_id, **self.school_filter(request)).first()
+            if room_obj:
+                schedules = schedules.filter(room__iexact=room_obj.room_no)
+            else:
+                schedules = schedules.none()
+
+        data = [
+            {
+                "id": row.id,
+                "exam_type": row.exam_term_id,
+                "exam_type_name": row.exam_term.title,
+                "class_name": row.school_class.name,
+                "class_id": row.school_class_id,
+                "section": row.section.name if row.section else "All",
+                "section_id": row.section_id,
+                "subject": row.subject.name,
+                "subject_id": row.subject_id,
+                "teacher": (
+                    (f"{(row.teacher.first_name or '').strip()} {(row.teacher.last_name or '').strip()}").strip() if row.teacher else ""
+                )
+                or (row.teacher.username if row.teacher else ""),
+                "teacher_id": row.teacher_id,
+                "room": row.room,
+                "room_id": room_map.get((row.room or "").upper()),
+                "date": row.exam_date.isoformat(),
+                "period": row.exam_period_id,
+                "period_name": row.exam_period.period if row.exam_period else "",
+                "start_time": row.start_time.strftime("%H:%M:%S"),
+                "end_time": row.end_time.strftime("%H:%M:%S"),
+            }
+            for row in schedules.order_by("start_time", "room", "id")
+        ]
+        return Response(data)
+
+    @transaction.atomic
+    def post(self, request):
+        school = self.get_school(request)
+        payload = self._normalize_payload(request.data)
+        serializer = ExamCommandCenterScheduleSerializer(
+            data=payload,
+            context={"request": request, "school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+        current_year = self.get_current_academic_year(school.id)
+        obj = serializer.save(school=school, academic_year=current_year)
+        return Response(ExamCommandCenterScheduleSerializer(obj).data, status=status.HTTP_201_CREATED)
+
+
+class ExamCommandCenterDetailAPIView(ExamTenantMixin, APIView):
+    @transaction.atomic
+    def put(self, request, schedule_id):
+        school = self.get_school(request)
+        instance = ExamRoutine.objects.filter(id=schedule_id, **self.school_filter(request)).first()
+        if not instance:
+            return Response({"detail": "Schedule not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        payload = request.data.copy()
+        if "exam_type_id" in payload and "exam_term" not in payload:
+            payload["exam_term"] = payload.get("exam_type_id")
+        if "class_id" in payload and "school_class" not in payload:
+            payload["school_class"] = payload.get("class_id")
+        if "section_id" in payload and "section" not in payload:
+            payload["section"] = payload.get("section_id")
+        if "subject_id" in payload and "subject" not in payload:
+            payload["subject"] = payload.get("subject_id")
+        if "teacher_id" in payload and "teacher" not in payload:
+            payload["teacher"] = payload.get("teacher_id")
+        if "period" in payload and "exam_period" not in payload:
+            payload["exam_period"] = payload.get("period")
+
+        serializer = ExamCommandCenterScheduleSerializer(
+            instance,
+            data=payload,
+            partial=False,
+            context={"request": request, "school": school},
+        )
+        serializer.is_valid(raise_exception=True)
+        obj = serializer.save()
+        return Response(ExamCommandCenterScheduleSerializer(obj).data)
+
+    @transaction.atomic
+    def delete(self, request, schedule_id):
+        instance = ExamRoutine.objects.filter(id=schedule_id, **self.school_filter(request)).first()
+        if not instance:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ExamRoomListAPIView(ExamTenantMixin, APIView):
+    def get(self, request):
+        rooms = ClassRoom.objects.filter(**self.school_filter(request), active_status=True).order_by("room_no")
+        return Response(
+            [
+                {
+                    "id": row.id,
+                    "name": row.room_no,
+                    "description": "Main Hall" if "HALL" in row.room_no.upper() else "Exam Room",
+                }
+                for row in rooms
+            ]
+        )
+
+
+class ExamHolidayListAPIView(ExamTenantMixin, APIView):
+    def get(self, request):
+        month = request.query_params.get("month")
+        year = request.query_params.get("year")
+
+        holidays = HolidayCalendar.objects.filter(is_active=True).filter(
+            Q(school_id=request.user.school_id) | Q(school_id__isnull=True)
+        )
+
+        if month and year:
+            try:
+                month_int = int(month)
+                year_int = int(year)
+                first_day = dt_date(year_int, month_int, 1)
+                last_day = dt_date(year_int, month_int, monthrange(year_int, month_int)[1])
+                holidays = holidays.filter(holiday_date__lte=last_day).filter(
+                    Q(end_date__isnull=True, holiday_date__gte=first_day) | Q(end_date__gte=first_day)
+                )
+            except (TypeError, ValueError):
+                return Response({"detail": "Invalid month/year."}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            [
+                {
+                    "id": row.id,
+                    "title": row.holiday_title,
+                    "start_date": row.holiday_date.isoformat(),
+                    "end_date": row.end_date.isoformat() if row.end_date else row.holiday_date.isoformat(),
+                    "is_active": row.is_active,
+                    "description": row.description,
+                }
+                for row in holidays.order_by("holiday_date", "id")
+            ]
+        )
 
 
 class ExamScheduleReportSearchAPIView(ExamTenantMixin, APIView):

@@ -87,8 +87,10 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
     permission_codes = {
         "*": "behaviour.assigned_incident.view",
         "assign_bulk": "behaviour.assigned_incident.view",
+        "assign_incident": "behaviour.assigned_incident.view",
         "student_incident_report": "behaviour.assigned_incident.view",
         "students_summary": "behaviour.assigned_incident.view",
+        "students_grouped": "behaviour.assigned_incident.view",
         "student_rank_report": "behaviour.assigned_incident.view",
         "class_section_rank_report": "behaviour.assigned_incident.view",
         "incident_wise_report": "behaviour.assigned_incident.view",
@@ -144,12 +146,7 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
 
         serializer.save(school=school, point=point, assigned_by=user)
 
-    @action(detail=False, methods=["post"], url_path="assign-bulk")
-    def assign_bulk(self, request):
-        serializer = AssignedIncidentBulkCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
-
+    def _assign_incidents_bulk(self, request, data):
         school = request.user.school or getattr(request, "school", None)
         if not school and not request.user.is_superuser:
             raise PermissionDenied("School context is required.")
@@ -187,7 +184,7 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
                     continue
 
                 for incident in incidents:
-                    obj, created = AssignedIncident.objects.get_or_create(
+                    _obj, created = AssignedIncident.objects.get_or_create(
                         school=school,
                         academic_year_id=data.get("academic_year_id"),
                         incident=incident,
@@ -208,6 +205,75 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+    @action(detail=False, methods=["post"], url_path="assign-bulk")
+    def assign_bulk(self, request):
+        serializer = AssignedIncidentBulkCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        return self._assign_incidents_bulk(request, data)
+
+    @action(detail=False, methods=["post"], url_path="assign-incident")
+    def assign_incident(self, request):
+        serializer = AssignedIncidentBulkCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        return self._assign_incidents_bulk(request, data)
+
+    @action(detail=False, methods=["get"], url_path="students-grouped")
+    def students_grouped(self, request):
+        school = request.user.school or getattr(request, "school", None)
+        if not school and not request.user.is_superuser:
+            raise PermissionDenied("School context is required.")
+
+        class_id = request.query_params.get("class_id")
+        section_id = request.query_params.get("section_id")
+        keyword = (request.query_params.get("q") or "").strip()
+
+        queryset = (
+            Student.objects.filter(school=school, is_active=True, is_deleted=False)
+            .select_related("current_class", "current_section")
+            .order_by("current_class__numeric_order", "current_class__name", "current_section__name", "admission_no")
+        )
+
+        if class_id not in (None, ""):
+            queryset = queryset.filter(current_class_id=class_id)
+        if section_id not in (None, ""):
+            queryset = queryset.filter(current_section_id=section_id)
+        if keyword:
+            queryset = queryset.filter(
+                Q(first_name__icontains=keyword)
+                | Q(last_name__icontains=keyword)
+                | Q(admission_no__icontains=keyword)
+                | Q(roll_no__icontains=keyword)
+            )
+
+        grouped = {}
+        for student in queryset:
+            class_name = student.current_class.name if student.current_class_id else "Unassigned Class"
+            section_name = student.current_section.name if student.current_section_id else "Unassigned Section"
+            if class_name not in grouped:
+                grouped[class_name] = {}
+            if section_name not in grouped[class_name]:
+                grouped[class_name][section_name] = []
+
+            full_name = f"{(student.first_name or '').strip()} {(student.last_name or '').strip()}".strip()
+            grouped[class_name][section_name].append(
+                {
+                    "id": student.id,
+                    "admission_no": student.admission_no,
+                    "roll_no": student.roll_no,
+                    "first_name": student.first_name,
+                    "last_name": student.last_name,
+                    "full_name": full_name,
+                    "class_id": student.current_class_id,
+                    "section_id": student.current_section_id,
+                }
+            )
+
+        return Response(grouped)
 
     @action(detail=False, methods=["get"], url_path="student-incident-report")
     def student_incident_report(self, request):

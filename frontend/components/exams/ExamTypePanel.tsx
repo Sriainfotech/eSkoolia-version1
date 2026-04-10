@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
+import { Edit3, Trash2 } from "lucide-react";
 import { API_BASE_URL } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { ActionButton } from "@/components/common/ActionButton";
@@ -67,7 +68,18 @@ function boxStyle() {
 }
 
 function buttonStyle(color = "var(--primary)") {
-  return { height: 36, border: `1px solid ${color}`, background: color, color: "#fff", borderRadius: 8, padding: "0 12px", cursor: "pointer" } as const;
+  return {
+    height: 34,
+    border: `1px solid ${color}`,
+    background: color,
+    color: "#fff",
+    borderRadius: 8,
+    padding: "0 10px",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    fontSize: 13,
+    fontWeight: 600,
+  } as const;
 }
 
 const defaultForm: FormState = {
@@ -80,6 +92,7 @@ const defaultForm: FormState = {
 export default function ExamTypePanel() {
   const [rows, setRows] = useState<ExamTypeRow[]>([]);
   const [form, setForm] = useState<FormState>(defaultForm);
+  const [nameError, setNameError] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
@@ -107,10 +120,38 @@ export default function ExamTypePanel() {
     void load();
   }, []);
 
+  const validateExamName = (rawValue: string): string => {
+    const value = rawValue.trim();
+    if (!value) {
+      return "Exam name is required.";
+    }
+
+    if (value.length >= 3 && /^(.)\1{2,}$/.test(value)) {
+      return "Enter a meaningful exam name.";
+    }
+
+    if (/^[^A-Za-z0-9\s]+$/.test(value)) {
+      return "Symbols-only names are not allowed.";
+    }
+
+    return "";
+  };
+
+  const handleExamNameChange = (value: string) => {
+    setForm((prev) => ({ ...prev, exam_type_title: value }));
+    setNameError(validateExamName(value));
+  };
+
+  const handleExamNameBlur = () => {
+    setNameError(validateExamName(form.exam_type_title));
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!form.exam_type_title.trim()) {
-      form_loader.setError("Exam name is required.");
+    const currentNameError = validateExamName(form.exam_type_title);
+    setNameError(currentNameError);
+    if (currentNameError) {
+      form_loader.setError(currentNameError);
       return;
     }
     if (form.is_average && !form.average_mark.trim()) {
@@ -131,6 +172,7 @@ export default function ExamTypePanel() {
         await apiPost("/api/v1/exams/exam-type/store/", payload);
       }
       setForm(defaultForm);
+      setNameError("");
       await load();
       form_loader.setSuccessMessage(form.id ? "Exam type updated successfully" : "Exam type saved successfully");
     });
@@ -146,6 +188,7 @@ export default function ExamTypePanel() {
         is_average: data.is_average,
         average_mark: data.average_mark || "0.00",
       });
+      setNameError("");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load selected exam type.";
       form_loader.setError(message);
@@ -176,33 +219,65 @@ export default function ExamTypePanel() {
 
       <section className="admin-visitor-area up_st_admin_visitor">
         <div className="container-fluid p-0">
-          <div style={{ display: "grid", gridTemplateColumns: "320px minmax(0, 1fr)", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12, alignItems: "start" }}>
             <div className="white-box" style={boxStyle()}>
               <h3 style={{ marginTop: 0, marginBottom: 12 }}>{form.id ? "Edit Exam Type" : "Add Exam Type"}</h3>
               <form onSubmit={(e) => void submit(e)}>
                 <div style={{ marginBottom: 10 }}>
-                  <label style={{ display: "block", marginBottom: 6 }}>Exam Name *</label>
+                  <label style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Exam Name *</label>
                   <input
                     value={form.exam_type_title}
-                    onChange={(e) => setForm((prev) => ({ ...prev, exam_type_title: e.target.value }))}
-                    style={fieldStyle()}
+                    onChange={(e) => handleExamNameChange(e.target.value)}
+                    onBlur={handleExamNameBlur}
+                    style={{ ...fieldStyle(), border: `1px solid ${nameError ? "#ef4444" : "var(--line)"}` }}
                   />
+                  <p style={{ margin: "6px 0 0", fontSize: 12, color: nameError ? "#dc2626" : "var(--text-muted)" }}>
+                    {nameError || "Use a meaningful name such as Mid Term or Final Exam."}
+                  </p>
                 </div>
 
                 <div style={{ marginBottom: 10 }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <input
-                      type="checkbox"
-                      checked={form.is_average}
-                      onChange={(e) => setForm((prev) => ({ ...prev, is_average: e.target.checked }))}
-                    />
-                    <span>Average Passing Examination</span>
-                  </label>
+                  <label style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Average Passing</label>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setForm((prev) => ({ ...prev, is_average: false }))}
+                      style={{
+                        height: 40,
+                        borderRadius: 8,
+                        border: `1px solid ${form.is_average ? "var(--line)" : "#2563eb"}`,
+                        background: form.is_average ? "var(--surface)" : "#eff6ff",
+                        color: form.is_average ? "var(--text)" : "#1d4ed8",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Standard
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setForm((prev) => ({ ...prev, is_average: true }))}
+                      style={{
+                        height: 40,
+                        borderRadius: 8,
+                        border: `1px solid ${form.is_average ? "#2563eb" : "var(--line)"}`,
+                        background: form.is_average ? "#eff6ff" : "var(--surface)",
+                        color: form.is_average ? "#1d4ed8" : "var(--text)",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Average Passing
+                    </button>
+                  </div>
+                  <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                    Select average passing if this exam requires minimum average marks.
+                  </p>
                 </div>
 
                 {form.is_average && (
                   <div style={{ marginBottom: 10 }}>
-                    <label style={{ display: "block", marginBottom: 6 }}>Average Mark *</label>
+                    <label style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Average Mark *</label>
                     <input
                       type="number"
                       min="0"
@@ -211,6 +286,9 @@ export default function ExamTypePanel() {
                       onChange={(e) => setForm((prev) => ({ ...prev, average_mark: e.target.value }))}
                       style={fieldStyle()}
                     />
+                    <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+                      This value is used for average-based pass/fail calculation.
+                    </p>
                   </div>
                 )}
 
@@ -240,7 +318,8 @@ export default function ExamTypePanel() {
                 </Link>
               </div>
 
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <div style={{ width: "100%", overflowX: "auto" }}>
+              <table style={{ width: "100%", minWidth: 780, borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
                     <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>SL</th>
@@ -252,28 +331,41 @@ export default function ExamTypePanel() {
                 </thead>
                 <tbody>
                   {paginatedRows.map((row, index) => (
-                    <tr key={row.id}>
+                    <tr key={row.id} style={{ transition: "background-color 180ms ease" }} onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "#f8fafc"; }} onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{startIndex + index + 1}</td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.title}</td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.is_average ? "Yes" : "No"}</td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{Number(row.average_mark || 0).toFixed(2)}</td>
-                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)", display: "flex", gap: 8 }}>
-                        <ActionButton
-                          label="Edit"
-                          isLoading={false}
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" }}>
+                        <div style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                        <button
+                          type="button"
                           onClick={() => void startEdit(row.id)}
-                          variant="primary"
-                        />
-                        <ActionButton
-                          label="Delete"
-                          loadingLabel="Deleting"
-                          isLoading={form_loader.isDeleting}
+                          style={{ ...buttonStyle("#2563eb"), display: "inline-flex", alignItems: "center", gap: 5 }}
+                        >
+                          <Edit3 size={14} />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          disabled={form_loader.isDeleting}
                           onClick={() => void remove(row.id)}
-                          variant="danger"
-                        />
+                          style={{
+                            ...buttonStyle("#dc2626"),
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 5,
+                            opacity: form_loader.isDeleting ? 0.6 : 1,
+                            cursor: form_loader.isDeleting ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          <Trash2 size={14} />
+                          {form_loader.isDeleting ? "Deleting" : "Delete"}
+                        </button>
                         <Link href={`/exams/setup?exam_type_id=${row.id}`} style={{ textDecoration: "none" }}>
                           <button type="button" style={buttonStyle("#059669")}>Exam Setup</button>
                         </Link>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -284,10 +376,11 @@ export default function ExamTypePanel() {
                   )}
                 </tbody>
               </table>
+              </div>
 
               {rows.length > 0 && (
-                <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Show:</span>
                     <select
                       value={itemsPerPage}
@@ -316,7 +409,7 @@ export default function ExamTypePanel() {
                       Showing {startIndex + 1}-{Math.min(endIndex, rows.length)} of {rows.length} exam types
                     </span>
                   </div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <button
                       type="button"
                       disabled={currentPage === 1}
