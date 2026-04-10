@@ -1,5 +1,5 @@
-import { BehaviourStudentRankReportPanel } from "@/components/behaviour/BehaviourPanels";
+import ReportPage from "@/components/behaviour/ReportPage";
 
 export default function BehaviourStudentRankReportPage() {
-  return <BehaviourStudentRankReportPanel />;
+  return <ReportPage />;
 }

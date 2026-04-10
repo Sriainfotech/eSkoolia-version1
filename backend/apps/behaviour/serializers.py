@@ -87,6 +87,59 @@ class AssignedIncidentBulkCreateSerializer(serializers.Serializer):
     incident_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False)
 
 
+class StudentRankQuerySerializer(serializers.Serializer):
+    academic_year_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    class_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    section_id = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    point = serializers.IntegerField(required=False, allow_null=True)
+    operator = serializers.ChoiceField(choices=["above", "below"], required=False, default="above")
+    scope = serializers.ChoiceField(choices=["class", "school"], required=False, default="class")
+    q = serializers.CharField(required=False, allow_blank=True)
+
+
+class StudentRankRowSerializer(serializers.Serializer):
+    rank = serializers.IntegerField()
+    student_id = serializers.IntegerField()
+    admission_no = serializers.CharField()
+    student_name = serializers.CharField()
+    incident_count = serializers.IntegerField()
+    total_points = serializers.IntegerField()
+
+
+class StudentRankSectionSerializer(serializers.Serializer):
+    section_id = serializers.IntegerField(allow_null=True)
+    section_name = serializers.CharField()
+    total_students = serializers.IntegerField()
+    total_incidents = serializers.IntegerField()
+    total_points = serializers.IntegerField()
+    students = StudentRankRowSerializer(many=True)
+
+
+class StudentRankClassSerializer(serializers.Serializer):
+    class_id = serializers.IntegerField(allow_null=True)
+    class_name = serializers.CharField()
+    total_sections = serializers.IntegerField()
+    total_students = serializers.IntegerField()
+    total_incidents = serializers.IntegerField()
+    total_points = serializers.IntegerField()
+    sections = StudentRankSectionSerializer(many=True)
+
+
+class StudentRankReportMetaSerializer(serializers.Serializer):
+    scope = serializers.CharField()
+    academic_year_id = serializers.IntegerField(allow_null=True)
+    class_id = serializers.IntegerField(allow_null=True)
+    section_id = serializers.IntegerField(allow_null=True)
+    point = serializers.IntegerField(allow_null=True)
+    operator = serializers.CharField()
+    q = serializers.CharField(allow_blank=True)
+
+
+class StudentRankReportSerializer(serializers.Serializer):
+    meta = StudentRankReportMetaSerializer()
+    classes = StudentRankClassSerializer(many=True)
+
+
 class BehaviourRecordSettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = BehaviourRecordSetting

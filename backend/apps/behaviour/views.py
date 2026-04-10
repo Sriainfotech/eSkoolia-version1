@@ -1,7 +1,7 @@
 from collections import defaultdict
 
 from django.db import transaction
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, Q, Sum, IntegerField
 from django.db.models.functions import Coalesce
 from rest_framework import permissions, status, viewsets
 from config.pagination import ApiPageNumberPagination
@@ -10,6 +10,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.core.models import AcademicYear, Class, Section
 from apps.students.models import Student, StudentMultiClassRecord
 
 from .models import AssignedIncident, AssignedIncidentComment, BehaviourRecordSetting, Incident
@@ -19,6 +20,8 @@ from .serializers import (
     AssignedIncidentSerializer,
     BehaviourRecordSettingSerializer,
     IncidentSerializer,
+    StudentRankQuerySerializer,
+    StudentRankReportSerializer,
 )
 
 
@@ -364,53 +367,191 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="student-rank-report")
     def student_rank_report(self, request):
-        queryset = self.get_queryset()
-        operator = (request.query_params.get("operator") or "").strip().lower()
-        threshold_raw = request.query_params.get("point")
+        school = request.user.school or getattr(request, "school", None)
+        if not school and not request.user.is_superuser:
+            raise PermissionDenied("School context is required.")
+
+        query_serializer = StudentRankQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        criteria = query_serializer.validated_data
+
+        academic_year_id = criteria.get("academic_year_id")
+        academic_year = None
+        if academic_year_id not in (None, ""):
+            academic_year = AcademicYear.objects.filter(id=academic_year_id, school=school).first()
+        if academic_year is None:
+            academic_year = AcademicYear.objects.filter(school=school, is_current=True).first()
+        if academic_year is None:
+            academic_year = AcademicYear.objects.filter(school=school).order_by("-start_date", "-id").first()
+        if academic_year is None:
+            raise ValidationError({"academic_year_id": "Academic year is required."})
+
+        scope = criteria.get("scope", "class")
+        class_id = criteria.get("class_id")
+        section_id = criteria.get("section_id")
+        operator = criteria.get("operator", "above")
+        threshold = criteria.get("point")
+        keyword = (criteria.get("q") or "").strip()
+
+        queryset = AssignedIncident.objects.filter(school=school, academic_year=academic_year).select_related(
+            "student",
+            "incident",
+            "record",
+            "student__current_class",
+            "student__current_section",
+        )
+
+        if keyword:
+            queryset = queryset.filter(
+                Q(student__first_name__icontains=keyword)
+                | Q(student__last_name__icontains=keyword)
+                | Q(student__admission_no__icontains=keyword)
+                | Q(student__roll_no__icontains=keyword)
+            )
+
+        if scope != "school":
+            if class_id not in (None, ""):
+                queryset = queryset.filter(Q(record__school_class_id=class_id) | Q(student__current_class_id=class_id))
+            if section_id not in (None, ""):
+                queryset = queryset.filter(Q(record__section_id=section_id) | Q(student__current_section_id=section_id))
 
         rows = (
-            queryset.values(
+            queryset.annotate(
+                effective_class_id=Coalesce("record__school_class_id", "student__current_class_id", output_field=IntegerField()),
+                effective_section_id=Coalesce("record__section_id", "student__current_section_id", output_field=IntegerField()),
+            )
+            .values(
                 "student_id",
                 "student__first_name",
                 "student__last_name",
                 "student__admission_no",
-                "record__school_class_id",
-                "record__section_id",
-                "student__current_class_id",
-                "student__current_section_id",
+                "student__roll_no",
+                "effective_class_id",
+                "effective_section_id",
             )
             .annotate(
                 total_points=Coalesce(Sum("point"), 0),
-                total_incidents=Coalesce(Count("id"), 0),
+                incident_count=Coalesce(Count("id"), 0),
             )
-            .order_by("-total_points", "student__first_name", "student__last_name")
+            .order_by("effective_class_id", "effective_section_id", "-total_points", "student__admission_no")
         )
 
-        if threshold_raw not in (None, ""):
+        if threshold not in (None, ""):
             try:
-                threshold = int(threshold_raw)
+                threshold_value = int(threshold)
             except ValueError:
                 raise ValidationError({"point": "Point threshold must be a number."})
             if operator == "below":
-                rows = rows.filter(total_points__lt=threshold)
+                rows = rows.filter(total_points__lt=threshold_value)
             else:
-                rows = rows.filter(total_points__gte=threshold)
+                rows = rows.filter(total_points__gte=threshold_value)
 
-        payload = []
-        for row in rows:
-            payload.append(
+        class_ids = []
+        section_ids = []
+        row_list = list(rows)
+        for row in row_list:
+            if row["effective_class_id"] and row["effective_class_id"] not in class_ids:
+                class_ids.append(row["effective_class_id"])
+            if row["effective_section_id"] and row["effective_section_id"] not in section_ids:
+                section_ids.append(row["effective_section_id"])
+
+        class_lookup = {
+            item.id: item
+            for item in Class.objects.filter(school=school, id__in=class_ids).order_by("numeric_order", "name", "id")
+        }
+        section_lookup = {
+            item.id: item
+            for item in Section.objects.filter(id__in=section_ids).select_related("school_class")
+        }
+
+        grouped_by_class = defaultdict(lambda: defaultdict(list))
+        for row in row_list:
+            class_value = row["effective_class_id"]
+            section_value = row["effective_section_id"]
+            grouped_by_class[class_value][section_value].append(row)
+
+        class_payload = []
+        for class_id_value, class_obj in class_lookup.items():
+            section_map = grouped_by_class.get(class_id_value, {})
+            section_payload = []
+            class_students = 0
+            class_incidents = 0
+            class_points = 0
+
+            ordered_section_ids = sorted(
+                section_map.keys(),
+                key=lambda value: (
+                    (section_lookup.get(value).name if section_lookup.get(value) else ""),
+                    value or 0,
+                ),
+            )
+
+            for section_value in ordered_section_ids:
+                section_obj = section_lookup.get(section_value)
+                students = section_map.get(section_value, [])
+                students = sorted(
+                    students,
+                    key=lambda item: (-int(item["total_points"] or 0), item["student__admission_no"] or "", item["student_id"]),
+                )
+
+                section_students = []
+                section_points = 0
+                section_incidents = 0
+                for rank_index, row in enumerate(students, start=1):
+                    section_students.append(
+                        {
+                            "rank": rank_index,
+                            "student_id": row["student_id"],
+                            "admission_no": row["student__admission_no"],
+                            "student_name": f"{(row['student__first_name'] or '').strip()} {(row['student__last_name'] or '').strip()}".strip(),
+                            "incident_count": row["incident_count"],
+                            "total_points": row["total_points"],
+                        }
+                    )
+                    section_points += int(row["total_points"] or 0)
+                    section_incidents += int(row["incident_count"] or 0)
+
+                class_students += len(section_students)
+                class_incidents += section_incidents
+                class_points += section_points
+
+                section_payload.append(
+                    {
+                        "section_id": section_value,
+                        "section_name": section_obj.name if section_obj else "Unassigned Section",
+                        "total_students": len(section_students),
+                        "total_incidents": section_incidents,
+                        "total_points": section_points,
+                        "students": section_students,
+                    }
+                )
+
+            class_payload.append(
                 {
-                    "student_id": row["student_id"],
-                    "student_name": f"{(row['student__first_name'] or '').strip()} {(row['student__last_name'] or '').strip()}".strip(),
-                    "admission_no": row["student__admission_no"],
-                    "class_id": row["record__school_class_id"] or row["student__current_class_id"],
-                    "section_id": row["record__section_id"] or row["student__current_section_id"],
-                    "total_points": row["total_points"],
-                    "total_incidents": row["total_incidents"],
+                    "class_id": class_id_value,
+                    "class_name": class_obj.name if class_obj else "Unassigned Class",
+                    "total_sections": len(section_payload),
+                    "total_students": class_students,
+                    "total_incidents": class_incidents,
+                    "total_points": class_points,
+                    "sections": section_payload,
                 }
             )
 
-        return Response(payload)
+        payload = {
+            "meta": {
+                "scope": scope,
+                "academic_year_id": academic_year.id,
+                "class_id": class_id if scope != "school" else None,
+                "section_id": section_id if scope != "school" else None,
+                "point": threshold,
+                "operator": operator,
+                "q": keyword,
+            },
+            "classes": class_payload,
+        }
+
+        return Response(StudentRankReportSerializer(payload).data)
 
     @action(detail=False, methods=["get"], url_path="class-section-rank-report")
     def class_section_rank_report(self, request):
