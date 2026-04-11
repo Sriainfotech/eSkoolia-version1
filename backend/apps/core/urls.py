@@ -13,6 +13,9 @@ from .views import (
     BusLocationViewSet,
     TransportAlertViewSet,
     BusRoutePickupUpdateViewSet,
+    VehicleDriverAssignmentViewSet,
+    TransportNotificationLogViewSet,
+    RoutePerformanceLogViewSet,
     ItemCategoryViewSet,
     ItemStoreViewSet,
     SupplierViewSet,
@@ -40,6 +43,9 @@ router.register("bus-stops", BusStopViewSet, basename="bus-stop")
 router.register("bus-locations", BusLocationViewSet, basename="bus-location")
 router.register("transport-alerts", TransportAlertViewSet, basename="transport-alert")
 router.register("bus-pickups", BusRoutePickupUpdateViewSet, basename="bus-pickup")
+router.register("vehicle-driver-assignments", VehicleDriverAssignmentViewSet, basename="vehicle-driver-assignment")
+router.register("transport-notification-logs", TransportNotificationLogViewSet, basename="transport-notification-log")
+router.register("route-performance-logs", RoutePerformanceLogViewSet, basename="route-performance-log")
 
 # Inventory Module Routes
 router.register("item-categories", ItemCategoryViewSet, basename="item-category")

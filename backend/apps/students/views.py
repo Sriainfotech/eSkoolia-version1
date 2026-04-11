@@ -1480,45 +1480,6 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
 
         return Response({"success": True, "message": "Subjects assigned successfully"}, status=status.HTTP_200_OK)
 
-
-class StudentRecordAuditViewSet(TenantScopedModelViewSet):
-    serializer_class = StudentRecordAuditSerializer
-    model = StudentRecordAudit
-    permission_codes = {"*": "student_info.delete_student_record.view"}
-    http_method_names = ["get", "head", "options"]
-
-    def get_queryset(self):
-        user = self.request.user
-        qs = StudentRecordAudit.objects.select_related("student", "performed_by", "school", "student__current_class", "student__current_section")
-
-        student_id = self.request.query_params.get("student_id")
-        action = (self.request.query_params.get("action") or "").strip()
-        search = (self.request.query_params.get("search") or "").strip()
-        class_id = self.request.query_params.get("class")
-        section_id = self.request.query_params.get("section")
-
-        if student_id:
-            qs = qs.filter(student_id=student_id)
-        if action:
-            qs = qs.filter(action=action)
-        if class_id:
-            qs = qs.filter(student__current_class_id=class_id)
-        if section_id:
-            qs = qs.filter(student__current_section_id=section_id)
-        if search:
-            qs = qs.filter(
-                Q(student__first_name__icontains=search)
-                | Q(student__last_name__icontains=search)
-                | Q(student__admission_no__icontains=search)
-                | Q(note__icontains=search)
-            )
-
-        if user.is_superuser:
-            return qs
-        if user.school_id:
-            return qs.filter(school_id=user.school_id)
-        return qs.none()
-
     @action(detail=False, methods=["post"], url_path="assign-bulk")
     def assign_bulk(self, request):
         serializer = StudentSubjectAssignmentRequestSerializer(data=request.data, context={"request": request})
@@ -1558,3 +1519,43 @@ class StudentRecordAuditViewSet(TenantScopedModelViewSet):
                 return error
 
         return Response({"success": True, "message": "Subjects assigned successfully"}, status=status.HTTP_200_OK)
+
+
+class StudentRecordAuditViewSet(TenantScopedModelViewSet):
+    serializer_class = StudentRecordAuditSerializer
+    model = StudentRecordAudit
+    permission_codes = {"*": "student_info.delete_student_record.view"}
+    http_method_names = ["get", "head", "options"]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = StudentRecordAudit.objects.select_related("student", "performed_by", "school", "student__current_class", "student__current_section")
+
+        student_id = self.request.query_params.get("student_id")
+        action = (self.request.query_params.get("action") or "").strip()
+        search = (self.request.query_params.get("search") or "").strip()
+        class_id = self.request.query_params.get("class")
+        section_id = self.request.query_params.get("section")
+
+        if student_id:
+            qs = qs.filter(student_id=student_id)
+        if action:
+            qs = qs.filter(action=action)
+        if class_id:
+            qs = qs.filter(student__current_class_id=class_id)
+        if section_id:
+            qs = qs.filter(student__current_section_id=section_id)
+        if search:
+            qs = qs.filter(
+                Q(student__first_name__icontains=search)
+                | Q(student__last_name__icontains=search)
+                | Q(student__admission_no__icontains=search)
+                | Q(note__icontains=search)
+            )
+
+        if user.is_superuser:
+            return qs
+        if user.school_id:
+            return qs.filter(school_id=user.school_id)
+        return qs.none()
+

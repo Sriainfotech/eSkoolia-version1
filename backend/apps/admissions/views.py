@@ -42,6 +42,28 @@ from .serializers import (
 )
 
 
+class VisitorBookPagination(ApiPageNumberPagination):
+    page_size = 10
+    max_page_size = 50
+
+    def get_page_size(self, request):
+        requested = super().get_page_size(request)
+        if not requested:
+            requested = self.page_size
+        return max(5, min(50, requested))
+
+
+class AdminSetupPagination(ApiPageNumberPagination):
+    page_size = 5
+    max_page_size = 50
+
+    def get_page_size(self, request):
+        requested = super().get_page_size(request)
+        if not requested:
+            requested = self.page_size
+        return max(5, min(50, requested))
+
+
 class AdminSectionRBACMixin:
     permission_codes = {}
 
@@ -68,7 +90,41 @@ class AdminSectionRBACMixin:
 
 
 class DuplicateSafeWriteMixin:
-    duplicate_error_message = "Duplicate record already exists."
+    duplicate_error_message = "Record already exists"
+    create_success_message = "Record created successfully"
+    update_success_message = "Record updated successfully"
+    delete_success_message = "Record deleted successfully"
+
+    def _normalize_field_errors(self, serializer_errors):
+        normalized = {}
+        for field, errors in (serializer_errors or {}).items():
+            if isinstance(errors, (list, tuple)):
+                normalized[field] = [str(error) for error in errors]
+            else:
+                normalized[field] = [str(errors)]
+        return normalized
+
+    def _first_error_message(self, field_errors):
+        for errors in field_errors.values():
+            if isinstance(errors, list) and errors:
+                return str(errors[0])
+        return "Validation failed"
+
+    def _validation_response(self, field_errors=None, message="Validation failed", status_code=status.HTTP_400_BAD_REQUEST):
+        return Response(
+            {
+                "success": False,
+                "message": message,
+                "field_errors": field_errors or {},
+            },
+            status=status_code,
+        )
+
+    def _success_response(self, message, data=None, status_code=status.HTTP_200_OK):
+        payload = {"success": True, "message": message}
+        if data is not None:
+            payload["data"] = data
+        return Response(payload, status=status_code)
 
     def _raise_integrity_validation_error(self, exc):
         message = str(exc).lower()
@@ -76,23 +132,54 @@ class DuplicateSafeWriteMixin:
             raise ValidationError({"detail": self.duplicate_error_message})
         raise ValidationError({"detail": "Invalid request data."})
 
-    def create(self, request, *args, **kwargs):
+    def _integrity_response(self, exc):
         try:
-            return super().create(request, *args, **kwargs)
-        except IntegrityError as exc:
             self._raise_integrity_validation_error(exc)
+        except ValidationError as error:
+            detail = error.detail
+            if isinstance(detail, dict):
+                field_errors = self._normalize_field_errors(detail)
+                message = self._first_error_message(field_errors)
+            else:
+                message = str(detail)
+                field_errors = {"detail": [message]}
+            return self._validation_response(field_errors, message)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
+        try:
+            self.perform_create(serializer)
+        except IntegrityError as exc:
+            return self._integrity_response(exc)
+        headers = self.get_success_headers(serializer.data)
+        output = self.get_serializer(serializer.instance)
+        return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        if not serializer.is_valid():
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
-            return super().update(request, *args, **kwargs)
+            self.perform_update(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
+        output = self.get_serializer(serializer.instance)
+        return self._success_response(self.update_success_message, output.data)
 
     def partial_update(self, request, *args, **kwargs):
-        try:
-            return super().partial_update(request, *args, **kwargs)
-        except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self.perform_destroy(instance)
+        return self._success_response(self.delete_success_message)
 
 
 class AdmissionPincodeLookupAPIView(APIView):
@@ -240,6 +327,9 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
     serializer_class = AdmissionInquirySerializer
     pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
+    create_success_message = "Admission query created successfully"
+    update_success_message = "Record updated successfully"
+    delete_success_message = "Record deleted successfully"
     permission_codes = {
         "list": "admin_section.admission_query.view",
         "retrieve": "admin_section.admission_query.view",
@@ -309,27 +399,29 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_create(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+        return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_update(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data)
+        return self._success_response(self.update_success_message, output.data)
 
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
@@ -341,6 +433,8 @@ class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
     pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ["get", "post", "delete", "head", "options"]
+    create_success_message = "Follow-up saved successfully"
+    delete_success_message = "Follow-up deleted successfully"
     permission_codes = {
         "list": "admin_section.admission_query.view",
         "retrieve": "admin_section.admission_query.view",
@@ -416,21 +510,24 @@ class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_create(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+        return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
 
 class VisitorBookEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = VisitorBookEntrySerializer
-    pagination_class = ApiPageNumberPagination
+    pagination_class = VisitorBookPagination
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    create_success_message = "Visitor record created successfully"
+    update_success_message = "Record updated successfully"
     permission_codes = {
         "list": "admin_section.visitor_book.view",
         "retrieve": "admin_section.visitor_book.view",
@@ -490,27 +587,29 @@ class VisitorBookEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_create(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+        return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_update(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data)
+        return self._success_response(self.update_success_message, output.data)
 
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
@@ -522,6 +621,8 @@ class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
     pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    create_success_message = "Complaint created successfully"
+    update_success_message = "Record updated successfully"
     permission_codes = {
         "list": "admin_section.complaint.view",
         "retrieve": "admin_section.complaint.view",
@@ -550,27 +651,29 @@ class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_create(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+        return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_update(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data)
+        return self._success_response(self.update_success_message, output.data)
 
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
@@ -582,6 +685,8 @@ class PostalReceiveEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, 
     pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    create_success_message = "Postal receive record created successfully"
+    update_success_message = "Record updated successfully"
     permission_codes = {
         "list": "admin_section.postal_receive.view",
         "retrieve": "admin_section.postal_receive.view",
@@ -613,6 +718,8 @@ class PostalDispatchEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
     pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    create_success_message = "Postal dispatch record created successfully"
+    update_success_message = "Record updated successfully"
     permission_codes = {
         "list": "admin_section.postal_dispatch.view",
         "retrieve": "admin_section.postal_dispatch.view",
@@ -641,27 +748,29 @@ class PostalDispatchEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_create(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+        return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_update(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data)
+        return self._success_response(self.update_success_message, output.data)
 
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
@@ -671,6 +780,8 @@ class PostalDispatchEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
 class PhoneCallLogEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = PhoneCallLogEntrySerializer
     permission_classes = [permissions.IsAuthenticated]
+    create_success_message = "Phone call log added successfully"
+    update_success_message = "Record updated successfully"
     permission_codes = {
         "list": "admin_section.phone_call_log.view",
         "retrieve": "admin_section.phone_call_log.view",
@@ -699,27 +810,29 @@ class PhoneCallLogEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_create(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data, status=status.HTTP_201_CREATED, headers=headers)
+        return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=422)
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
             self.perform_update(serializer)
         except IntegrityError as exc:
-            self._raise_integrity_validation_error(exc)
+            return self._integrity_response(exc)
         output = self.get_serializer(serializer.instance)
-        return Response(output.data)
+        return self._success_response(self.update_success_message, output.data)
 
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
@@ -728,6 +841,7 @@ class PhoneCallLogEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
 
 class AdminSetupEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = AdminSetupEntrySerializer
+    pagination_class = AdminSetupPagination
     permission_classes = [permissions.IsAuthenticated]
     permission_codes = {
         "list": "admin_section.admin_setup.view",
@@ -742,10 +856,17 @@ class AdminSetupEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vie
         user = self.request.user
         qs = AdminSetupEntry.objects.select_related("school", "created_by")
         if user.is_superuser:
-            return qs
-        if user.school_id:
-            return qs.filter(school_id=user.school_id)
-        return qs.none()
+            scoped = qs
+        elif user.school_id:
+            scoped = qs.filter(school_id=user.school_id)
+        else:
+            return qs.none()
+
+        type_filter = str(self.request.query_params.get("type", "")).strip()
+        if type_filter in {"1", "2", "3", "4"}:
+            scoped = scoped.filter(type=type_filter)
+
+        return scoped
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -866,6 +987,13 @@ class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
                     }
                 )
 
+            paginator = ApiPageNumberPagination()
+            page = paginator.paginate_queryset(rows, request, view=self)
+            if page is not None:
+                response = paginator.get_paginated_response(page)
+                response.data["is_student_role"] = True
+                return response
+
             return Response({"is_student_role": True, "recipients": rows}, status=status.HTTP_200_OK)
 
         user_role_qs = UserRole.objects.select_related("user", "role").filter(role_id=role.id)
@@ -880,6 +1008,13 @@ class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
             seen.add(row.user_id)
             full_name = f"{(row.user.first_name or '').strip()} {(row.user.last_name or '').strip()}".strip()
             rows.append({"id": row.user_id, "label": full_name or row.user.username})
+
+        paginator = ApiPageNumberPagination()
+        page = paginator.paginate_queryset(rows, request, view=self)
+        if page is not None:
+            response = paginator.get_paginated_response(page)
+            response.data["is_student_role"] = False
+            return response
 
         return Response({"is_student_role": False, "recipients": rows}, status=status.HTTP_200_OK)
 

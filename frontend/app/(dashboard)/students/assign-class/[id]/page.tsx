@@ -1,6 +1,9 @@
-import { StudentMultiClassPanel } from "@/components/students/StudentMultiClassPanel";
+import { redirect } from "next/navigation";
 
 export default function AssignClassPage({ params }: { params: { id: string } }) {
   const studentId = Number(params.id);
-  return <StudentMultiClassPanel selectedStudentId={Number.isNaN(studentId) ? undefined : studentId} />;
+  if (Number.isNaN(studentId)) {
+    redirect("/students/list");
+  }
+  redirect(`/students/add?mode=edit&id=${studentId}`);
 }

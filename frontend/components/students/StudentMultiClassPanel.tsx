@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Spinner } from "@/components/common/Spinner";
+import { TopToast } from "@/components/common/TopToast";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 
 type ApiList<T> = T[] | { results?: T[]; count?: number; next?: string | null; previous?: string | null };
@@ -158,6 +159,23 @@ function parseError(error: unknown): { message: string; fieldErrors: Record<stri
   return { message: "Failed to assign subjects", fieldErrors };
 }
 
+function getBestValidationMessage(message: string, fieldErrors: Record<string, string>) {
+  const fallback = message || "Validation failed";
+  const lower = fallback.toLowerCase();
+  if (lower === "validation failed" || lower.includes("validation failed")) {
+    return (
+      fieldErrors.subject_ids ||
+      fieldErrors.student_ids ||
+      fieldErrors.section ||
+      fieldErrors.class ||
+      fieldErrors.academic_year ||
+      Object.values(fieldErrors)[0] ||
+      fallback
+    );
+  }
+  return fallback;
+}
+
 function studentLabel(student: Student) {
   return `${student.first_name || ""} ${student.last_name || ""}`.trim() || `Student #${student.id}`;
 }
@@ -171,6 +189,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
   const [students, setStudents] = useState<Student[]>([]);
   const [totalStudents, setTotalStudents] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   const [academicYearId, setAcademicYearId] = useState("");
   const [classId, setClassId] = useState("");
@@ -303,7 +322,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
 
       const params = new URLSearchParams();
       params.set("page", String(currentPage));
-      params.set("page_size", "25");
+      params.set("page_size", String(pageSize));
       if (classId) {
         params.set("class", classId);
       }
@@ -377,7 +396,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
     if (!loadingMeta) {
       void loadStudents();
     }
-  }, [loadingMeta, currentPage, classId, sectionId, academicYearId, debouncedSearchText]);
+  }, [loadingMeta, currentPage, pageSize, classId, sectionId, academicYearId, debouncedSearchText]);
 
   useEffect(() => {
     if (!loadingMeta && classId) {
@@ -457,7 +476,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
 
     setFieldErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
-      setError("Validation failed");
+      setError(getBestValidationMessage("Validation failed", nextErrors));
       return;
     }
 
@@ -483,20 +502,27 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
       await loadAssignments();
     } catch (err) {
       const parsed = parseError(err);
-      setError(parsed.message || "Failed to assign subjects");
       setFieldErrors(parsed.fieldErrors);
-      if (!parsed.message) {
-        setError("Failed to assign subjects");
-      }
+      setError(getBestValidationMessage(parsed.message || "Failed to assign subjects", parsed.fieldErrors));
     } finally {
       setAssigning(false);
     }
   };
 
-  const totalPages = Math.max(1, Math.ceil(totalStudents / 25));
+  const totalPages = Math.max(1, Math.ceil(totalStudents / pageSize));
+  const displayFrom = totalStudents === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const displayTo = Math.min(currentPage * pageSize, totalStudents);
 
   return (
     <div className="legacy-panel">
+      <TopToast
+        message={error || success}
+        tone={error ? "error" : "success"}
+        onClose={() => {
+          setError("");
+          setSuccess("");
+        }}
+      />
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
@@ -798,11 +824,27 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
               </table>
             </div>
 
-            <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
-                Total: {totalStudents} students | Page {currentPage} of {totalPages}
+                Showing {displayFrom}-{displayTo} of {totalStudents} students | Page {currentPage} of {totalPages}
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-muted)" }}>
+                  Page size
+                  <select
+                    value={pageSize}
+                    onChange={(event) => {
+                      setPageSize(Number(event.target.value));
+                      setCurrentPage(1);
+                      setSelectedStudentIds([]);
+                    }}
+                    style={{ ...fieldStyle(), width: 88 }}
+                  >
+                    {[5, 10, 15, 20, 25, 30, 35, 40, 45, 50].map((size) => (
+                      <option key={size} value={size}>{size}</option>
+                    ))}
+                  </select>
+                </label>
                 <button
                   type="button"
                   style={buttonStyle("#64748b")}
@@ -826,8 +868,6 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
           {loadingMeta && <p style={{ margin: 0, color: "var(--text-muted)" }}>Loading data...</p>}
           {loadingSections && <p style={{ margin: 0, color: "var(--text-muted)" }}><Spinner size={14} color="var(--primary)" /> Loading sections for selected class...</p>}
           {loadingAssignments && <p style={{ margin: 0, color: "var(--text-muted)" }}><Spinner size={14} color="var(--primary)" /> Loading current subject assignments...</p>}
-          {error && <p style={{ margin: 0, color: "var(--warning)" }}>{error}</p>}
-          {success && <p style={{ margin: 0, color: "#0f766e" }}>{success}</p>}
         </div>
       </section>
     </div>

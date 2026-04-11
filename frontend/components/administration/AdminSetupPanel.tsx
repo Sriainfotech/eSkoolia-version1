@@ -1,9 +1,10 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { TopToast } from "@/components/common/TopToast";
 
-type ApiList<T> = T[] | { results?: T[] };
+type ApiList<T> = T[] | { results?: T[]; count?: number; next?: string | null; previous?: string | null };
 
 type AdminSetupRow = {
   id: number;
@@ -32,6 +33,44 @@ const CATEGORY_CLASS: Record<AdminSetupRow["type"], string> = {
   "4": "cat-reference",
 };
 
+type GroupRowsMap = Record<AdminSetupRow["type"], AdminSetupRow[]>;
+type GroupNumberMap = Record<AdminSetupRow["type"], number>;
+
+const EMPTY_GROUP_ROWS: GroupRowsMap = {
+  "1": [],
+  "2": [],
+  "3": [],
+  "4": [],
+};
+
+const DEFAULT_GROUP_PAGE: GroupNumberMap = {
+  "1": 1,
+  "2": 1,
+  "3": 1,
+  "4": 1,
+};
+
+const DEFAULT_GROUP_PAGE_SIZE: GroupNumberMap = {
+  "1": 5,
+  "2": 5,
+  "3": 5,
+  "4": 5,
+};
+
+const DEFAULT_GROUP_TOTAL: GroupNumberMap = {
+  "1": 0,
+  "2": 0,
+  "3": 0,
+  "4": 0,
+};
+
+const DEFAULT_GROUP_TOTAL_PAGES: GroupNumberMap = {
+  "1": 1,
+  "2": 1,
+  "3": 1,
+  "4": 1,
+};
+
 function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error) {
     const message = error.message.trim();
@@ -44,6 +83,12 @@ function getErrorMessage(error: unknown, fallback: string): string {
 
 function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
+}
+
+function getTotalCount<T>(value: ApiList<T>): number {
+  if (Array.isArray(value)) return value.length;
+  if (typeof value.count === "number") return value.count;
+  return (value.results || []).length;
 }
 
 function isMeaningless(value: string): boolean {
@@ -126,7 +171,11 @@ function buttonStyle(color = "var(--primary)") {
 }
 
 export function AdminSetupPanel() {
-  const [items, setItems] = useState<AdminSetupRow[]>([]);
+  const [groupRows, setGroupRows] = useState<GroupRowsMap>(EMPTY_GROUP_ROWS);
+  const [groupPage, setGroupPage] = useState<GroupNumberMap>(DEFAULT_GROUP_PAGE);
+  const [groupPageSize, setGroupPageSize] = useState<GroupNumberMap>(DEFAULT_GROUP_PAGE_SIZE);
+  const [groupTotalRecords, setGroupTotalRecords] = useState<GroupNumberMap>(DEFAULT_GROUP_TOTAL);
+  const [groupTotalPages, setGroupTotalPages] = useState<GroupNumberMap>(DEFAULT_GROUP_TOTAL_PAGES);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -144,12 +193,31 @@ export function AdminSetupPanel() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
 
-  const load = async () => {
+  const loadTypePage = async (groupType: AdminSetupRow["type"], targetPage: number, targetPageSize: number) => {
+    const data = await apiGet<ApiList<AdminSetupRow>>(
+      `/api/v1/admissions/admin-setups/?type=${groupType}&page=${targetPage}&page_size=${targetPageSize}`,
+    );
+    const rows = listData(data);
+    const total = getTotalCount(data);
+    const pages = Math.max(1, Math.ceil(total / targetPageSize));
+
+    setGroupRows((prev) => ({ ...prev, [groupType]: rows }));
+    setGroupTotalRecords((prev) => ({ ...prev, [groupType]: total }));
+    setGroupTotalPages((prev) => ({ ...prev, [groupType]: pages }));
+
+    if (targetPage > pages) {
+      setGroupPage((prev) => ({ ...prev, [groupType]: pages }));
+      await loadTypePage(groupType, pages, targetPageSize);
+    }
+  };
+
+  const loadAll = async () => {
     try {
       setLoading(true);
       setError("");
-      const data = await apiGet<ApiList<AdminSetupRow>>("/api/v1/admissions/admin-setups/");
-      setItems(listData(data));
+      await Promise.all(
+        TYPE_OPTIONS.map((option) => loadTypePage(option.value, groupPage[option.value], groupPageSize[option.value])),
+      );
     } catch (error: unknown) {
       setError(getErrorMessage(error, "Unable to load admin setups."));
     } finally {
@@ -158,7 +226,7 @@ export function AdminSetupPanel() {
   };
 
   useEffect(() => {
-    void load();
+    void loadAll();
   }, []);
 
   const reset = () => {
@@ -222,13 +290,13 @@ export function AdminSetupPanel() {
       setFieldErrors({});
       if (editingId) {
         await apiMutate(`/api/v1/admissions/admin-setups/${editingId}/`, "PATCH", payload);
-        setSuccess("Admin setup updated successfully.");
+        setSuccess("Record updated successfully.");
       } else {
         await apiMutate("/api/v1/admissions/admin-setups/", "POST", payload);
-        setSuccess("Admin setup saved successfully.");
+        setSuccess("Record created successfully.");
       }
       reset();
-      await load();
+      await loadAll();
     } catch (error: unknown) {
       setError(getErrorMessage(error, editingId ? "Unable to update admin setup." : "Unable to save admin setup."));
     } finally {
@@ -236,16 +304,21 @@ export function AdminSetupPanel() {
     }
   };
 
-  const remove = async (id: number) => {
+  const remove = async (row: AdminSetupRow) => {
     const ok = window.confirm("Are you sure to delete this admin setup entry?");
     if (!ok) return;
     try {
-      setBusyId(id);
+      setBusyId(row.id);
       setError("");
       setSuccess("");
-      await apiDelete(`/api/v1/admissions/admin-setups/${id}/`);
-      setItems((prev) => prev.filter((row) => row.id !== id));
-      setSuccess("Admin setup deleted.");
+      await apiDelete(`/api/v1/admissions/admin-setups/${row.id}/`);
+      setSuccess("Record deleted successfully.");
+      const currentRows = groupRows[row.type] || [];
+      const currentPage = groupPage[row.type];
+      const currentSize = groupPageSize[row.type];
+      const nextPage = currentPage > 1 && currentRows.length === 1 ? currentPage - 1 : currentPage;
+      setGroupPage((prev) => ({ ...prev, [row.type]: nextPage }));
+      await loadTypePage(row.type, nextPage, currentSize);
     } catch (error: unknown) {
       setError(getErrorMessage(error, "Unable to delete admin setup."));
     } finally {
@@ -253,16 +326,26 @@ export function AdminSetupPanel() {
     }
   };
 
-  const grouped = useMemo(() => {
-    const map = new Map<AdminSetupRow["type"], AdminSetupRow[]>();
-    TYPE_OPTIONS.forEach((opt) => map.set(opt.value, []));
-    items.forEach((row) => {
-      const current = map.get(row.type) || [];
-      current.push(row);
-      map.set(row.type, current);
-    });
-    return map;
-  }, [items]);
+  const handleGroupPageChange = async (groupType: AdminSetupRow["type"], nextPage: number) => {
+    setGroupPage((prev) => ({ ...prev, [groupType]: nextPage }));
+    try {
+      setError("");
+      await loadTypePage(groupType, nextPage, groupPageSize[groupType]);
+    } catch (loadError: unknown) {
+      setError(getErrorMessage(loadError, "Unable to load admin setups."));
+    }
+  };
+
+  const handleGroupPageSizeChange = async (groupType: AdminSetupRow["type"], nextPageSize: number) => {
+    setGroupPageSize((prev) => ({ ...prev, [groupType]: nextPageSize }));
+    setGroupPage((prev) => ({ ...prev, [groupType]: 1 }));
+    try {
+      setError("");
+      await loadTypePage(groupType, 1, nextPageSize);
+    } catch (loadError: unknown) {
+      setError(getErrorMessage(loadError, "Unable to load admin setups."));
+    }
+  };
 
   const getInputClass = (error?: string, hasValue?: boolean) => {
     if (error) return "input-error";
@@ -272,6 +355,14 @@ export function AdminSetupPanel() {
 
   return (
     <div className="legacy-panel">
+      <TopToast
+        message={error || success}
+        tone={error ? "error" : "success"}
+        onClose={() => {
+          setError("");
+          setSuccess("");
+        }}
+      />
       <style>{`
         .white-box {
           background: #ffffff !important;
@@ -541,13 +632,17 @@ export function AdminSetupPanel() {
               <h3 style={{ marginTop: 0, marginBottom: 12 }}>Admin Setup List</h3>
               <div style={{ display: "grid", gap: 10 }}>
                 {TYPE_OPTIONS.map((group) => {
-                  const rows = grouped.get(group.value) || [];
+                  const rows = groupRows[group.value] || [];
+                  const currentPage = groupPage[group.value];
+                  const currentPageSize = groupPageSize[group.value];
+                  const currentTotal = groupTotalRecords[group.value];
+                  const currentTotalPages = groupTotalPages[group.value];
                   return (
                     <details key={group.value} className={`category-accordion ${CATEGORY_CLASS[group.value]}`}>
                       <summary>
                         <span className="cat-summary-left">
                           <span>{group.label}</span>
-                          <span className="cat-badge">{rows.length} items</span>
+                          <span className="cat-badge">{currentTotal} items</span>
                         </span>
                         <span className="cat-chevron">
                           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
@@ -556,6 +651,38 @@ export function AdminSetupPanel() {
                         </span>
                       </summary>
                       <div className="cat-items-container">
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                          <span style={{ color: "#64748b", fontSize: 12 }}>Page {currentPage} of {currentTotalPages}</span>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <label htmlFor={`as-page-size-${group.value}`} style={{ fontSize: 12, color: "#475569" }}>Page size</label>
+                            <select
+                              id={`as-page-size-${group.value}`}
+                              value={currentPageSize}
+                              onChange={(e) => void handleGroupPageSizeChange(group.value, Number(e.target.value))}
+                              style={{ ...fieldStyle(), width: 100 }}
+                            >
+                              {[5, 10, 25, 50].map((size) => (
+                                <option key={size} value={size}>{size}</option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              disabled={loading || currentPage <= 1}
+                              onClick={() => void handleGroupPageChange(group.value, Math.max(1, currentPage - 1))}
+                              style={buttonStyle("#64748b")}
+                            >
+                              Previous
+                            </button>
+                            <button
+                              type="button"
+                              disabled={loading || currentPage >= currentTotalPages}
+                              onClick={() => void handleGroupPageChange(group.value, Math.min(currentTotalPages, currentPage + 1))}
+                              style={buttonStyle("#0f766e")}
+                            >
+                              Next
+                            </button>
+                          </div>
+                        </div>
                         {rows.length === 0 ? (
                           <div className="cat-empty">No entries yet.</div>
                         ) : (
@@ -569,7 +696,7 @@ export function AdminSetupPanel() {
                                 <button type="button" className="icon-btn icon-btn-edit" onClick={() => edit(row)} title="Edit">
                                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                                 </button>
-                                <button type="button" className="icon-btn icon-btn-delete" disabled={busyId === row.id} onClick={() => void remove(row.id)} title="Delete">
+                                <button type="button" className="icon-btn icon-btn-delete" disabled={busyId === row.id} onClick={() => void remove(row)} title="Delete">
                                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
                                 </button>
                               </div>
@@ -583,8 +710,6 @@ export function AdminSetupPanel() {
               </div>
 
               {loading && <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading admin setups...</p>}
-              {error && <p style={{ marginTop: 10, color: "var(--warning)" }}>{error}</p>}
-              {success && <p style={{ marginTop: 10, color: "#0f766e" }}>{success}</p>}
             </div>
           </div>
         </div>

@@ -31,6 +31,45 @@ ALLOWED_POSTAL_DISPATCH_FILE_EXTENSIONS = {".pdf", ".doc", ".docx", ".jpg", ".jp
 MAX_POSTAL_DISPATCH_FILE_SIZE = 5 * 1024 * 1024
 
 
+def _current_school_id(context, instance=None):
+    request = context.get("request") if context else None
+    if request and getattr(request, "user", None):
+        user_school_id = getattr(request.user, "school_id", None)
+        if user_school_id:
+            return user_school_id
+        request_school = getattr(request, "school", None)
+        if request_school:
+            return getattr(request_school, "id", None)
+    if instance is not None:
+        return getattr(getattr(instance, "school", None), "id", None)
+    return None
+
+
+def _normalize_duplicate_phone(value, field_name="phone", required=False):
+    phone = str(value or "").strip()
+    if not phone:
+        if required:
+            raise serializers.ValidationError({field_name: "This field is required."})
+        return ""
+
+    phone = re.sub(r"[\s-]", "", phone)
+    if phone.startswith("+"):
+        phone = phone[1:]
+
+    if not re.fullmatch(r"\d{10,12}", phone):
+        raise serializers.ValidationError({field_name: "Phone number must be 10 to 12 digits."})
+
+    return phone
+
+
+def _validate_duplicate_entry(model, filters, instance=None, message="Record already exists"):
+    queryset = model.objects.filter(**filters)
+    if instance is not None:
+        queryset = queryset.exclude(id=instance.id)
+    if queryset.exists():
+        raise serializers.ValidationError(message)
+
+
 class AdmissionPincodeLookupQuerySerializer(serializers.Serializer):
     pincode = serializers.CharField()
 
@@ -54,12 +93,12 @@ def _normalize_phone(value, field_name, required=False):
             raise serializers.ValidationError({field_name: "This field is required."})
         return ""
 
-    if not phone.isdigit():
-        raise serializers.ValidationError({field_name: "Phone number must contain digits only."})
-    if len(phone) < 10 or len(phone) > 12:
-        raise serializers.ValidationError({field_name: "Phone number must be 10-12 digits"})
-    if not PHONE_PATTERN.match(phone):
-        raise serializers.ValidationError({field_name: "Enter a valid phone number."})
+    phone = re.sub(r"[\s-]", "", phone)
+    if phone.startswith("+"):
+        phone = phone[1:]
+
+    if not re.fullmatch(r"\d{10,12}", phone):
+        raise serializers.ValidationError({field_name: "Phone number must be 10 to 12 digits."})
 
     return phone
 
@@ -279,6 +318,40 @@ class AdmissionInquirySerializer(serializers.ModelSerializer):
         attrs["description"] = description
         attrs["note"] = note
         attrs["no_of_child"] = no_of_child
+
+        school_id = _current_school_id(self.context, self.instance)
+        if school_id:
+            class_value = incoming_or_instance("school_class", None)
+            class_id = getattr(class_value, "id", None)
+            if class_id is None and isinstance(class_value, (int, str)):
+                class_str = str(class_value).strip()
+                if class_str.isdigit():
+                    class_id = int(class_str)
+
+            request = self.context.get("request")
+            restrict_same_day_duplicates = True
+            if request is not None:
+                raw_flag = request.data.get("restrict_same_day_duplicates", None)
+                if raw_flag is None:
+                    raw_flag = request.query_params.get("restrict_same_day_duplicates", None)
+                if raw_flag is not None:
+                    restrict_same_day_duplicates = str(raw_flag).strip().lower() in {"1", "true", "yes", "on"}
+
+            duplicate_qs = AdmissionInquiry.objects.filter(
+                school_id=school_id,
+                full_name__iexact=full_name,
+                phone=phone,
+                school_class_id=class_id,
+                no_of_child=no_of_child,
+            )
+            if self.instance is not None:
+                duplicate_qs = duplicate_qs.exclude(id=self.instance.id)
+            if restrict_same_day_duplicates:
+                duplicate_qs = duplicate_qs.filter(created_at__date=timezone.localdate())
+
+            if duplicate_qs.exists():
+                raise serializers.ValidationError({"non_field_errors": ["This enquiry already exists"]})
+
         return super().validate(attrs)
 
 
@@ -452,7 +525,7 @@ class VisitorBookEntrySerializer(serializers.ModelSerializer):
             if self.instance:
                 queryset = queryset.exclude(id=self.instance.id)
             if queryset.exists():
-                raise serializers.ValidationError("Visitor already exists for the selected date and time")
+                raise serializers.ValidationError("Record already exists")
 
         # Prevent duplicate visitor_id within the same school
         visitor_id = attrs.get("visitor_id", getattr(self.instance, "visitor_id", None))
@@ -639,8 +712,6 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
             "phone",
             required=False,
         )
-        if phone and len(phone) < 10:
-            errors["phone"] = "Phone must be at least 10 digits."
 
         if errors:
             raise serializers.ValidationError(errors)
@@ -650,6 +721,22 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
         attrs["assigned"] = assigned
         attrs["description"] = description
         attrs["phone"] = phone
+
+        school_id = _current_school_id(self.context, self.instance)
+        if school_id:
+            duplicate_filters = {
+                "school_id": school_id,
+                "complaint_by__iexact": complaint_by,
+                "complaint_type__iexact": str(complaint_type_value or "").strip(),
+                "complaint_source__iexact": str(complaint_source_value or "").strip(),
+                "phone": phone,
+                "date": date_value,
+                "action_taken__iexact": action_taken,
+                "assigned__iexact": assigned,
+                "description__iexact": description,
+            }
+            _validate_duplicate_entry(ComplaintEntry, duplicate_filters, instance=self.instance)
+
         return super().validate(attrs)
 
     def get_file_url(self, obj):
@@ -728,6 +815,84 @@ class PostalReceiveEntrySerializer(serializers.ModelSerializer):
             validated_data["file"] = upload
         return super().update(instance, validated_data)
 
+    def validate(self, attrs):
+        errors = {}
+
+        def incoming_or_instance(field_name, default=""):
+            if field_name in attrs:
+                return attrs.get(field_name)
+            if self.instance is not None:
+                return getattr(self.instance, field_name, default)
+            return default
+
+        from_title = _sanitize_text(incoming_or_instance("from_title", ""))
+        reference_no = _sanitize_text(incoming_or_instance("reference_no", ""))
+        address = _sanitize_text(incoming_or_instance("address", ""))
+        note = _sanitize_text(incoming_or_instance("note", ""))
+        to_title = _sanitize_text(incoming_or_instance("to_title", ""))
+        receive_date = incoming_or_instance("date", None)
+
+        if not from_title:
+            errors["from_title"] = "From Title is required."
+        elif len(from_title) < 3:
+            errors["from_title"] = "From Title must be at least 3 characters."
+        elif not _is_meaningful_text(from_title):
+            errors["from_title"] = "Please enter a meaningful From Title."
+
+        if not reference_no:
+            errors["reference_no"] = "Reference No is required."
+        elif len(reference_no) < 3:
+            errors["reference_no"] = "Reference No must be at least 3 characters."
+        elif len(reference_no) > 20:
+            errors["reference_no"] = "Reference No must not exceed 20 characters."
+        elif not re.fullmatch(r"[A-Za-z0-9\-]+", reference_no):
+            errors["reference_no"] = "Reference No must be alphanumeric (letters, numbers, hyphens only)."
+
+        if not address:
+            errors["address"] = "Address is required."
+        elif len(address) < 5:
+            errors["address"] = "Address must be at least 5 characters."
+
+        if not to_title:
+            errors["to_title"] = "To Title is required."
+        elif len(to_title) < 3:
+            errors["to_title"] = "To Title must be at least 3 characters."
+        elif not _is_meaningful_text(to_title):
+            errors["to_title"] = "Please enter a meaningful To Title."
+
+        today = timezone.localdate()
+        min_allowed = today - timedelta(days=365)
+        if not receive_date:
+            errors["date"] = "Receive Date is required."
+        elif receive_date > today:
+            errors["date"] = "Receive Date cannot be in the future."
+        elif receive_date < min_allowed:
+            errors["date"] = "Receive Date cannot be older than 1 year."
+
+        if note and len(note) > 500:
+            errors["note"] = "Note must not exceed 500 characters."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        attrs["from_title"] = from_title
+        attrs["reference_no"] = reference_no
+        attrs["address"] = address
+        attrs["note"] = note
+        attrs["to_title"] = to_title
+
+        attrs = super().validate(attrs)
+
+        school_id = _current_school_id(self.context, self.instance)
+        if school_id and reference_no:
+            duplicate_filters = {
+                "school_id": school_id,
+                "reference_no__iexact": reference_no,
+            }
+            _validate_duplicate_entry(PostalReceiveEntry, duplicate_filters, instance=self.instance)
+
+        return attrs
+
 
 class PostalDispatchEntrySerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField(read_only=True)
@@ -767,7 +932,7 @@ class PostalDispatchEntrySerializer(serializers.ModelSerializer):
         url = obj.file.url
         return request.build_absolute_uri(url) if request else url
 
-    def validate(self, attrs):
+    def _validate_fields(self, attrs):
         errors = {}
 
         def incoming_or_instance(field_name, default=""):
@@ -796,6 +961,8 @@ class PostalDispatchEntrySerializer(serializers.ModelSerializer):
             errors["reference_no"] = "Reference No is required."
         elif len(reference_no) < 3:
             errors["reference_no"] = "Reference No must be at least 3 characters."
+        elif len(reference_no) > 20:
+            errors["reference_no"] = "Reference No must not exceed 20 characters."
         elif not re.fullmatch(r"[A-Za-z0-9\-]+", reference_no):
             errors["reference_no"] = "Reference No must be alphanumeric (letters, numbers, hyphens only)."
 
@@ -839,7 +1006,7 @@ class PostalDispatchEntrySerializer(serializers.ModelSerializer):
         attrs["address"] = address
         attrs["from_title"] = from_title
         attrs["note"] = note
-        return super().validate(attrs)
+        return attrs
 
     def create(self, validated_data):
         upload = validated_data.pop("file_upload", None)
@@ -852,6 +1019,21 @@ class PostalDispatchEntrySerializer(serializers.ModelSerializer):
         if upload is not None:
             validated_data["file"] = upload
         return super().update(instance, validated_data)
+
+    def validate(self, attrs):
+        attrs = self._validate_fields(attrs)
+        attrs = super().validate(attrs)
+
+        school_id = _current_school_id(self.context, self.instance)
+        if school_id:
+            reference_no = _sanitize_text(attrs.get("reference_no", getattr(self.instance, "reference_no", "")))
+            duplicate_filters = {
+                "school_id": school_id,
+                "reference_no__iexact": reference_no,
+            }
+            _validate_duplicate_entry(PostalDispatchEntry, duplicate_filters, instance=self.instance)
+
+        return attrs
 
 
 class PhoneCallLogEntrySerializer(serializers.ModelSerializer):
@@ -944,6 +1126,21 @@ class PhoneCallLogEntrySerializer(serializers.ModelSerializer):
         attrs["call_duration"] = call_duration
         attrs["call_type"] = call_type
         attrs["phone"] = phone
+
+        school_id = _current_school_id(self.context, self.instance)
+        if school_id:
+            duplicate_filters = {
+                "school_id": school_id,
+                "name__iexact": caller_name,
+                "phone": phone,
+                "date": from_date,
+                "next_follow_up_date": to_date,
+                "call_duration": call_duration,
+                "description__iexact": description,
+                "call_type": call_type,
+            }
+            _validate_duplicate_entry(PhoneCallLogEntry, duplicate_filters, instance=self.instance)
+
         return super().validate(attrs)
 
 
@@ -1000,9 +1197,7 @@ class AdminSetupEntrySerializer(serializers.ModelSerializer):
             if self.instance:
                 duplicate_qs = duplicate_qs.exclude(id=self.instance.id)
             if duplicate_qs.exists():
-                raise serializers.ValidationError(
-                    {"name": f"An entry with this name already exists for type '{setup_type}'."}
-                )
+                raise serializers.ValidationError({"name": "Record already exists"})
 
         return super().validate(attrs)
 
@@ -1101,6 +1296,30 @@ class IdCardTemplateSerializer(serializers.ModelSerializer):
 
     def get_signature_url(self, obj):
         return self._file_url(obj.signature)
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        title = str(attrs.get("title", getattr(self.instance, "title", "")) or "").strip()
+        layout = str(attrs.get("page_layout_style", getattr(self.instance, "page_layout_style", "")) or "").strip()
+        if title:
+            attrs["title"] = title
+
+        school_id = _current_school_id(self.context, self.instance)
+        if school_id and title and layout:
+            duplicate_filters = {
+                "school_id": school_id,
+                "title__iexact": title,
+                "page_layout_style": layout,
+            }
+            _validate_duplicate_entry(
+                IdCardTemplate,
+                duplicate_filters,
+                instance=self.instance,
+                message="ID Card with this title and layout already exists",
+            )
+
+        return attrs
 
     def create(self, validated_data):
         raw_roles = validated_data.get("applicable_role_ids")
@@ -1202,6 +1421,22 @@ class CertificateTemplateSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         url = obj.background_image.url
         return request.build_absolute_uri(url) if request else url
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        title = str(attrs.get("title", getattr(self.instance, "title", "")) or "").strip()
+        if title:
+            attrs["title"] = title
+
+        school_id = _current_school_id(self.context, self.instance)
+        if school_id and title:
+            duplicate_filters = {
+                "school_id": school_id,
+                "title__iexact": title,
+            }
+            _validate_duplicate_entry(CertificateTemplate, duplicate_filters, instance=self.instance)
+
+        return attrs
 
     def create(self, validated_data):
         bg = validated_data.pop("background_upload", None)

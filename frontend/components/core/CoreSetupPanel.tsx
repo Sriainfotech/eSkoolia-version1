@@ -10,6 +10,7 @@ type Section = { id: number; school_class: number; name: string; capacity: numbe
 type Subject = { id: number; name: string; code: string; subject_type: string };
 
 type ApiList<T> = T[] | { results?: T[]; next?: string | null };
+const CORE_PAGE_SIZE_OPTIONS = [5, 10, 20, 50] as const;
 
 type Tab = "years" | "classes" | "sections" | "subjects";
 
@@ -132,6 +133,8 @@ function extractAcademicYearFieldErrors(details: unknown): { name?: string; star
 // ─── Academic Years ──────────────────────────────────────────────────────────
 function AcademicYearsSection() {
   const [items, setItems] = useState<AcademicYear[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(10);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [name, setName] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -247,6 +250,16 @@ function AcademicYearsSection() {
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const pagedItems = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, currentPage, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
+
   return (
     <div>
       {isEditMode ? <p style={{ margin: "0 0 10px", color: "#0f766e", fontSize: 13, fontWeight: 600 }}>Edit mode active for selected academic year.</p> : null}
@@ -276,7 +289,7 @@ function AcademicYearsSection() {
         <thead><tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
           {["Name", "Start", "End", "Current", "Actions"].map(h => <th key={h} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13 }}>{h}</th>)}
         </tr></thead>
-        <tbody>{items.map(y => (
+        <tbody>{pagedItems.map(y => (
           <tr key={y.id}>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{y.name}</td>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13, color: "var(--text-muted)" }}>{formatDisplayDate(y.start_date)}</td>
@@ -289,20 +302,38 @@ function AcademicYearsSection() {
           </tr>
         ))}</tbody>
       </table>
+      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Page {currentPage} of {totalPages} | Total {items.length}</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-muted)" }}>
+            Page size
+            <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }} style={{ height: 34, border: "1px solid var(--line)", borderRadius: 8, padding: "0 8px" }}>
+              {CORE_PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))} disabled={currentPage <= 1} style={{ height: 32, padding: "0 12px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: currentPage <= 1 ? "not-allowed" : "pointer" }}>Previous</button>
+          <button type="button" onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))} disabled={currentPage >= totalPages} style={{ height: 32, padding: "0 12px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: currentPage >= totalPages ? "not-allowed" : "pointer" }}>Next</button>
+        </div>
+      </div>
     </div>
   );
 }
 
 // ─── Classes ─────────────────────────────────────────────────────────────────
+const CLASS_NAME_REGEX = /^[A-Za-z0-9 \-]+$/;
+const CLASS_DEFAULT_ORDER = 1000;
+
 function ClassesSection() {
   const [items, setItems] = useState<SchoolClass[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(10);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<SchoolClass | null>(null);
   const [name, setName] = useState("");
-  const [order, setOrder] = useState("0");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string }>({});
   const isEditMode = editingId !== null;
 
   const classErrorMessage = (err: unknown, fallback: string) => {
@@ -318,6 +349,33 @@ function ClassesSection() {
     return fallback;
   };
 
+  const classLabelStyle = {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--text-muted)",
+    marginBottom: 6,
+    display: "block",
+  } as const;
+
+  const classFieldStyle = {
+    width: "100%",
+    height: 38,
+    border: "1px solid var(--line)",
+    borderRadius: 8,
+    padding: "0 12px",
+    fontSize: 13,
+    background: "#fff",
+    boxSizing: "border-box" as const,
+  };
+
+  const classErrorStyle = {
+    display: "block",
+    minHeight: 16,
+    fontSize: 12,
+    color: "#dc2626",
+    marginTop: 4,
+  } as const;
+
   const load = async () => {
     try {
       const data = await fetchAllPages<SchoolClass>("/api/v1/core/classes/?page_size=100");
@@ -328,18 +386,39 @@ function ClassesSection() {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) { setError("Class name is required."); return; }
-    const parsedOrder = parseInt(order, 10) || 0;
-    if (parsedOrder < 0) { setError("Order must be zero or greater."); return; }
+    const trimmedName = name.trim();
+    const nextErrors: { name?: string } = {};
+
+    if (!trimmedName) {
+      nextErrors.name = "Class name is required.";
+    } else if (trimmedName.length < 1 || trimmedName.length > 50) {
+      nextErrors.name = "Class name must be between 1 and 50 characters.";
+    } else if (!CLASS_NAME_REGEX.test(trimmedName)) {
+      nextErrors.name = "Only letters, numbers, spaces and hyphens are allowed.";
+    } else if (!editingId && items.some((row) => (row.name || "").trim().toLowerCase() === trimmedName.toLowerCase())) {
+      nextErrors.name = "Class name already exists.";
+    }
+
+    if (Object.keys(nextErrors).length) {
+      setFieldErrors(nextErrors);
+      setError(nextErrors.name || "Please correct highlighted fields.");
+      setSuccess("");
+      return;
+    }
+
     try {
-      setSaving(true); setError(""); setSuccess("");
-      const payload = { name: name.trim(), numeric_order: parsedOrder };
+      setSaving(true); setError(""); setSuccess(""); setFieldErrors({});
+      const payload = { name: trimmedName, numeric_order: CLASS_DEFAULT_ORDER };
       await apiFetch(
         editingId ? `/api/v1/core/classes/${editingId}/` : "/api/v1/core/classes/",
         { method: editingId ? "PATCH" : "POST", body: JSON.stringify(payload) }
       );
-      setName(""); setOrder("0"); setEditingId(null);
-      setSuccess(editingId ? "Class updated successfully." : "Class added successfully.");
+      const wasEditing = editingId;
+      setName(""); setEditingId(null);
+      setSuccess(wasEditing ? "Class updated successfully." : "Class added successfully.");
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
       await load();
     } catch (err) {
       setError(classErrorMessage(err, editingId ? "Failed to update class." : "Failed to create class."));
@@ -349,9 +428,9 @@ function ClassesSection() {
   const edit = (row: SchoolClass) => {
     setEditingId(row.id);
     setName(row.name || "");
-    setOrder(String(row.numeric_order || 0));
     setError("");
     setSuccess("");
+    setFieldErrors({});
     window.requestAnimationFrame(() => {
       window.scrollTo({ top: 0, behavior: "smooth" });
     });
@@ -360,46 +439,88 @@ function ClassesSection() {
   const reset = () => {
     setEditingId(null);
     setName("");
-    setOrder("0");
     setError("");
     setSuccess("");
+    setFieldErrors({});
   };
 
-  const remove = async (id: number) => {
+  const remove = async (row: SchoolClass) => {
     try {
       setError("");
-      await apiFetch(`/api/v1/core/classes/${id}/`, { method: "DELETE" });
-      if (editingId === id) reset();
+      setSuccess("");
+      await apiFetch(`/api/v1/core/classes/${row.id}/`, { method: "DELETE" });
+      if (editingId === row.id) reset();
+      setSuccess(`Class "${row.name}" deleted successfully.`);
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
       await load();
     } catch {
       setError("Failed to delete class.");
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const pagedItems = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, currentPage, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
+
   return (
     <div>
-      {isEditMode ? <p style={{ margin: "0 0 10px", color: "#0f766e", fontSize: 13, fontWeight: 600 }}>Edit mode active for selected class.</p> : null}
-      <form onSubmit={submit} style={{ display: "flex", gap: 8, marginBottom: 14, alignItems: "end" }}>
-        <div style={{ flex: 1 }}><label style={{ fontSize: 12, color: "var(--text-muted)" }}>Class Name</label><input required value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Grade 1" style={{ display: "block", width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 8, padding: "0 10px", marginTop: 4 }} /></div>
-        <div style={{ width: 140 }}>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Order</label>
-          <input type="number" min={0} value={order} onChange={e => setOrder(e.target.value)} style={{ display: "block", width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 8, padding: "0 10px", marginTop: 4 }} />
-          <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>Order defines display sequence of classes</span>
+      {success && (
+        <div role="status" aria-live="polite" style={{ marginBottom: 12, padding: "10px 14px", border: "1px solid #86efac", background: "#f0fdf4", color: "#166534", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden>✓</span>
+          <span>{success}</span>
         </div>
-        <button type="submit" disabled={saving} style={{ height: 36, padding: "0 14px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", alignSelf: "flex-end" }}>{saving ? "…" : isEditMode ? "Update" : "Add"}</button>
-        {isEditMode ? <button type="button" onClick={reset} style={{ height: 36, padding: "0 14px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", alignSelf: "flex-end" }}>Cancel</button> : null}
+      )}
+      {error && (
+        <div role="alert" style={{ marginBottom: 12, padding: "10px 14px", border: "1px solid #fca5a5", background: "#fef2f2", color: "#991b1b", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden>!</span>
+          <span>{error}</span>
+        </div>
+      )}
+      {isEditMode ? <p style={{ margin: "0 0 10px", color: "#0f766e", fontSize: 13, fontWeight: 600 }}>Edit mode active for selected class.</p> : null}
+      <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 14, alignItems: "start" }}>
+        <div>
+          <label style={classLabelStyle}>Class *</label>
+          <input
+            required
+            value={name}
+            onChange={e => {
+              const nextValue = e.target.value;
+              setName(nextValue);
+              setFieldErrors((prev) => ({
+                ...prev,
+                name: nextValue && !CLASS_NAME_REGEX.test(nextValue.trim())
+                  ? "Only letters, numbers, spaces and hyphens are allowed."
+                  : undefined,
+              }));
+            }}
+            onBlur={() => setName((prev) => prev.replace(/\s+/g, " ").trim() === "" ? prev : prev.replace(/\s+/g, " "))}
+            placeholder="e.g. Grade 1"
+            maxLength={50}
+            style={{ ...classFieldStyle, borderColor: fieldErrors.name ? "#dc2626" : "var(--line)" }}
+          />
+          <span style={classErrorStyle}>{fieldErrors.name || ""}</span>
+        </div>
+        <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+          <button type="submit" disabled={saving} style={{ height: 36, padding: "0 14px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>{saving ? "Saving..." : isEditMode ? "Update" : "Add"}</button>
+          {isEditMode ? <button type="button" onClick={reset} style={{ height: 36, padding: "0 14px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>Cancel</button> : null}
+        </div>
       </form>
-      {error && <p style={{ color: "var(--warning)", fontSize: 13, marginBottom: 8 }}>{error}</p>}
-      {success && <p style={{ color: "#16a34a", fontSize: 13, marginBottom: 8 }}>{success}</p>}
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
-          {["Class", "Sections", "Order", "Actions"].map(h => <th key={h} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13 }}>{h}</th>)}
+          {["Class", "Sections", "Actions"].map(h => <th key={h} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13 }}>{h}</th>)}
         </tr></thead>
-        <tbody>{items.map(c => (
+        <tbody>{pagedItems.map(c => (
           <tr key={c.id}>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{c.name}</td>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13, color: "var(--text-muted)" }}>{(c.sections || []).map(s => s.name).join(", ") || "—"}</td>
-            <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13, color: "var(--text-muted)" }}>{c.numeric_order}</td>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", display: "flex", gap: 6 }}>
               <button type="button" onClick={() => edit(c)} style={{ height: 28, padding: "0 10px", background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Edit</button>
               <button type="button" onClick={() => setDeleteCandidate(c)} style={{ height: 28, padding: "0 10px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Delete</button>
@@ -407,6 +528,19 @@ function ClassesSection() {
           </tr>
         ))}</tbody>
       </table>
+      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Page {currentPage} of {totalPages} | Total {items.length}</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-muted)" }}>
+            Page size
+            <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }} style={{ height: 34, border: "1px solid var(--line)", borderRadius: 8, padding: "0 8px" }}>
+              {CORE_PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))} disabled={currentPage <= 1} style={{ height: 32, padding: "0 12px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: currentPage <= 1 ? "not-allowed" : "pointer" }}>Previous</button>
+          <button type="button" onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))} disabled={currentPage >= totalPages} style={{ height: 32, padding: "0 12px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: currentPage >= totalPages ? "not-allowed" : "pointer" }}>Next</button>
+        </div>
+      </div>
 
       {deleteCandidate ? (
         <div
@@ -432,7 +566,7 @@ function ClassesSection() {
           >
             <h3 style={{ margin: 0, fontSize: 18 }}>Delete Class</h3>
             <p style={{ marginTop: 10, marginBottom: 14, color: "var(--text-muted)" }}>
-              Delete class &quot;{deleteCandidate.name}&quot;?
+              Are you sure you want to delete this class?
             </p>
             <div style={{ marginBottom: 14, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--surface-muted)" }}>
               <strong>{deleteCandidate.name}</strong>
@@ -443,7 +577,7 @@ function ClassesSection() {
                 onClick={() => setDeleteCandidate(null)}
                 style={{ height: 36, padding: "0 14px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}
               >
-                No
+                Cancel
               </button>
               <button
                 type="button"
@@ -451,12 +585,12 @@ function ClassesSection() {
                   const target = deleteCandidate;
                   setDeleteCandidate(null);
                   if (target) {
-                    void remove(target.id);
+                    void remove(target);
                   }
                 }}
                 style={{ height: 36, padding: "0 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}
               >
-                Yes
+                Delete
               </button>
             </div>
           </div>
@@ -469,6 +603,8 @@ function ClassesSection() {
 // ─── Subjects ─────────────────────────────────────────────────────────────────
 function SubjectsSection() {
   const [items, setItems] = useState<Subject[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(10);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
@@ -479,7 +615,36 @@ function SubjectsSection() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ name?: string; code?: string; subject_type?: string }>({});
+  const [deleteCandidate, setDeleteCandidate] = useState<Subject | null>(null);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const isEditMode = editingId !== null;
+
+  const subjectLabelStyle = {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--text-muted)",
+    marginBottom: 6,
+    display: "block",
+  } as const;
+
+  const subjectFieldStyle = {
+    width: "100%",
+    height: 38,
+    border: "1px solid var(--line)",
+    borderRadius: 8,
+    padding: "0 12px",
+    fontSize: 13,
+    background: "#fff",
+    boxSizing: "border-box" as const,
+  };
+
+  const subjectErrorStyle = {
+    display: "block",
+    minHeight: 16,
+    fontSize: 12,
+    color: "#dc2626",
+    marginTop: 4,
+  } as const;
 
   const load = async () => {
     try {
@@ -579,12 +744,16 @@ function SubjectsSection() {
   };
 
   const remove = async (row: Subject) => {
-    if (!window.confirm(`Delete subject: ${row.name}?`)) return;
     try {
       setError("");
+      setSuccess("");
       await apiFetch(`/api/v1/core/subjects/${row.id}/`, { method: "DELETE" });
       setSelectedIds((prev) => prev.filter((entry) => entry !== row.id));
       if (editingId === row.id) reset();
+      setSuccess(`Subject "${row.name}" deleted successfully.`);
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
       await load();
     } catch {
       setError("Failed to delete subject.");
@@ -600,31 +769,58 @@ function SubjectsSection() {
       setError("Select at least one subject to delete.");
       return;
     }
-    if (!window.confirm(`Delete ${selectedIds.length} selected subject(s)?`)) return;
     try {
       setBulkDeleting(true);
       setError("");
       setSuccess("");
+      const count = selectedIds.length;
       await Promise.all(selectedIds.map((id) => apiFetch(`/api/v1/core/subjects/${id}/`, { method: "DELETE" })));
+      const removed = [...selectedIds];
       setSelectedIds([]);
-      if (editingId && selectedIds.includes(editingId)) {
+      if (editingId && removed.includes(editingId)) {
         reset();
       }
-      setSuccess("Selected subjects deleted successfully.");
+      setSuccess(`${count} subject${count === 1 ? "" : "s"} deleted successfully.`);
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
       await load();
     } catch {
       setError("Failed to delete selected subjects.");
     } finally {
       setBulkDeleting(false);
+      setBulkDeleteOpen(false);
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const pagedItems = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, currentPage, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
+
   return (
     <div>
+      {success && (
+        <div role="status" aria-live="polite" style={{ marginBottom: 12, padding: "10px 14px", border: "1px solid #86efac", background: "#f0fdf4", color: "#166534", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden>✓</span>
+          <span>{success}</span>
+        </div>
+      )}
+      {error && (
+        <div role="alert" style={{ marginBottom: 12, padding: "10px 14px", border: "1px solid #fca5a5", background: "#fef2f2", color: "#991b1b", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden>!</span>
+          <span>{error}</span>
+        </div>
+      )}
       {isEditMode ? <p style={{ margin: "0 0 10px", color: "#0f766e", fontSize: 13, fontWeight: 600 }}>Edit mode active for selected subject.</p> : null}
-      <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) 130px 150px auto auto", gap: 8, marginBottom: 14, alignItems: "end" }}>
+      <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 14, alignItems: "start" }}>
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Subject Name</label>
+          <label style={subjectLabelStyle}>Subject Name *</label>
           <input
             required
             value={name}
@@ -633,12 +829,12 @@ function SubjectsSection() {
               setFieldErrors((prev) => ({ ...prev, name: undefined }));
             }}
             placeholder="e.g. Mathematics"
-            style={{ display: "block", width: "100%", height: 36, border: `1px solid ${fieldErrors.name ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px", marginTop: 4 }}
+            style={{ ...subjectFieldStyle, borderColor: fieldErrors.name ? "#dc2626" : "var(--line)" }}
           />
-          <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.name || ""}</span>
+          <span style={subjectErrorStyle}>{fieldErrors.name || ""}</span>
         </div>
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Code</label>
+          <label style={subjectLabelStyle}>Code *</label>
           <input
             required
             value={code}
@@ -647,12 +843,12 @@ function SubjectsSection() {
               setFieldErrors((prev) => ({ ...prev, code: undefined }));
             }}
             placeholder="MATH"
-            style={{ display: "block", width: "100%", height: 36, border: `1px solid ${fieldErrors.code ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px", marginTop: 4 }}
+            style={{ ...subjectFieldStyle, borderColor: fieldErrors.code ? "#dc2626" : "var(--line)" }}
           />
-          <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.code || ""}</span>
+          <span style={subjectErrorStyle}>{fieldErrors.code || ""}</span>
         </div>
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Type</label>
+          <label style={subjectLabelStyle}>Type *</label>
           <select
             required
             value={subjectType}
@@ -660,29 +856,29 @@ function SubjectsSection() {
               setSubjectType(e.target.value);
               setFieldErrors((prev) => ({ ...prev, subject_type: undefined }));
             }}
-            style={{ display: "block", width: "100%", height: 36, border: `1px solid ${fieldErrors.subject_type ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 8px", marginTop: 4 }}
+            style={{ ...subjectFieldStyle, borderColor: fieldErrors.subject_type ? "#dc2626" : "var(--line)" }}
           >
             <option value="compulsory">Compulsory</option>
             <option value="optional">Optional</option>
             <option value="elective">Elective</option>
           </select>
-          <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.subject_type || ""}</span>
+          <span style={subjectErrorStyle}>{fieldErrors.subject_type || ""}</span>
         </div>
-        <button type="submit" disabled={saving} style={{ height: 36, padding: "0 14px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", alignSelf: "end", opacity: saving ? 0.85 : 1 }}>{saving ? "Saving..." : isEditMode ? "Update" : "Add"}</button>
-        {isEditMode ? <button type="button" onClick={reset} style={{ height: 36, padding: "0 14px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", alignSelf: "end" }}>Cancel</button> : null}
+        <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+          <button type="submit" disabled={saving} style={{ height: 36, padding: "0 14px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", opacity: saving ? 0.85 : 1 }}>{saving ? "Saving..." : isEditMode ? "Update" : "Add"}</button>
+          {isEditMode ? <button type="button" onClick={reset} style={{ height: 36, padding: "0 14px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>Cancel</button> : null}
+        </div>
       </form>
       <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-        <button type="button" onClick={() => void deleteSelected()} disabled={!selectedIds.length || bulkDeleting} style={{ height: 32, padding: "0 12px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: selectedIds.length && !bulkDeleting ? "pointer" : "not-allowed", opacity: selectedIds.length && !bulkDeleting ? 1 : 0.6 }}>
+        <button type="button" onClick={() => { if (!selectedIds.length) { setError("Select at least one subject to delete."); return; } setBulkDeleteOpen(true); }} disabled={!selectedIds.length || bulkDeleting} style={{ height: 32, padding: "0 12px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: selectedIds.length && !bulkDeleting ? "pointer" : "not-allowed", opacity: selectedIds.length && !bulkDeleting ? 1 : 0.6 }}>
           {bulkDeleting ? "Deleting..." : "Delete Selected"}
         </button>
       </div>
-      {error && <p style={{ color: "var(--warning)", fontSize: 13, marginBottom: 8 }}>{error}</p>}
-      {success && <p style={{ color: "#16a34a", fontSize: 13, marginBottom: 8 }}>{success}</p>}
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
-          {["Select", "Name", "Code", "Type", "Actions"].map(h => <th key={h} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13 }}>{h}</th>)}
+          {["Select", "Subject Name", "Code", "Type", "Actions"].map(h => <th key={h} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13 }}>{h}</th>)}
         </tr></thead>
-        <tbody>{items.map(s => (
+        <tbody>{pagedItems.map(s => (
           <tr key={s.id}>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", width: 48 }}><input type="checkbox" checked={selectedIds.includes(s.id)} onChange={() => toggleSelect(s.id)} /></td>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{s.name}</td>
@@ -690,11 +886,68 @@ function SubjectsSection() {
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13, textTransform: "capitalize" }}>{s.subject_type}</td>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", display: "flex", gap: 6 }}>
               <button type="button" onClick={() => edit(s)} style={{ height: 28, padding: "0 10px", background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Edit</button>
-              <button type="button" onClick={() => void remove(s)} style={{ height: 28, padding: "0 10px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Delete</button>
+              <button type="button" onClick={() => setDeleteCandidate(s)} style={{ height: 28, padding: "0 10px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Delete</button>
             </td>
           </tr>
         ))}</tbody>
       </table>
+      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Page {currentPage} of {totalPages} | Total {items.length}</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-muted)" }}>
+            Page size
+            <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }} style={{ height: 34, border: "1px solid var(--line)", borderRadius: 8, padding: "0 8px" }}>
+              {CORE_PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))} disabled={currentPage <= 1} style={{ height: 32, padding: "0 12px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: currentPage <= 1 ? "not-allowed" : "pointer" }}>Previous</button>
+          <button type="button" onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))} disabled={currentPage >= totalPages} style={{ height: 32, padding: "0 12px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: currentPage >= totalPages ? "not-allowed" : "pointer" }}>Next</button>
+        </div>
+      </div>
+
+      {deleteCandidate ? (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ width: "min(480px, calc(100vw - 24px))", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 12, padding: 16, boxShadow: "0 12px 30px rgba(0,0,0,.18)" }}>
+            <h3 style={{ margin: 0, fontSize: 18 }}>Delete Subject</h3>
+            <p style={{ marginTop: 10, marginBottom: 14, color: "var(--text-muted)" }}>Are you sure you want to delete this subject?</p>
+            <div style={{ marginBottom: 14, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--surface-muted)" }}>
+              <strong>{deleteCandidate.name}</strong>
+              {deleteCandidate.code ? <span style={{ marginLeft: 8, color: "var(--text-muted)", fontSize: 13 }}>({deleteCandidate.code})</span> : null}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={() => setDeleteCandidate(null)} style={{ height: 36, padding: "0 14px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = deleteCandidate;
+                  setDeleteCandidate(null);
+                  if (target) void remove(target);
+                }}
+                style={{ height: 36, padding: "0 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {bulkDeleteOpen ? (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ width: "min(480px, calc(100vw - 24px))", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 12, padding: 16, boxShadow: "0 12px 30px rgba(0,0,0,.18)" }}>
+            <h3 style={{ margin: 0, fontSize: 18 }}>Delete Subjects</h3>
+            <p style={{ marginTop: 10, marginBottom: 14, color: "var(--text-muted)" }}>
+              Are you sure you want to delete {selectedIds.length} selected subject{selectedIds.length === 1 ? "" : "s"}?
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={() => setBulkDeleteOpen(false)} disabled={bulkDeleting} style={{ height: 36, padding: "0 14px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: bulkDeleting ? "not-allowed" : "pointer" }}>Cancel</button>
+              <button type="button" onClick={() => void deleteSelected()} disabled={bulkDeleting} style={{ height: 36, padding: "0 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: bulkDeleting ? "not-allowed" : "pointer" }}>
+                {bulkDeleting ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -708,13 +961,17 @@ const SECTION_MAX_PER_CLASS = 26;
 function SectionsSection() {
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [items, setItems] = useState<Section[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(10);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [schoolClassId, setSchoolClassId] = useState("");
   const [name, setName] = useState("");
   const [capacity, setCapacity] = useState("40");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{ school_class?: string; name?: string; capacity?: string }>({});
+  const [deleteCandidate, setDeleteCandidate] = useState<Section | null>(null);
   const isEditMode = editingId !== null;
 
   const classSectionCount = useMemo(() => {
@@ -774,6 +1031,7 @@ function SectionsSection() {
     try {
       setSaving(true);
       setError("");
+      setSuccess("");
       setFieldErrors({});
       const payload = {
         school_class: Number(schoolClassId),
@@ -786,11 +1044,22 @@ function SectionsSection() {
           ...payload,
         }),
       });
+      const wasEditing = editingId;
       setName("");
-      if (editingId) {
+      if (wasEditing) {
         setSchoolClassId("");
       }
       setEditingId(null);
+      setSuccess(
+        wasEditing
+          ? "Section updated successfully"
+          : names.length > 1
+            ? `${names.length} sections added successfully`
+            : "Section added successfully",
+      );
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
       await load();
     } catch (e) {
       const message = e instanceof Error ? e.message : "Failed to create section.";
@@ -820,6 +1089,11 @@ function SectionsSection() {
     setName(row.name || "");
     setCapacity(String(row.capacity ?? 40));
     setFieldErrors({});
+    setError("");
+    setSuccess("");
+    window.requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
   };
 
   const reset = () => {
@@ -828,53 +1102,108 @@ function SectionsSection() {
     setName("");
     setCapacity("40");
     setFieldErrors({});
+    setError("");
+    setSuccess("");
   };
 
   const remove = async (row: Section) => {
-    const className = classes.find((entry) => entry.id === row.school_class)?.name || `Class ${row.school_class}`;
-    if (!window.confirm(`Delete section \"${row.name}\" from ${className}?`)) return;
     try {
       setError("");
+      setSuccess("");
       await apiFetch(`/api/v1/core/sections/${row.id}/`, { method: "DELETE" });
       if (editingId === row.id) reset();
+      setSuccess(`Section "${row.name}" deleted successfully.`);
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
       await load();
     } catch {
       setError("Failed to delete section.");
     }
   };
 
+  const sectionLabelStyle = {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "var(--text-muted)",
+    marginBottom: 6,
+    display: "block",
+  } as const;
+
+  const sectionFieldStyle = {
+    width: "100%",
+    height: 38,
+    border: "1px solid var(--line)",
+    borderRadius: 8,
+    padding: "0 12px",
+    fontSize: 13,
+    background: "#fff",
+    boxSizing: "border-box" as const,
+  };
+
+  const sectionErrorStyle = {
+    display: "block",
+    minHeight: 16,
+    fontSize: 12,
+    color: "#dc2626",
+    marginTop: 4,
+  } as const;
+
+  const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+  const pagedItems = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return items.slice(start, start + pageSize);
+  }, [items, currentPage, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage((prev) => Math.min(prev, totalPages));
+  }, [totalPages]);
+
   return (
     <div>
+      {success && (
+        <div role="status" aria-live="polite" style={{ marginBottom: 12, padding: "10px 14px", border: "1px solid #86efac", background: "#f0fdf4", color: "#166534", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden>✓</span>
+          <span>{success}</span>
+        </div>
+      )}
+      {error && (
+        <div role="alert" style={{ marginBottom: 12, padding: "10px 14px", border: "1px solid #fca5a5", background: "#fef2f2", color: "#991b1b", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden>!</span>
+          <span>{error}</span>
+        </div>
+      )}
       {isEditMode ? <p style={{ margin: "0 0 10px", color: "#0f766e", fontSize: 13, fontWeight: 600 }}>Edit mode active for selected section.</p> : null}
-      <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) minmax(220px, 1fr) 120px auto auto", gap: 8, marginBottom: 8, alignItems: "end" }}>
+      <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 8, alignItems: "start" }}>
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Class</label>
-          <select required value={schoolClassId} onChange={(e) => { setSchoolClassId(e.target.value); setFieldErrors((prev) => ({ ...prev, school_class: undefined, name: undefined })); }} style={{ display: "block", width: "100%", height: 36, border: `1px solid ${fieldErrors.school_class ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px", marginTop: 4 }}>
+          <label style={sectionLabelStyle}>Class *</label>
+          <select required value={schoolClassId} onChange={(e) => { setSchoolClassId(e.target.value); setFieldErrors((prev) => ({ ...prev, school_class: undefined, name: undefined })); }} style={{ ...sectionFieldStyle, borderColor: fieldErrors.school_class ? "#dc2626" : "var(--line)" }}>
             <option value="">Select class</option>
             {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.school_class || ""}</span>
+          <span style={sectionErrorStyle}>{fieldErrors.school_class || ""}</span>
         </div>
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Section Name</label>
-          <input required value={name} onChange={e => { setName(e.target.value); setFieldErrors((prev) => ({ ...prev, name: undefined })); }} placeholder="e.g. A or A,B,C" style={{ display: "block", width: "100%", height: 36, border: `1px solid ${fieldErrors.name ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px", marginTop: 4 }} />
-          <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.name || ""}</span>
+          <label style={sectionLabelStyle}>Section Name *</label>
+          <input required value={name} onChange={e => { setName(e.target.value); setFieldErrors((prev) => ({ ...prev, name: undefined })); }} placeholder="e.g. A or A,B,C" style={{ ...sectionFieldStyle, borderColor: fieldErrors.name ? "#dc2626" : "var(--line)" }} />
+          <span style={sectionErrorStyle}>{fieldErrors.name || ""}</span>
         </div>
         <div>
-          <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Capacity</label>
-          <input type="number" min={SECTION_MIN_CAPACITY} max={SECTION_MAX_CAPACITY} value={capacity} onChange={e => { setCapacity(e.target.value); setFieldErrors((prev) => ({ ...prev, capacity: undefined })); }} style={{ display: "block", width: "100%", height: 36, border: `1px solid ${fieldErrors.capacity ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: "0 10px", marginTop: 4 }} />
-          <span style={{ display: "block", minHeight: 16, fontSize: 12, color: "#dc2626" }}>{fieldErrors.capacity || ""}</span>
+          <label style={sectionLabelStyle}>Capacity *</label>
+          <input type="text" inputMode="numeric" pattern="[0-9]*" min={SECTION_MIN_CAPACITY} max={SECTION_MAX_CAPACITY} value={capacity} onChange={e => { setCapacity(e.target.value.replace(/[^0-9]/g, "")); setFieldErrors((prev) => ({ ...prev, capacity: undefined })); }} style={{ ...sectionFieldStyle, borderColor: fieldErrors.capacity ? "#dc2626" : "var(--line)" }} />
+          <span style={sectionErrorStyle}>{fieldErrors.capacity || ""}</span>
         </div>
-        <button type="submit" disabled={saving} style={{ height: 36, padding: "0 14px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", alignSelf: "flex-end" }}>{saving ? "…" : isEditMode ? "Update" : "Add"}</button>
-        {isEditMode ? <button type="button" onClick={reset} style={{ height: 36, padding: "0 14px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", alignSelf: "flex-end" }}>Cancel</button> : <span />}
+        <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+          <button type="submit" disabled={saving} style={{ height: 36, padding: "0 14px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>{saving ? "…" : isEditMode ? "Update" : "Add"}</button>
+          {isEditMode ? <button type="button" onClick={reset} style={{ height: 36, padding: "0 14px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>Cancel</button> : null}
+        </div>
       </form>
       <p style={{ marginTop: 0, marginBottom: 10, fontSize: 11, color: "var(--text-muted)" }}>Use comma to add multiple sections in one go. Class and capacity stay selected after save for quick repeat add.</p>
-      {error && <p style={{ color: "var(--warning)", fontSize: 13, marginBottom: 8 }}>{error}</p>}
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
-          {"Class,Section,Capacity,Actions".split(",").map(h => <th key={h} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13 }}>{h}</th>)}
+          {["Class", "Section Name", "Capacity", "Actions"].map(h => <th key={h} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13 }}>{h}</th>)}
         </tr></thead>
-        <tbody>{items.map(s => {
+        <tbody>{pagedItems.map(s => {
           const schoolClass = classes.find((c) => c.id === s.school_class);
           return (
             <tr key={s.id}>
@@ -883,12 +1212,54 @@ function SectionsSection() {
               <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13, color: "var(--text-muted)" }}>{s.capacity ?? 0}</td>
               <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", display: "flex", gap: 6 }}>
                 <button type="button" onClick={() => edit(s)} style={{ height: 28, padding: "0 10px", background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Edit</button>
-                <button type="button" onClick={() => void remove(s)} style={{ height: 28, padding: "0 10px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Delete</button>
+                <button type="button" onClick={() => setDeleteCandidate(s)} style={{ height: 28, padding: "0 10px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12 }}>Delete</button>
               </td>
             </tr>
           );
         })}</tbody>
       </table>
+      <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Page {currentPage} of {totalPages} | Total {items.length}</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-muted)" }}>
+            Page size
+            <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }} style={{ height: 34, border: "1px solid var(--line)", borderRadius: 8, padding: "0 8px" }}>
+              {CORE_PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))} disabled={currentPage <= 1} style={{ height: 32, padding: "0 12px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: currentPage <= 1 ? "not-allowed" : "pointer" }}>Previous</button>
+          <button type="button" onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))} disabled={currentPage >= totalPages} style={{ height: 32, padding: "0 12px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: currentPage >= totalPages ? "not-allowed" : "pointer" }}>Next</button>
+        </div>
+      </div>
+
+      {deleteCandidate ? (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ width: "min(480px, calc(100vw - 24px))", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 12, padding: 16, boxShadow: "0 12px 30px rgba(0,0,0,.18)" }}>
+            <h3 style={{ margin: 0, fontSize: 18 }}>Delete Section</h3>
+            <p style={{ marginTop: 10, marginBottom: 14, color: "var(--text-muted)" }}>Are you sure you want to delete this section?</p>
+            <div style={{ marginBottom: 14, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--surface-muted)" }}>
+              <strong>{deleteCandidate.name}</strong>
+              <span style={{ marginLeft: 8, color: "var(--text-muted)", fontSize: 13 }}>
+                ({classes.find((entry) => entry.id === deleteCandidate.school_class)?.name || `Class ${deleteCandidate.school_class}`})
+              </span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={() => setDeleteCandidate(null)} style={{ height: 36, padding: "0 14px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = deleteCandidate;
+                  setDeleteCandidate(null);
+                  if (target) void remove(target);
+                }}
+                style={{ height: 36, padding: "0 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

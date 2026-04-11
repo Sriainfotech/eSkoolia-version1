@@ -303,6 +303,40 @@ export function AdmissionsPanel() {
     setDateConfirm(null);
   };
 
+  const readApiFieldErrors = (err: unknown) => {
+    const details = (err as { details?: unknown } | null)?.details;
+    if (!details || typeof details !== "object") return null;
+
+    const detailsRaw = details as Record<string, unknown>;
+    const fieldErrorsRaw =
+      detailsRaw.field_errors && typeof detailsRaw.field_errors === "object"
+        ? (detailsRaw.field_errors as Record<string, unknown>)
+        : {};
+
+    const next: Record<string, string> = {};
+
+    const pick = (key: string) => {
+      const value = detailsRaw[key] ?? fieldErrorsRaw[key];
+      if (typeof value === "string") return value;
+      if (Array.isArray(value) && value.length > 0) return String(value[0]);
+      return "";
+    };
+
+    const topMessage = typeof detailsRaw.message === "string" ? detailsRaw.message.trim() : "";
+    const nonFieldError = pick("non_field_errors") || pick("detail");
+
+    if (pick("full_name")) next.full_name = pick("full_name");
+    if (pick("phone")) next.phone = pick("phone");
+    if (pick("school_class")) next.school_class = pick("school_class");
+    if (pick("no_of_child")) next.no_of_child = pick("no_of_child");
+    if (nonFieldError) next.form = nonFieldError;
+
+    const summary = topMessage || nonFieldError || next.full_name || next.phone || next.school_class || next.no_of_child;
+    if (summary) next.main = summary;
+
+    return Object.keys(next).length > 0 ? next : null;
+  };
+
   const setFormValue = (key: keyof InquiryForm, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
@@ -747,9 +781,19 @@ export function AdmissionsPanel() {
       }
       resetForm();
       await loadInquiries();
-    } catch {
-      setError(editingId ? "Unable to update admission query." : "Unable to create admission query.");
-      toast.error(editingId ? "Unable to update admission query." : "Unable to create admission query.", { autoClose: 6000 });
+    } catch (err: unknown) {
+      const apiFieldErrors = readApiFieldErrors(err);
+      if (apiFieldErrors) {
+        const { main, form, ...inputErrors } = apiFieldErrors;
+        setFieldErrors((prev) => ({ ...prev, ...inputErrors }));
+        const message = main || form || "Please fix the errors below before submitting.";
+        setError(message);
+        toast.error(message, { autoClose: 6000 });
+      } else {
+        const fallback = editingId ? "Unable to update admission query." : "Unable to create admission query.";
+        setError(fallback);
+        toast.error(fallback, { autoClose: 6000 });
+      }
     } finally {
       setSaving(false);
     }

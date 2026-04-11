@@ -8,11 +8,13 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from django.db import IntegrityError
-from django.db.models import Case, IntegerField, Q, Value, When
+from django.db.models import Avg, Case, Count, IntegerField, Q, Value, When
 from config.pagination import ApiPageNumberPagination
 from .models import AcademicYear, Class, ClassPeriod, ClassRoom, Section, Subject, Vehicle, TransportRoute, AssignVehicle
 from .models import BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate
+from .models import VehicleDriverAssignment, TransportNotificationLog, RoutePerformanceLog
 from .models import ItemCategory, ItemStore, Supplier, Item, ItemReceive, ItemIssue, ItemSell
+from .services.parent_notifications import send_email_sendgrid, send_sms_twilio, safe_guardian_phone
 from .serializers import (
     AcademicYearSerializer,
     ClassPeriodSerializer,
@@ -27,6 +29,9 @@ from .serializers import (
     BusLocationSerializer,
     TransportAlertSerializer,
     BusRoutePickupUpdateSerializer,
+    VehicleDriverAssignmentSerializer,
+    TransportNotificationLogSerializer,
+    RoutePerformanceLogSerializer,
     ItemCategorySerializer,
     ItemStoreSerializer,
     SupplierSerializer,
@@ -553,6 +558,83 @@ class TransportRouteViewSet(TenantQueryMixin, PermissionScopedViewSet):
             }
         )
 
+    @action(detail=True, methods=["get"], url_path="optimize")
+    def optimize(self, request, pk=None):
+        """Nearest-neighbor stop optimization with pickup density as tie-breaker."""
+        route = self.get_object()
+        stops = list(BusStop.objects.filter(route=route, active_status=True).order_by("stop_order", "id"))
+        if len(stops) < 2:
+            return Response({"route_id": route.id, "optimized_stops": BusStopSerializer(stops, many=True).data})
+
+        pickup_counts = {
+            row["stop_id"]: row["count"]
+            for row in (
+                BusRoutePickupUpdate.objects.filter(stop__route=route)
+                .values("stop_id")
+                .annotate(count=Count("id"))
+            )
+        }
+
+        start = min(stops, key=lambda s: s.stop_order)
+        unvisited = [s for s in stops if s.id != start.id]
+        ordered = [start]
+        cursor = start
+
+        while unvisited:
+            unvisited.sort(
+                key=lambda s: (
+                    self._haversine_km(float(cursor.latitude), float(cursor.longitude), float(s.latitude), float(s.longitude)),
+                    -(pickup_counts.get(s.id, 0) or 0),
+                )
+            )
+            next_stop = unvisited.pop(0)
+            ordered.append(next_stop)
+            cursor = next_stop
+
+        data = []
+        for idx, stop in enumerate(ordered, start=1):
+            data.append(
+                {
+                    "id": stop.id,
+                    "stop_name": stop.stop_name,
+                    "latitude": stop.latitude,
+                    "longitude": stop.longitude,
+                    "current_order": stop.stop_order,
+                    "suggested_order": idx,
+                    "pickup_weight": int(pickup_counts.get(stop.id, 0) or 0),
+                }
+            )
+
+        return Response({"route_id": route.id, "optimized_stops": data})
+
+    @action(detail=True, methods=["get"], url_path="analytics")
+    def analytics(self, request, pk=None):
+        route = self.get_object()
+        logs_qs = RoutePerformanceLog.objects.filter(route=route).order_by("-log_date", "-id")
+        vehicle_id = request.query_params.get("vehicle_id")
+        if vehicle_id:
+            logs_qs = logs_qs.filter(vehicle_id=vehicle_id)
+
+        serializer = RoutePerformanceLogSerializer(logs_qs[:90], many=True)
+        aggregate = logs_qs.aggregate(
+            avg_delay=Avg("delay_minutes"),
+            avg_speed=Avg("avg_speed_kmh"),
+            avg_distance=Avg("total_distance_km"),
+        )
+        return Response(
+            {
+                "route_id": route.id,
+                "route_title": route.title,
+                "summary": {
+                    "avg_delay_minutes": round(float(aggregate.get("avg_delay") or 0), 2),
+                    "avg_speed_kmh": round(float(aggregate.get("avg_speed") or 0), 2),
+                    "avg_distance_km": round(float(aggregate.get("avg_distance") or 0), 3),
+                    "total_logs": logs_qs.count(),
+                },
+                "logs": serializer.data,
+            }
+        )
+
     def _haversine_km(self, lat1, lng1, lat2, lng2):
         radius_km = 6371
         lat_delta = math.radians(lat2 - lat1)
@@ -875,6 +957,7 @@ class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
         eta_minutes = None
         distance_to_next_km = None
         stop_reached_payload = None
+        reached_count = 0
 
         if assignment:
             route_stops = list(BusStop.objects.filter(route_id=assignment.route_id, active_status=True).order_by("stop_order", "id"))
@@ -910,7 +993,6 @@ class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
                         Q(vehicle_id=vehicle_id) | Q(transport_route_id=assignment.route_id)
                     )
 
-                    reached_count = 0
                     for student in students:
                         pickup, _pickup_created = BusRoutePickupUpdate.objects.get_or_create(
                             stop_id=next_stop.id,
@@ -928,6 +1010,8 @@ class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
                             pickup.status = "picked_up"
                             pickup.save(update_fields=["arrived_at", "picked_up_at", "status"])
                         reached_count += 1
+
+                    self._auto_mark_attendance(students, now.date())
 
                     alert_message = f"{vehicle.vehicle_no} reached {next_stop.stop_name} - {reached_count} students marked picked up"
                     alert = TransportAlert.objects.create(
@@ -947,7 +1031,45 @@ class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
                         "timestamp": now.isoformat(),
                     }
 
+                    self._notify_parents_for_stop_reach(vehicle, students, next_stop)
                     self._broadcast_alert(alert)
+
+        vehicle.current_latitude = latitude_value
+        vehicle.current_longitude = longitude_value
+        vehicle.current_speed = speed_value
+        vehicle.status = "at_stop" if stop_reached_payload else ("in_transit" if speed_value > 0 else "idle")
+        vehicle.last_location_update = timezone.now()
+        vehicle.next_stop = next_stop
+        vehicle.is_tracking_active = True
+        vehicle.save(
+            update_fields=[
+                "current_latitude",
+                "current_longitude",
+                "current_speed",
+                "status",
+                "last_location_update",
+                "next_stop",
+                "is_tracking_active",
+            ]
+        )
+
+        if assignment:
+            total_stops = BusStop.objects.filter(route_id=assignment.route_id, active_status=True).count()
+            RoutePerformanceLog.objects.update_or_create(
+                route_id=assignment.route_id,
+                vehicle_id=vehicle_id,
+                log_date=timezone.localdate(),
+                defaults={
+                    "avg_speed_kmh": speed_value,
+                    "completed_stops": BusRoutePickupUpdate.objects.filter(
+                        vehicle_id=vehicle_id,
+                        stop__route_id=assignment.route_id,
+                        status__in=["arrived", "picked_up"],
+                    ).values("stop_id").distinct().count(),
+                    "total_stops": total_stops,
+                    "completed": next_stop is None and total_stops > 0,
+                },
+            )
 
         serializer = self.get_serializer(location)
         self._broadcast_location(serializer.data)
@@ -967,6 +1089,87 @@ class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+
+    @action(detail=False, methods=["get"], url_path="live")
+    def live(self, request):
+        """Parent/operations live feed with latest status per vehicle."""
+        vehicles = Vehicle.objects.all()
+        if not request.user.is_superuser:
+            if request.user.school_id:
+                vehicles = vehicles.filter(school_id=request.user.school_id)
+            else:
+                vehicles = vehicles.none()
+
+        payload = []
+        for vehicle in vehicles.order_by("vehicle_no"):
+            payload.append(
+                {
+                    "vehicle_id": vehicle.id,
+                    "vehicle_no": vehicle.vehicle_no,
+                    "latitude": float(vehicle.current_latitude) if vehicle.current_latitude is not None else None,
+                    "longitude": float(vehicle.current_longitude) if vehicle.current_longitude is not None else None,
+                    "speed": vehicle.current_speed,
+                    "status": vehicle.status,
+                    "next_stop": vehicle.next_stop.stop_name if vehicle.next_stop else None,
+                    "last_location_update": vehicle.last_location_update.isoformat() if vehicle.last_location_update else None,
+                }
+            )
+        return Response(payload)
+
+    def _auto_mark_attendance(self, students, attendance_date):
+        from apps.attendance.models import StudentAttendance
+
+        for student in students:
+            StudentAttendance.objects.get_or_create(
+                school_id=student.school_id,
+                academic_year_id=student.academic_year_id,
+                student_id=student.id,
+                attendance_date=attendance_date,
+                defaults={
+                    "class_id": student.current_class_id,
+                    "section_id": student.current_section_id,
+                    "attendance_type": "P",
+                    "notes": "Auto-marked present by transport pickup.",
+                },
+            )
+
+    def _notify_parents_for_stop_reach(self, vehicle, students, stop):
+        message = f"{vehicle.vehicle_no} reached {stop.stop_name}."
+        subject = f"Bus Update: {vehicle.vehicle_no}"
+
+        for student in students:
+            guardian = student.guardian
+            if not guardian:
+                continue
+
+            phone = safe_guardian_phone(getattr(guardian, "phone", ""))
+            email = (getattr(guardian, "email", "") or "").strip()
+
+            if phone:
+                sms_status, sms_provider, sms_error = send_sms_twilio(phone, message)
+                TransportNotificationLog.objects.create(
+                    vehicle=vehicle,
+                    student=student,
+                    channel="sms",
+                    provider=sms_provider,
+                    recipient=phone,
+                    message=message,
+                    status=sms_status,
+                    error_message=sms_error,
+                )
+
+            if email:
+                email_status, email_provider, email_error = send_email_sendgrid(email, subject, message)
+                TransportNotificationLog.objects.create(
+                    vehicle=vehicle,
+                    student=student,
+                    channel="email",
+                    provider=email_provider,
+                    recipient=email,
+                    message=message,
+                    status=email_status,
+                    error_message=email_error,
+                )
 
     def _broadcast_location(self, location_payload):
         channel_layer = get_channel_layer()
@@ -1084,6 +1287,72 @@ class BusRoutePickupUpdateViewSet(TenantQueryMixin, PermissionScopedViewSet):
             queryset = queryset.filter(status=status_filter)
         
         return queryset.select_related("stop", "vehicle", "student").order_by("-arrived_at")
+
+
+class VehicleDriverAssignmentViewSet(TenantQueryMixin, PermissionScopedViewSet):
+    model = VehicleDriverAssignment
+    serializer_class = VehicleDriverAssignmentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    permission_codes = {"*": "transport.vehicle.view"}
+
+    def get_queryset(self):
+        queryset = VehicleDriverAssignment.objects.all()
+        if not self.request.user.is_superuser:
+            if self.request.user.school_id:
+                queryset = queryset.filter(vehicle__school_id=self.request.user.school_id)
+            else:
+                return queryset.none()
+
+        vehicle_id = self.request.query_params.get("vehicle_id")
+        if vehicle_id:
+            queryset = queryset.filter(vehicle_id=vehicle_id)
+        return queryset.select_related("vehicle", "driver").order_by("-is_primary", "-created_at")
+
+
+class TransportNotificationLogViewSet(TenantQueryMixin, PermissionScopedViewSet):
+    model = TransportNotificationLog
+    serializer_class = TransportNotificationLogSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    permission_codes = {"*": "transport.vehicle.view"}
+
+    def get_queryset(self):
+        queryset = TransportNotificationLog.objects.all()
+        if not self.request.user.is_superuser:
+            if self.request.user.school_id:
+                queryset = queryset.filter(vehicle__school_id=self.request.user.school_id)
+            else:
+                return queryset.none()
+
+        vehicle_id = self.request.query_params.get("vehicle_id")
+        channel = self.request.query_params.get("channel")
+        if vehicle_id:
+            queryset = queryset.filter(vehicle_id=vehicle_id)
+        if channel:
+            queryset = queryset.filter(channel=channel)
+        return queryset.select_related("vehicle", "student").order_by("-created_at")
+
+
+class RoutePerformanceLogViewSet(TenantQueryMixin, PermissionScopedViewSet):
+    model = RoutePerformanceLog
+    serializer_class = RoutePerformanceLogSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    permission_codes = {"*": "transport.route.view"}
+
+    def get_queryset(self):
+        queryset = RoutePerformanceLog.objects.all()
+        if not self.request.user.is_superuser:
+            if self.request.user.school_id:
+                queryset = queryset.filter(route__school_id=self.request.user.school_id)
+            else:
+                return queryset.none()
+
+        route_id = self.request.query_params.get("route_id")
+        vehicle_id = self.request.query_params.get("vehicle_id")
+        if route_id:
+            queryset = queryset.filter(route_id=route_id)
+        if vehicle_id:
+            queryset = queryset.filter(vehicle_id=vehicle_id)
+        return queryset.select_related("route", "vehicle").order_by("-log_date", "-id")
 
 
 # ===== INVENTORY MODULE VIEWSETS =====

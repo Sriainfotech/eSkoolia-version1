@@ -8,6 +8,7 @@ type AcademicYear = { id: number; name: string; is_current: boolean };
 type SchoolClass = { id: number; name: string };
 type Section = { id: number; school_class: number; name: string };
 type ApiList<T> = T[] | { results?: T[] };
+type ApiPaginated<T> = T[] | { results?: T[]; count?: number; report?: T[]; data?: T[] };
 
 type StudentRow = {
   id: number;
@@ -50,6 +51,21 @@ async function apiPost<T>(path: string, payload: unknown): Promise<T> {
 
 function listData<T>(v: ApiList<T>): T[] {
   return Array.isArray(v) ? v : v.results ?? [];
+}
+
+function parsePaginatedRows<T>(payload: ApiPaginated<T>): { rows: T[]; count: number } {
+  if (Array.isArray(payload)) {
+    return { rows: payload, count: payload.length };
+  }
+  const rows = payload.results || payload.report || payload.data || [];
+  return { rows, count: payload.count || rows.length };
+}
+
+function startAndEndDateOfMonth(year: number, month: number): { dateFrom: string; dateTo: string } {
+  const first = new Date(year, month - 1, 1);
+  const last = new Date(year, month, 0);
+  const toIso = (d: Date) => d.toISOString().slice(0, 10);
+  return { dateFrom: toIso(first), dateTo: toIso(last) };
 }
 
 function fieldStyle() {
@@ -96,9 +112,14 @@ export default function StudentAttendancePanel() {
   const [attendanceTypeBanner, setAttendanceTypeBanner] = useState("");
 
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [searching, setSearching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [studentsPage, setStudentsPage] = useState(1);
+  const [studentsPageSize, setStudentsPageSize] = useState(25);
+  const [reportPage, setReportPage] = useState(1);
+  const [reportPageSize, setReportPageSize] = useState(25);
 
   // Report state
   const [reportMonth, setReportMonth] = useState(String(new Date().getMonth() + 1));
@@ -188,6 +209,7 @@ export default function StudentAttendancePanel() {
     try {
       setSearching(true);
       setError("");
+      setSuccess("");
       const data = await apiPost<{
         students: StudentRow[];
         attendance_type: string;
@@ -213,6 +235,8 @@ export default function StudentAttendancePanel() {
       });
       setAttendance(init);
       setLoaded(true);
+      setStudentsPage(1);
+      setSuccess(`Loaded ${(data.students || []).length} student records.`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       setError(message && message !== "401" ? message : "Failed to load students.");
@@ -233,6 +257,7 @@ export default function StudentAttendancePanel() {
     try {
       setSaving(true);
       setError("");
+      setSuccess("");
       await apiPost("/api/v1/attendance/student-attendance/store/", {
         class_id: Number(classId),
         section_id: Number(sectionId),
@@ -248,6 +273,7 @@ export default function StudentAttendancePanel() {
         mark_holiday: markHoliday,
       });
       await searchStudents();
+      setSuccess("Attendance saved successfully.");
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       setError(message && message !== "401" ? message : "Unable to save attendance.");
@@ -259,6 +285,7 @@ export default function StudentAttendancePanel() {
   const triggerHoliday = async (purpose: "mark" | "unmark") => {
     if (!classId || !sectionId || !attendanceDate) return;
     try {
+      setSuccess("");
       await apiPost("/api/v1/attendance/student-attendance/holiday/", {
         class_id: Number(classId),
         section_id: Number(sectionId),
@@ -267,6 +294,7 @@ export default function StudentAttendancePanel() {
         purpose,
       });
       await searchStudents();
+      setSuccess(purpose === "mark" ? "Holiday marked successfully." : "Holiday unmarked successfully.");
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       setError(message && message !== "401" ? message : "Unable to update holiday status.");
@@ -285,20 +313,56 @@ export default function StudentAttendancePanel() {
     try {
       setReportLoading(true);
       setError("");
-      const data = await apiGet<MonthlyReport[]>(
-        `/api/v1/attendance/student-attendance/report/?class_id=${classId}&section_id=${sectionId}&month=${reportMonth}&year=${reportYear}`
-      );
-      setReport(data);
+      setSuccess("");
+      const primaryUrl = `/api/v1/attendance/student-attendance/report/?class_id=${classId}&section_id=${sectionId}&month=${reportMonth}&year=${reportYear}`;
+      let parsed: { rows: MonthlyReport[]; count: number } | null = null;
+
+      try {
+        const primaryData = await apiGet<ApiPaginated<MonthlyReport>>(primaryUrl);
+        parsed = parsePaginatedRows(primaryData);
+      } catch {
+        // Backward-compatible fallback for deployments expecting class/section params.
+        const fallbackUrl = `/api/v1/attendance/student-attendance/report/?class=${classId}&section=${sectionId}&month=${reportMonth}&year=${reportYear}`;
+        const fallbackData = await apiGet<ApiPaginated<MonthlyReport>>(fallbackUrl);
+        parsed = parsePaginatedRows(fallbackData);
+      }
+
+      if (!parsed) {
+        throw new Error("Unable to parse report response.");
+      }
+
+      setReport(parsed.rows);
       setReportLoaded(true);
+      setReportPage(1);
+      setSuccess(`Report loaded: ${parsed.count} records.`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       setError(message && message !== "401" ? message : "Failed to load attendance report.");
+      setReport([]);
+      setReportLoaded(false);
     } finally {
       setReportLoading(false);
     }
   };
 
   const typeColor: Record<string, string> = { P: "#16a34a", A: "#dc2626", L: "#d97706", F: "#2563eb", H: "#6b7280" };
+  const totalStudentPages = Math.max(1, Math.ceil(students.length / studentsPageSize));
+  const visibleStudents = useMemo(() => {
+    const start = (studentsPage - 1) * studentsPageSize;
+    return students.slice(start, start + studentsPageSize);
+  }, [students, studentsPage, studentsPageSize]);
+  const studentDisplayFrom = students.length === 0 ? 0 : (studentsPage - 1) * studentsPageSize + 1;
+  const studentDisplayTo = Math.min(studentsPage * studentsPageSize, students.length);
+  const totalReportPages = Math.max(1, Math.ceil(report.length / reportPageSize));
+  const visibleReport = useMemo(() => {
+    const start = (reportPage - 1) * reportPageSize;
+    return report.slice(start, start + reportPageSize);
+  }, [report, reportPage, reportPageSize]);
+
+  const goToStudentPage = (nextPage: number) => {
+    const safePage = Math.min(Math.max(nextPage, 1), totalStudentPages);
+    setStudentsPage(safePage);
+  };
 
   return (
     <div className="legacy-panel student-attendance-panel">
@@ -322,6 +386,8 @@ export default function StudentAttendancePanel() {
             <p style={{ margin: "0 0 10px", color: "var(--text-muted)", fontSize: 13 }}>
               Workflow: Select criteria | Search students | Mark attendance | Generate monthly report.
             </p>
+            {error && <p style={{ color: "#dc2626", margin: "0 0 10px" }}>{error}</p>}
+            {success && <p style={{ color: "#0f766e", margin: "0 0 10px" }}>{success}</p>}
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <label style={{ minWidth: 150 }}>
                 <span style={{ display: "block", fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>Academic Year</span>
@@ -391,7 +457,6 @@ export default function StudentAttendancePanel() {
                 </Link>
               </div>
             </div>
-            {error && <p style={{ color: "var(--warning)", marginTop: 8 }}>{error}</p>}
           </div>
 
           {loaded && (
@@ -421,7 +486,7 @@ export default function StudentAttendancePanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {students.map((student) => {
+                  {visibleStudents.map((student) => {
                     const entry = attendance[student.id];
                     const curType = entry?.attendance_type ?? "P";
                     return (
@@ -462,11 +527,37 @@ export default function StudentAttendancePanel() {
                       </tr>
                     );
                   })}
-                  {students.length === 0 && (
+                  {visibleStudents.length === 0 && (
                     <tr><td colSpan={5} style={{ padding: 8, color: "var(--text-muted)" }}>No students found.</td></tr>
                   )}
                 </tbody>
               </table>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, gap: 8, flexWrap: "wrap" }}>
+                <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                  Showing {studentDisplayFrom}-{studentDisplayTo} of {students.length} | Page {studentsPage} of {totalStudentPages}
+                </span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-muted)" }}>
+                    Page size
+                    <select
+                      value={studentsPageSize}
+                      onChange={(e) => {
+                        setStudentsPageSize(Number(e.target.value));
+                        setStudentsPage(1);
+                      }}
+                      style={{ ...fieldStyle(), width: 96 }}
+                    >
+                      {[5, 10, 15, 20, 25, 30, 40, 50, 75, 100].map((size) => (
+                        <option key={size} value={size}>{size}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button type="button" onClick={() => goToStudentPage(1)} disabled={studentsPage <= 1} style={btnStyle("#64748b")}>First</button>
+                  <button type="button" onClick={() => goToStudentPage(studentsPage - 1)} disabled={studentsPage <= 1} style={btnStyle("#64748b")}>Previous</button>
+                  <button type="button" onClick={() => goToStudentPage(studentsPage + 1)} disabled={studentsPage >= totalStudentPages} style={btnStyle("#64748b")}>Next</button>
+                  <button type="button" onClick={() => goToStudentPage(totalStudentPages)} disabled={studentsPage >= totalStudentPages} style={btnStyle("#64748b")}>Last</button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -513,7 +604,7 @@ export default function StudentAttendancePanel() {
                   </tr>
                 </thead>
                 <tbody>
-                  {report.map((row) => (
+                  {visibleReport.map((row) => (
                     <tr key={row.student_id}>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.admission_no}</td>
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.name}</td>
@@ -524,11 +615,35 @@ export default function StudentAttendancePanel() {
                       <td style={{ padding: 8, borderBottom: "1px solid var(--line)", color: typeColor.H, fontWeight: 600 }}>{row.holiday}</td>
                     </tr>
                   ))}
-                  {report.length === 0 && (
+                  {visibleReport.length === 0 && (
                     <tr><td colSpan={7} style={{ padding: 8, color: "var(--text-muted)" }}>No attendance data for selected period.</td></tr>
                   )}
                 </tbody>
               </table>
+            )}
+            {reportLoaded && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, gap: 8, flexWrap: "wrap" }}>
+                <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Page {reportPage} of {totalReportPages}</span>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-muted)" }}>
+                    Page size
+                    <select
+                      value={reportPageSize}
+                      onChange={(e) => {
+                        setReportPageSize(Number(e.target.value));
+                        setReportPage(1);
+                      }}
+                      style={{ ...fieldStyle(), width: 96 }}
+                    >
+                      {[5, 10, 15, 20, 25, 30, 40, 50, 75, 100].map((size) => (
+                        <option key={size} value={size}>{size}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button type="button" onClick={() => setReportPage((prev) => Math.max(1, prev - 1))} disabled={reportPage <= 1} style={btnStyle("#64748b")}>Previous</button>
+                  <button type="button" onClick={() => setReportPage((prev) => Math.min(totalReportPages, prev + 1))} disabled={reportPage >= totalReportPages} style={btnStyle("#64748b")}>Next</button>
+                </div>
+              </div>
             )}
           </div>
 

@@ -5,6 +5,7 @@ import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { validateMeaningfulText } from "@/lib/meaningfulText";
 import { DateConfirmDialog } from "@/components/common/DateConfirmDialog";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
+import { TopToast } from "@/components/common/TopToast";
 
 type ApiList<T> = T[] | { results?: T[] };
 
@@ -221,15 +222,22 @@ export function ComplaintPanel() {
   const readApiFieldErrors = (err: unknown) => {
     const details = (err as { details?: unknown } | null)?.details;
     if (!details || typeof details !== "object") return null;
-    const raw = details as Record<string, unknown>;
+    const detailsRaw = details as Record<string, unknown>;
+    const fieldErrorsRaw =
+      detailsRaw.field_errors && typeof detailsRaw.field_errors === "object"
+        ? (detailsRaw.field_errors as Record<string, unknown>)
+        : {};
     const next: Record<string, string> = {};
 
     const pick = (key: string) => {
-      const value = raw[key];
+      const value = detailsRaw[key] ?? fieldErrorsRaw[key];
       if (typeof value === "string") return value;
       if (Array.isArray(value) && value.length > 0) return String(value[0]);
       return "";
     };
+
+    const topMessage = typeof detailsRaw.message === "string" ? detailsRaw.message.trim() : "";
+    const nonFieldError = pick("non_field_errors") || pick("detail");
 
     const complaintByError = pick("complaint_by");
     const complaintTypeError = pick("complaint_type");
@@ -250,6 +258,20 @@ export function ComplaintPanel() {
     if (assignedError) next.assigned = assignedError;
     if (descriptionError) next.description = descriptionError;
     if (attachmentError) next.attachment = attachmentError;
+
+    const summary =
+      topMessage ||
+      nonFieldError ||
+      complaintByError ||
+      complaintTypeError ||
+      complaintSourceError ||
+      phoneError ||
+      dateError ||
+      actionTakenError ||
+      assignedError ||
+      descriptionError ||
+      attachmentError;
+    if (summary) next.main = summary;
 
     return Object.keys(next).length > 0 ? next : null;
   };
@@ -459,10 +481,10 @@ export function ComplaintPanel() {
       setFieldErrors({});
       if (editingId) {
         await apiForm(`/api/v1/admissions/complaints/${editingId}/`, "PATCH", formData);
-        setSuccess("Complaint updated successfully.");
+        setSuccess("Record updated successfully.");
       } else {
         await apiForm("/api/v1/admissions/complaints/", "POST", formData);
-        setSuccess("Complaint added successfully.");
+        setSuccess("Record created successfully.");
       }
       reset();
       await load();
@@ -470,7 +492,7 @@ export function ComplaintPanel() {
       const apiFieldErrors = readApiFieldErrors(err);
       if (apiFieldErrors) {
         setFieldErrors(apiFieldErrors);
-        setError("Please fix the errors below.");
+        setError(apiFieldErrors.main || "Please fix the errors below.");
       } else {
         setError(getErrorMessage(err, editingId ? "Unable to update complaint." : "Unable to add complaint."));
       }
@@ -486,7 +508,7 @@ export function ComplaintPanel() {
       setSuccess("");
       await apiDelete(`/api/v1/admissions/complaints/${id}/`);
       setItems((prev) => prev.filter((row) => row.id !== id));
-      setSuccess("Complaint deleted.");
+      setSuccess("Record deleted successfully.");
     } catch {
       setError("Unable to delete complaint.");
     } finally {
@@ -545,6 +567,14 @@ export function ComplaintPanel() {
 
   return (
     <div className="legacy-panel complaint-panel-wrap">
+      <TopToast
+        message={error || success}
+        tone={error ? "error" : "success"}
+        onClose={() => {
+          setError("");
+          setSuccess("");
+        }}
+      />
       <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
 
       <section className="sms-breadcrumb mb-20">
@@ -862,8 +892,6 @@ export function ComplaintPanel() {
               </div>
 
               {loading && <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading complaints...</p>}
-              {error && <p style={{ marginTop: 10, color: "var(--warning)" }}>{error}</p>}
-              {success && <p style={{ marginTop: 10, color: "#0f766e" }}>{success}</p>}
             </div>
           </div>
         </div>

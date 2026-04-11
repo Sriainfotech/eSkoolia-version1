@@ -219,15 +219,22 @@ export function PhoneCallLogPanel() {
   const readApiFieldErrors = (err: unknown) => {
     const details = (err as { details?: unknown } | null)?.details;
     if (!details || typeof details !== "object") return null;
-    const raw = details as Record<string, unknown>;
+    const detailsRaw = details as Record<string, unknown>;
+    const fieldErrorsRaw =
+      detailsRaw.field_errors && typeof detailsRaw.field_errors === "object"
+        ? (detailsRaw.field_errors as Record<string, unknown>)
+        : {};
     const next: Record<string, string> = {};
 
     const pick = (key: string) => {
-      const value = raw[key];
+      const value = detailsRaw[key] ?? fieldErrorsRaw[key];
       if (typeof value === "string") return value;
       if (Array.isArray(value) && value.length > 0) return String(value[0]);
       return "";
     };
+
+    const topMessage = typeof detailsRaw.message === "string" ? detailsRaw.message.trim() : "";
+    const nonFieldError = pick("non_field_errors") || pick("detail");
 
     if (pick("name")) next.name = pick("name");
     if (pick("phone")) next.phone = pick("phone");
@@ -237,6 +244,8 @@ export function PhoneCallLogPanel() {
     if (pick("description")) next.description = pick("description");
     if (pick("call_type")) next.callType = pick("call_type");
     next.main =
+      topMessage ||
+      nonFieldError ||
       pick("name") ||
       pick("phone") ||
       pick("date") ||
@@ -244,6 +253,10 @@ export function PhoneCallLogPanel() {
       pick("call_duration") ||
       pick("description") ||
       pick("call_type");
+
+    if (!next.main) {
+      delete next.main;
+    }
 
     return Object.keys(next).length > 0 ? next : null;
   };
@@ -276,7 +289,7 @@ export function PhoneCallLogPanel() {
 
     if (field === "phone") {
       if (!v.trim()) return "Phone is required.";
-      if (!/^\d{10,12}$/.test(v.trim())) return "Phone number must be 10-12 digits.";
+      if (!/^\+?\d{10,12}$/.test(v.trim())) return "Phone number must be 10-12 digits.";
       return "";
     }
 
@@ -513,26 +526,27 @@ export function PhoneCallLogPanel() {
 
                 <div className="form-group">
                   <label htmlFor="pcl-phone">Phone *</label>
-                <input
-                  id="pcl-phone"
-                  name="phone"
-                  type="tel"
-                  required
-                  aria-required="true"
-                  aria-label="Phone Number"
-                  minLength={10}
-                  maxLength={12}
-                  inputMode="numeric"
-                  pattern="[0-9]{10,12}"
-                  value={phone}
-                  onChange={(e) => {
-                    setPhone(e.target.value.replace(/\D/g, "").slice(0, 12));
-                    setErrorField("phone", "");
-                  }}
-                  onBlur={() => setErrorField("phone", validateField("phone", phone))}
-                  placeholder="Phone *"
-                  style={fieldStyle(Boolean(fieldErrors.phone))}
-                />
+                  <input
+                    id="pcl-phone"
+                    name="phone"
+                    type="tel"
+                    required
+                    aria-required="true"
+                    aria-label="Phone Number"
+                    minLength={10}
+                    maxLength={13}
+                    inputMode="tel"
+                    pattern="\+?\d{10,12}"
+                    value={phone}
+                    onChange={(e) => {
+                      const cleaned = e.target.value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "").slice(0, 13);
+                      setPhone(cleaned);
+                      setErrorField("phone", "");
+                    }}
+                    onBlur={() => setErrorField("phone", validateField("phone", phone))}
+                    placeholder="e.g. 9876543210 or +919876543210"
+                    style={fieldStyle(Boolean(fieldErrors.phone))}
+                  />
                   <small className="form-error" style={{ display: fieldErrors.phone ? "block" : "none" }}>{fieldErrors.phone || ""}</small>
                 </div>
 

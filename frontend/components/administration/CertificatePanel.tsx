@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { TopToast } from "@/components/common/TopToast";
 
 type ApiList<T> = T[] | { count?: number; next?: string | null; previous?: string | null; results?: T[] };
 
@@ -79,6 +80,31 @@ function validateNumberField(value: string, min: number, max: number): string {
   return "";
 }
 
+function readApiFieldErrors(err: unknown): { main?: string; title?: string } | null {
+  const details = (err as { details?: unknown } | null)?.details;
+  if (!details || typeof details !== "object") return null;
+
+  const detailsRaw = details as Record<string, unknown>;
+  const fieldErrorsRaw =
+    detailsRaw.field_errors && typeof detailsRaw.field_errors === "object"
+      ? (detailsRaw.field_errors as Record<string, unknown>)
+      : {};
+
+  const pick = (key: string) => {
+    const value = detailsRaw[key] ?? fieldErrorsRaw[key];
+    if (typeof value === "string") return value;
+    if (Array.isArray(value) && value.length > 0) return String(value[0]);
+    return "";
+  };
+
+  const topMessage = typeof detailsRaw.message === "string" ? detailsRaw.message.trim() : "";
+  const nonFieldError = pick("non_field_errors") || pick("detail");
+  const titleError = pick("title");
+  const main = topMessage || nonFieldError || titleError;
+
+  return main || titleError ? { main, title: titleError || undefined } : null;
+}
+
 export function CertificatePanel() {
   const [items, setItems] = useState<CertificateRow[]>([]);
   const [roles, setRoles] = useState<RoleOption[]>([]);
@@ -110,7 +136,7 @@ export function CertificatePanel() {
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const pageSize = 10;
+  const [pageSize, setPageSize] = useState(10);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -148,6 +174,10 @@ export function CertificatePanel() {
     const timer = window.setTimeout(() => setToast(""), 2400);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize]);
 
   useEffect(() => {
     if (!backgroundUpload) {
@@ -283,17 +313,25 @@ export function CertificatePanel() {
       setSuccess("");
       if (editingId) {
         await apiForm(`/api/v1/admissions/certificate-templates/${editingId}/`, "PATCH", formData);
-        setSuccess("Certificate updated successfully.");
-        setToast("Certificate updated successfully.");
+        setSuccess("Record updated successfully.");
+        setToast("Record updated successfully.");
       } else {
         await apiForm("/api/v1/admissions/certificate-templates/", "POST", formData);
-        setSuccess("Certificate saved successfully.");
-        setToast("Certificate saved successfully.");
+        setSuccess("Record created successfully.");
+        setToast("Record created successfully.");
       }
       reset();
       await load();
-    } catch {
-      setError(editingId ? "Unable to update certificate." : "Unable to save certificate.");
+    } catch (err: unknown) {
+      const apiFieldErrors = readApiFieldErrors(err);
+      if (apiFieldErrors) {
+        if (apiFieldErrors.title) {
+          setErrors((prev) => ({ ...prev, title: apiFieldErrors.title || "" }));
+        }
+        setError(apiFieldErrors.main || "Please fix validation errors before saving.");
+      } else {
+        setError(editingId ? "Unable to update certificate." : "Unable to save certificate.");
+      }
     } finally {
       setSaving(false);
     }
@@ -308,8 +346,8 @@ export function CertificatePanel() {
       setSuccess("");
       await apiDelete(`/api/v1/admissions/certificate-templates/${id}/`);
       setItems((prev) => prev.filter((row) => row.id !== id));
-      setSuccess("Certificate deleted.");
-      setToast("Certificate deleted.");
+      setSuccess("Record deleted successfully.");
+      setToast("Record deleted successfully.");
     } catch {
       setError("Unable to delete certificate.");
     } finally {
@@ -324,10 +362,12 @@ export function CertificatePanel() {
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(page, totalPages);
+  const start = filtered.length === 0 ? 0 : (safePage - 1) * pageSize + 1;
+  const end = Math.min(safePage * pageSize, filtered.length);
   const pagedItems = useMemo(() => {
     const start = (safePage - 1) * pageSize;
     return filtered.slice(start, start + pageSize);
-  }, [filtered, safePage]);
+  }, [filtered, pageSize, safePage]);
 
   const previewBody = sanitizeCertificateBody(body)
     .replaceAll("[student_name]", "John Doe")
@@ -338,6 +378,14 @@ export function CertificatePanel() {
 
   return (
     <div className="legacy-panel certificate-page">
+      <TopToast
+        message={error || success}
+        tone={error ? "error" : "success"}
+        onClose={() => {
+          setError("");
+          setSuccess("");
+        }}
+      />
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
           <div className="breadcrumb-row">
@@ -556,7 +604,18 @@ export function CertificatePanel() {
                     <input value={searchInput} onChange={(e) => setSearchInput(e.target.value)} placeholder="Search certificates..." aria-label="Search certificates" />
                   </div>
                 </div>
-                <p className="summary">{filtered.length} certificates · Sorted by role</p>
+                <div className="list-meta">
+                  <p className="summary">Showing {start}-{end} of {filtered.length} certificates · Sorted by role</p>
+                  <label className="page-size-control">
+                    <span>Rows per page</span>
+                    <select value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                      <option value={5}>5</option>
+                      <option value={10}>10</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                    </select>
+                  </label>
+                </div>
 
                 <table className="certificate-table">
                   <thead>
@@ -595,15 +654,11 @@ export function CertificatePanel() {
                 </div>
 
                 {loading && <p className="status muted">Loading certificates...</p>}
-                {error && <p className="status error">{error}</p>}
-                {success && <p className="status success">{success}</p>}
               </div>
             </div>
           </div>
         </div>
       </section>
-
-      {toast ? <div className="toast">{toast}</div> : null}
 
       <style jsx>{`
         .certificate-page {
@@ -814,6 +869,28 @@ export function CertificatePanel() {
           margin: 0 0 8px;
           color: #64748b;
           font-size: 12px;
+        }
+        .list-meta {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          flex-wrap: wrap;
+          margin-bottom: 14px;
+        }
+        .page-size-control {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: #475569;
+          font-size: 13px;
+        }
+        .page-size-control select {
+          border: 1px solid #cbd5e1;
+          border-radius: 10px;
+          padding: 8px 10px;
+          background: #fff;
+          color: #0f172a;
         }
         .certificate-table {
           width: 100%;

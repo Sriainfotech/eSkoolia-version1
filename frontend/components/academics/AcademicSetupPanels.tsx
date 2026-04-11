@@ -272,6 +272,10 @@ export function AssignClassTeacherPanel() {
   const [fieldErrors, setFieldErrors] = useState<{ academic_year?: string; class_id?: string; section_id?: string; teacher?: string }>({});
   const [editingId, setEditingId] = useState<number | null>(null);
   const [viewingRow, setViewingRow] = useState<ClassTeacherAssignment | null>(null);
+  const [classSubjects, setClassSubjects] = useState<ClassSubjectAssignment[]>([]);
+  const [classSubjectsLoading, setClassSubjectsLoading] = useState(false);
+  const [classSubjectsError, setClassSubjectsError] = useState("");
+  const [deleteCandidate, setDeleteCandidate] = useState<ClassTeacherAssignment | null>(null);
 
   const [yearId, setYearId] = useState("");
   const [classId, setClassId] = useState("");
@@ -325,6 +329,79 @@ export function AssignClassTeacherPanel() {
       setPage(totalPages);
     }
   }, [page, totalPages]);
+
+  // Fetch subjects assigned to the currently selected class/section so the
+  // operator can confirm what the incoming class teacher will actually handle.
+  useEffect(() => {
+    let cancelled = false;
+    const targetClassId = classId || (viewingRow ? String(toId(viewingRow.class_id) ?? toId(viewingRow.school_class) ?? "") : "");
+    const targetSectionId = sectionId || (viewingRow ? String(toId(viewingRow.section_id) ?? toId(viewingRow.section) ?? "") : "");
+
+    if (!targetClassId) {
+      setClassSubjects([]);
+      setClassSubjectsError("");
+      setClassSubjectsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const run = async () => {
+      try {
+        setClassSubjectsLoading(true);
+        setClassSubjectsError("");
+        const params = new URLSearchParams();
+        params.set("class_id", targetClassId);
+        if (targetSectionId) params.set("section_id", targetSectionId);
+        params.set("page_size", "500");
+        const response = await apiFetch<ApiList<ClassSubjectAssignment>>(`/api/v1/academics/class-subjects/?${params.toString()}`);
+        if (cancelled) return;
+        const rows = asList(response).filter((row) => {
+          const rowClass = toId(row.class_id) ?? toId(row.school_class);
+          if (rowClass !== Number(targetClassId)) return false;
+          if (!targetSectionId) return true;
+          const rowSection = toId(row.section_id) ?? toId(row.section);
+          // Include rows that are section-specific matches as well as class-wide
+          // (null section) assignments so nothing gets hidden by filtering.
+          return rowSection === Number(targetSectionId) || rowSection == null;
+        });
+        setClassSubjects(rows);
+      } catch {
+        if (cancelled) return;
+        setClassSubjects([]);
+        setClassSubjectsError("Unable to load subjects for this class.");
+      } finally {
+        if (!cancelled) setClassSubjectsLoading(false);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [classId, sectionId, viewingRow]);
+
+  const resolvedClassSubjects = useMemo(() => {
+    const seen = new Set<number>();
+    const rows: { id: number; name: string; code: string; teacher: string; optional: boolean }[] = [];
+    for (const assignment of classSubjects) {
+      const subjectId = toId(assignment.subject_id) ?? toId(assignment.subject);
+      if (!subjectId || seen.has(subjectId)) continue;
+      seen.add(subjectId);
+      const subject = data.subjects.find((entry) => entry.id === subjectId);
+      const teacherIdValue = toId(assignment.teacher_id) ?? toId(assignment.teacher);
+      const teacher = teacherIdValue ? data.teachers.find((entry) => entry.id === teacherIdValue) : undefined;
+      rows.push({
+        id: subjectId,
+        name: subject?.name || `Subject #${subjectId}`,
+        code: subject?.code || "",
+        teacher: teacher ? teacherDisplayName(teacher) : "—",
+        optional: !!assignment.is_optional,
+      });
+    }
+    rows.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+    return rows;
+  }, [classSubjects, data.subjects, data.teachers]);
 
   const resetForm = (clearNotice = true) => {
     setEditingId(null);
@@ -405,12 +482,11 @@ export function AssignClassTeacherPanel() {
   };
 
   const remove = async (row: ClassTeacherAssignment) => {
-    const className = nameById(data.classes, toId(row.class_id) ?? toId(row.school_class), (entry) => entry.name);
-    const teacherName = nameById(data.teachers, toId(row.teacher_id) ?? toId(row.teacher), teacherDisplayName);
-    if (!window.confirm(`Delete assignment for ${className} - ${teacherName}?`)) return;
     try {
       setError("");
+      setMessage("");
       await apiFetch(`/api/v1/academics/class-teachers/${row.id}/`, { method: "DELETE" });
+      setMessage("Class teacher assignment deleted successfully.");
       await load();
     } catch {
       setError("Failed to delete class teacher assignment.");
@@ -485,8 +561,46 @@ export function AssignClassTeacherPanel() {
         {isEditMode ? <div style={{ alignSelf: "start", marginTop: 22 }}><button type="button" onClick={() => resetForm()} style={{ height: 36, background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, padding: "0 14px", cursor: "pointer" }}>Cancel</button></div> : <span />}
       </form>
 
-      {(lookupError || (error && !hasClassTeacherFieldError)) && <p style={{ color: "var(--warning)", margin: "8px 0" }}>{lookupError || error}</p>}
-      {message && <p style={{ color: "#16a34a", margin: "8px 0" }}>{message}</p>}
+      {message && (
+        <div role="status" aria-live="polite" style={{ margin: "8px 0", padding: "10px 14px", border: "1px solid #86efac", background: "#f0fdf4", color: "#166534", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden>✓</span>
+          <span>{message}</span>
+        </div>
+      )}
+      {(lookupError || (error && !hasClassTeacherFieldError)) && (
+        <div role="alert" style={{ margin: "8px 0", padding: "10px 14px", border: "1px solid #fca5a5", background: "#fef2f2", color: "#991b1b", borderRadius: 8, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
+          <span aria-hidden>!</span>
+          <span>{lookupError || error}</span>
+        </div>
+      )}
+
+      {classId ? (
+        <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--surface)", padding: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>
+              Subjects assigned to {nameById(data.classes, Number(classId), (entry) => entry.name)}
+              {sectionId ? ` – ${nameById(data.sections, Number(sectionId), (entry) => entry.name)}` : ""}
+            </h3>
+            {classSubjectsLoading ? <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading…</span> : null}
+          </div>
+          {classSubjectsError ? (
+            <p style={{ margin: 0, fontSize: 13, color: "#dc2626" }}>{classSubjectsError}</p>
+          ) : classSubjectsLoading ? null : resolvedClassSubjects.length === 0 ? (
+            <p style={{ margin: 0, fontSize: 13, color: "var(--text-muted)" }}>No subjects assigned to this class</p>
+          ) : (
+            <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {resolvedClassSubjects.map((subject) => (
+                <li key={subject.id} style={{ padding: "4px 10px", border: "1px solid var(--line)", borderRadius: 999, background: "var(--surface-muted)", fontSize: 12, color: "var(--text)" }}>
+                  <strong>{subject.name}</strong>
+                  {subject.code ? <span style={{ marginLeft: 6, color: "var(--text-muted)" }}>({subject.code})</span> : null}
+                  {subject.teacher && subject.teacher !== "—" ? <span style={{ marginLeft: 6, color: "var(--text-muted)" }}>· {subject.teacher}</span> : null}
+                  {subject.optional ? <span style={{ marginLeft: 6, color: "#b45309" }}>· optional</span> : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
 
       <div style={{ border: "1px solid var(--line)", borderRadius: 10, overflow: "hidden", background: "var(--surface)" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -513,7 +627,7 @@ export function AssignClassTeacherPanel() {
                   <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", display: "flex", gap: 6 }}>
                     <button type="button" onClick={() => setViewingRow(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#6366f1", color: "#fff", cursor: "pointer", fontSize: 12 }}>View</button>
                     <button type="button" onClick={() => edit(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#0284c7", color: "#fff", cursor: "pointer", fontSize: 12 }}>Edit</button>
-                    <button type="button" onClick={() => void remove(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#dc2626", color: "#fff", cursor: "pointer", fontSize: 12 }}>Delete</button>
+                    <button type="button" onClick={() => setDeleteCandidate(row)} style={{ height: 28, padding: "0 10px", border: "none", borderRadius: 6, background: "#dc2626", color: "#fff", cursor: "pointer", fontSize: 12 }}>Delete</button>
                   </td>
                 </tr>
               );
@@ -567,6 +681,30 @@ export function AssignClassTeacherPanel() {
                 <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block" }}>Status</label>
                 <div style={{ fontSize: 14, marginTop: 4, color: viewingRow.active_status ? "#16a34a" : "#dc2626" }}>{viewingRow.active_status ? "Active" : "Inactive"}</div>
               </div>
+              <div>
+                <label style={{ fontSize: 12, color: "var(--text-muted)", display: "block" }}>Assigned Subjects</label>
+                <div style={{ fontSize: 13, marginTop: 6 }}>
+                  {classSubjectsLoading ? (
+                    <span style={{ color: "var(--text-muted)" }}>Loading subjects…</span>
+                  ) : classSubjectsError ? (
+                    <span style={{ color: "#dc2626" }}>{classSubjectsError}</span>
+                  ) : resolvedClassSubjects.length === 0 ? (
+                    <span style={{ color: "var(--text-muted)" }}>No subjects assigned to this class</span>
+                  ) : (
+                    <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 6 }}>
+                      {resolvedClassSubjects.map((subject) => (
+                        <li key={subject.id} style={{ padding: "6px 10px", border: "1px solid var(--line)", borderRadius: 6, background: "var(--surface-muted)" }}>
+                          <strong>{subject.name}</strong>
+                          {subject.code ? <span style={{ marginLeft: 6, color: "var(--text-muted)" }}>({subject.code})</span> : null}
+                          <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2 }}>
+                            Teacher: {subject.teacher}{subject.optional ? " · Optional" : ""}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
               <button type="button" onClick={() => setViewingRow(null)} style={{ height: 36, padding: "0 16px", border: "none", borderRadius: 6, background: "#6b7280", color: "#fff", cursor: "pointer", fontSize: 13 }}>Close</button>
@@ -574,6 +712,40 @@ export function AssignClassTeacherPanel() {
           </div>
         </div>
       )}
+
+      {deleteCandidate ? (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ width: "min(480px, calc(100vw - 24px))", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 12, padding: 16, boxShadow: "0 12px 30px rgba(0,0,0,.18)" }}>
+            <h3 style={{ margin: 0, fontSize: 18 }}>Delete Assignment</h3>
+            <p style={{ marginTop: 10, marginBottom: 14, color: "var(--text-muted)" }}>Are you sure you want to delete this class teacher assignment?</p>
+            <div style={{ marginBottom: 14, padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--surface-muted)", fontSize: 13 }}>
+              <div><strong>{nameById(data.classes, toId(deleteCandidate.class_id) ?? toId(deleteCandidate.school_class), (entry) => entry.name)}</strong>
+                {(() => {
+                  const sec = nameById(data.sections, toId(deleteCandidate.section_id) ?? toId(deleteCandidate.section), (entry) => entry.name);
+                  return sec && sec !== "-" ? <span style={{ color: "var(--text-muted)" }}> – {sec}</span> : null;
+                })()}
+              </div>
+              <div style={{ color: "var(--text-muted)", marginTop: 4 }}>
+                Teacher: {nameById(data.teachers, toId(deleteCandidate.teacher_id) ?? toId(deleteCandidate.teacher), teacherDisplayName)}
+              </div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={() => setDeleteCandidate(null)} style={{ height: 36, padding: "0 14px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = deleteCandidate;
+                  setDeleteCandidate(null);
+                  if (target) void remove(target);
+                }}
+                style={{ height: 36, padding: "0 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

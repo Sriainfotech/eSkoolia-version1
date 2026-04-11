@@ -280,7 +280,7 @@ export default function ReportPage() {
                 placeholder="Search student, admission no, roll no"
               />
               <label className="block space-y-1.5">
-                <span className="block text-sm font-semibold text-slate-700">Points</span>
+                <span className="block text-sm font-semibold text-slate-700">Total Incident Points</span>
                 <div className="grid grid-cols-[140px_1fr] gap-2">
                   <select
                     value={operator}
@@ -343,7 +343,7 @@ export default function ReportPage() {
                 <SummaryCard label="Sections" value={String(totals.sections)} />
                 <SummaryCard label="Students" value={String(totals.students)} />
                 <SummaryCard label="Incidents" value={String(totals.incidents)} />
-                <SummaryCard label="Total Points" value={String(totals.points)} />
+                <SummaryCard label="Total Incident Points" value={String(totals.points)} />
               </div>
 
               <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
@@ -458,7 +458,7 @@ export default function ReportPage() {
                                       <th className="border-b border-slate-200 px-4 py-3 text-left font-semibold text-slate-800">Admission No</th>
                                       <th className="border-b border-slate-200 px-4 py-3 text-left font-semibold text-slate-600">Student Name</th>
                                       <th className="border-b border-slate-200 px-4 py-3 text-left font-semibold text-slate-600">Incident Count</th>
-                                      <th className="border-b border-slate-200 px-4 py-3 text-left font-semibold text-slate-600">Total Points</th>
+                                      <th className="border-b border-slate-200 px-4 py-3 text-left font-semibold text-slate-600">Total Incident Points</th>
                                     </tr>
                                   </thead>
                                   <tbody>

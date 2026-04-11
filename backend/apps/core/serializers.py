@@ -4,6 +4,7 @@ from .models import (
     AcademicYear, Class, ClassPeriod, ClassRoom, Section, Subject, 
     Vehicle, TransportRoute, AssignVehicle,
     BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate,
+    VehicleDriverAssignment, TransportNotificationLog, RoutePerformanceLog,
     ItemCategory, ItemStore, Supplier, Item, ItemReceive, ItemReceiveChild,
     ItemIssue, ItemSell, ItemSellChild
 )
@@ -336,7 +337,12 @@ class VehicleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Vehicle
-        fields = ["id", "school", "academic_year", "vehicle_no", "vehicle_model", "made_year", "note", "driver", "driver_name", "active_status", "created_at", "updated_at"]
+        fields = [
+            "id", "school", "academic_year", "vehicle_no", "vehicle_model", "made_year", "note",
+            "driver", "driver_name", "active_status", "current_latitude", "current_longitude",
+            "current_speed", "status", "last_location_update", "next_stop", "is_tracking_active",
+            "created_at", "updated_at",
+        ]
         read_only_fields = ["id", "school", "academic_year", "created_at", "updated_at"]
 
 
@@ -410,6 +416,51 @@ class BusRoutePickupUpdateSerializer(serializers.ModelSerializer):
         model = BusRoutePickupUpdate
         fields = ["id", "stop", "stop_name", "vehicle", "vehicle_no", "student", "student_name", "arrived_at", "picked_up_at", "status"]
         read_only_fields = ["id"]
+
+
+class VehicleDriverAssignmentSerializer(serializers.ModelSerializer):
+    vehicle_no = serializers.CharField(source="vehicle.vehicle_no", read_only=True)
+    driver_name = serializers.SerializerMethodField()
+
+    def get_driver_name(self, obj):
+        driver = obj.driver
+        if not driver:
+            return None
+        return f"{driver.first_name} {driver.last_name}".strip()
+
+    class Meta:
+        model = VehicleDriverAssignment
+        fields = [
+            "id", "vehicle", "vehicle_no", "driver", "driver_name", "assigned_from", "assigned_to",
+            "is_primary", "active_status", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class TransportNotificationLogSerializer(serializers.ModelSerializer):
+    vehicle_no = serializers.CharField(source="vehicle.vehicle_no", read_only=True)
+
+    class Meta:
+        model = TransportNotificationLog
+        fields = [
+            "id", "vehicle", "vehicle_no", "student", "channel", "provider", "recipient", "message",
+            "status", "error_message", "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
+
+
+class RoutePerformanceLogSerializer(serializers.ModelSerializer):
+    route_title = serializers.CharField(source="route.title", read_only=True)
+    vehicle_no = serializers.CharField(source="vehicle.vehicle_no", read_only=True)
+
+    class Meta:
+        model = RoutePerformanceLog
+        fields = [
+            "id", "route", "route_title", "vehicle", "vehicle_no", "log_date", "total_distance_km",
+            "avg_speed_kmh", "delay_minutes", "completed_stops", "total_stops", "completed",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
 
 
 # ===== INVENTORY MODULE SERIALIZERS =====

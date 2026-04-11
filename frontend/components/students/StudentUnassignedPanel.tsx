@@ -39,6 +39,14 @@ async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
   });
 }
 
+async function apiPost<T>(path: string, payload?: unknown): Promise<T> {
+  return apiRequestWithRefresh<T>(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: payload ? JSON.stringify(payload) : undefined,
+  });
+}
+
 function fieldStyle() {
   return {
     width: "100%",
@@ -261,7 +269,7 @@ export function StudentUnassignedPanel() {
       setError("");
       setSuccess("");
       for (const id of ids) {
-        await apiPatch(`/api/v1/students/students/${id}/`, { is_active: false });
+        await apiPost(`/api/v1/students/students/${id}/soft-delete/`);
       }
       setSuccess(ids.length > 1 ? "Selected students moved to deleted records." : "Student moved to deleted records.");
       setSelectedIds([]);
@@ -468,9 +476,16 @@ export function StudentUnassignedPanel() {
                           <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                               <Link
-                                href={`/students/assign-class/${row.id}`}
+                                href={`/students/add?mode=edit&id=${row.id}`}
                                 style={{ ...buttonStyle("#0284c7"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}
-                                aria-label="Assign Student"
+                                aria-label="Edit Student"
+                              >
+                                Edit
+                              </Link>
+                              <Link
+                                href={`/students/assign-class/${row.id}`}
+                                style={{ ...buttonStyle("#0f766e"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}
+                                aria-label="Assign Class"
                               >
                                 Assign Class
                               </Link>

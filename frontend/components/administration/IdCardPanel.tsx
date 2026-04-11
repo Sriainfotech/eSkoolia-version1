@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { TopToast } from "@/components/common/TopToast";
 
 type ApiList<T> = T[] | { results?: T[] };
 
@@ -46,6 +47,14 @@ function validateTitleValue(value: string): string {
   if (/^[^a-zA-Z0-9]+$/.test(val)) return "Title cannot contain only special characters.";
   if (isMeaningless(val)) return 'Please enter a meaningful title (e.g. "Student ID Card 2025").';
   return "";
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (message && message !== "[object Object]") return message;
+  }
+  return fallback;
 }
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -230,6 +239,35 @@ export function IdCardPanel() {
     return !err;
   };
 
+  const readApiFieldErrors = (err: unknown) => {
+    const details = (err as { details?: unknown } | null)?.details;
+    if (!details || typeof details !== "object") return null;
+    const detailsRaw = details as Record<string, unknown>;
+    const fieldErrorsRaw =
+      detailsRaw.field_errors && typeof detailsRaw.field_errors === "object"
+        ? (detailsRaw.field_errors as Record<string, unknown>)
+        : {};
+    const next: Record<string, string> = {};
+
+    const pick = (key: string) => {
+      const value = detailsRaw[key] ?? fieldErrorsRaw[key];
+      if (typeof value === "string") return value;
+      if (Array.isArray(value) && value.length > 0) return String(value[0]);
+      return "";
+    };
+
+    const topMessage = typeof detailsRaw.message === "string" ? detailsRaw.message.trim() : "";
+    const nonFieldError = pick("non_field_errors") || pick("detail");
+
+    if (pick("title")) next.title = pick("title");
+    if (pick("page_layout_style")) next.page_layout_style = pick("page_layout_style");
+
+    const summary = topMessage || nonFieldError || next.title || next.page_layout_style;
+    if (summary) next.main = summary;
+
+    return Object.keys(next).length > 0 ? next : null;
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const isValidTitle = validateTitle(title);
@@ -264,8 +302,17 @@ export function IdCardPanel() {
       }
       reset();
       await load();
-    } catch {
-      setError(editingId ? "Unable to update ID card." : "Unable to save ID card.");
+    } catch (err: unknown) {
+      const apiFieldErrors = readApiFieldErrors(err);
+      if (apiFieldErrors) {
+        if (apiFieldErrors.title) {
+          setTitleError(apiFieldErrors.title);
+        }
+        setFieldErrors(apiFieldErrors);
+        setError(apiFieldErrors.main || "Please fix the errors below.");
+      } else {
+        setError(getErrorMessage(err, editingId ? "Unable to update ID card." : "Unable to save ID card."));
+      }
     } finally {
       setSaving(false);
     }
@@ -296,6 +343,14 @@ export function IdCardPanel() {
 
   return (
     <div className="legacy-panel">
+      <TopToast
+        message={error || success}
+        tone={error ? "error" : "success"}
+        onClose={() => {
+          setError("");
+          setSuccess("");
+        }}
+      />
       <style>{`
         .idcard-form-title {
           font-size: 20px;

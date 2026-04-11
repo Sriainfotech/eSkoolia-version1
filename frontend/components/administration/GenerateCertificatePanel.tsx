@@ -172,7 +172,11 @@ type GenerateSetupResponse = {
 
 type RecipientsResponse = {
   is_student_role: boolean;
-  recipients: Recipient[];
+  recipients?: Recipient[];
+  results?: Recipient[];
+  count?: number;
+  next?: string | null;
+  previous?: string | null;
 };
 
 export function GenerateCertificatePanel() {
@@ -183,6 +187,9 @@ export function GenerateCertificatePanel() {
 
   const [recipients, setRecipients] = useState<Recipient[]>([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [recipientPage, setRecipientPage] = useState(1);
+  const [recipientPageSize, setRecipientPageSize] = useState(10);
+  const [recipientTotal, setRecipientTotal] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
@@ -217,7 +224,8 @@ export function GenerateCertificatePanel() {
   const availableTemplates = useMemo(() => {
     if (!roleId) return templates;
     const rid = Number(roleId);
-    return templates.filter((t) => !t.applicable_role_id || t.applicable_role_id === rid);
+    const matched = templates.filter((t) => !t.applicable_role_id || t.applicable_role_id === rid);
+    return matched.length > 0 ? matched : templates;
   }, [templates, roleId]);
 
   const filteredSections = useMemo(() => {
@@ -249,10 +257,16 @@ export function GenerateCertificatePanel() {
   }, [roleId]);
 
   useEffect(() => {
+    if (isStudentRole) return;
+    setClassId("");
+    setSectionId("");
+  }, [isStudentRole]);
+
+  useEffect(() => {
     setSectionId("");
   }, [classId]);
 
-  const loadRecipients = async () => {
+  const loadRecipients = async (targetPage = recipientPage, targetPageSize = recipientPageSize) => {
     if (!roleId) {
       setError("Select a role first.");
       return;
@@ -266,17 +280,21 @@ export function GenerateCertificatePanel() {
 
       const params = new URLSearchParams();
       params.set("role", roleId);
+      params.set("page", String(targetPage));
+      params.set("page_size", String(targetPageSize));
       if (classId) params.set("class", classId);
       if (sectionId) params.set("section", sectionId);
 
       const data = await apiGet<RecipientsResponse>(`/api/v1/admissions/certificate-templates/recipients/?${params.toString()}`);
-      const rows = (data.recipients || []).map((row) => ({
+      const rows = (data.recipients || data.results || []).map((row) => ({
         ...row,
         className: row.className || classNameById.get(Number((row as Recipient & { current_class?: number }).current_class || -1)) || row.className,
         sectionName: row.sectionName || sectionNameById.get(Number((row as Recipient & { current_section?: number }).current_section || -1)) || row.sectionName,
       }));
 
       setRecipients(rows);
+      setRecipientTotal(data.count ?? rows.length);
+      setRecipientPage(targetPage);
       if (!rows.length) {
         setSuccess(data.is_student_role ? "No student recipients found." : "No recipients found for this role.");
       }
@@ -589,14 +607,7 @@ export function GenerateCertificatePanel() {
                   <div className="cert-error" />
                   <div className="cert-hint">Filter by class (optional)</div>
                 </div>
-              ) : (
-                <div className="cert-field-group">
-                  <label className="cert-label">Class</label>
-                  <input value="All classes" readOnly />
-                  <div className="cert-error" />
-                  <div className="cert-hint">All class levels are included</div>
-                </div>
-              )}
+              ) : null}
 
               {isStudentRole ? (
                 <div className="cert-field-group">
@@ -614,14 +625,7 @@ export function GenerateCertificatePanel() {
                   <div className="cert-error" />
                   <div className="cert-hint">Filter by section (optional)</div>
                 </div>
-              ) : (
-                <div className="cert-field-group">
-                  <label className="cert-label">Section</label>
-                  <input value="All sections" readOnly />
-                  <div className="cert-error" />
-                  <div className="cert-hint">All sections are included</div>
-                </div>
-              )}
+              ) : null}
 
               <div className="cert-field-group">
                 <label className="cert-label">Grid Gap (px)</label>
@@ -651,14 +655,58 @@ export function GenerateCertificatePanel() {
           <div className="white-box">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <h3 style={{ margin: 0 }}>Recipient List</h3>
-              <label style={{ fontSize: 13, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
-                <input
-                  type="checkbox"
-                  checked={!!recipients.length && selectedIds.length === recipients.length}
-                  onChange={(e) => toggleAll(e.target.checked)}
-                />
-                Select all
-              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <label style={{ fontSize: 13, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={!!recipients.length && selectedIds.length === recipients.length}
+                    onChange={(e) => toggleAll(e.target.checked)}
+                  />
+                  Select all
+                </label>
+                <label style={{ fontSize: 13, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 6 }}>
+                  Rows per page
+                  <select
+                    value={recipientPageSize}
+                    onChange={(e) => {
+                      const size = Number(e.target.value);
+                      setRecipientPageSize(size);
+                      void loadRecipients(1, size);
+                    }}
+                    style={{ ...fieldStyle(), width: 92 }}
+                  >
+                    <option value={5}>5</option>
+                    <option value={10}>10</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                Showing {recipientTotal === 0 ? 0 : (recipientPage - 1) * recipientPageSize + 1}-{Math.min(recipientPage * recipientPageSize, recipientTotal)} of {recipientTotal}
+              </span>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  type="button"
+                  style={buttonStyle("#64748b")}
+                  disabled={recipientPage <= 1 || searching}
+                  onClick={() => void loadRecipients(Math.max(1, recipientPage - 1), recipientPageSize)}
+                >
+                  Previous
+                </button>
+                <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Page {recipientPage} of {Math.max(1, Math.ceil(recipientTotal / recipientPageSize))}</span>
+                <button
+                  type="button"
+                  style={buttonStyle("#64748b")}
+                  disabled={recipientPage * recipientPageSize >= recipientTotal || searching}
+                  onClick={() => void loadRecipients(recipientPage + 1, recipientPageSize)}
+                >
+                  Next
+                </button>
+              </div>
             </div>
 
             <div style={{ overflowX: "auto" }}>

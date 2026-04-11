@@ -160,6 +160,25 @@ class Vehicle(models.Model):
     note = models.TextField(blank=True)
     driver = models.ForeignKey("hr.Staff", on_delete=models.SET_NULL, null=True, blank=True, related_name="vehicles")
     active_status = models.BooleanField(default=True)
+    # GPS & Tracking Fields
+    current_latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, help_text="Current GPS latitude")
+    current_longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True, help_text="Current GPS longitude")
+    current_speed = models.IntegerField(default=0, help_text="Current speed in km/h")
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ("idle", "Idle"),
+            ("approaching_stop", "Approaching Stop"),
+            ("at_stop", "At Stop"),
+            ("in_transit", "In Transit"),
+            ("offline", "Offline"),
+        ],
+        default="idle",
+        help_text="Current vehicle status"
+    )
+    last_location_update = models.DateTimeField(null=True, blank=True, help_text="Last GPS update timestamp")
+    next_stop = models.ForeignKey("BusStop", on_delete=models.SET_NULL, null=True, blank=True, related_name="buses_heading_to")
+    is_tracking_active = models.BooleanField(default=False, help_text="Whether live GPS tracking is active")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -318,6 +337,73 @@ class BusRoutePickupUpdate(models.Model):
 
     def __str__(self):
         return f"{self.student} - {self.stop.stop_name} ({self.status})"
+
+
+class VehicleDriverAssignment(models.Model):
+    """Supports multiple drivers per vehicle with primary assignment."""
+
+    vehicle = models.ForeignKey("Vehicle", on_delete=models.CASCADE, related_name="driver_assignments")
+    driver = models.ForeignKey("hr.Staff", on_delete=models.CASCADE, related_name="vehicle_assignments")
+    assigned_from = models.DateField(null=True, blank=True)
+    assigned_to = models.DateField(null=True, blank=True)
+    is_primary = models.BooleanField(default=False)
+    active_status = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "vehicle_driver_assignments"
+        ordering = ["-is_primary", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["vehicle", "driver"], name="uq_vehicle_driver_pair"),
+        ]
+
+    def __str__(self):
+        return f"{self.vehicle.vehicle_no} -> {self.driver_id}"
+
+
+class TransportNotificationLog(models.Model):
+    """Stores SMS/Email notification attempts for transport events."""
+
+    CHANNEL_CHOICES = [("sms", "SMS"), ("email", "Email")]
+    STATUS_CHOICES = [("sent", "Sent"), ("failed", "Failed"), ("skipped", "Skipped")]
+
+    vehicle = models.ForeignKey("Vehicle", on_delete=models.CASCADE, related_name="notification_logs")
+    student = models.ForeignKey("students.Student", on_delete=models.SET_NULL, null=True, blank=True, related_name="transport_notifications")
+    channel = models.CharField(max_length=10, choices=CHANNEL_CHOICES)
+    provider = models.CharField(max_length=30, blank=True)
+    recipient = models.CharField(max_length=120)
+    message = models.TextField()
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="skipped")
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "transport_notification_logs"
+        ordering = ["-created_at"]
+
+
+class RoutePerformanceLog(models.Model):
+    """Daily route analytics (distance, delay, speed, stop completion)."""
+
+    route = models.ForeignKey("TransportRoute", on_delete=models.CASCADE, related_name="performance_logs")
+    vehicle = models.ForeignKey("Vehicle", on_delete=models.CASCADE, related_name="performance_logs")
+    log_date = models.DateField()
+    total_distance_km = models.DecimalField(max_digits=10, decimal_places=3, default=Decimal("0.000"))
+    avg_speed_kmh = models.DecimalField(max_digits=7, decimal_places=2, default=Decimal("0.00"))
+    delay_minutes = models.IntegerField(default=0)
+    completed_stops = models.PositiveIntegerField(default=0)
+    total_stops = models.PositiveIntegerField(default=0)
+    completed = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "route_performance_logs"
+        ordering = ["-log_date", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["route", "vehicle", "log_date"], name="uq_route_vehicle_date_log"),
+        ]
 
 
 # ===== INVENTORY MODULE =====

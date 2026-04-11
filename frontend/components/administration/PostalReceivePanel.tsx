@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
+import { TopToast } from "@/components/common/TopToast";
 
 type ApiList<T> = T[] | { results?: T[] };
 
@@ -139,17 +140,24 @@ export function PostalReceivePanel() {
   const readApiFieldErrors = (err: unknown) => {
     const details = (err as { details?: unknown } | null)?.details;
     if (!details || typeof details !== "object") return null;
-    const raw = details as Record<string, unknown>;
+    const detailsRaw = details as Record<string, unknown>;
+    const fieldErrorsRaw =
+      detailsRaw.field_errors && typeof detailsRaw.field_errors === "object"
+        ? (detailsRaw.field_errors as Record<string, unknown>)
+        : {};
     const next: Record<string, string> = {};
 
     const pick = (key: string) => {
-      const value = raw[key];
+      const value = detailsRaw[key] ?? fieldErrorsRaw[key];
       if (typeof value === "string") return value;
       if (Array.isArray(value) && value.length > 0) return String(value[0]);
       return "";
     };
 
-    const msg = pick("from_title") || pick("reference_no") || pick("address") || pick("to_title") || pick("date");
+    const topMessage = typeof detailsRaw.message === "string" ? detailsRaw.message.trim() : "";
+    const nonFieldError = pick("non_field_errors") || pick("detail");
+
+    const msg = topMessage || nonFieldError || pick("from_title") || pick("reference_no") || pick("address") || pick("to_title") || pick("date");
     if (msg) next.main = msg;
     if (pick("from_title")) next.fromTitle = pick("from_title");
     if (pick("reference_no")) next.referenceNo = pick("reference_no");
@@ -219,6 +227,7 @@ export function PostalReceivePanel() {
     if (field === "referenceNo") {
       if (!v.trim()) return "Reference No is required.";
       if (v.trim().length < 3) return "Reference No must be at least 3 characters.";
+      if (v.trim().length > 20) return "Reference No must not exceed 20 characters.";
       if (!/^[A-Za-z0-9\-]+$/.test(v.trim())) return "Reference No can only contain letters, numbers, and hyphens.";
       return "";
     }
@@ -303,10 +312,10 @@ export function PostalReceivePanel() {
       setFieldErrors({});
       if (editingId) {
         await apiForm(`/api/v1/admissions/postal-receive/${editingId}/`, "PATCH", formData);
-        setSuccess("Postal record updated successfully.");
+        setSuccess("Record updated successfully.");
       } else {
         await apiForm("/api/v1/admissions/postal-receive/", "POST", formData);
-        setSuccess("Postal record saved successfully.");
+        setSuccess("Record created successfully.");
       }
       reset();
       await load();
@@ -330,7 +339,7 @@ export function PostalReceivePanel() {
       setSuccess("");
       await apiDelete(`/api/v1/admissions/postal-receive/${id}/`);
       setItems((prev) => prev.filter((row) => row.id !== id));
-      setSuccess("Postal record deleted.");
+      setSuccess("Record deleted successfully.");
     } catch {
       setError("Unable to delete postal record.");
     } finally {
@@ -369,6 +378,14 @@ export function PostalReceivePanel() {
 
   return (
     <div className="legacy-panel postal-receive-wrap">
+      <TopToast
+        message={error || success}
+        tone={error ? "error" : "success"}
+        onClose={() => {
+          setError("");
+          setSuccess("");
+        }}
+      />
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -422,12 +439,12 @@ export function PostalReceivePanel() {
                     type="text"
                     required
                     minLength={3}
-                    maxLength={50}
+                    maxLength={20}
                     pattern="[A-Za-z0-9\-]+"
                     placeholder="e.g. PR-2026-001"
                     value={referenceNo}
                     onInput={(e) => {
-                      const cleaned = e.currentTarget.value.replace(/[^A-Za-z0-9\-]/g, "").slice(0, 50);
+                      const cleaned = e.currentTarget.value.replace(/[^A-Za-z0-9\-]/g, "").slice(0, 20);
                       setReferenceNo(cleaned);
                       setErrorField("referenceNo", validateField("referenceNo", cleaned));
                     }}
@@ -444,7 +461,6 @@ export function PostalReceivePanel() {
                     name="address"
                     type="text"
                     required
-                    minLength={5}
                     maxLength={255}
                     placeholder="e.g. 123 Main Street, City"
                     value={address}
@@ -636,8 +652,6 @@ export function PostalReceivePanel() {
               </div>
 
               {loading && <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading postal receive records...</p>}
-              {error && <p style={{ marginTop: 10, color: "#dc3545" }}>{error}</p>}
-              {success && <p style={{ marginTop: 10, color: "#0f766e" }}>{success}</p>}
             </div>
           </div>
         </div>

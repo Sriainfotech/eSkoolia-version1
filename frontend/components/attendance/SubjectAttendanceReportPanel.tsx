@@ -33,6 +33,13 @@ async function apiPost<T>(path: string, payload: unknown): Promise<T> {
   });
 }
 
+function parseApiError(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallback;
+}
+
 function fieldStyle() {
   return { width: "100%", height: 40, border: "1px solid var(--line)", borderRadius: 8, padding: "0 10px", background: "var(--surface)" } as const;
 }
@@ -194,18 +201,18 @@ export default function SubjectAttendanceReportPanel() {
       setRequiredError("");
       setSearching(true);
       setHasSearched(true);
-      const data = await apiPost<{ attendances: ReportRow[]; days: number; print_url: string }>("/api/v1/attendance/subject-attendance/report-search/", {
+      const data = await apiPost<{ attendances?: ReportRow[]; results?: ReportRow[]; days?: number; print_url?: string }>("/api/v1/attendance/subject-attendance/report-search/", {
         class: Number(classId),
         section: Number(sectionId),
         month,
         year: Number(derivedReportYear),
       });
-      setRows(data.attendances || []);
+      setRows(data.attendances || data.results || []);
       setDays(data.days || 0);
       setPrintUrl(data.print_url || "");
       setPage(1);
-    } catch {
-      setError("Operation Failed");
+    } catch (err) {
+      setError(parseApiError(err, "Operation Failed"));
       setRows([]);
       setDays(0);
       setPrintUrl("");

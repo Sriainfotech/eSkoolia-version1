@@ -1,11 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 
-type ApiList<T> = T[] | { results?: T[] };
+type ApiList<T> = T[] | { results?: T[]; count?: number };
 
 type StudentCategory = {
   id: number;
@@ -152,6 +152,23 @@ const DEFAULT_STATE_CITY_MAP: Record<string, string[]> = {
 
 function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
+}
+
+async function fetchAllPages<T>(basePath: string, pageSize = 200): Promise<T[]> {
+  let page = 1;
+  const rows: T[] = [];
+  while (page <= 50) {
+    const separator = basePath.includes("?") ? "&" : "?";
+    const payload = await apiGet<ApiList<T>>(`${basePath}${separator}page=${page}&page_size=${pageSize}`);
+    const pageItems = listData(payload);
+    rows.push(...pageItems);
+    const count = Array.isArray(payload) ? pageItems.length : Number(payload.count || 0);
+    if (pageItems.length < pageSize || (count > 0 && rows.length >= count)) {
+      break;
+    }
+    page += 1;
+  }
+  return rows;
 }
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -365,6 +382,8 @@ export function StudentAddPanel() {
   const [photo, setPhoto] = useState("");
   const [photoName, setPhotoName] = useState("");
   const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoCleared, setPhotoCleared] = useState(false);
+  const [photoPreviewOpen, setPhotoPreviewOpen] = useState(false);
   const [statusValue, setStatusValue] = useState<"active" | "inactive" | "transferred" | "dropped">("active");
   const [categoryId, setCategoryId] = useState("");
   const [guardianId, setGuardianId] = useState("");
@@ -395,6 +414,7 @@ export function StudentAddPanel() {
   const [manualAddressMode, setManualAddressMode] = useState(false);
   const [lastPinLookup, setLastPinLookup] = useState("");
   const [pendingSectionId, setPendingSectionId] = useState("");
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
 
   const pinIsValid = /^\d{6}$/.test(pincode.trim());
 
@@ -432,15 +452,15 @@ export function StudentAddPanel() {
     try {
       setLoading(true);
       setError("");
-      const [yearData, categoryData, guardianData, classData] = await Promise.all([
+      const [yearData, classData, categoryRows, guardianRows] = await Promise.all([
         apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/?page_size=200"),
-        apiGet<ApiList<StudentCategory>>("/api/v1/students/categories/?page_size=200"),
-        apiGet<ApiList<Guardian>>("/api/v1/students/guardians/?page_size=200"),
         apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/?page_size=200"),
+        fetchAllPages<StudentCategory>("/api/v1/students/categories/?status=active"),
+        fetchAllPages<Guardian>("/api/v1/students/guardians/"),
       ]);
       setAcademicYears(listData(yearData));
-      setCategories(listData(categoryData));
-      setGuardians(listData(guardianData));
+      setCategories(categoryRows);
+      setGuardians(guardianRows);
       setClasses(listData(classData));
     } catch (loadError) {
       setError(parseError(loadError));
@@ -492,6 +512,7 @@ export function StudentAddPanel() {
     setPincode(String(data.pincode || ""));
     setPhoto(String(data.photo || ""));
     setPhotoName(data.photo ? "Uploaded photo" : "");
+    setPhotoCleared(false);
     setStatusValue(data.status || "active");
     setCategoryId(data.category ? String(data.category) : "");
     setGuardianId(data.guardian ? String(data.guardian) : "");
@@ -669,6 +690,7 @@ export function StudentAddPanel() {
     setPincode("");
     setPhoto("");
     setPhotoName("");
+    setPhotoCleared(false);
     setStatusValue("active");
     setCategoryId("");
     setGuardianId("");
@@ -882,6 +904,7 @@ export function StudentAddPanel() {
       if (!uploadedUrl) throw new Error("Photo upload failed");
       setPhoto(uploadedUrl);
       setPhotoName(file.name);
+      setPhotoCleared(false);
       setSuccess("Photo uploaded securely.");
     } catch (uploadError) {
       setSingleFieldError("photo", parseError(uploadError));
@@ -890,6 +913,14 @@ export function StudentAddPanel() {
     } finally {
       setPhotoUploading(false);
     }
+  };
+
+  const clearStudentPhoto = () => {
+    setPhoto("");
+    setPhotoName("");
+    setPhotoCleared(true);
+    setPhotoPreviewOpen(false);
+    setSingleFieldError("photo", "");
   };
 
   const submit = async (event: FormEvent) => {
@@ -935,7 +966,7 @@ export function StudentAddPanel() {
         district: sanitizeText(district) || undefined,
         state: sanitizeText(stateName) || undefined,
         pincode: pincode.trim() || undefined,
-        photo: photo || undefined,
+        photo: photo ? photo : (isEditMode && photoCleared ? "" : undefined),
         status: statusValue,
         category: categoryId ? Number(categoryId) : undefined,
         guardian: guardianId ? Number(guardianId) : undefined,
@@ -999,6 +1030,44 @@ export function StudentAddPanel() {
             <p style={{ margin: "0 0 12px", color: "#334155", fontSize: 13 }}>
               Required fields are marked with *.
             </p>
+
+            {error ? (
+              <div
+                role="alert"
+                aria-live="polite"
+                style={{
+                  margin: "0 0 12px",
+                  color: "#b91c1c",
+                  fontSize: 13,
+                  backgroundColor: "#fee2e2",
+                  padding: "12px",
+                  borderRadius: 8,
+                  border: "1px solid #fecaca",
+                  fontWeight: 500,
+                }}
+              >
+                {error}
+              </div>
+            ) : null}
+
+            {success ? (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  margin: "0 0 12px",
+                  color: "#065f46",
+                  fontSize: 13,
+                  backgroundColor: "#d1fae5",
+                  padding: "12px",
+                  borderRadius: 8,
+                  border: "1px solid #a7f3d0",
+                  fontWeight: 500,
+                }}
+              >
+                {success}
+              </div>
+            ) : null}
 
             <fieldset disabled={isViewMode} style={{ border: 0, margin: 0, padding: 0 }}>
             <div className="white-box" style={boxStyle()}>
@@ -1144,16 +1213,78 @@ export function StudentAddPanel() {
                 <div data-field="photo">
                   <label htmlFor="photo" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Student Photo (JPEG/PNG)</label>
                   <input
+                    ref={photoInputRef}
                     id="photo"
                     type="file"
                     accept="image/jpeg,image/png"
                     style={fieldStyle(Boolean(fieldErrors.photo))}
+                    onClick={(event) => {
+                      event.currentTarget.value = "";
+                    }}
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) void uploadStudentPhoto(file);
                     }}
+                    disabled={isViewMode || photoUploading}
                   />
-                  {photoName ? <p style={{ margin: "4px 0 0", color: "#0f766e", fontSize: 12 }}>Uploaded: {photoName}</p> : null}
+                  {photo ? (
+                    <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        onClick={() => setPhotoPreviewOpen(true)}
+                        aria-label="Open photo preview"
+                        title="Open photo preview"
+                        style={{ border: "none", padding: 0, margin: 0, background: "transparent", cursor: "zoom-in" }}
+                      >
+                        <img
+                          src={photo}
+                          alt="Student photo preview"
+                          width={52}
+                          height={52}
+                          style={{
+                            width: 52,
+                            height: 52,
+                            objectFit: "cover",
+                            borderRadius: 8,
+                            border: "1px solid var(--line)",
+                            background: "#f8fafc",
+                          }}
+                        />
+                      </button>
+                      <span style={{ color: "#0f766e", fontSize: 12 }}>Uploaded: {photoName || "Student photo"}</span>
+                      {!isViewMode ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => photoInputRef.current?.click()}
+                            disabled={photoUploading}
+                            style={{ ...buttonStyle("#2563eb"), minHeight: 32, padding: "0 10px", fontSize: 12 }}
+                          >
+                            Replace
+                          </button>
+                          <button
+                            type="button"
+                            onClick={clearStudentPhoto}
+                            disabled={photoUploading}
+                            aria-label="Remove uploaded photo"
+                            title="Remove uploaded photo"
+                            style={{
+                              minWidth: 32,
+                              height: 32,
+                              border: "1px solid #dc2626",
+                              background: "#fff",
+                              color: "#dc2626",
+                              borderRadius: 8,
+                              cursor: "pointer",
+                              fontWeight: 700,
+                            }}
+                          >
+                            X
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {fieldErrors.photo ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.photo}</p> : null}
                 </div>
 
@@ -1383,18 +1514,71 @@ export function StudentAddPanel() {
           {loading ? (
             <div style={{ margin: 0, color: "var(--text-muted)", fontSize: 14, textAlign: "center", padding: "12px" }}>Loading form data...</div>
           ) : null}
-          {error ? (
-            <div style={{ margin: 0, color: "#b91c1c", fontSize: 13, backgroundColor: "#fee2e2", padding: "12px", borderRadius: 8, border: "1px solid #fecaca", fontWeight: 500 }}>
-              {error}
-            </div>
-          ) : null}
-          {success ? (
-            <div style={{ margin: 0, color: "#065f46", fontSize: 13, backgroundColor: "#d1fae5", padding: "12px", borderRadius: 8, border: "1px solid #a7f3d0", fontWeight: 500 }}>
-              {success}
-            </div>
-          ) : null}
         </div>
       </section>
+
+      {photoPreviewOpen && photo ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Student photo preview"
+          onClick={() => setPhotoPreviewOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.68)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              position: "relative",
+              maxWidth: 720,
+              width: "100%",
+              background: "#fff",
+              borderRadius: 12,
+              padding: 12,
+              border: "1px solid #e2e8f0",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setPhotoPreviewOpen(false)}
+              aria-label="Close photo preview"
+              style={{
+                position: "absolute",
+                top: 8,
+                right: 8,
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                border: "1px solid #cbd5e1",
+                background: "#fff",
+                cursor: "pointer",
+                fontWeight: 700,
+              }}
+            >
+              X
+            </button>
+            <img
+              src={photo}
+              alt="Student full preview"
+              style={{
+                width: "100%",
+                maxHeight: "80vh",
+                objectFit: "contain",
+                borderRadius: 8,
+                background: "#f8fafc",
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
 
       <style jsx>{`
         .student-add-panel-wrap {

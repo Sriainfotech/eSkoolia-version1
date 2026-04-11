@@ -11,6 +11,7 @@ from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
+from config.pagination import ApiPageNumberPagination
 
 from apps.core.models import Class, Section
 from apps.students.models import Student
@@ -70,7 +71,12 @@ class StudentAttendanceListCreateAPIView(AttendanceTenantMixin, APIView):
         if params.get("academic_year_id"):
             queryset = queryset.filter(academic_year_id=params["academic_year_id"])
 
-        serializer = StudentAttendanceSerializer(queryset.order_by("-attendance_date", "student_id"), many=True)
+        ordered_queryset = queryset.order_by("-attendance_date", "student_id")
+        paginator = ApiPageNumberPagination()
+        page = paginator.paginate_queryset(ordered_queryset, request)
+        serializer = StudentAttendanceSerializer(page if page is not None else ordered_queryset, many=True)
+        if page is not None:
+            return paginator.get_paginated_response(serializer.data)
         return Response(serializer.data)
 
     def post(self, request):
@@ -350,6 +356,25 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
+            detail = getattr(e, "detail", None)
+            if detail is not None:
+                if isinstance(detail, dict):
+                    first_message = "Validation failed"
+                    for value in detail.values():
+                        if isinstance(value, (list, tuple)) and value:
+                            first_message = str(value[0])
+                            break
+                        if isinstance(value, str):
+                            first_message = value
+                            break
+                    return Response(
+                        {"success": False, "message": first_message, "field_errors": detail},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                return Response(
+                    {"success": False, "message": str(detail)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             return Response(
                 {"success": False, "message": f"Failed to save attendance: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -475,6 +500,10 @@ class StudentAttendanceMonthlyReportAPIView(AttendanceTenantMixin, APIView):
             }
             for sid, info in grouped.items()
         ]
+        paginator = ApiPageNumberPagination()
+        page = paginator.paginate_queryset(result, request)
+        if page is not None:
+            return paginator.get_paginated_response(page)
         return Response(result)
 
 
@@ -595,6 +624,16 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        school_scope = self.school_filter(request)
+        class_qs = Class.objects.filter(id=class_id, **school_scope)
+        if not class_qs.exists():
+            return Response({"detail": "Invalid class selected."}, status=status.HTTP_400_BAD_REQUEST)
+        section_qs = Section.objects.filter(id=section_id, school_class_id=class_id)
+        if not request.user.is_superuser:
+            section_qs = section_qs.filter(school_class__school_id=request.user.school_id)
+        if not section_qs.exists():
+            return Response({"detail": "Invalid section selected for class."}, status=status.HTTP_400_BAD_REQUEST)
+
         imported_rows = []
         errors: list[dict] = []
         row_number = 2  # Start from 2 (header is row 1)
@@ -640,7 +679,7 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-        school_filter = self.school_filter(request)
+        school_filter = school_scope
         processed_count = 0
         failed_count = 0
 
@@ -649,9 +688,9 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
 
         for row_num, row_data in imported_rows:
             row_errors = []
-            admission_no = (row_data.get("admission_no") or "").strip()
-            attendance_type = (row_data.get("attendance_type") or "").strip()
-            note = (row_data.get("note") or "").strip()
+            admission_no = str(row_data.get("admission_no") or "").strip()
+            attendance_type = str(row_data.get("attendance_type") or "").strip()
+            note = str(row_data.get("note") or "").strip()
 
             # Validate admission_no
             if not admission_no:

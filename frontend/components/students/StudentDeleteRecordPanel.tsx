@@ -54,6 +54,13 @@ function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
 }
 
+function listMeta<T>(value: ApiList<T>) {
+  if (Array.isArray(value)) {
+    return { count: value.length };
+  }
+  return { count: value.count || 0 };
+}
+
 async function apiGet<T>(path: string): Promise<T> {
   return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
 }
@@ -162,6 +169,9 @@ export function StudentDeleteRecordPanel() {
   const [confirmState, setConfirmState] = useState<ConfirmState>(null);
   const [confirmText, setConfirmText] = useState("");
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [totalCount, setTotalCount] = useState(0);
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -245,12 +255,16 @@ export function StudentDeleteRecordPanel() {
       if (debouncedSearch) {
         params.set("search", debouncedSearch);
       }
+      params.set("page", String(currentPage));
+      params.set("page_size", String(pageSize));
 
       const studentData = await apiGet<ApiList<StudentRow>>(`/api/v1/students/students/?${params.toString()}`);
       setStudents(listData(studentData));
+      setTotalCount(listMeta(studentData).count);
       setSelectedStudentIds([]);
     } catch (err) {
       setError(parseError(err));
+      setTotalCount(0);
     } finally {
       setListLoading(false);
     }
@@ -289,7 +303,11 @@ export function StudentDeleteRecordPanel() {
         void loadAudits();
       }
     }
-  }, [loading, classId, sectionId, deletedOnly, debouncedSearch, activeTab]);
+  }, [loading, classId, sectionId, deletedOnly, debouncedSearch, activeTab, currentPage, pageSize]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [classId, sectionId, deletedOnly, debouncedSearch]);
 
   useEffect(() => {
     if (!classId) {
@@ -397,6 +415,7 @@ export function StudentDeleteRecordPanel() {
       setConfirmState(null);
       setConfirmText("");
       setSelectedStudentIds([]);
+      await loadStudents();
       if (activeTab === "audit") {
         await loadAudits();
       }
@@ -420,6 +439,7 @@ export function StudentDeleteRecordPanel() {
 
   const noRows = !listLoading && students.length === 0;
   const selectedCount = selectedStudentIds.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   const actionLabel = (action: StudentAuditRow["action"]) => {
     if (action === "soft_delete") {
@@ -628,6 +648,45 @@ export function StudentDeleteRecordPanel() {
                       )}
                     </tbody>
                   </table>
+                </div>
+
+                <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+                    Page {currentPage} of {totalPages} | Total {totalCount}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                      Rows
+                      <select
+                        value={pageSize}
+                        onChange={(event) => {
+                          setPageSize(Number(event.target.value));
+                          setCurrentPage(1);
+                        }}
+                        style={{ ...fieldStyle(), width: 86 }}
+                      >
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      style={buttonStyle("#64748b")}
+                      disabled={currentPage <= 1 || listLoading}
+                      onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                    >
+                      Previous
+                    </button>
+                    <button
+                      type="button"
+                      style={buttonStyle("#64748b")}
+                      disabled={currentPage >= totalPages || listLoading}
+                      onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                    >
+                      Next
+                    </button>
+                  </div>
                 </div>
 
                 {(loading || listLoading) && <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading records...</p>}
