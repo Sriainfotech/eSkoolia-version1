@@ -353,7 +353,7 @@ function ClassesSection() {
     fontSize: 12,
     fontWeight: 600,
     color: "var(--text-muted)",
-    marginBottom: 6,
+    marginBottom: 6,  
     display: "block",
   } as const;
 
