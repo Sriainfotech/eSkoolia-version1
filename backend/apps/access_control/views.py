@@ -144,11 +144,11 @@ class RoleViewSet(StandardizedAccessControlResponseMixin, viewsets.ModelViewSet)
         user = self.request.user
         queryset = Role.objects.prefetch_related("permissions")
         if user.is_superuser:
-            queryset = queryset
-        if user.school_id:
+            pass
+        elif user.school_id:
             queryset = queryset.filter(school_id=user.school_id)
         else:
-            queryset = queryset.none()
+            queryset = queryset.filter(school__isnull=True)
 
         search = (self.request.query_params.get("search") or "").strip()
         if search:

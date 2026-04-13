@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+from urllib.parse import parse_qs, unquote, urlparse
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
@@ -82,17 +83,50 @@ CHANNEL_LAYERS = {
 }
 
 DB_ENGINE = os.getenv("DB_ENGINE", "django.db.backends.sqlite3")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-DATABASES = {
-    "default": {
-        "ENGINE": DB_ENGINE,
-        "NAME": os.getenv("DB_NAME", str(BASE_DIR / "db.sqlite3")) if DB_ENGINE == "django.db.backends.sqlite3" else os.getenv("DB_NAME", "school_erp"),
-        "USER": os.getenv("DB_USER", ""),
-        "PASSWORD": os.getenv("DB_PASSWORD", ""),
-        "HOST": os.getenv("DB_HOST", ""),
-        "PORT": os.getenv("DB_PORT", ""),
+if DATABASE_URL:
+    parsed_db_url = urlparse(DATABASE_URL)
+    db_scheme = (parsed_db_url.scheme or "").split("+")[0].lower()
+    engine_map = {
+        "postgres": "django.db.backends.postgresql",
+        "postgresql": "django.db.backends.postgresql",
+        "sqlite": "django.db.backends.sqlite3",
     }
-}
+    resolved_engine = engine_map.get(db_scheme, DB_ENGINE)
+    resolved_name = (
+        unquote(parsed_db_url.path.lstrip("/"))
+        if resolved_engine != "django.db.backends.sqlite3"
+        else (unquote(parsed_db_url.path) or str(BASE_DIR / "db.sqlite3"))
+    )
+    resolved_options = {}
+    query_params = parse_qs(parsed_db_url.query or "")
+    resolved_sslmode = (query_params.get("sslmode", [""])[0] or os.getenv("DB_SSLMODE", "")).strip()
+    if resolved_sslmode:
+        resolved_options["sslmode"] = resolved_sslmode
+
+    DATABASES = {
+        "default": {
+            "ENGINE": resolved_engine,
+            "NAME": resolved_name,
+            "USER": unquote(parsed_db_url.username or ""),
+            "PASSWORD": unquote(parsed_db_url.password or ""),
+            "HOST": parsed_db_url.hostname or "",
+            "PORT": str(parsed_db_url.port or ""),
+            **({"OPTIONS": resolved_options} if resolved_options else {}),
+        }
+    }
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": DB_ENGINE,
+            "NAME": os.getenv("DB_NAME", str(BASE_DIR / "db.sqlite3")) if DB_ENGINE == "django.db.backends.sqlite3" else os.getenv("DB_NAME", "school_erp"),
+            "USER": os.getenv("DB_USER", ""),
+            "PASSWORD": os.getenv("DB_PASSWORD", ""),
+            "HOST": os.getenv("DB_HOST", ""),
+            "PORT": os.getenv("DB_PORT", ""),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
