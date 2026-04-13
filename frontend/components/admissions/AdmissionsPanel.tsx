@@ -352,14 +352,14 @@ export function AdmissionsPanel() {
   };
 
   const loadOptions = async () => {
-    const [setupData, classData] = await Promise.all([
-      apiRequestWithRefresh<ApiList<AdminSetup>>("/api/v1/admissions/admin-setups/"),
+    const [sourceData, referenceData, classData] = await Promise.all([
+      apiRequestWithRefresh<ApiList<AdminSetup>>("/api/v1/admissions/admin-setups/?type=3&page=1&page_size=50"),
+      apiRequestWithRefresh<ApiList<AdminSetup>>("/api/v1/admissions/admin-setups/?type=4&page=1&page_size=50"),
       apiRequestWithRefresh<ApiList<SchoolClass>>("/api/v1/core/classes/"),
     ]);
 
-    const setupRows = listData(setupData);
-    setSources(setupRows.filter((row) => row.type === "3"));
-    setReferences(setupRows.filter((row) => row.type === "4"));
+    setSources(listData(sourceData));
+    setReferences(listData(referenceData));
     setClasses(listData(classData));
   };
 

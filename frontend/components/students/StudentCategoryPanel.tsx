@@ -419,15 +419,32 @@ export function StudentCategoryPanel() {
 
   const bulkStatusChange = async (nextStatus: "active" | "inactive") => {
     if (!selectedIds.length) return;
+    const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
+    const toUpdate = selectedRows.filter((row) => row.status !== nextStatus);
+
+    if (selectedRows.length > 0 && toUpdate.length === 0) {
+      setToast(nextStatus === "active" ? "Selected categories are already active." : "Selected categories are already inactive.");
+      return;
+    }
+
     try {
       setSaving(true);
       setError("");
       setSuccess("");
       const response = await apiPatch<CategoryMutationResponse>("/api/v1/students/categories/bulk-status/", {
-        ids: selectedIds,
+        ids: toUpdate.length > 0 ? toUpdate.map((row) => row.id) : selectedIds,
         status: nextStatus,
       });
-      setToast(response?.message || `Selected categories updated to ${nextStatus}.`);
+      if (response?.success === false) {
+        setToast(response.message || "Unable to update selected categories.", true);
+      } else {
+        const updatedCount = toUpdate.length > 0 ? toUpdate.length : selectedIds.length;
+        setToast(
+          nextStatus === "active"
+            ? `${updatedCount} categor${updatedCount === 1 ? "y" : "ies"} activated successfully.`
+            : `${updatedCount} categor${updatedCount === 1 ? "y" : "ies"} deactivated successfully.`
+        );
+      }
       setSelectedIds([]);
       await load(currentPage, pageSize, search, statusFilter);
     } catch (err) {

@@ -463,7 +463,7 @@ export function StudentDeleteRecordPanel() {
                   Student List
                 </Link>
                 <Link href="/students/multi-class" style={{ ...buttonStyle("#16a34a"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-                  Student Subject Assignment
+                  Multi Subject Assignment
                 </Link>
               </div>
               <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>

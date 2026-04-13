@@ -40,7 +40,9 @@ type GenerateSetupResponse = {
 
 type RecipientsResponse = {
   is_student_role: boolean;
-  recipients: StudentRow[];
+  recipients?: StudentRow[];
+  results?: StudentRow[];
+  count?: number;
 };
 
 function fieldStyle() {
@@ -105,6 +107,16 @@ async function apiGet<T>(path: string): Promise<T> {
   return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
 }
 
+function resolveRecipients(data: RecipientsResponse): StudentRow[] {
+  if (Array.isArray(data.recipients)) {
+    return data.recipients;
+  }
+  if (Array.isArray(data.results)) {
+    return data.results;
+  }
+  return [];
+}
+
 export function GenerateIdCardPanel() {
   const [roles, setRoles] = useState<RoleOption[]>([]);
   const [templates, setTemplates] = useState<IdCardTemplate[]>([]);
@@ -115,6 +127,7 @@ export function GenerateIdCardPanel() {
 
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -130,7 +143,8 @@ export function GenerateIdCardPanel() {
 
   const isStudentRole = useMemo(() => {
     if (!selectedRole) return false;
-    return String(selectedRole.id) === "2" || selectedRole.name.toLowerCase().includes("student");
+    const roleName = String(selectedRole.name || "").trim().toLowerCase();
+    return roleName === "student";
   }, [selectedRole]);
 
   const classNameById = useMemo(() => {
@@ -176,12 +190,31 @@ export function GenerateIdCardPanel() {
   }, [roleId]);
 
   useEffect(() => {
+    if (!isStudentRole) {
+      setClassId("");
+      setSectionId("");
+    }
+  }, [isStudentRole]);
+
+  useEffect(() => {
     setSectionId("");
   }, [classId]);
 
   const searchStudents = async () => {
     if (!roleId) {
-      setError("Select a role first.");
+      setError("Please select Role.");
+      return;
+    }
+    if (!templateId) {
+      setError("Please select ID Card Template.");
+      return;
+    }
+    if (isStudentRole && !classId) {
+      setError("Please select Class for Student role.");
+      return;
+    }
+    if (isStudentRole && !sectionId) {
+      setError("Please select Section for Student role.");
       return;
     }
 
@@ -196,14 +229,21 @@ export function GenerateIdCardPanel() {
       if (isStudentRole && sectionId) params.set("section", sectionId);
 
       const data = await apiGet<RecipientsResponse>(`/api/v1/admissions/id-card-templates/recipients/?${params.toString()}`);
-      setStudents(data.recipients || []);
+      const recipients = resolveRecipients(data);
+      setStudents(recipients);
+      setHasSearched(true);
       setIsStudentRoleResponse(!!data.is_student_role);
       setSelectedIds([]);
-      if (!(data.recipients || []).length) {
-        setSuccess(isStudentRole ? "No students found for selected criteria." : "No recipients found for selected role.");
+      if (!recipients.length) {
+        setSuccess("No users found.");
       }
-    } catch {
-      setError("Unable to load recipients.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (/validation\s+error/i.test(message)) {
+        setError("Please fix the errors.");
+      } else {
+        setError(message || "Unable to load recipients.");
+      }
     } finally {
       setSearching(false);
     }
@@ -356,43 +396,64 @@ export function GenerateIdCardPanel() {
           <div className="white-box" style={boxStyle()}>
             <h3 style={{ marginTop: 0 }}>Select Criteria</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(140px, 1fr))", gap: 8 }}>
-              <select aria-label="Role" title="Role" value={roleId} onChange={(e) => setRoleId(e.target.value)} style={fieldStyle()}>
-                <option value="">Select role *</option>
-                {roles.map((role) => (
-                  <option key={role.id} value={role.id}>{role.name}</option>
-                ))}
-              </select>
-
-              <select aria-label="ID card template" title="ID card template" value={templateId} onChange={(e) => setTemplateId(e.target.value)} style={fieldStyle()}>
-                <option value="">Select ID card *</option>
-                {availableTemplates.map((t) => (
-                  <option key={t.id} value={t.id}>{templateLabel(t)}</option>
-                ))}
-              </select>
-
-              {isStudentRole ? (
-                <select aria-label="Class" title="Class" value={classId} onChange={(e) => setClassId(e.target.value)} style={fieldStyle()}>
-                  <option value="">Select class</option>
-                  {classes.map((c) => (
-                    <option key={c.id} value={c.id}>{c.class_name || c.name || `Class ${c.id}`}</option>
+              <div>
+                <label htmlFor="id-card-role" style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Role</label>
+                <select id="id-card-role" aria-label="Role" title="Role" value={roleId} onChange={(e) => setRoleId(e.target.value)} style={fieldStyle()}>
+                  <option value="">Select role *</option>
+                  {roles.map((role) => (
+                    <option key={role.id} value={role.id}>{role.name}</option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label htmlFor="id-card-template" style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>ID Card Template</label>
+                <select id="id-card-template" aria-label="ID card template" title="ID card template" value={templateId} onChange={(e) => setTemplateId(e.target.value)} style={fieldStyle()}>
+                  <option value="">Select ID card *</option>
+                  {availableTemplates.map((t) => (
+                    <option key={t.id} value={t.id}>{templateLabel(t)}</option>
+                  ))}
+                </select>
+              </div>
+
+              {isStudentRole ? (
+                <div>
+                  <label htmlFor="id-card-class" style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Class</label>
+                  <select id="id-card-class" aria-label="Class" title="Class" value={classId} onChange={(e) => setClassId(e.target.value)} style={fieldStyle()}>
+                    <option value="">Select class *</option>
+                    {classes.map((c) => (
+                      <option key={c.id} value={c.id}>{c.class_name || c.name || `Class ${c.id}`}</option>
+                    ))}
+                  </select>
+                </div>
               ) : (
-                <input aria-label="Class" title="Class" value="All classes" readOnly style={{ ...fieldStyle(), background: "#f9fafb" }} />
+                <div>
+                  <label htmlFor="id-card-class-readonly" style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Class</label>
+                  <input id="id-card-class-readonly" aria-label="Class" title="Class" value="All classes" readOnly style={{ ...fieldStyle(), background: "#f9fafb" }} />
+                </div>
               )}
 
               {isStudentRole ? (
-                <select aria-label="Section" title="Section" value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={fieldStyle()}>
-                  <option value="">Select section</option>
-                  {filteredSections.map((s) => (
-                    <option key={s.id} value={s.id}>{s.section_name || s.name || `Section ${s.id}`}</option>
-                  ))}
-                </select>
+                <div>
+                  <label htmlFor="id-card-section" style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Section</label>
+                  <select id="id-card-section" aria-label="Section" title="Section" value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={fieldStyle()}>
+                    <option value="">Select section *</option>
+                    {filteredSections.map((s) => (
+                      <option key={s.id} value={s.id}>{s.section_name || s.name || `Section ${s.id}`}</option>
+                    ))}
+                  </select>
+                </div>
               ) : (
-                <input aria-label="Section" title="Section" value="All sections" readOnly style={{ ...fieldStyle(), background: "#f9fafb" }} />
+                <div>
+                  <label htmlFor="id-card-section-readonly" style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Section</label>
+                  <input id="id-card-section-readonly" aria-label="Section" title="Section" value="All sections" readOnly style={{ ...fieldStyle(), background: "#f9fafb" }} />
+                </div>
               )}
 
-              <input type="number" min={0} value={gridGap} onChange={(e) => setGridGap(e.target.value)} placeholder="Grid gap (px)" style={fieldStyle()} />
+              <div>
+                <label htmlFor="id-card-grid-gap" style={{ display: "block", fontSize: 12, marginBottom: 4, color: "var(--text-muted)" }}>Grid Gap (px)</label>
+                <input id="id-card-grid-gap" type="number" min={0} value={gridGap} onChange={(e) => setGridGap(e.target.value)} placeholder="Grid gap (px)" style={fieldStyle()} />
+              </div>
             </div>
 
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
@@ -432,7 +493,7 @@ export function GenerateIdCardPanel() {
                   {!students.length ? (
                     <tr>
                       <td colSpan={isStudentRoleResponse ? 6 : 2} style={{ padding: 12, color: "var(--text-muted)" }}>
-                        {loading ? "Loading..." : "No recipients loaded. Click Search."}
+                        {loading ? "Loading..." : hasSearched ? "No users found." : "No recipients loaded. Click Search."}
                       </td>
                     </tr>
                   ) : (

@@ -1,13 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { API_BASE_URL } from "@/lib/api";
 import { clearAuthTokens, getAccessToken, getRefreshToken } from "@/lib/auth";
+import { BackButton } from "@/components/common/BackButton";
 
 export function Topbar() {
+  const pathname = usePathname();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
+  const showBackButton = pathname !== "/dashboard";
 
   const handleLogout = async () => {
     if (loggingOut) return;
@@ -50,7 +53,9 @@ export function Topbar() {
         background: "var(--surface)",
       }}
     >
-      <div />
+      <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+        {showBackButton ? <BackButton /> : null}
+      </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <button
           onClick={handleLogout}
