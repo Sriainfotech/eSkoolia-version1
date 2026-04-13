@@ -419,12 +419,21 @@ export function StudentCategoryPanel() {
 
   const bulkStatusChange = async (nextStatus: "active" | "inactive") => {
     if (!selectedIds.length) return;
+
+    const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
+    const idsNeedingUpdate = selectedRows.filter((row) => row.status !== nextStatus).map((row) => row.id);
+
+    if (!idsNeedingUpdate.length) {
+      setToast(`Selected categories are already ${nextStatus}.`);
+      return;
+    }
+
     try {
       setSaving(true);
       setError("");
       setSuccess("");
       const response = await apiPatch<CategoryMutationResponse>("/api/v1/students/categories/bulk-status/", {
-        ids: selectedIds,
+        ids: idsNeedingUpdate,
         status: nextStatus,
       });
       setToast(response?.message || `Selected categories updated to ${nextStatus}.`);

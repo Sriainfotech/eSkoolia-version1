@@ -237,8 +237,24 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
             return self._build_validation_error_response({}, "Select at least one category.")
 
         queryset = self.get_queryset().filter(id__in=ids)
-        updated = queryset.update(status=status_value)
-        return Response({"success": True, "message": f"{updated} categories updated successfully."})
+        already_count = queryset.filter(status=status_value).count()
+        update_queryset = queryset.exclude(status=status_value)
+        updated = update_queryset.update(status=status_value)
+
+        if updated == 0:
+            message = f"Selected categories are already {status_value}."
+        elif already_count == 0:
+            noun = "category" if updated == 1 else "categories"
+            message = f"{updated} {noun} updated successfully."
+        else:
+            updated_noun = "category" if updated == 1 else "categories"
+            already_noun = "category is" if already_count == 1 else "categories are"
+            message = (
+                f"{updated} {updated_noun} updated successfully. "
+                f"{already_count} {already_noun} already {status_value}."
+            )
+
+        return Response({"success": True, "message": message})
 
     @action(detail=False, methods=["delete"], url_path="bulk-delete")
     def bulk_delete(self, request):
