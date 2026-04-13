@@ -116,7 +116,7 @@ export default function ExamMarksRegisterCreatePanel() {
       setSuccess("");
       const data = await apiPost<{ students: StudentRow[]; marks_entry_form: Part[] }>("/api/v1/exams/exam-marks/create-search/", {
         exam: Number(examId),
-        class: Number(classId),
+        class_id: Number(classId),
         section: sectionId ? Number(sectionId) : 0,
         subject: Number(subjectId),
       });
@@ -180,8 +180,9 @@ export default function ExamMarksRegisterCreatePanel() {
               String(s.student_record_id),
               {
                 student: s.student,
-                class: Number(classId),
-                section: s.section,
+                class_id: Number(classId),
+                section_id: s.section,
+                subject_id: Number(subjectId),
                 marks: marksState[s.student_record_id] || {},
                 exam_Sids: sidMap,
                 absent_students: absentState[s.student_record_id] ? s.student_record_id : "",
@@ -208,23 +209,37 @@ export default function ExamMarksRegisterCreatePanel() {
           <div className="white-box" style={{ ...boxStyle(), marginBottom: 12 }}>
             <h3 style={{ marginTop: 0, marginBottom: 12 }}>Select Criteria</h3>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr)) auto", gap: 8 }}>
-              <select value={examId} onChange={(e) => setExamId(e.target.value)} style={fieldStyle()}>
-                <option value="">Select Exam *</option>
-                {exams.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
-              </select>
-              <select value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); }} style={fieldStyle()}>
-                <option value="">Select Class *</option>
-                {classes.map((x) => <option key={x.id} value={x.id}>{x.class_name || x.name || `Class ${x.id}`}</option>)}
-              </select>
-              <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={fieldStyle()}>
-                <option value="">Select Subject *</option>
-                {subjects.map((x) => <option key={x.id} value={x.id}>{x.subject_name || x.name || `Subject ${x.id}`}</option>)}
-              </select>
-              <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={fieldStyle()}>
-                <option value="">All Sections</option>
-                {filteredSections.map((x) => <option key={x.id} value={x.id}>{x.section_name || x.name || `Section ${x.id}`}</option>)}
-              </select>
-              <button type="button" onClick={() => void search()} style={buttonStyle()}>Search</button>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <label htmlFor="examId" style={{ marginBottom: 4, fontWeight: 500 }}>Exam</label>
+                <select id="examId" value={examId} onChange={(e) => setExamId(e.target.value)} style={fieldStyle()}>
+                  <option value="">Select Exam *</option>
+                  {exams.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
+                </select>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <label htmlFor="classId" style={{ marginBottom: 4, fontWeight: 500 }}>Class</label>
+                <select id="classId" value={classId} onChange={(e) => { setClassId(e.target.value); setSectionId(""); }} style={fieldStyle()}>
+                  <option value="">Select Class *</option>
+                  {classes.map((x) => <option key={x.id} value={x.id}>{x.class_name || x.name || `Class ${x.id}`}</option>)}
+                </select>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <label htmlFor="subjectId" style={{ marginBottom: 4, fontWeight: 500 }}>Subject</label>
+                <select id="subjectId" value={subjectId} onChange={(e) => setSubjectId(e.target.value)} style={fieldStyle()}>
+                  <option value="">Select Subject *</option>
+                  {subjects.map((x) => <option key={x.id} value={x.id}>{x.subject_name || x.name || `Subject ${x.id}`}</option>)}
+                </select>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                <label htmlFor="sectionId" style={{ marginBottom: 4, fontWeight: 500 }}>Section</label>
+                <select id="sectionId" value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={fieldStyle()}>
+                  <option value="">All Sections</option>
+                  {filteredSections.map((x) => <option key={x.id} value={x.id}>{x.section_name || x.name || `Section ${x.id}`}</option>)}
+                </select>
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-end" }}>
+                <button type="button" onClick={() => void search()} style={buttonStyle()}>Search</button>
+              </div>
             </div>
             {error && <p style={{ color: "var(--warning)", marginTop: 8 }}>{error}</p>}
             {success && <p style={{ color: "#059669", marginTop: 8 }}>{success}</p>}

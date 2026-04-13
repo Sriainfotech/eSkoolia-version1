@@ -154,7 +154,7 @@ function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
 }
 
-async function fetchAllPages<T>(basePath: string, pageSize = 200): Promise<T[]> {
+async function fetchAllPages<T>(basePath: string, pageSize = 100): Promise<T[]> {
   let page = 1;
   const rows: T[] = [];
   while (page <= 50) {
@@ -279,7 +279,11 @@ function isValidPincode(pincode: string): boolean {
 function isLikelyValidClassName(value: string): boolean {
   const clean = sanitizeText(value);
   const lowered = clean.toLowerCase();
-  if (!clean || clean.length < 2) return false;
+  if (!clean) return false;
+  // Accept numeric classes like "1".."12" that are a single character.
+  if (/^\d+$/.test(clean)) {
+    return true;
+  }
   if (["abc", "adc", "asdf", "test", "demo"].includes(lowered)) return false;
   return /[A-Za-z0-9]/.test(clean);
 }
@@ -454,14 +458,14 @@ export function StudentAddPanel() {
       setError("");
       const [yearData, classData, categoryRows, guardianRows] = await Promise.all([
         apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/?page_size=200"),
-        apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/?page_size=200"),
+        fetchAllPages<SchoolClass>("/api/v1/core/classes/"),
         fetchAllPages<StudentCategory>("/api/v1/students/categories/?status=active"),
         fetchAllPages<Guardian>("/api/v1/students/guardians/"),
       ]);
       setAcademicYears(listData(yearData));
       setCategories(categoryRows);
       setGuardians(guardianRows);
-      setClasses(listData(classData));
+      setClasses(classData);
     } catch (loadError) {
       setError(parseError(loadError));
     } finally {
@@ -1016,7 +1020,7 @@ export function StudentAddPanel() {
                   Student List
                 </Link>
                 <Link href="/students/multi-class" style={{ ...buttonStyle("#1d4ed8"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-                  Student Subject Assignment
+                  Multi Subject Assignment
                 </Link>
               </div>
             </div>

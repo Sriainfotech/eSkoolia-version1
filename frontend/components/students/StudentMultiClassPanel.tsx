@@ -526,7 +526,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>Student Subject Assignment</h1>
+            <h1 style={{ margin: 0, fontSize: 24 }}>Multi Subject Assignment</h1>
             <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
               <div style={{ display: "flex", gap: 8 }}>
                 <Link href="/students/add" style={{ ...buttonStyle("#16a34a"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
@@ -541,7 +541,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                 <span>/</span>
                 <span>Student Information</span>
                 <span>/</span>
-                <span>Student Subject Assignment</span>
+                <span>Multi Subject Assignment</span>
               </div>
             </div>
           </div>

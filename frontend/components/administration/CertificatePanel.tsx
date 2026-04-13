@@ -80,6 +80,18 @@ function validateNumberField(value: string, min: number, max: number): string {
   return "";
 }
 
+function normalizeIntegerField(value: unknown, fallback: string): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return fallback;
+  if (/^\d+$/.test(raw)) return raw;
+
+  const asNumber = Number(raw);
+  if (!Number.isFinite(asNumber)) return fallback;
+  const normalized = Math.trunc(asNumber);
+  if (normalized < 0) return fallback;
+  return String(normalized);
+}
+
 function readApiFieldErrors(err: unknown): { main?: string; title?: string } | null {
   const details = (err as { details?: unknown } | null)?.details;
   if (!details || typeof details !== "object") return null;
@@ -215,12 +227,12 @@ export function CertificatePanel() {
     setRoleId(row.applicable_role_id ? String(row.applicable_role_id) : "");
     setTitle(row.title || "");
     setBody(row.body || "");
-    setHeight(String(row.background_height || "144"));
-    setWidth(String(row.background_width || "165"));
-    setPt(String(row.padding_top || "5"));
-    setPr(String(row.padding_right || "5"));
-    setPb(String(row.padding_bottom || "5"));
-    setPl(String(row.pading_left || "5"));
+    setHeight(normalizeIntegerField(row.background_height, "144"));
+    setWidth(normalizeIntegerField(row.background_width, "165"));
+    setPt(normalizeIntegerField(row.padding_top, "5"));
+    setPr(normalizeIntegerField(row.padding_right, "5"));
+    setPb(normalizeIntegerField(row.padding_bottom, "5"));
+    setPl(normalizeIntegerField(row.pading_left, "5"));
     setBackgroundUpload(null);
     setBackgroundUrl(row.background_url || "");
     setErrors({});

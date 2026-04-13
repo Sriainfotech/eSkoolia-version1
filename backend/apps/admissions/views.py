@@ -875,6 +875,62 @@ class AdminSetupEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vie
             school = self.request.school
         serializer.save(school=school, created_by=user)
 
+    def _dependency_blockers(self, instance: AdminSetupEntry):
+        school_id = instance.school_id
+        label = (instance.name or "").strip()
+        blockers = []
+
+        if instance.type == "1":
+            visitor_exists = VisitorBookEntry.objects.filter(
+                school_id=school_id,
+                purpose__iexact=label,
+            ).exists()
+            if visitor_exists:
+                blockers.append("Visitor Book")
+
+        elif instance.type == "2":
+            complaint_type_exists = ComplaintEntry.objects.filter(
+                school_id=school_id,
+                complaint_type__iexact=label,
+            ).exists()
+            if complaint_type_exists:
+                blockers.append("Complaints by type")
+
+        elif instance.type == "3":
+            inquiry_source_exists = AdmissionInquiry.objects.filter(
+                school_id=school_id,
+                source_id=instance.id,
+            ).exists()
+            complaint_source_exists = ComplaintEntry.objects.filter(
+                school_id=school_id,
+                complaint_source__iexact=label,
+            ).exists()
+            if inquiry_source_exists:
+                blockers.append("Admission Inquiries source")
+            if complaint_source_exists:
+                blockers.append("Complaints source")
+
+        elif instance.type == "4":
+            inquiry_reference_exists = AdmissionInquiry.objects.filter(
+                school_id=school_id,
+                reference_id=instance.id,
+            ).exists()
+            if inquiry_reference_exists:
+                blockers.append("Admission Inquiries reference")
+
+        return blockers
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        blockers = self._dependency_blockers(instance)
+        if blockers:
+            msg = (
+                f"Cannot delete '{instance.name}'. It is used in: "
+                f"{', '.join(blockers)}. Remove related data first."
+            )
+            return self._validation_response({"dependency": [msg]}, msg)
+        return super().destroy(request, *args, **kwargs)
+
 
 class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = IdCardTemplateSerializer
@@ -956,11 +1012,15 @@ class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
         if not role_id:
             return Response({"detail": "role query param is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        role = Role.objects.filter(id=role_id).first()
+        roles_qs = Role.objects.all()
+        if not user.is_superuser and user.school_id:
+            roles_qs = roles_qs.filter(school_id=user.school_id) | roles_qs.filter(school__isnull=True)
+
+        role = roles_qs.distinct().filter(id=role_id).first()
         if not role:
             return Response({"detail": "Role not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        is_student_role = str(role.id) == "2" or role.name.lower().find("student") >= 0
+        is_student_role = role.name.strip().lower() == "student"
 
         if is_student_role:
             students_qs = Student.objects.select_related("current_class", "current_section")
@@ -978,8 +1038,13 @@ class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
                     {
                         "id": student.id,
                         "label": label,
+                        "first_name": student.first_name or "",
+                        "last_name": student.last_name or "",
                         "admission_no": student.admission_no or "",
                         "roll_no": student.roll_no or "",
+                        "current_class": student.current_class_id,
+                        "current_section": student.current_section_id,
+                        "date_of_birth": student.date_of_birth,
                         "className": student.current_class.name if student.current_class else "",
                         "sectionName": student.current_section.name if student.current_section else "",
                         "gender": student.gender or "",
@@ -997,8 +1062,8 @@ class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
             return Response({"is_student_role": True, "recipients": rows}, status=status.HTTP_200_OK)
 
         user_role_qs = UserRole.objects.select_related("user", "role").filter(role_id=role.id)
-        if not user.is_superuser:
-            user_role_qs = user_role_qs.filter(role__school_id=user.school_id)
+        if not user.is_superuser and user.school_id:
+            user_role_qs = user_role_qs.filter(user__school_id=user.school_id)
 
         seen = set()
         rows = []
@@ -1099,11 +1164,15 @@ class CertificateTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
         if not role_id:
             return Response({"detail": "role query param is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        role = Role.objects.filter(id=role_id).first()
+        roles_qs = Role.objects.all()
+        if not user.is_superuser and user.school_id:
+            roles_qs = roles_qs.filter(school_id=user.school_id) | roles_qs.filter(school__isnull=True)
+
+        role = roles_qs.distinct().filter(id=role_id).first()
         if not role:
             return Response({"detail": "Role not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        is_student_role = role.name.lower().find("student") >= 0 or str(role.id) == "2"
+        is_student_role = role.name.strip().lower() == "student"
 
         if is_student_role:
             students_qs = Student.objects.select_related("current_class", "current_section")
@@ -1121,8 +1190,13 @@ class CertificateTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
                     {
                         "id": student.id,
                         "label": label,
+                        "first_name": student.first_name or "",
+                        "last_name": student.last_name or "",
                         "admission_no": student.admission_no or "",
                         "roll_no": student.roll_no or "",
+                        "current_class": student.current_class_id,
+                        "current_section": student.current_section_id,
+                        "date_of_birth": student.date_of_birth,
                         "className": student.current_class.name if student.current_class else "",
                         "sectionName": student.current_section.name if student.current_section else "",
                         "gender": student.gender or "",
@@ -1133,8 +1207,8 @@ class CertificateTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
             return Response({"is_student_role": True, "recipients": rows}, status=status.HTTP_200_OK)
 
         user_role_qs = UserRole.objects.select_related("user", "role").filter(role_id=role.id)
-        if not user.is_superuser:
-            user_role_qs = user_role_qs.filter(role__school_id=user.school_id)
+        if not user.is_superuser and user.school_id:
+            user_role_qs = user_role_qs.filter(user__school_id=user.school_id)
 
         seen = set()
         rows = []

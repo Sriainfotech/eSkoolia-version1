@@ -10,6 +10,7 @@ type ItemStore = { id: number; title: string };
 type Item = { id: number; name: string; quantity: number };
 type ItemIssue = {
   id: number;
+  issue_date?: string;
   store_id: number;
   store_title: string;
   item_id: number;
@@ -22,6 +23,7 @@ type ItemIssue = {
 };
 
 export function ItemIssuePanel() {
+  const today = new Date().toISOString().slice(0, 10);
   const [issues, setIssues] = useState<ItemIssue[]>([]);
   const [stores, setStores] = useState<ItemStore[]>([]);
   const [items, setItems] = useState<Item[]>([]);
@@ -34,11 +36,82 @@ export function ItemIssuePanel() {
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
   const [formData, setFormData] = useState({
+    issue_date: today,
     store: "",
     item: "",
     quantity: 0,
     subject: "",
     notes: "",
+  });
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  const readApiFieldErrors = (err: unknown) => {
+    const details = (err as { details?: unknown } | null)?.details;
+    if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+
+    const payload = details as Record<string, unknown>;
+    const rawFieldErrors =
+      payload.field_errors && typeof payload.field_errors === "object"
+        ? (payload.field_errors as Record<string, unknown>)
+        : {};
+
+    const pick = (key: string) => {
+      const value = payload[key] ?? rawFieldErrors[key];
+      if (typeof value === "string") return value;
+      if (Array.isArray(value) && value.length > 0) return String(value[0]);
+      return "";
+    };
+
+    const next: Record<string, string> = {};
+    const issueDateError = pick("issue_date");
+    const storeError = pick("store");
+    const subjectError = pick("subject");
+    const notesError = pick("notes");
+    const detail = pick("detail") || pick("non_field_errors");
+    const topMessage = typeof payload.message === "string" ? payload.message.trim() : "";
+
+    if (issueDateError) next.issue_date = issueDateError;
+    if (storeError) next.store = storeError;
+    if (subjectError) next.subject = subjectError;
+    if (notesError) next.notes = notesError;
+
+    const summary = topMessage || detail || issueDateError || storeError || subjectError || notesError;
+    if (summary) next.main = summary;
+
+    return Object.keys(next).length > 0 ? next : null;
+  };
+
+  const validateForm = () => {
+    const next: Record<string, string> = {};
+
+    if (!formData.issue_date) next.issue_date = "Issue date is required.";
+    if (!formData.store) next.store = "Store is required.";
+    if (!formData.item) next.item = "Item is required.";
+    if (!Number.isFinite(formData.quantity) || formData.quantity <= 0) {
+      next.quantity = "Quantity must be greater than 0.";
+    }
+
+    setFieldErrors(next);
+    if (Object.keys(next).length > 0) {
+      const required = [
+        next.issue_date ? "Issue Date" : "",
+        next.store ? "Store" : "",
+        next.item ? "Item" : "",
+        next.quantity ? "Quantity" : "",
+      ].filter(Boolean);
+      setError(`Please correct required fields: ${required.join(", ")}.`);
+      return false;
+    }
+    return true;
+  };
+
+  const controlStyle = (key: string): React.CSSProperties => ({
+    width: "100%",
+    border: `1px solid ${fieldErrors[key] ? "#dc2626" : "var(--line)"}`,
+    borderRadius: "6px",
+    padding: "8px 12px",
+    fontSize: "14px",
+    boxSizing: "border-box",
   });
 
   const loadData = async () => {
@@ -73,7 +146,10 @@ export function ItemIssuePanel() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!validateForm()) return;
+
     try {
+      setError("");
       const method = editingId ? "PUT" : "POST";
       const url = editingId ? `/api/v1/core/item-issues/${editingId}/` : "/api/v1/core/item-issues/";
 
@@ -81,6 +157,7 @@ export function ItemIssuePanel() {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          issue_date: formData.issue_date,
           store: parseInt(formData.store),
           item: parseInt(formData.item),
           quantity: parseFloat(formData.quantity as any),
@@ -90,17 +167,27 @@ export function ItemIssuePanel() {
       });
 
       setFormData({
+        issue_date: today,
         store: "",
         item: "",
         quantity: 0,
         subject: "",
         notes: "",
       });
+      setFieldErrors({});
       setEditingId(null);
       setShowForm(false);
       await loadData();
     } catch (err) {
-      setError("Unable to save issue. " + (err instanceof Error ? err.message : ""));
+      const extracted = readApiFieldErrors(err);
+      if (extracted) {
+        const next = { ...extracted };
+        delete next.main;
+        setFieldErrors(next);
+        setError(extracted.main || "Please correct the highlighted fields.");
+      } else {
+        setError("Unable to save issue. " + (err instanceof Error ? err.message : ""));
+      }
       console.error(err);
     }
   };
@@ -115,11 +202,12 @@ export function ItemIssuePanel() {
     }
   };
 
-  const filtered = issues.filter(
-    (i) =>
-      i.item_name.toLowerCase().includes(search.toLowerCase()) ||
-      i.store_title.toLowerCase().includes(search.toLowerCase())
-  );
+  const searchTerm = search.toLowerCase();
+  const filtered = issues.filter((i) => {
+    const itemName = String(i.item_name || "").toLowerCase();
+    const storeTitle = String(i.store_title || "").toLowerCase();
+    return itemName.includes(searchTerm) || storeTitle.includes(searchTerm);
+  });
   const totalPages = Math.ceil(filtered.length / itemsPerPage);
   const paginatedData = filtered.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -134,12 +222,15 @@ export function ItemIssuePanel() {
             setShowForm(!showForm);
             setEditingId(null);
             setFormData({
+              issue_date: today,
               store: "",
               item: "",
               quantity: 0,
               subject: "",
               notes: "",
             });
+            setFieldErrors({});
+            setError("");
           }}
         >
           {showForm ? "Cancel" : "Add Issue"}
@@ -155,6 +246,23 @@ export function ItemIssuePanel() {
       {showForm && (
         <Card>
           <form onSubmit={handleSubmit} style={{ display: "grid", gap: "16px" }}>
+            <div>
+              <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>
+                Issue Date *
+              </label>
+              <Input
+                type="date"
+                required
+                value={formData.issue_date}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  setFormData({ ...formData, issue_date: e.target.value });
+                  setFieldErrors((prev) => ({ ...prev, issue_date: "" }));
+                }}
+                style={{ borderColor: fieldErrors.issue_date ? "#dc2626" : undefined }}
+              />
+              {fieldErrors.issue_date ? <small style={{ color: "#dc2626" }}>{fieldErrors.issue_date}</small> : null}
+            </div>
+
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
               <div>
                 <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>
@@ -163,17 +271,11 @@ export function ItemIssuePanel() {
                 <select
                   required
                   value={formData.store}
-                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
-                    setFormData({ ...formData, store: e.target.value })
-                  }
-                  style={{
-                    width: "100%",
-                    border: "1px solid var(--line)",
-                    borderRadius: "6px",
-                    padding: "8px 12px",
-                    fontSize: "14px",
-                    boxSizing: "border-box",
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                    setFormData({ ...formData, store: e.target.value });
+                    setFieldErrors((prev) => ({ ...prev, store: "" }));
                   }}
+                  style={controlStyle("store")}
                 >
                   <option value="">Select store</option>
                   {stores.map((s) => (
@@ -182,6 +284,7 @@ export function ItemIssuePanel() {
                     </option>
                   ))}
                 </select>
+                {fieldErrors.store ? <small style={{ color: "#dc2626" }}>{fieldErrors.store}</small> : null}
               </div>
               <div>
                 <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>
@@ -190,17 +293,11 @@ export function ItemIssuePanel() {
                 <select
                   required
                   value={formData.item}
-                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
-                    setFormData({ ...formData, item: e.target.value })
-                  }
-                  style={{
-                    width: "100%",
-                    border: "1px solid var(--line)",
-                    borderRadius: "6px",
-                    padding: "8px 12px",
-                    fontSize: "14px",
-                    boxSizing: "border-box",
+                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                    setFormData({ ...formData, item: e.target.value });
+                    setFieldErrors((prev) => ({ ...prev, item: "" }));
                   }}
+                  style={controlStyle("item")}
                 >
                   <option value="">Select item</option>
                   {items.map((i) => (
@@ -209,6 +306,7 @@ export function ItemIssuePanel() {
                     </option>
                   ))}
                 </select>
+                {fieldErrors.item ? <small style={{ color: "#dc2626" }}>{fieldErrors.item}</small> : null}
               </div>
             </div>
 
@@ -222,10 +320,13 @@ export function ItemIssuePanel() {
                   step="0.01"
                   required
                   value={formData.quantity}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                    setFormData({ ...formData, quantity: parseFloat(e.target.value) || 0 })
-                  }
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    setFormData({ ...formData, quantity: parseFloat(e.target.value) || 0 });
+                    setFieldErrors((prev) => ({ ...prev, quantity: "" }));
+                  }}
+                  style={{ borderColor: fieldErrors.quantity ? "#dc2626" : undefined }}
                 />
+                {fieldErrors.quantity ? <small style={{ color: "#dc2626" }}>{fieldErrors.quantity}</small> : null}
               </div>
               <div>
                 <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>
@@ -233,11 +334,14 @@ export function ItemIssuePanel() {
                 </label>
                 <Input
                   value={formData.subject}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                    setFormData({ ...formData, subject: e.target.value })
-                  }
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    setFormData({ ...formData, subject: e.target.value });
+                    setFieldErrors((prev) => ({ ...prev, subject: "" }));
+                  }}
                   placeholder="e.g. Office Use, Classroom"
+                  style={{ borderColor: fieldErrors.subject ? "#dc2626" : undefined }}
                 />
+                {fieldErrors.subject ? <small style={{ color: "#dc2626" }}>{fieldErrors.subject}</small> : null}
               </div>
             </div>
 
@@ -245,21 +349,18 @@ export function ItemIssuePanel() {
               <label style={{ display: "block", fontSize: "14px", fontWeight: "500", marginBottom: "8px" }}>Notes</label>
               <textarea
                 value={formData.notes}
-                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-                  setFormData({ ...formData, notes: e.target.value })
-                }
+                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+                  setFormData({ ...formData, notes: e.target.value });
+                  setFieldErrors((prev) => ({ ...prev, notes: "" }));
+                }}
                 placeholder="Additional notes"
                 style={{
-                  width: "100%",
-                  border: "1px solid var(--line)",
-                  borderRadius: "6px",
-                  padding: "8px 12px",
-                  fontSize: "14px",
+                  ...controlStyle("notes"),
                   fontFamily: "inherit",
-                  boxSizing: "border-box",
                 }}
                 rows={3}
               />
+              {fieldErrors.notes ? <small style={{ color: "#dc2626" }}>{fieldErrors.notes}</small> : null}
             </div>
 
             <Button type="submit">{editingId ? "Update" : "Save"}</Button>

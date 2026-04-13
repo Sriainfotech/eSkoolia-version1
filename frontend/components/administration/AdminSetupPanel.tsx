@@ -35,6 +35,7 @@ const CATEGORY_CLASS: Record<AdminSetupRow["type"], string> = {
 
 type GroupRowsMap = Record<AdminSetupRow["type"], AdminSetupRow[]>;
 type GroupNumberMap = Record<AdminSetupRow["type"], number>;
+type DependencyLink = { label: string; href: string };
 
 const EMPTY_GROUP_ROWS: GroupRowsMap = {
   "1": [],
@@ -73,6 +74,19 @@ const DEFAULT_GROUP_TOTAL_PAGES: GroupNumberMap = {
 
 function getErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error) {
+    // First check if error has details (from API error response)
+    const apiError = error as Error & { details?: Record<string, unknown> };
+    if (apiError.details && typeof apiError.details === "object") {
+      const msg = (apiError.details.message as string | undefined);
+      if (msg && typeof msg === "string") {
+        const trimmed = msg.trim();
+        if (trimmed && trimmed !== "[object Object]") {
+          return trimmed;
+        }
+      }
+    }
+    
+    // Fall back to error.message
     const message = error.message.trim();
     if (message && message !== "[object Object]") {
       return message;
@@ -168,6 +182,55 @@ function buttonStyle(color = "var(--primary)") {
     cursor: "pointer",
     fontSize: 13,
   } as const;
+}
+
+function dependencyLinksFromMessage(message: string): DependencyLink[] {
+  const normalized = (message || "").toLowerCase();
+  
+  // Check if this is a dependency error message
+  if (!normalized.includes("cannot delete") || !normalized.includes("used in")) {
+    return [];
+  }
+
+  const links: DependencyLink[] = [];
+  
+  // Check for various module names
+  if (
+    normalized.includes("visitor book") ||
+    normalized.includes("visitor") && normalized.includes("book")
+  ) {
+    links.push({ label: "Open Visitor Book", href: "/administration/visitor-book" });
+  }
+  
+  if (
+    normalized.includes("complaint type") ||
+    (normalized.includes("complaint") && normalized.includes("type"))
+  ) {
+    links.push({ label: "Open Complaints", href: "/administration/complaint" });
+  }
+  
+  if (
+    normalized.includes("admission inquiries source") ||
+    normalized.includes("admission") && normalized.includes("source")
+  ) {
+    links.push({ label: "Open Admission Query", href: "/administration/admission-query" });
+  }
+  
+  if (
+    normalized.includes("admission inquiries reference") ||
+    (normalized.includes("admission") && normalized.includes("reference"))
+  ) {
+    links.push({ label: "Open Admission Query", href: "/administration/admission-query" });
+  }
+  
+  if (
+    normalized.includes("complaints source") ||
+    (normalized.includes("complaint") && normalized.includes("source"))
+  ) {
+    links.push({ label: "Open Complaints", href: "/administration/complaint" });
+  }
+
+  return links;
 }
 
 export function AdminSetupPanel() {
@@ -353,6 +416,8 @@ export function AdminSetupPanel() {
     return "";
   };
 
+  const dependencyLinks = dependencyLinksFromMessage(error);
+
   return (
     <div className="legacy-panel">
       <TopToast
@@ -526,7 +591,56 @@ export function AdminSetupPanel() {
         .icon-btn-delete { background: #fce8ec; color: #d4616f; }
         .icon-btn-delete:hover { background: #d4616f; color: #fff; }
         .cat-empty { text-align: center; padding: 16px; color: #b8bdd0; font-style: italic; font-size: 0.83rem; }
+        .dependency-help {
+          margin: 12px 0;
+          border: 1px solid #f5c2c7;
+          background: #fff5f6;
+          color: #842029;
+          border-radius: 10px;
+          padding: 12px;
+        }
+        .dependency-help-title {
+          margin: 0 0 8px;
+          font-size: 13px;
+          font-weight: 700;
+        }
+        .dependency-actions {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+        .dependency-link {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 32px;
+          padding: 0 10px;
+          border-radius: 8px;
+          border: 1px solid #e59aa3;
+          background: #fff;
+          color: #842029;
+          text-decoration: none;
+          font-size: 12px;
+          font-weight: 600;
+        }
+        .dependency-link:hover {
+          background: #ffe9ec;
+        }
       `}</style>
+
+      {dependencyLinks.length > 0 ? (
+        <div className="dependency-help" role="alert">
+          <p className="dependency-help-title">This setup is linked with existing records. Remove them first from:</p>
+          <div className="dependency-actions">
+            {dependencyLinks.map((link) => (
+              <a key={link.href} className="dependency-link" href={link.href}>
+                {link.label}
+              </a>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

@@ -419,12 +419,11 @@ export function StudentCategoryPanel() {
 
   const bulkStatusChange = async (nextStatus: "active" | "inactive") => {
     if (!selectedIds.length) return;
-
     const selectedRows = rows.filter((row) => selectedIds.includes(row.id));
-    const idsNeedingUpdate = selectedRows.filter((row) => row.status !== nextStatus).map((row) => row.id);
+    const toUpdate = selectedRows.filter((row) => row.status !== nextStatus);
 
-    if (!idsNeedingUpdate.length) {
-      setToast(`Selected categories are already ${nextStatus}.`);
+    if (selectedRows.length > 0 && toUpdate.length === 0) {
+      setToast(nextStatus === "active" ? "Selected categories are already active." : "Selected categories are already inactive.");
       return;
     }
 
@@ -433,10 +432,19 @@ export function StudentCategoryPanel() {
       setError("");
       setSuccess("");
       const response = await apiPatch<CategoryMutationResponse>("/api/v1/students/categories/bulk-status/", {
-        ids: idsNeedingUpdate,
+        ids: toUpdate.length > 0 ? toUpdate.map((row) => row.id) : selectedIds,
         status: nextStatus,
       });
-      setToast(response?.message || `Selected categories updated to ${nextStatus}.`);
+      if (response?.success === false) {
+        setToast(response.message || "Unable to update selected categories.", true);
+      } else {
+        const updatedCount = toUpdate.length > 0 ? toUpdate.length : selectedIds.length;
+        setToast(
+          nextStatus === "active"
+            ? `${updatedCount} categor${updatedCount === 1 ? "y" : "ies"} activated successfully.`
+            : `${updatedCount} categor${updatedCount === 1 ? "y" : "ies"} deactivated successfully.`
+        );
+      }
       setSelectedIds([]);
       await load(currentPage, pageSize, search, statusFilter);
     } catch (err) {
@@ -510,7 +518,6 @@ export function StudentCategoryPanel() {
                     onBlur={() => markTouched("name")}
                     placeholder="e.g. General"
                     aria-describedby="student-category-name-help"
-                    aria-invalid={Boolean(fieldErrors.name)}
                     className={fieldErrors.name ? "has-error" : ""}
                     maxLength={100}
                   />
@@ -604,12 +611,20 @@ export function StudentCategoryPanel() {
                       aria-label="Search categories"
                     />
                   </div>
-                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as "all" | "active" | "inactive")}> 
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as "all" | "active" | "inactive")}
+                    aria-label="Filter categories by status"
+                  >
                     <option value="all">All</option>
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
                   </select>
-                  <select value={String(pageSize)} onChange={(e) => setPageSize(Number(e.target.value) as 10 | 25)}>
+                  <select
+                    value={String(pageSize)}
+                    onChange={(e) => setPageSize(Number(e.target.value) as 10 | 25)}
+                    aria-label="Categories per page"
+                  >
                     <option value="10">10 / page</option>
                     <option value="25">25 / page</option>
                   </select>

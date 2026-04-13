@@ -322,6 +322,20 @@ function AcademicYearsSection() {
 // ─── Classes ─────────────────────────────────────────────────────────────────
 const CLASS_NAME_REGEX = /^[A-Za-z0-9 \-]+$/;
 const CLASS_DEFAULT_ORDER = 1000;
+const CLASS_NUMBER_NAME_REGEX = /^class\s*(\d{1,2})$|^(\d{1,2})$/i;
+
+function parseClassNumberFromName(value: string): number | null {
+  const trimmed = (value || "").trim();
+  const match = trimmed.match(CLASS_NUMBER_NAME_REGEX);
+  if (!match) return null;
+  const raw = match[1] || match[2];
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
+function normalizeClassName(value: string): string {
+  return (value || "").trim().replace(/\s+/g, " ").toLowerCase();
+}
 
 function ClassesSection() {
   const [items, setItems] = useState<SchoolClass[]>([]);
@@ -329,6 +343,9 @@ function ClassesSection() {
   const [pageSize, setPageSize] = useState<number>(10);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<SchoolClass | null>(null);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -379,7 +396,10 @@ function ClassesSection() {
   const load = async () => {
     try {
       const data = await fetchAllPages<SchoolClass>("/api/v1/core/classes/?page_size=100");
-      setItems(sortAcademicsClasses(data));
+      const sorted = sortAcademicsClasses(data);
+      setItems(sorted);
+      const validIds = new Set(sorted.map((row) => row.id));
+      setSelectedIds((prev) => prev.filter((id) => validIds.has(id)));
     } catch { setError("Unable to load classes."); }
   };
   useEffect(() => { load(); }, []);
@@ -388,6 +408,7 @@ function ClassesSection() {
     e.preventDefault();
     const trimmedName = name.trim();
     const nextErrors: { name?: string } = {};
+    const parsedClassNumber = parseClassNumberFromName(trimmedName);
 
     if (!trimmedName) {
       nextErrors.name = "Class name is required.";
@@ -395,7 +416,16 @@ function ClassesSection() {
       nextErrors.name = "Class name must be between 1 and 50 characters.";
     } else if (!CLASS_NAME_REGEX.test(trimmedName)) {
       nextErrors.name = "Only letters, numbers, spaces and hyphens are allowed.";
-    } else if (!editingId && items.some((row) => (row.name || "").trim().toLowerCase() === trimmedName.toLowerCase())) {
+    } else if (parsedClassNumber !== null && (parsedClassNumber < 1 || parsedClassNumber > 12)) {
+      nextErrors.name = "Only classes 1 to 12 are allowed.";
+    } else if (!editingId && items.some((row) => {
+      const existingName = row.name || "";
+      const existingNumber = parseClassNumberFromName(existingName);
+      if (parsedClassNumber !== null && existingNumber !== null) {
+        return parsedClassNumber === existingNumber;
+      }
+      return normalizeClassName(existingName) === normalizeClassName(trimmedName);
+    })) {
       nextErrors.name = "Class name already exists.";
     }
 
@@ -449,6 +479,7 @@ function ClassesSection() {
       setError("");
       setSuccess("");
       await apiFetch(`/api/v1/core/classes/${row.id}/`, { method: "DELETE" });
+      setSelectedIds((prev) => prev.filter((id) => id !== row.id));
       if (editingId === row.id) reset();
       setSuccess(`Class "${row.name}" deleted successfully.`);
       window.requestAnimationFrame(() => {
@@ -460,11 +491,54 @@ function ClassesSection() {
     }
   };
 
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((entry) => entry !== id) : [...prev, id]));
+  };
+
+  const deleteSelected = async () => {
+    if (!selectedIds.length) {
+      setError("Select at least one class to delete.");
+      return;
+    }
+    try {
+      setBulkDeleting(true);
+      setError("");
+      setSuccess("");
+      const count = selectedIds.length;
+      const removed = [...selectedIds];
+      await Promise.all(removed.map((id) => apiFetch(`/api/v1/core/classes/${id}/`, { method: "DELETE" })));
+      setSelectedIds([]);
+      if (editingId && removed.includes(editingId)) {
+        reset();
+      }
+      setSuccess(`${count} class${count === 1 ? "" : "es"} deleted successfully.`);
+      window.requestAnimationFrame(() => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+      await load();
+    } catch {
+      setError("Failed to delete selected classes.");
+    } finally {
+      setBulkDeleting(false);
+      setBulkDeleteOpen(false);
+    }
+  };
+
   const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
   const pagedItems = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
     return items.slice(start, start + pageSize);
   }, [items, currentPage, pageSize]);
+
+  const selectedAllOnPage = pagedItems.length > 0 && pagedItems.every((row) => selectedIds.includes(row.id));
+  const toggleSelectAllOnPage = (checked: boolean) => {
+    const pageIds = pagedItems.map((row) => row.id);
+    if (checked) {
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+      return;
+    }
+    setSelectedIds((prev) => prev.filter((id) => !pageIds.includes(id)));
+  };
 
   useEffect(() => {
     setCurrentPage((prev) => Math.min(prev, totalPages));
@@ -494,10 +568,13 @@ function ClassesSection() {
             onChange={e => {
               const nextValue = e.target.value;
               setName(nextValue);
+              const parsedNumber = parseClassNumberFromName(nextValue);
               setFieldErrors((prev) => ({
                 ...prev,
                 name: nextValue && !CLASS_NAME_REGEX.test(nextValue.trim())
                   ? "Only letters, numbers, spaces and hyphens are allowed."
+                  : parsedNumber !== null && (parsedNumber < 1 || parsedNumber > 12)
+                    ? "Only classes 1 to 12 are allowed."
                   : undefined,
               }));
             }}
@@ -513,12 +590,31 @@ function ClassesSection() {
           {isEditMode ? <button type="button" onClick={reset} style={{ height: 36, padding: "0 14px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>Cancel</button> : null}
         </div>
       </form>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+        <button
+          type="button"
+          onClick={() => {
+            if (!selectedIds.length) {
+              setError("Select at least one class to delete.");
+              return;
+            }
+            setBulkDeleteOpen(true);
+          }}
+          disabled={!selectedIds.length || bulkDeleting}
+          style={{ height: 32, padding: "0 12px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: selectedIds.length && !bulkDeleting ? "pointer" : "not-allowed", opacity: selectedIds.length && !bulkDeleting ? 1 : 0.6 }}
+        >
+          {bulkDeleting ? "Deleting..." : "Delete Selected"}
+        </button>
+      </div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead><tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
-          {["Class", "Sections", "Actions"].map(h => <th key={h} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13 }}>{h}</th>)}
+          {["Select", "Class", "Sections", "Actions"].map(h => <th key={h} style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13 }}>{h}</th>)}
         </tr></thead>
         <tbody>{pagedItems.map(c => (
           <tr key={c.id}>
+            <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", width: 56 }}>
+              <input type="checkbox" checked={selectedIds.includes(c.id)} onChange={() => toggleSelect(c.id)} aria-label={`Select class ${c.name}`} />
+            </td>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)" }}>{c.name}</td>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", fontSize: 13, color: "var(--text-muted)" }}>{(c.sections || []).map(s => s.name).join(", ") || "—"}</td>
             <td style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", display: "flex", gap: 6 }}>
@@ -528,6 +624,13 @@ function ClassesSection() {
           </tr>
         ))}</tbody>
       </table>
+      <div style={{ marginTop: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)" }}>
+          <input type="checkbox" checked={selectedAllOnPage} onChange={(e) => toggleSelectAllOnPage(e.target.checked)} />
+          Select all on page
+        </label>
+        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{selectedIds.length} selected</span>
+      </div>
       <div style={{ marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Page {currentPage} of {totalPages} | Total {items.length}</span>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -591,6 +694,23 @@ function ClassesSection() {
                 style={{ height: 36, padding: "0 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {bulkDeleteOpen ? (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div style={{ width: "min(480px, calc(100vw - 24px))", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 12, padding: 16, boxShadow: "0 12px 30px rgba(0,0,0,.18)" }}>
+            <h3 style={{ margin: 0, fontSize: 18 }}>Delete Classes</h3>
+            <p style={{ marginTop: 10, marginBottom: 14, color: "var(--text-muted)" }}>
+              Are you sure you want to delete {selectedIds.length} selected class{selectedIds.length === 1 ? "" : "es"}?
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button type="button" onClick={() => setBulkDeleteOpen(false)} disabled={bulkDeleting} style={{ height: 36, padding: "0 14px", background: "#64748b", color: "#fff", border: "none", borderRadius: 8, cursor: bulkDeleting ? "not-allowed" : "pointer" }}>Cancel</button>
+              <button type="button" onClick={() => void deleteSelected()} disabled={bulkDeleting} style={{ height: 36, padding: "0 14px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 8, cursor: bulkDeleting ? "not-allowed" : "pointer" }}>
+                {bulkDeleting ? "Deleting..." : "Delete"}
               </button>
             </div>
           </div>
