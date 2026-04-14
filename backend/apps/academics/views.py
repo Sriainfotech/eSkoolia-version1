@@ -48,6 +48,7 @@ from .serializers import (
 
 class TenantScopedModelViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = ApiPageNumberPagination
     model = None
     permission_codes = {}
 
@@ -514,10 +515,10 @@ class UploadedContentViewSet(TenantScopedModelViewSet):
         content_type = self.request.query_params.get("content_type")
 
         if class_id not in (None, ""):
-            queryset = queryset.filter(class_id_ref_id=class_id)
+            queryset = queryset.filter(Q(class_id_ref_id=class_id) | Q(available_for_all_classes=True))
 
         if section_id not in (None, ""):
-            queryset = queryset.filter(section_id_ref_id=section_id)
+            queryset = queryset.filter(Q(section_id_ref_id=section_id) | Q(available_for_all_classes=True, section_id_ref__isnull=True))
 
         if content_type not in (None, ""):
             queryset = queryset.filter(content_type=content_type)
@@ -792,6 +793,18 @@ class LessonTopicViewSet(TenantScopedModelViewSet):
                     lesson_topic.updated_by = request.user
                     lesson_topic.save(update_fields=["updated_by", "updated_at"])
                 for topic_title in data["topic"]:
+                    if LessonTopicDetail.objects.filter(
+                        topic=lesson_topic,
+                        lesson=data["lesson"],
+                        topic_title__iexact=topic_title,
+                    ).exists():
+                        return Response(
+                            {
+                                "success": False,
+                                "message": f"Topic '{topic_title}' already exists for this lesson.",
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
                     LessonTopicDetail.objects.create(
                         topic=lesson_topic,
                         lesson=data["lesson"],

@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { Spinner } from "@/components/common/Spinner";
+import { TopToast } from "@/components/common/TopToast";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { getAccessToken } from "@/lib/auth";
 import { API_BASE_URL } from "@/lib/api";
@@ -19,6 +20,79 @@ type ImportResponse = {
   failed_count?: number;
   error_details?: ImportError[];
 };
+
+function extractImportFailure(response: ImportResponse | null | undefined) {
+  if (!response) return null;
+
+  const imported = Number(response.data?.imported ?? response.imported_count ?? 0);
+  const failed = Number(response.data?.failed ?? response.failed_count ?? 0);
+  const errors = response.data?.errors || response.error_details || [];
+
+  if (response.success !== false && failed <= 0) {
+    return null;
+  }
+
+  const message =
+    response.message ||
+    response.detail ||
+    (imported <= 0
+      ? `Failed to import any records. ${failed} errors found.`
+      : `${imported} records imported, ${failed} failed.`);
+
+  return {
+    imported,
+    failed,
+    errors,
+    message,
+  };
+}
+
+function buildRequestFailedMessage(message: string, errors: ImportError[] = []) {
+  const trimmed = (message || "").trim();
+  const countMatch = trimmed.match(/(\d+)\s+errors?\s+found/i);
+  const errorCount = countMatch ? Number(countMatch[1]) : errors.length;
+
+  const shortBase = trimmed
+    .replace(/^request failed:\s*/i, "")
+    .replace(/^failed to import any records\.\s*/i, "")
+    .replace(/\s*errors?\s+found\.?/i, "")
+    .trim();
+
+  const base = shortBase
+    ? `Request failed: ${shortBase}`
+    : "Request failed: Could not import attendance.";
+
+  const firstError = errors[0];
+  if (!firstError?.message) return base;
+
+  const normalizeErrorDetail = (value: string) => {
+    const text = (value || "").trim();
+    if (!text) return "Unknown error.";
+
+    if (/invalid attendance type/i.test(text) && /use one of/i.test(text)) {
+      return "Invalid attendance type. Use P, A, L, F, or H.";
+    }
+
+    if (/does not belong to the selected class\/section/i.test(text)) {
+      const admissionMatch = text.match(/'([^']+)'/);
+      const admissionNo = admissionMatch?.[1] || "this admission number";
+      return `${admissionNo} is not in the selected class/section.`;
+    }
+
+    return text;
+  };
+
+  const shorten = (value: string, maxLen = 100) => {
+    if (value.length <= maxLen) return value;
+    return `${value.slice(0, maxLen - 1)}...`;
+  };
+
+  const rowPart = firstError.row ? `Row ${firstError.row}` : "Row N/A";
+  const fieldPart = firstError.field ? ` ${firstError.field}` : "";
+  const detail = shorten(normalizeErrorDetail(firstError.message));
+  const countPart = errorCount > 1 ? ` (${errorCount} rows)` : "";
+  return `${base}${countPart}. ${rowPart}${fieldPart}: ${detail}`;
+}
 
 async function apiGet<T>(path: string): Promise<T> {
   return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
@@ -128,6 +202,7 @@ export default function StudentAttendanceImportPanel() {
   // Response tracking
   const [apiError, setApiError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
   const [importResult, setImportResult] = useState<{ imported: number; failed: number } | null>(null);
   const [detailedErrors, setDetailedErrors] = useState<ImportError[]>([]);
 
@@ -172,8 +247,13 @@ export default function StudentAttendanceImportPanel() {
       setSectionLoading(true);
       setSections([]);
       setSectionId("");
-      const data = await apiGet<Section[] | { results?: Section[] }>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
-      setSections(listData(data));
+      try {
+        const data = await apiGet<Section[] | { results?: Section[] }>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
+        setSections(listData(data));
+      } catch {
+        const fallback = await apiGet<Section[] | { results?: Section[] }>(`/api/v1/core/sections/?school_class=${encodeURIComponent(targetClassId)}&page_size=200`);
+        setSections(listData(fallback));
+      }
       setApiError("");
     } catch {
       setApiError("Failed to load sections for selected class.");
@@ -211,6 +291,18 @@ export default function StudentAttendanceImportPanel() {
   const selectedSection = useMemo(() => filteredSections.find((item) => String(item.id) === sectionId), [filteredSections, sectionId]);
   const selectedFileError = useMemo(() => getFileValidationError(file), [file]);
   const canSubmit = Boolean(classId && sectionId && attendanceDate && file && !selectedFileError && !saving && !loading && !sectionLoading);
+
+  useEffect(() => {
+    if (apiError) {
+      setToast({ message: apiError, tone: "error" });
+    }
+  }, [apiError]);
+
+  useEffect(() => {
+    if (successMessage) {
+      setToast({ message: successMessage, tone: "success" });
+    }
+  }, [successMessage]);
 
   // Drag & drop handlers
   const handleDrag = (e: React.DragEvent) => {
@@ -390,38 +482,60 @@ export default function StudentAttendanceImportPanel() {
 
       setUploadProgress(85);
 
-      // Handle different response scenarios
-      if (response.data?.failed && response.data.failed > 0) {
-        // Partial success
+      const failure = extractImportFailure(response);
+      if (failure) {
         setImportResult({
-          imported: response.data.imported || 0,
-          failed: response.data.failed || 0,
+          imported: failure.imported,
+          failed: failure.failed,
         });
-        setDetailedErrors(response.data.errors || []);
-        setSuccessMessage(`✓ ${response.data.imported || 0} records imported, ${response.data.failed || 0} failed`);
+        setDetailedErrors(failure.errors);
+        const failedMessage = buildRequestFailedMessage(failure.message, failure.errors);
+
+        if (failure.imported <= 0) {
+          setSuccessMessage("");
+          setApiError(failedMessage);
+        } else {
+          setApiError("");
+          setSuccessMessage(`✓ ${failure.imported} records imported, ${failure.failed} failed`);
+        }
       } else {
         // Full success
+        setApiError("");
         setSuccessMessage("✓ Attendance imported successfully");
         setFile(null);
         if (fileInputRef.current) fileInputRef.current.value = "";
         setImportResult(null);
+        setDetailedErrors([]);
       }
       setUploadProgress(100);
       window.setTimeout(() => setUploadProgress(0), 500);
       setQueuedSubmit(null);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Operation failed";
+      const errorDetails = (err as { details?: unknown } | null)?.details;
+
+      const failure =
+        errorDetails && typeof errorDetails === "object"
+          ? extractImportFailure(errorDetails as ImportResponse)
+          : null;
 
       if (errorMsg === "401") {
-        setApiError("Session expired. Please log in again.");
+        setApiError("Request failed: Session expired. Please log in again.");
+        setImportResult(null);
+        setDetailedErrors([]);
       } else if (errorMsg.includes("network") || errorMsg.includes("fetch")) {
-        setApiError("Network error. Check your internet connection.");
+        setApiError("Request failed: Network error. Check your internet connection.");
+        setImportResult(null);
+        setDetailedErrors([]);
+      } else if (failure) {
+        setImportResult({ imported: failure.imported, failed: failure.failed });
+        setDetailedErrors(failure.errors);
+        setApiError(buildRequestFailedMessage(failure.message || errorMsg || "Something went wrong. Please try again.", failure.errors));
       } else {
-        setApiError(errorMsg || "Something went wrong. Please try again.");
+        setApiError(buildRequestFailedMessage(errorMsg || "Something went wrong. Please try again."));
+        setImportResult(null);
+        setDetailedErrors([]);
       }
-
-      setImportResult(null);
-      setDetailedErrors([]);
       setUploadProgress(0);
     } finally {
       setSaving(false);
@@ -430,6 +544,14 @@ export default function StudentAttendanceImportPanel() {
 
   return (
     <div className="legacy-panel">
+      {toast ? (
+        <TopToast
+          message={toast.message}
+          tone={toast.tone}
+          autoCloseMs={toast.tone === "error" ? 9000 : 3500}
+          onClose={() => setToast(null)}
+        />
+      ) : null}
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>

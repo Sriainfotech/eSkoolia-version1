@@ -852,15 +852,32 @@ class AdminSetupEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vie
         "destroy": "admin_section.admin_setup.delete",
     }
 
+    def _resolve_school(self):
+        user = self.request.user
+        school = getattr(user, "school", None) or getattr(self.request, "school", None)
+
+        # Some users may only have school_id set without relation preloaded.
+        if not school and getattr(user, "school_id", None):
+            school = School.objects.filter(id=user.school_id, is_active=True).first()
+
+        # In single-school local/UAT setups, allow graceful fallback.
+        if not school:
+            active_schools = School.objects.filter(is_active=True).only("id")[:2]
+            if len(active_schools) == 1:
+                school = active_schools[0]
+
+        return school
+
     def get_queryset(self):
         user = self.request.user
         qs = AdminSetupEntry.objects.select_related("school", "created_by")
         if user.is_superuser:
             scoped = qs
-        elif user.school_id:
-            scoped = qs.filter(school_id=user.school_id)
         else:
-            return qs.none()
+            school = self._resolve_school()
+            if not school:
+                return qs.none()
+            scoped = qs.filter(school_id=school.id)
 
         type_filter = str(self.request.query_params.get("type", "")).strip()
         if type_filter in {"1", "2", "3", "4"}:
@@ -870,9 +887,11 @@ class AdminSetupEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vie
 
     def perform_create(self, serializer):
         user = self.request.user
-        school = user.school
-        if not school and getattr(self.request, "school", None):
-            school = self.request.school
+        school = self._resolve_school()
+        if not school:
+            raise ValidationError({
+                "school": "Your account is not linked to any school. Contact your administrator.",
+            })
         serializer.save(school=school, created_by=user)
 
     def _dependency_blockers(self, instance: AdminSetupEntry):

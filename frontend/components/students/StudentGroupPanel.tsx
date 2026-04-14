@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 
 type StudentGroup = {
@@ -30,6 +30,26 @@ type ToastConfig = {
   message: string;
   type: "success" | "error" | "info";
   duration?: number;
+};
+
+type StudentOption = {
+  id: number;
+  admission_no?: string;
+  first_name: string;
+  last_name?: string;
+  student_group?: number | null;
+};
+
+type SchoolClassOption = {
+  id: number;
+  name?: string;
+  class_name?: string;
+};
+
+type SectionOption = {
+  id: number;
+  name: string;
+  school_class: number;
 };
 
 const SEARCH_STATE_KEY = "students.group.uiState";
@@ -194,6 +214,16 @@ export function StudentGroupPanel() {
   // Delete confirmation modal
   const [deleteConfirm, setDeleteConfirm] = useState<StudentGroup | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [assignGroup, setAssignGroup] = useState<StudentGroup | null>(null);
+  const [assignStudents, setAssignStudents] = useState<StudentOption[]>([]);
+  const [assignLoading, setAssignLoading] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  const [assignSearch, setAssignSearch] = useState("");
+  const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
+  const [assignClasses, setAssignClasses] = useState<SchoolClassOption[]>([]);
+  const [assignSections, setAssignSections] = useState<SectionOption[]>([]);
+  const [assignClassId, setAssignClassId] = useState("");
+  const [assignSectionId, setAssignSectionId] = useState("");
 
   const clearFieldError = (field: "name" | "description") => {
     setFieldErrors((prev) => {
@@ -367,6 +397,122 @@ export function StudentGroupPanel() {
 
   const onDeleteClick = (row: StudentGroup) => {
     setDeleteConfirm(row);
+  };
+
+  const openAssignModal = async (row: StudentGroup) => {
+    try {
+      setAssignLoading(true);
+      setAssignGroup(row);
+      setAssignSearch("");
+      setSelectedStudentIds([]);
+      setAssignClassId("");
+      setAssignSectionId("");
+
+      const [classData, sectionData, studentData] = await Promise.all([
+        apiGet<ApiList<SchoolClassOption>>("/api/v1/core/classes/?page_size=500"),
+        apiGet<ApiList<SectionOption>>("/api/v1/core/sections/?page_size=500"),
+        apiGet<ApiList<StudentOption>>("/api/v1/students/students/?is_active=true&page_size=500"),
+      ]);
+
+      setAssignClasses(listData(classData));
+      setAssignSections(listData(sectionData));
+      setAssignStudents(listData(studentData));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to load students.";
+      setError(message && message !== "401" ? message : "Unable to load students for assignment.");
+      setAssignGroup(null);
+    } finally {
+      setAssignLoading(false);
+    }
+  };
+
+  const loadAssignableStudents = async (classFilter = assignClassId, sectionFilter = assignSectionId) => {
+    try {
+      setAssignLoading(true);
+      const params = new URLSearchParams();
+      params.set("is_active", "true");
+      params.set("page_size", "500");
+      if (classFilter) params.set("class_id", classFilter);
+      if (sectionFilter) params.set("section_id", sectionFilter);
+
+      const data = await apiGet<ApiList<StudentOption>>(`/api/v1/students/students/?${params.toString()}`);
+      setAssignStudents(listData(data));
+      setSelectedStudentIds([]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to load students.";
+      setToast({ message: message || "Unable to load students.", type: "error" });
+    } finally {
+      setAssignLoading(false);
+    }
+  };
+
+  const filteredSectionsByClass = useMemo(() => {
+    if (!assignClassId) return assignSections;
+    const classIdNum = Number(assignClassId);
+    return assignSections.filter((section) => Number(section.school_class) === classIdNum);
+  }, [assignSections, assignClassId]);
+
+  const submitAssignStudents = async () => {
+    if (!assignGroup || selectedStudentIds.length === 0) {
+      setToast({ message: "Select at least one student.", type: "error" });
+      return;
+    }
+    try {
+      setAssigning(true);
+      await apiPost(`/api/v1/students/groups/${assignGroup.id}/assign-students/`, {
+        student_ids: selectedStudentIds,
+      });
+      setAssignGroup(null);
+      setSelectedStudentIds([]);
+      setAssignSearch("");
+      setToast({ message: "✓ Students assigned to group successfully", type: "success" });
+      await load(currentPage, pageSize, debouncedSearch, sortBy);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unable to assign students.";
+      setToast({ message: message || "Unable to assign students.", type: "error" });
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  const filteredAssignableStudents = useMemo(() => {
+    const query = assignSearch.trim().toLowerCase();
+    return assignStudents.filter((student) => {
+      if (student.student_group && student.student_group === assignGroup?.id) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      const name = `${student.first_name || ""} ${student.last_name || ""}`.trim().toLowerCase();
+      const admission = String(student.admission_no || "").toLowerCase();
+      return name.includes(query) || admission.includes(query);
+    });
+  }, [assignStudents, assignSearch, assignGroup]);
+
+  const visibleAssignableStudentIds = useMemo(
+    () => filteredAssignableStudents.map((student) => student.id),
+    [filteredAssignableStudents],
+  );
+
+  const allVisibleSelected = useMemo(
+    () =>
+      visibleAssignableStudentIds.length > 0
+      && visibleAssignableStudentIds.every((id) => selectedStudentIds.includes(id)),
+    [visibleAssignableStudentIds, selectedStudentIds],
+  );
+
+  const toggleSelectAllVisible = (checked: boolean) => {
+    if (checked) {
+      setSelectedStudentIds((prev) => {
+        const merged = new Set(prev);
+        visibleAssignableStudentIds.forEach((id) => merged.add(id));
+        return Array.from(merged);
+      });
+      return;
+    }
+
+    setSelectedStudentIds((prev) => prev.filter((id) => !visibleAssignableStudentIds.includes(id)));
   };
 
   const confirmDelete = async () => {
@@ -705,6 +851,19 @@ export function StudentGroupPanel() {
                             </button>
                             <button
                               type="button"
+                              onClick={() => void openAssignModal(row)}
+                              style={{
+                                ...secondaryBtnStyle(false),
+                                borderColor: "#dbeafe",
+                                color: "#1d4ed8",
+                              }}
+                              aria-label={`Assign students to ${row.name}`}
+                              title="Assign students"
+                            >
+                              👥 Assign
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => onDeleteClick(row)}
                               style={{
                                 ...secondaryBtnStyle(false),
@@ -816,6 +975,133 @@ export function StudentGroupPanel() {
               >
                 {deleting ? "Deleting..." : "🗑 Delete"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {assignGroup && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: 16,
+          }}
+        >
+          <div style={{ background: "#fff", borderRadius: "var(--radius)", padding: 20, maxWidth: 620, width: "100%" }}>
+            <h3 style={{ margin: "0 0 10px 0", fontSize: 18, fontWeight: 600 }}>Assign Students to {assignGroup.name}</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+              <select
+                value={assignClassId}
+                onChange={(event) => {
+                  const nextClassId = event.target.value;
+                  setAssignClassId(nextClassId);
+                  setAssignSectionId("");
+                  void loadAssignableStudents(nextClassId, "");
+                }}
+                style={fieldStyle(false)}
+              >
+                <option value="">All classes</option>
+                {assignClasses.map((schoolClass) => (
+                  <option key={schoolClass.id} value={schoolClass.id}>
+                    {schoolClass.class_name || schoolClass.name || `Class ${schoolClass.id}`}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={assignSectionId}
+                onChange={(event) => {
+                  const nextSectionId = event.target.value;
+                  setAssignSectionId(nextSectionId);
+                  void loadAssignableStudents(assignClassId, nextSectionId);
+                }}
+                style={fieldStyle(false)}
+                disabled={!assignClassId}
+              >
+                <option value="">{assignClassId ? "All sections" : "Select class first"}</option>
+                {filteredSectionsByClass.map((section) => (
+                  <option key={section.id} value={section.id}>
+                    {section.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <input
+              value={assignSearch}
+              onChange={(event) => setAssignSearch(event.target.value)}
+              placeholder="Search by name or admission number"
+              style={{ ...fieldStyle(false), marginBottom: 10 }}
+            />
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 13, color: "var(--text-muted)" }}>
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={(event) => toggleSelectAllVisible(event.target.checked)}
+                disabled={assignLoading || visibleAssignableStudentIds.length === 0}
+              />
+              <span>Select all visible ({visibleAssignableStudentIds.length})</span>
+            </label>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 8, maxHeight: 280, overflowY: "auto", padding: 8 }}>
+              {assignLoading ? (
+                <p style={{ margin: 0, color: "var(--text-muted)" }}>Loading students...</p>
+              ) : filteredAssignableStudents.length === 0 ? (
+                <p style={{ margin: 0, color: "var(--text-muted)" }}>No students available for assignment.</p>
+              ) : (
+                filteredAssignableStudents.map((student) => {
+                  const label = `${student.first_name || ""} ${student.last_name || ""}`.trim() || student.admission_no || "Student";
+                  return (
+                    <label key={student.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 4px" }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedStudentIds.includes(student.id)}
+                        onChange={(event) => {
+                          setSelectedStudentIds((prev) => {
+                            if (event.target.checked) {
+                              return [...prev, student.id];
+                            }
+                            return prev.filter((id) => id !== student.id);
+                          });
+                        }}
+                      />
+                      <span>{label}</span>
+                      <span style={{ color: "var(--text-muted)", fontSize: 12 }}>({student.admission_no || "N/A"})</span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10, alignItems: "center" }}>
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{selectedStudentIds.length} selected</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (assigning) return;
+                    setAssignGroup(null);
+                    setSelectedStudentIds([]);
+                  }}
+                  style={secondaryBtnStyle(assigning)}
+                  disabled={assigning}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void submitAssignStudents()}
+                  style={btnStyle("#1d4ed8", assigning || selectedStudentIds.length === 0)}
+                  disabled={assigning || selectedStudentIds.length === 0}
+                >
+                  {assigning ? "Assigning..." : "Assign Selected"}
+                </button>
+              </div>
             </div>
           </div>
         </div>

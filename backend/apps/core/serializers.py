@@ -162,25 +162,24 @@ class ClassSerializer(serializers.ModelSerializer):
         return None
 
     def validate_name(self, value):
-        cleaned = (value or "").strip()
+        cleaned = Class.normalize_name(value)
+        if not cleaned:
+            raise serializers.ValidationError("Class name must be Nursery, LKG, UKG, or Grade 1 to Grade 12")
 
         school_id = self._school_id()
         if school_id and cleaned:
-            duplicate_qs = Class.objects.filter(school_id=school_id, name__iexact=cleaned)
+            duplicate_qs = Class.objects.filter(school_id=school_id)
             if self.instance is not None:
                 duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
-            if duplicate_qs.exists():
+            if any(Class.normalize_name(existing_name) == cleaned for existing_name in duplicate_qs.values_list("name", flat=True)):
                 raise serializers.ValidationError("Class name already exists")
 
         return cleaned
 
-    def validate_numeric_order(self, value):
-        return value
-
     class Meta:
         model = Class
         fields = ["id", "school", "name", "numeric_order", "sections", "created_at"]
-        read_only_fields = ["id", "school", "sections", "created_at"]
+        read_only_fields = ["id", "school", "numeric_order", "sections", "created_at"]
 
 
 class SubjectSerializer(serializers.ModelSerializer):

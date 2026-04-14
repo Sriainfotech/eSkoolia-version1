@@ -1,5 +1,6 @@
 import json
 from django.db.models import Sum
+from django.core.validators import FileExtensionValidator
 import re
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
@@ -9,6 +10,17 @@ from apps.students.models import Student
 from rest_framework import serializers
 
 from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument
+
+
+class FileNameCharField(serializers.CharField):
+    """Accept either plain strings or uploaded file objects and store only the file name."""
+
+    def to_internal_value(self, data):
+        if hasattr(data, "name"):
+            data = getattr(data, "name", "")
+        if data is None:
+            data = ""
+        return super().to_internal_value(str(data))
 
 
 class DepartmentSerializer(serializers.ModelSerializer):
@@ -183,6 +195,17 @@ class StaffDocumentSerializer(serializers.ModelSerializer):
 
 
 class StaffSerializer(serializers.ModelSerializer):
+    staff_photo = serializers.ImageField(
+        required=False,
+        allow_null=True,
+        validators=[FileExtensionValidator(allowed_extensions=["jpg", "jpeg", "png"])],
+    )
+    resume = FileNameCharField(required=False, allow_blank=True, max_length=300)
+    joining_letter = FileNameCharField(required=False, allow_blank=True, max_length=300)
+    tenth_certificate = FileNameCharField(required=False, allow_blank=True, max_length=300)
+    eleventh_certificate = FileNameCharField(required=False, allow_blank=True, max_length=300)
+    aadhar_card = FileNameCharField(required=False, allow_blank=True, max_length=300)
+    driving_license_doc = FileNameCharField(required=False, allow_blank=True, max_length=300)
     other_document = serializers.ListField(
         child=serializers.CharField(allow_blank=False, trim_whitespace=True, max_length=300),
         required=False,
@@ -283,8 +306,16 @@ class StaffSerializer(serializers.ModelSerializer):
         if value is None:
             return []
 
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, (list, tuple)):
+            normalized = []
+            for item in value:
+                if hasattr(item, "name"):
+                    text = str(item.name or "").strip()
+                else:
+                    text = str(item or "").strip()
+                if text:
+                    normalized.append(text)
+            return normalized
 
         if isinstance(value, str):
             text = value.strip()
@@ -300,6 +331,14 @@ class StaffSerializer(serializers.ModelSerializer):
 
         return [str(value).strip()] if str(value).strip() else []
 
+    @staticmethod
+    def _normalize_text_input(value):
+        if value is None:
+            return ""
+        if hasattr(value, "name"):
+            return str(value.name or "").strip()
+        return str(value).strip()
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data["other_document"] = self._normalize_other_documents(getattr(instance, "other_document", []))
@@ -307,9 +346,45 @@ class StaffSerializer(serializers.ModelSerializer):
 
     def to_internal_value(self, data):
         mutable_data = data.copy() if hasattr(data, "copy") else dict(data)
-        if "other_document" in mutable_data:
+
+        # QueryDict keeps repeated keys in getlist; use that for multi-file/name document input.
+        if hasattr(data, "getlist") and "other_document" in data:
+            mutable_data["other_document"] = self._normalize_other_documents(data.getlist("other_document"))
+        elif "other_document" in mutable_data:
             mutable_data["other_document"] = self._normalize_other_documents(mutable_data.get("other_document"))
+
+        custom_field = mutable_data.get("custom_field")
+        if isinstance(custom_field, str):
+            custom_field_text = custom_field.strip()
+            if custom_field_text:
+                try:
+                    parsed_custom = json.loads(custom_field_text)
+                    if isinstance(parsed_custom, dict):
+                        mutable_data["custom_field"] = parsed_custom
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    # Preserve original value so serializer can emit a proper validation error if needed.
+                    pass
+
+        for field_name in [
+            "resume",
+            "joining_letter",
+            "tenth_certificate",
+            "eleventh_certificate",
+            "aadhar_card",
+            "driving_license_doc",
+        ]:
+            if field_name in mutable_data:
+                mutable_data[field_name] = self._normalize_text_input(mutable_data.get(field_name))
+
         return super().to_internal_value(mutable_data)
+
+    def validate_staff_photo(self, value):
+        if not value:
+            return value
+        max_size = 2 * 1024 * 1024
+        if value.size > max_size:
+            raise serializers.ValidationError("File size must be 2MB or less.")
+        return value
 
     def _apply_payroll_defaults(self, custom_field, school):
         current = dict(custom_field or {})
@@ -373,28 +448,28 @@ class StaffSerializer(serializers.ModelSerializer):
         designation = get_value("designation")
         user = get_value("user")
         role = get_value("role")
-        staff_no = (get_value("staff_no") or "").strip()
-        first_name = (get_value("first_name") or "").strip()
-        email = (get_value("email") or "").strip().lower()
-        phone = (get_value("phone") or "").strip()
-        emergency_mobile = (get_value("emergency_mobile") or "").strip()
+        staff_no = self._normalize_text_input(get_value("staff_no"))
+        first_name = self._normalize_text_input(get_value("first_name"))
+        email = self._normalize_text_input(get_value("email")).lower()
+        phone = self._normalize_text_input(get_value("phone"))
+        emergency_mobile = self._normalize_text_input(get_value("emergency_mobile"))
         date_of_birth = get_value("date_of_birth")
         join_date = get_value("join_date")
-        staff_photo = (get_value("staff_photo") or "").strip()
-        current_address = (get_value("current_address") or "").strip()
-        permanent_address = (get_value("permanent_address") or "").strip()
-        other_document = (get_value("other_document") or "").strip()
-        epf_no = (get_value("epf_no") or "").strip()
+        staff_photo = self._normalize_text_input(get_value("staff_photo"))
+        current_address = self._normalize_text_input(get_value("current_address"))
+        permanent_address = self._normalize_text_input(get_value("permanent_address"))
+        other_document_values = self._normalize_other_documents(get_value("other_document"))
+        epf_no = self._normalize_text_input(get_value("epf_no"))
         basic_salary = get_value("basic_salary")
-        contract_type = (get_value("contract_type") or "").strip()
-        bank_account_name = (get_value("bank_account_name") or "").strip()
-        bank_account_no = (get_value("bank_account_no") or "").strip()
-        bank_name = (get_value("bank_name") or "").strip()
-        bank_branch = (get_value("bank_branch") or "").strip()
-        facebook_url = (get_value("facebook_url") or "").strip()
-        twitter_url = (get_value("twitter_url") or "").strip()
-        linkedin_url = (get_value("linkedin_url") or "").strip()
-        instagram_url = (get_value("instagram_url") or "").strip()
+        contract_type = self._normalize_text_input(get_value("contract_type"))
+        bank_account_name = self._normalize_text_input(get_value("bank_account_name"))
+        bank_account_no = self._normalize_text_input(get_value("bank_account_no"))
+        bank_name = self._normalize_text_input(get_value("bank_name"))
+        bank_branch = self._normalize_text_input(get_value("bank_branch"))
+        facebook_url = self._normalize_text_input(get_value("facebook_url"))
+        twitter_url = self._normalize_text_input(get_value("twitter_url"))
+        linkedin_url = self._normalize_text_input(get_value("linkedin_url"))
+        instagram_url = self._normalize_text_input(get_value("instagram_url"))
 
         required_errors = {}
         if not staff_no:
@@ -415,7 +490,7 @@ class StaffSerializer(serializers.ModelSerializer):
             required_errors["current_address"] = "Current address is required."
         if not permanent_address:
             required_errors["permanent_address"] = "Permanent address is required."
-        if not other_document:
+        if not other_document_values:
             required_errors["other_document"] = "Signature upload is required."
         if not bank_account_name:
             required_errors["bank_account_name"] = "Account holder name is required."
@@ -440,7 +515,7 @@ class StaffSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"phone": "Mobile number must contain digits only and must not exceed 12 digits."})
         if emergency_mobile and not mobile_pattern.fullmatch(emergency_mobile):
             raise serializers.ValidationError({"emergency_mobile": "Mobile number must contain digits only and must not exceed 12 digits."})
-        bank_mobile_no = (get_value("bank_mobile_no") or "").strip()
+        bank_mobile_no = self._normalize_text_input(get_value("bank_mobile_no"))
         if bank_mobile_no and not mobile_pattern.fullmatch(bank_mobile_no):
             raise serializers.ValidationError({"bank_mobile_no": "Mobile number must contain digits only and must not exceed 12 digits."})
 
@@ -451,9 +526,14 @@ class StaffSerializer(serializers.ModelSerializer):
                 "bank_account_name": "Account holder name can contain only letters, spaces, hyphens, and apostrophes."
             })
 
-        # Account Number: 6-30 digits, no special characters
-        if bank_account_no and not re.fullmatch(r"\d{6,30}", bank_account_no):
-            raise serializers.ValidationError({"bank_account_no": "Account number must be 6-30 digits."})
+        # Account Number: 9-18 digits, no special characters, reject repeated digits
+        if bank_account_no:
+            if not re.fullmatch(r"\d+", bank_account_no):
+                raise serializers.ValidationError({"bank_account_no": "Only numbers are allowed"})
+            if len(bank_account_no) < 9 or len(bank_account_no) > 18:
+                raise serializers.ValidationError({"bank_account_no": "Account number must be between 9 and 18 digits"})
+            if re.fullmatch(r"(\d)\1+", bank_account_no):
+                raise serializers.ValidationError({"bank_account_no": "Account number cannot contain all repeated digits."})
 
         # Bank Name: Letters, spaces, hyphens, and ampersands only
         if bank_name and not re.match(r"^[A-Za-z\s\-&]{2,120}$", bank_name):
@@ -467,13 +547,13 @@ class StaffSerializer(serializers.ModelSerializer):
                 "bank_branch": "Branch name can contain only letters and spaces."
             })
 
-        # IFSC Code: Proper validation - 4 letters + 0 + 6 alphanumeric characters
+        # IFSC Code: Proper validation - 4 letters + 0 + 6 digits
         custom_field = get_value("custom_field") or {}
         ifsc_code = (custom_field.get("ifsc_code") or "").strip() if isinstance(custom_field, dict) else ""
         if ifsc_code:
-            if not re.fullmatch(r"[A-Z]{4}0[A-Z0-9]{6}", ifsc_code.upper()):
+            if not re.fullmatch(r"[A-Z]{4}0\d{6}", ifsc_code.upper()):
                 raise serializers.ValidationError({
-                    "ifsc_code": "Invalid IFSC code format. Expected: 4 uppercase letters + 0 + 6 alphanumeric characters (e.g., HDFC0001234)."
+                    "ifsc_code": "Invalid IFSC code format. Expected: 4 uppercase letters + 0 + 6 digits (e.g., HDFC0001234)."
                 })
 
         # Unique bank account number per school
@@ -545,8 +625,8 @@ class StaffSerializer(serializers.ModelSerializer):
             if not (lowered.endswith(".jpg") or lowered.endswith(".jpeg") or lowered.endswith(".png")):
                 raise serializers.ValidationError({"staff_photo": "Only JPG and PNG files are allowed."})
 
-        if other_document:
-            lowered_doc = other_document.lower()
+        for document_name in other_document_values:
+            lowered_doc = document_name.lower()
             if not lowered_doc.endswith((".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png")):
                 raise serializers.ValidationError({"other_document": "Signature upload must be PDF, DOC, DOCX, JPG, JPEG, or PNG."})
 

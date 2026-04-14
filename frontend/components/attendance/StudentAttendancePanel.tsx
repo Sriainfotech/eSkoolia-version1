@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { TopToast } from "@/components/common/TopToast";
 
 type AcademicYear = { id: number; name: string; is_current: boolean };
 type SchoolClass = { id: number; name: string };
@@ -113,6 +114,7 @@ export default function StudentAttendancePanel() {
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
   const [searching, setSearching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -145,6 +147,18 @@ export default function StudentAttendancePanel() {
     const all = Array.from(new Set([new Date().getFullYear(), ...fromAcademicYears]));
     return all.sort((a, b) => b - a);
   }, [validAcademicYears]);
+
+  useEffect(() => {
+    if (error) {
+      setToast({ message: error, tone: "error" });
+    }
+  }, [error]);
+
+  useEffect(() => {
+    if (success) {
+      setToast({ message: success, tone: "success" });
+    }
+  }, [success]);
 
   useEffect(() => {
     const load = async () => {
@@ -188,8 +202,13 @@ export default function StudentAttendancePanel() {
       setLoadingSections(true);
       setSections([]);
       setSectionId("");
-      const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
-      setSections(listData(data));
+      try {
+        const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
+        setSections(listData(data));
+      } catch {
+        const fallback = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?school_class=${encodeURIComponent(targetClassId)}&page_size=200`);
+        setSections(listData(fallback));
+      }
     } catch {
       setError("Unable to load sections for selected class.");
     } finally {
@@ -366,6 +385,13 @@ export default function StudentAttendancePanel() {
 
   return (
     <div className="legacy-panel student-attendance-panel">
+      {toast ? (
+        <TopToast
+          message={toast.message}
+          tone={toast.tone}
+          onClose={() => setToast(null)}
+        />
+      ) : null}
       <style>{`
         .student-attendance-panel button:focus,
         .student-attendance-panel select:focus,

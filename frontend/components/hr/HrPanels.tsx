@@ -293,18 +293,28 @@ async function apiGet<T>(path: string): Promise<T> {
 }
 
 async function apiPost<T>(path: string, payload: unknown): Promise<T> {
+  const isFormData = payload instanceof FormData;
   return apiRequestWithRefresh<T>(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    ...(isFormData
+      ? { body: payload }
+      : {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }),
   });
 }
 
 async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
+  const isFormData = payload instanceof FormData;
   return apiRequestWithRefresh<T>(path, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    ...(isFormData
+      ? { body: payload }
+      : {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }),
   });
 }
 
@@ -1333,12 +1343,16 @@ export function HrStaffPanel() {
     staff_no?: string;
     role?: string;
     first_name?: string;
+    last_name?: string;
     email?: string;
     join_date?: string;
     date_of_birth?: string;
     phone?: string;
     emergency_mobile?: string;
     staff_photo?: string;
+    current_address?: string;
+    permanent_address?: string;
+    other_document?: string;
     epf_no?: string;
     basic_salary?: string;
     contract_type?: string;
@@ -1347,6 +1361,7 @@ export function HrStaffPanel() {
     bank_mobile_no?: string;
     bank_name?: string;
     bank_branch?: string;
+    ifsc_code?: string;
     facebook_url?: string;
     twitter_url?: string;
     linkedin_url?: string;
@@ -1376,6 +1391,7 @@ export function HrStaffPanel() {
   const [emergencyMobile, setEmergencyMobile] = useState("");
   const [drivingLicense, setDrivingLicense] = useState("");
   const [staffPhoto, setStaffPhoto] = useState("");
+  const [staffPhotoFile, setStaffPhotoFile] = useState<File | null>(null);
   const [showPublic, setShowPublic] = useState(false);
   const [currentAddress, setCurrentAddress] = useState("");
   const [permanentAddress, setPermanentAddress] = useState("");
@@ -1399,6 +1415,9 @@ export function HrStaffPanel() {
   const [bankBranch, setBankBranch] = useState("");
   const [bankMobileNo, setBankMobileNo] = useState("");
   const [ifscCode, setIfscCode] = useState("");
+  const [ifscLookupLoading, setIfscLookupLoading] = useState(false);
+  const [ifscLookupError, setIfscLookupError] = useState("");
+  const [ifscAutoFilled, setIfscAutoFilled] = useState(false);
 
   const [facebookUrl, setFacebookUrl] = useState("");
   const [twitterUrl, setTwitterUrl] = useState("");
@@ -1429,6 +1448,8 @@ export function HrStaffPanel() {
   const aadharRef = useRef<HTMLInputElement | null>(null);
   const drivingLicenseRef = useRef<HTMLInputElement | null>(null);
   const otherDocRef = useRef<HTMLInputElement | null>(null);
+  const ifscLookupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ifscLookupAbortRef = useRef<AbortController | null>(null);
   const [staffPhotoPreview, setStaffPhotoPreview] = useState("");
 
   const filteredDesignations = useMemo(() => {
@@ -1473,6 +1494,81 @@ export function HrStaffPanel() {
 
   const todayStr = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
+  useEffect(() => {
+    if (ifscLookupTimeoutRef.current) {
+      clearTimeout(ifscLookupTimeoutRef.current);
+      ifscLookupTimeoutRef.current = null;
+    }
+    if (ifscLookupAbortRef.current) {
+      ifscLookupAbortRef.current.abort();
+      ifscLookupAbortRef.current = null;
+    }
+
+    const normalizedIfsc = ifscCode.trim().toUpperCase();
+    setIfscLookupError("");
+
+    if (!normalizedIfsc) {
+      setIfscLookupLoading(false);
+      setIfscAutoFilled(false);
+      return;
+    }
+
+    if (!/^[A-Z]{4}0\d{6}$/.test(normalizedIfsc)) {
+      setIfscLookupLoading(false);
+      setIfscAutoFilled(false);
+      return;
+    }
+
+    ifscLookupTimeoutRef.current = setTimeout(async () => {
+      const controller = new AbortController();
+      ifscLookupAbortRef.current = controller;
+      setIfscLookupLoading(true);
+
+      try {
+        const response = await fetch(`https://ifsc.razorpay.com/${normalizedIfsc}`, { signal: controller.signal });
+        if (!response.ok) {
+          throw new Error(response.status === 404 ? "Invalid IFSC code." : "Unable to fetch bank details.");
+        }
+        const data = (await response.json()) as { BANK?: string; BRANCH?: string };
+        const fetchedBank = String(data.BANK || "").trim();
+        const fetchedBranch = String(data.BRANCH || "").trim();
+
+        if (fetchedBank) {
+          setBankName(fetchedBank);
+          clearFieldError("bank_name");
+        }
+        if (fetchedBranch) {
+          setBankBranch(fetchedBranch);
+          clearFieldError("bank_branch");
+        }
+
+        setIfscAutoFilled(Boolean(fetchedBank || fetchedBranch));
+        if (!fetchedBank && !fetchedBranch) {
+          setIfscLookupError("Could not auto-fill bank details for this IFSC.");
+        }
+      } catch (err) {
+        const aborted = err instanceof DOMException && err.name === "AbortError";
+        if (!aborted) {
+          setIfscLookupError("Could not auto-fill bank details for this IFSC.");
+          setIfscAutoFilled(false);
+        }
+      } finally {
+        setIfscLookupLoading(false);
+      }
+    }, 500);
+
+    return () => {
+      if (ifscLookupTimeoutRef.current) {
+        clearTimeout(ifscLookupTimeoutRef.current);
+        ifscLookupTimeoutRef.current = null;
+      }
+      if (ifscLookupAbortRef.current) {
+        ifscLookupAbortRef.current.abort();
+        ifscLookupAbortRef.current = null;
+      }
+    };
+  }, [ifscCode]);
+
   const clearFieldError = (field: keyof typeof fieldErrors) => {
     if (!fieldErrors[field]) return;
     setFieldErrors((prev) => ({ ...prev, [field]: undefined }));
@@ -1483,6 +1579,7 @@ export function HrStaffPanel() {
 
   const scrollToField = (field: keyof typeof fieldErrors) => {
     const tabByField: Partial<Record<keyof typeof fieldErrors, typeof activeTab>> = {
+      ifsc_code: "bank",
       epf_no: "payroll",
       basic_salary: "payroll",
       contract_type: "payroll",
@@ -1490,6 +1587,7 @@ export function HrStaffPanel() {
       bank_account_no: "bank",
       bank_name: "bank",
       bank_branch: "bank",
+      other_document: "document",
       facebook_url: "social",
       twitter_url: "social",
       linkedin_url: "social",
@@ -1539,7 +1637,7 @@ export function HrStaffPanel() {
       nextErrors.first_name = "First name can contain only letters and spaces.";
     }
     if (lastName.trim() && !/^[A-Za-z ]{2,50}$/.test(lastName.trim())) {
-      nextErrors.first_name = "Last name can contain only letters and spaces.";
+      nextErrors.last_name = "Last name can contain only letters and spaces.";
     }
     if (!email.trim()) {
       nextErrors.email = "Email is required.";
@@ -1574,21 +1672,38 @@ export function HrStaffPanel() {
         nextErrors.join_date = `Joining date must be after employee turns ${minAgeYears}.`;
       }
     }
-    if (!validateMobile(phone)) nextErrors.phone = phone.trim().length > 12 ? "Mobile number must not exceed 12 digits." : "Mobile number must contain digits only.";
+    if (!phone.trim()) {
+      nextErrors.phone = "Mobile number is required.";
+    } else if (!validateMobile(phone)) {
+      nextErrors.phone = phone.trim().length > 12 ? "Mobile number must not exceed 12 digits." : "Mobile number must contain digits only.";
+    }
     if (!validateMobile(emergencyMobile)) nextErrors.emergency_mobile = emergencyMobile.trim().length > 12 ? "Mobile number must not exceed 12 digits." : "Mobile number must contain digits only.";
 
-    if (!bankAccountName.trim()) nextErrors.bank_account_name = "Account holder name is required";
+    if (!staffPhoto.trim()) nextErrors.staff_photo = "Staff photo is required.";
+    if (!currentAddress.trim()) nextErrors.current_address = "Current address is required.";
+    if (!permanentAddress.trim()) nextErrors.permanent_address = "Permanent address is required.";
+    if (otherDocuments.length === 0) nextErrors.other_document = "Signature upload is required.";
+
+    if (!bankAccountName.trim()) {
+      nextErrors.bank_account_name = "Account holder name is required";
+    } else if (!/^[A-Za-z\s\-']{2,120}$/.test(bankAccountName.trim())) {
+      nextErrors.bank_account_name = "Account holder name can contain only letters, spaces, hyphens, and apostrophes.";
+    }
     if (!bankAccountNo.trim()) {
       nextErrors.bank_account_no = "Enter valid account number";
-    } else if (!/^\d{6,30}$/.test(bankAccountNo.trim())) {
-      nextErrors.bank_account_no = "Enter valid account number";
+    } else if (!/^\d+$/.test(bankAccountNo.trim())) {
+      nextErrors.bank_account_no = "Only numbers are allowed";
+    } else if (bankAccountNo.trim().length < 9 || bankAccountNo.trim().length > 18) {
+      nextErrors.bank_account_no = "Account number must be between 9 and 18 digits";
+    } else if (/^(\d)\1+$/.test(bankAccountNo.trim())) {
+      nextErrors.bank_account_no = "Account number cannot contain all repeated digits.";
     }
     if (!bankName.trim()) nextErrors.bank_name = "Bank name is required";
     if (!bankBranch.trim()) nextErrors.bank_branch = "Branch name is required";
     if (!ifscCode.trim()) {
-      nextErrors.bank_branch = "IFSC code is required.";
-    } else if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode.trim().toUpperCase())) {
-      nextErrors.bank_branch = "Enter a valid IFSC code (e.g., HDFC0001234).";
+      nextErrors.ifsc_code = "IFSC code is required.";
+    } else if (!/^[A-Z]{4}0\d{6}$/.test(ifscCode.trim().toUpperCase())) {
+      nextErrors.ifsc_code = "Enter a valid IFSC code (e.g., HDFC0001234).";
     }
 
     if (!basicSalary.trim()) {
@@ -1639,6 +1754,30 @@ export function HrStaffPanel() {
       setFieldErrors((prev) => ({ ...prev, phone: message }));
       return "phone";
     }
+    if (lowered.includes("last name")) {
+      setFieldErrors((prev) => ({ ...prev, last_name: message }));
+      return "last_name";
+    }
+    if (lowered.includes("ifsc")) {
+      setFieldErrors((prev) => ({ ...prev, ifsc_code: message }));
+      return "ifsc_code";
+    }
+    if (lowered.includes("current address")) {
+      setFieldErrors((prev) => ({ ...prev, current_address: message }));
+      return "current_address";
+    }
+    if (lowered.includes("permanent address")) {
+      setFieldErrors((prev) => ({ ...prev, permanent_address: message }));
+      return "permanent_address";
+    }
+    if (lowered.includes("staff photo")) {
+      setFieldErrors((prev) => ({ ...prev, staff_photo: message }));
+      return "staff_photo";
+    }
+    if (lowered.includes("signature") || lowered.includes("other document")) {
+      setFieldErrors((prev) => ({ ...prev, other_document: message }));
+      return "other_document";
+    }
     if (lowered.includes("account holder")) {
       setFieldErrors((prev) => ({ ...prev, bank_account_name: message }));
       return "bank_account_name";
@@ -1686,6 +1825,77 @@ export function HrStaffPanel() {
     return null;
   };
 
+  const applyApiDetailsToField = (details: unknown): keyof typeof fieldErrors | null => {
+    const fieldKeyMap: Record<string, keyof typeof fieldErrors> = {
+      staff_no: "staff_no",
+      role: "role",
+      first_name: "first_name",
+      last_name: "last_name",
+      email: "email",
+      join_date: "join_date",
+      date_of_birth: "date_of_birth",
+      phone: "phone",
+      emergency_mobile: "emergency_mobile",
+      staff_photo: "staff_photo",
+      current_address: "current_address",
+      permanent_address: "permanent_address",
+      other_document: "other_document",
+      epf_no: "epf_no",
+      basic_salary: "basic_salary",
+      contract_type: "contract_type",
+      bank_account_name: "bank_account_name",
+      bank_account_no: "bank_account_no",
+      bank_mobile_no: "bank_mobile_no",
+      bank_name: "bank_name",
+      bank_branch: "bank_branch",
+      ifsc_code: "ifsc_code",
+      facebook_url: "facebook_url",
+      twitter_url: "twitter_url",
+      linkedin_url: "linkedin_url",
+      instagram_url: "instagram_url",
+    };
+
+    const pickMessage = (value: unknown): string | null => {
+      if (typeof value === "string") {
+        return value;
+      }
+      if (Array.isArray(value) && value.length > 0) {
+        const first = value[0];
+        return typeof first === "string" ? first : null;
+      }
+      return null;
+    };
+
+    const tryApply = (value: unknown): keyof typeof fieldErrors | null => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return null;
+      }
+
+      const record = value as Record<string, unknown>;
+      for (const [apiField, apiValue] of Object.entries(record)) {
+        const mappedField = fieldKeyMap[apiField];
+        if (!mappedField) continue;
+        const message = pickMessage(apiValue);
+        if (!message) continue;
+        setFieldErrors((prev) => ({ ...prev, [mappedField]: message }));
+        return mappedField;
+      }
+      return null;
+    };
+
+    if (!details || typeof details !== "object") {
+      return null;
+    }
+
+    const root = details as Record<string, unknown>;
+    return (
+      tryApply(root.errors) ||
+      tryApply(root.details) ||
+      tryApply((root.error as Record<string, unknown> | undefined)?.details) ||
+      tryApply(root)
+    );
+  };
+
   const resetForm = () => {
     setActiveTab("basic");
     setStaffNo("");
@@ -1705,6 +1915,7 @@ export function HrStaffPanel() {
     setEmergencyMobile("");
     setDrivingLicense("");
     setStaffPhoto("");
+    setStaffPhotoFile(null);
     setStaffPhotoPreview("");
     setShowPublic(false);
     setCurrentAddress("");
@@ -1723,6 +1934,9 @@ export function HrStaffPanel() {
     setBankBranch("");
     setBankMobileNo("");
     setIfscCode("");
+    setIfscLookupLoading(false);
+    setIfscLookupError("");
+    setIfscAutoFilled(false);
     try {
       localStorage.removeItem("hr_staff_form_draft");
     } catch {
@@ -1927,8 +2141,10 @@ export function HrStaffPanel() {
         } else if (!["permanent", "contract"].includes(contractTypeValue.toLowerCase())) {
           rowErrors.push("contract type must be Permanent or Contract");
         }
-        if (bankAccountNoValue && !/^\d{6,30}$/.test(bankAccountNoValue)) rowErrors.push("bank account number must contain 6 to 30 digits");
-        if (ifscCodeValue && !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCodeValue.toUpperCase())) rowErrors.push("ifsc code must be valid");
+        if (bankAccountNoValue && !/^\d+$/.test(bankAccountNoValue)) rowErrors.push("bank account number must contain digits only");
+        if (bankAccountNoValue && (bankAccountNoValue.length < 9 || bankAccountNoValue.length > 18)) rowErrors.push("bank account number must contain 9 to 18 digits");
+        if (bankAccountNoValue && /^(\d)\1+$/.test(bankAccountNoValue)) rowErrors.push("bank account number cannot contain all repeated digits");
+        if (ifscCodeValue && !/^[A-Z]{4}0\d{6}$/.test(ifscCodeValue.toUpperCase())) rowErrors.push("ifsc code must be valid");
         if (basicSalaryValue && (!Number.isFinite(Number(basicSalaryValue)) || Number(basicSalaryValue) <= 0)) rowErrors.push("basic salary must be greater than 0");
         if (phoneValue && !validateMobile(phoneValue)) rowErrors.push("phone number must contain digits only and be at most 12 digits");
         if (emergencyMobileValue && !validateMobile(emergencyMobileValue)) rowErrors.push("emergency mobile must contain digits only and be at most 12 digits");
@@ -2024,41 +2240,32 @@ export function HrStaffPanel() {
       setRolesLoading(true);
       setRolesError("");
 
-      const [roleDataResult, departmentDataResult, designationDataResult, nextStaffNoResult, payrollSettingsResult] = await Promise.allSettled([
-        apiGet<unknown>("/api/v1/access-control/roles/"),
-        apiGet<ApiList<Department>>("/api/v1/hr/departments/?is_active=true"),
-        apiGet<ApiList<Designation>>("/api/v1/hr/designations/?is_active=true"),
+      const [formOptionsResult, nextStaffNoResult, payrollSettingsResult] = await Promise.allSettled([
+        apiGet<{ data?: { roles?: Role[]; departments?: Department[]; designations?: Designation[] } }>("/api/v1/hr/staff/form-options/"),
         apiGet<{ staff_no?: string }>("/api/v1/hr/staff/next-staff-no/"),
         apiGet<PayrollSettings>("/api/v1/hr/payroll/settings/"),
       ]);
 
-      if (roleDataResult.status === "fulfilled") {
-        const payload = roleDataResult.value as { results?: Role[]; data?: Role[] } | Role[];
-        const mappedRoles = Array.isArray(payload)
-          ? payload
-          : Array.isArray(payload.data)
-            ? payload.data
-            : payload.results || [];
-        // Ensure options always use backend id -> value and name -> label.
-        setRoles(mappedRoles.map((role) => ({ id: role.id, name: role.name })));
+      if (formOptionsResult.status === "fulfilled") {
+        const options = formOptionsResult.value?.data || {};
+        const roleOptions = Array.isArray(options.roles) ? options.roles : [];
+        const departmentOptions = Array.isArray(options.departments) ? options.departments : [];
+        const designationOptions = Array.isArray(options.designations) ? options.designations : [];
+        setRoles(roleOptions.map((role) => ({ id: role.id, name: role.name })));
+        setDepartments(departmentOptions);
+        setDesignations(designationOptions);
         setRolesError("");
       } else {
         setRoles([]);
-        setRolesError("Failed to load roles");
-        setDropdownErrors((prev) => ({ ...prev, roles: "Failed to load roles" }));
-      }
-
-      if (departmentDataResult.status === "fulfilled") {
-        setDepartments(listData(departmentDataResult.value));
-      } else {
         setDepartments([]);
-        setDropdownErrors((prev) => ({ ...prev, departments: "Failed to load departments" }));
-      }
-      if (designationDataResult.status === "fulfilled") {
-        setDesignations(listData(designationDataResult.value));
-      } else {
         setDesignations([]);
-        setDropdownErrors((prev) => ({ ...prev, designations: "Failed to load designations" }));
+        setRolesError("Failed to load roles");
+        setDropdownErrors((prev) => ({
+          ...prev,
+          roles: "Failed to load roles",
+          departments: "Failed to load departments",
+          designations: "Failed to load designations",
+        }));
       }
       if (!editParam && nextStaffNoResult.status === "fulfilled") {
         const nextValue = (nextStaffNoResult.value.staff_no || "").trim();
@@ -2211,6 +2418,7 @@ export function HrStaffPanel() {
         setEmergencyMobile(row.emergency_mobile || "");
         setDrivingLicense(row.driving_license || "");
         setStaffPhoto(row.staff_photo || "");
+        setStaffPhotoFile(null);
         setStaffPhotoPreview(/^https?:\/\//i.test(row.staff_photo || "") ? (row.staff_photo || "") : "");
         setShowPublic(Boolean(row.show_public));
         setCurrentAddress(row.current_address || "");
@@ -2244,6 +2452,8 @@ export function HrStaffPanel() {
         setBankBranch(row.bank_branch || "");
         setBankMobileNo(row.bank_mobile_no || "");
         setIfscCode(String((row as unknown as { custom_field?: { ifsc_code?: string } }).custom_field?.ifsc_code || ""));
+        setIfscLookupError("");
+        setIfscAutoFilled(false);
         setFacebookUrl(row.facebook_url || "");
         setTwitterUrl(row.twitter_url || "");
         setLinkedinUrl(row.linkedin_url || "");
@@ -2302,7 +2512,7 @@ export function HrStaffPanel() {
         marital_status: maritalStatus,
         emergency_mobile: emergencyMobile.trim(),
         driving_license: drivingLicense.trim(),
-        staff_photo: staffPhoto.trim(),
+        staff_photo: staffPhotoFile ? staffPhotoFile.name : undefined,
         show_public: showPublic,
         current_address: currentAddress.trim(),
         permanent_address: permanentAddress.trim(),
@@ -2340,8 +2550,47 @@ export function HrStaffPanel() {
         status: "active",
       };
 
+      const hasUploadFiles = Boolean(
+        staffPhotoFile ||
+        resumeFile ||
+        joiningLetterFile ||
+        tenthCertFile ||
+        eleventhCertFile ||
+        aadharFile ||
+        drivingLicenseFile ||
+        otherDocuments.some((doc) => Boolean(doc.file))
+      );
+
+      const requestPayload: typeof payload | FormData = hasUploadFiles
+        ? (() => {
+            const formData = new FormData();
+            Object.entries(payload).forEach(([key, value]) => {
+              if (value === null || value === undefined) return;
+              if (key === "custom_field") {
+                formData.append(key, JSON.stringify(value));
+                return;
+              }
+              if (Array.isArray(value)) {
+                value.forEach((item) => formData.append(key, String(item)));
+                return;
+              }
+              formData.append(key, String(value));
+            });
+
+            if (staffPhotoFile) formData.set("staff_photo", staffPhotoFile, staffPhotoFile.name);
+            if (resumeFile) formData.set("resume", resumeFile, resumeFile.name);
+            if (joiningLetterFile) formData.set("joining_letter", joiningLetterFile, joiningLetterFile.name);
+            if (tenthCertFile) formData.set("tenth_certificate", tenthCertFile, tenthCertFile.name);
+            if (eleventhCertFile) formData.set("eleventh_certificate", eleventhCertFile, eleventhCertFile.name);
+            if (aadharFile) formData.set("aadhar_card", aadharFile, aadharFile.name);
+            if (drivingLicenseFile) formData.set("driving_license_doc", drivingLicenseFile, drivingLicenseFile.name);
+
+            return formData;
+          })()
+        : payload;
+
       if (editingStaffId) {
-        await apiPatch(`/api/v1/hr/staff/${editingStaffId}/`, payload);
+        await apiPatch(`/api/v1/hr/staff/${editingStaffId}/`, requestPayload);
         try {
           localStorage.removeItem("hr_staff_form_draft");
         } catch {
@@ -2352,7 +2601,7 @@ export function HrStaffPanel() {
         return;
       }
 
-      await apiPost("/api/v1/hr/staff/", payload);
+      await apiPost("/api/v1/hr/staff/", requestPayload);
 
       try {
         localStorage.removeItem("hr_staff_form_draft");
@@ -2365,7 +2614,8 @@ export function HrStaffPanel() {
       router.push("/hr/staff-directory?created=1");
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to save staff.";
-      const mappedField = applyApiErrorToField(message);
+      const details = (err as { details?: unknown } | null)?.details;
+      const mappedField = applyApiDetailsToField(details) || applyApiErrorToField(message);
       if (mappedField) {
         scrollToField(mappedField);
       }
@@ -2541,14 +2791,14 @@ export function HrStaffPanel() {
                     <div />
 
                     {/* 2) Personal Details */}
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>First Name *</span><input value={firstName} onChange={(e) => { setFirstName(e.target.value); clearFieldError("first_name"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.first_name ? "#dc2626" : "var(--line)" }} />{fieldErrors.first_name ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.first_name}</span> : null}</label>
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Last Name</span><input value={lastName} onChange={(e) => setLastName(e.target.value)} style={fieldStyle()} /></label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>First Name *</span><input id="staff-field-first_name" value={firstName} onChange={(e) => { setFirstName(e.target.value); clearFieldError("first_name"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.first_name ? "#dc2626" : "var(--line)" }} />{fieldErrors.first_name ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.first_name}</span> : null}</label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Last Name</span><input id="staff-field-last_name" value={lastName} onChange={(e) => { setLastName(e.target.value); clearFieldError("last_name"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.last_name ? "#dc2626" : "var(--line)" }} />{fieldErrors.last_name ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.last_name}</span> : null}</label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Gender</span><select value={gender} onChange={(e) => setGender(e.target.value as "" | "male" | "female" | "other")} style={fieldStyle()}><option value="">Gender</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select></label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Date Of Birth</span><input type="date" value={dateOfBirth} onChange={(e) => { setDateOfBirth(e.target.value); clearFieldError("date_of_birth"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.date_of_birth ? "#dc2626" : "var(--line)" }} />{fieldErrors.date_of_birth ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.date_of_birth}</span> : null}</label>
 
                     {/* 3) Contact Details */}
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Email *</span><input type="email" value={email} onChange={(e) => { setEmail(e.target.value); clearFieldError("email"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.email ? "#dc2626" : "var(--line)" }} />{fieldErrors.email ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.email}</span> : null}</label>
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Mobile</span><input value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 12)); clearFieldError("phone"); }} maxLength={12} style={{ ...fieldStyle(), borderColor: fieldErrors.phone ? "#dc2626" : "var(--line)" }} />{fieldErrors.phone ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.phone}</span> : null}</label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Mobile Number *</span><input id="staff-field-phone" value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 12)); clearFieldError("phone"); }} maxLength={12} style={{ ...fieldStyle(), borderColor: fieldErrors.phone ? "#dc2626" : "var(--line)" }} />{fieldErrors.phone ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.phone}</span> : null}</label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Emergency Mobile</span><input value={emergencyMobile} onChange={(e) => { setEmergencyMobile(e.target.value.replace(/\D/g, "").slice(0, 12)); clearFieldError("emergency_mobile"); }} maxLength={12} style={{ ...fieldStyle(), borderColor: fieldErrors.emergency_mobile ? "#dc2626" : "var(--line)" }} />{fieldErrors.emergency_mobile ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.emergency_mobile}</span> : null}</label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Marital Status</span><select value={maritalStatus} onChange={(e) => setMaritalStatus(e.target.value as "" | "single" | "married")} style={fieldStyle()}><option value="">Marital Status</option><option value="single">Single</option><option value="married">Married</option></select></label>
 
@@ -2566,9 +2816,9 @@ export function HrStaffPanel() {
 
                     {/* 7) File Upload */}
                     <div style={{ display: "grid", gap: 6 }}>
-                      <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Staff Photo</span>
+                      <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Staff Photo *</span>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 86px", gap: 6 }}>
-                        <input readOnly value={staffPhoto || "Staff Photo"} style={{ ...fieldStyle(), borderColor: fieldErrors.staff_photo ? "#dc2626" : "var(--line)" }} />
+                        <input id="staff-field-staff_photo" readOnly value={staffPhoto || "Staff Photo"} style={{ ...fieldStyle(), borderColor: fieldErrors.staff_photo ? "#dc2626" : "var(--line)" }} />
                         <button type="button" style={buttonStyle("#7c3aed")} onClick={() => staffPhotoRef.current?.click()}>Browse</button>
                         <input
                           ref={staffPhotoRef}
@@ -2579,6 +2829,7 @@ export function HrStaffPanel() {
                             const file = e.target.files?.[0];
                             if (!file) {
                               setStaffPhoto("");
+                              setStaffPhotoFile(null);
                               setStaffPhotoPreview("");
                               clearFieldError("staff_photo");
                               return;
@@ -2601,6 +2852,7 @@ export function HrStaffPanel() {
                               return;
                             }
                             setStaffPhoto(file.name);
+                            setStaffPhotoFile(file);
                             setStaffPhotoPreview(URL.createObjectURL(file));
                             clearFieldError("staff_photo");
                           }}
@@ -2636,8 +2888,8 @@ export function HrStaffPanel() {
                 <section style={{ ...boxStyle(), padding: 12 }}>
                   <h4 style={{ margin: "0 0 10px 0", fontSize: 14, textTransform: "uppercase", color: "var(--text-muted)" }}>Additional Information</h4>
                   <div style={sectionGrid}>
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Current Address</span><textarea value={currentAddress} onChange={(e) => setCurrentAddress(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
-                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Permanent Address</span><textarea value={permanentAddress} onChange={(e) => setPermanentAddress(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Current Address *</span><textarea id="staff-field-current_address" value={currentAddress} onChange={(e) => { setCurrentAddress(e.target.value); clearFieldError("current_address"); }} style={{ width: "100%", minHeight: 84, border: `1px solid ${fieldErrors.current_address ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: 10 }} />{fieldErrors.current_address ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.current_address}</span> : null}</label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Permanent Address *</span><textarea id="staff-field-permanent_address" value={permanentAddress} onChange={(e) => { setPermanentAddress(e.target.value); clearFieldError("permanent_address"); }} style={{ width: "100%", minHeight: 84, border: `1px solid ${fieldErrors.permanent_address ? "#dc2626" : "var(--line)"}`, borderRadius: 8, padding: 10 }} />{fieldErrors.permanent_address ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.permanent_address}</span> : null}</label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Qualifications</span><textarea value={qualification} onChange={(e) => setQualification(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Experience</span><textarea value={experience} onChange={(e) => setExperience(e.target.value)} style={{ width: "100%", minHeight: 84, border: "1px solid var(--line)", borderRadius: 8, padding: 10 }} /></label>
                   </div>
@@ -2693,22 +2945,53 @@ export function HrStaffPanel() {
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Account Number *</span>
-                  <input id="staff-field-bank_account_no" value={bankAccountNo} onChange={(e) => { setBankAccountNo(e.target.value); clearFieldError("bank_account_no"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.bank_account_no ? "#dc2626" : "var(--line)" }} />
+                  <input
+                    id="staff-field-bank_account_no"
+                    value={bankAccountNo}
+                    onChange={(e) => {
+                      const rawValue = e.target.value;
+                      if (/\D/.test(rawValue)) {
+                        setFieldErrors((prev) => ({ ...prev, bank_account_no: "Only numbers are allowed" }));
+                      } else {
+                        clearFieldError("bank_account_no");
+                      }
+                      setBankAccountNo(rawValue.replace(/\D/g, "").slice(0, 18));
+                    }}
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={18}
+                    style={{ ...fieldStyle(), borderColor: fieldErrors.bank_account_no ? "#dc2626" : "var(--line)" }}
+                  />
                   {fieldErrors.bank_account_no ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.bank_account_no}</span> : null}
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Bank Name *</span>
-                  <input id="staff-field-bank_name" value={bankName} onChange={(e) => { setBankName(e.target.value); clearFieldError("bank_name"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.bank_name ? "#dc2626" : "var(--line)" }} />
+                  <input id="staff-field-bank_name" value={bankName} onChange={(e) => { setBankName(e.target.value); clearFieldError("bank_name"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.bank_name ? "#dc2626" : "var(--line)", background: ifscAutoFilled ? "#f8fafc" : "#fff" }} disabled={ifscAutoFilled} />
                   {fieldErrors.bank_name ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.bank_name}</span> : null}
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Branch Name *</span>
-                  <input id="staff-field-bank_branch" value={bankBranch} onChange={(e) => { setBankBranch(e.target.value); clearFieldError("bank_branch"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.bank_branch ? "#dc2626" : "var(--line)" }} />
+                  <input id="staff-field-bank_branch" value={bankBranch} onChange={(e) => { setBankBranch(e.target.value); clearFieldError("bank_branch"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.bank_branch ? "#dc2626" : "var(--line)", background: ifscAutoFilled ? "#f8fafc" : "#fff" }} disabled={ifscAutoFilled} />
                   {fieldErrors.bank_branch ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.bank_branch}</span> : null}
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>IFSC Code *</span>
-                  <input value={ifscCode} onChange={(e) => setIfscCode(e.target.value.toUpperCase())} placeholder="e.g., SBIN0001234" style={fieldStyle()} maxLength={11} />
+                  <input
+                    id="staff-field-ifsc_code"
+                    value={ifscCode}
+                    onChange={(e) => {
+                      setIfscCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 11));
+                      setIfscAutoFilled(false);
+                      setIfscLookupError("");
+                      clearFieldError("ifsc_code");
+                    }}
+                    placeholder="e.g., SBIN0001234"
+                    style={{ ...fieldStyle(), borderColor: fieldErrors.ifsc_code ? "#dc2626" : "var(--line)" }}
+                    maxLength={11}
+                  />
+                  {fieldErrors.ifsc_code ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.ifsc_code}</span> : null}
+                  {ifscLookupLoading ? <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Fetching bank details...</span> : null}
+                  {ifscLookupError ? <span style={{ color: "#dc2626", fontSize: 12 }}>{ifscLookupError}</span> : null}
                 </label>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Bank Contact Mobile</span>
@@ -2849,7 +3132,8 @@ export function HrStaffPanel() {
                       <input
                         readOnly
                         value={otherDocuments.length > 0 ? `${otherDocuments.length} document(s) selected` : "Other Documents"}
-                        style={fieldStyle()}
+                        id="staff-field-other_document"
+                        style={{ ...fieldStyle(), borderColor: fieldErrors.other_document ? "#dc2626" : "var(--line)" }}
                       />
                       <button type="button" style={{ ...buttonStyle("#7c3aed"), flexShrink: 0 }} onClick={() => otherDocRef.current?.click()}>Browse</button>
                       {otherDocuments.length > 0 ? (
@@ -2858,6 +3142,7 @@ export function HrStaffPanel() {
                           style={{ ...buttonStyle("#dc2626"), flexShrink: 0, minWidth: 78, background: "#fff", color: "#dc2626" }}
                           onClick={() => {
                             setOtherDocuments([]);
+                            clearFieldError("other_document");
                           }}
                         >
                           Remove
@@ -2893,11 +3178,14 @@ export function HrStaffPanel() {
                             return next;
                           });
 
+                          clearFieldError("other_document");
+
                           e.target.value = "";
                         }}
                       />
                     </div>
                     <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Accepted: PDF, DOC, DOCX, JPG, PNG</span>
+                    {fieldErrors.other_document ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.other_document}</span> : null}
                     {otherDocuments.length > 0 ? (
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, padding: 8, border: "1px solid var(--line)", borderRadius: 10, background: "#fafafa" }}>
                         {otherDocuments.map((document) => (

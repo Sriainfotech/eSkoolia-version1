@@ -700,7 +700,7 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
             if attendance_type and attendance_type not in valid_attendance_types:
                 row_errors.append({
                     "field": "attendance_type",
-                    "message": f"Invalid attendance type. Must be one of: {', '.join(valid_attendance_types)}"
+                    "message": "Invalid attendance type. Use one of P (Present), A (Absent), L (Late), F (Half Day), H (Holiday)."
                 })
 
             # Validate note length
@@ -723,7 +723,22 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
                 errors.append({
                     "row": row_num,
                     "field": "admission_no",
-                    "message": f"Student with admission number '{admission_no}' not found"
+                    "message": f"Admission number '{admission_no}' was not found in this school."
+                })
+                failed_count += 1
+                continue
+
+            # Ensure uploaded admission number belongs to the selected class and section.
+            selected_class_id = int(class_id)
+            selected_section_id = int(section_id)
+            if student.current_class_id != selected_class_id or student.current_section_id != selected_section_id:
+                errors.append({
+                    "row": row_num,
+                    "field": "admission_no",
+                    "message": (
+                        f"Admission number '{admission_no}' does not belong to the selected "
+                        "class/section."
+                    ),
                 })
                 failed_count += 1
                 continue

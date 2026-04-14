@@ -93,7 +93,7 @@ class Staff(models.Model):
     gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True)
     marital_status = models.CharField(max_length=12, choices=MARITAL_CHOICES, blank=True)
     driving_license = models.CharField(max_length=80, blank=True)
-    staff_photo = models.CharField(max_length=300, blank=True)
+    staff_photo = models.ImageField(upload_to="staff/photos/", blank=True)
     current_address = models.TextField(blank=True)
     permanent_address = models.TextField(blank=True)
     qualification = models.CharField(max_length=255, blank=True)

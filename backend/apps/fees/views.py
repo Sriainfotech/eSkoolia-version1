@@ -15,6 +15,7 @@ from .serializers import FeesAssignmentSerializer, FeesGroupSerializer, FeesPaym
 
 class SchoolScopedModelViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = ApiPageNumberPagination
     permission_codes = {}
 
     def get_required_permission_code(self):

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { TopToast } from "@/components/common/TopToast";
 
 type ApiList<T> = T[] | { results?: T[] };
 
@@ -169,6 +170,7 @@ export function StudentPromotePanel() {
   const [promoting, setPromoting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
 
   // Validation errors
   const [searchErrors, setSearchErrors] = useState<Record<string, string>>({});
@@ -260,8 +262,14 @@ export function StudentPromotePanel() {
         setPromoteSectionId("");
       }
 
-      const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
-      const nextSections = listData(data);
+      let nextSections: Section[] = [];
+      try {
+        const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
+        nextSections = listData(data);
+      } catch {
+        const fallback = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?school_class=${encodeURIComponent(targetClassId)}&page_size=200`);
+        nextSections = listData(fallback);
+      }
       if (type === "current") {
         setCurrentSections(nextSections);
       } else {
@@ -301,6 +309,18 @@ export function StudentPromotePanel() {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [promoteClassId]);
+
+  useEffect(() => {
+    if (error) {
+      setToast({ message: error, tone: "error" });
+    }
+  }, [error]);
+
+  useEffect(() => {
+    if (success) {
+      setToast({ message: success, tone: "success" });
+    }
+  }, [success]);
 
   const classMap = useMemo(() => new Map(normalizedClasses.map((item) => [item.id, item.display_name])), [normalizedClasses]);
   const sectionMap = useMemo(() => {
@@ -442,15 +462,17 @@ export function StudentPromotePanel() {
         setSuccess("Students promoted successfully.");
       }
 
-      // Reset form
-      setChecked({});
-      setPromoteYearId("");
-      setPromoteClassId("");
-      setPromoteSectionId("");
-      setPromoteErrors({});
+      // Remove promoted students from current list immediately for better UX.
+      setStudents((prev) => prev.filter((row) => !selectedIds.includes(row.id)));
+      setChecked((prev) => {
+        const next = { ...prev };
+        selectedIds.forEach((id) => {
+          delete next[id];
+        });
+        return next;
+      });
 
-      // Reload students
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Refresh list using current criteria.
       await search();
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
@@ -473,6 +495,13 @@ export function StudentPromotePanel() {
 
   return (
     <div className="legacy-panel student-promote-panel">
+      {toast ? (
+        <TopToast
+          message={toast.message}
+          tone={toast.tone}
+          onClose={() => setToast(null)}
+        />
+      ) : null}
       <style>{`
         .student-promote-panel button:focus,
         .student-promote-panel select:focus,

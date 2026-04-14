@@ -24,8 +24,10 @@ type StudentRow = {
   roll_no?: string;
   first_name: string;
   last_name?: string;
+  date_of_birth?: string | null;
   gender: "male" | "female" | "other";
   blood_group?: string;
+  phone?: string;
   category?: number | null;
   guardian?: number | null;
   current_class?: number | null;
@@ -33,6 +35,17 @@ type StudentRow = {
   is_disabled: boolean;
   is_active: boolean;
   created_at: string;
+};
+
+type Guardian = {
+  id: number;
+  full_name: string;
+  phone?: string;
+};
+
+type StudentCategory = {
+  id: number;
+  name: string;
 };
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -121,6 +134,8 @@ export function StudentListPanel() {
   const [rows, setRows] = useState<StudentRow[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
+  const [guardians, setGuardians] = useState<Guardian[]>([]);
+  const [categories, setCategories] = useState<StudentCategory[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [searchInput, setSearchInput] = useState("");
   const [classId, setClassId] = useState("");
@@ -153,6 +168,18 @@ export function StudentListPanel() {
     for (const item of sections) map.set(item.id, item.name);
     return map;
   }, [sections]);
+
+  const guardianById = useMemo(() => {
+    const map = new Map<number, Guardian>();
+    for (const item of guardians) map.set(item.id, item);
+    return map;
+  }, [guardians]);
+
+  const categoryNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const item of categories) map.set(item.id, item.name);
+    return map;
+  }, [categories]);
 
   const filteredSections = useMemo(() => {
     if (!classId) return [];
@@ -224,12 +251,16 @@ export function StudentListPanel() {
     try {
       setFilterLoading(true);
       setError("");
-      const [classData, sectionData] = await Promise.all([
+      const [classData, sectionData, guardianData, categoryData] = await Promise.all([
         withTimeout(apiGet<ListApiResponse<SchoolClass>>("/api/v1/core/classes/"), 8000),
         apiGet<ListApiResponse<Section>>("/api/v1/core/sections/"),
+        apiGet<ListApiResponse<Guardian>>("/api/v1/students/guardians/"),
+        apiGet<ListApiResponse<StudentCategory>>("/api/v1/students/categories/"),
       ]);
       setClasses(extractListData(classData));
       setSections(extractListData(sectionData));
+      setGuardians(extractListData(guardianData));
+      setCategories(extractListData(categoryData));
     } catch {
       setError("Unable to load filter options.");
     } finally {
@@ -419,7 +450,10 @@ export function StudentListPanel() {
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Admission No</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Roll No</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Name</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Date Of Birth</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Gender</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Type</th>
+                    <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Phone</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Class</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Section</th>
                     <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Status</th>
@@ -429,19 +463,19 @@ export function StudentListPanel() {
                 <tbody>
                   {queryMode === "none" ? (
                     <tr>
-                      <td colSpan={9} style={{ padding: 12, color: "var(--text-muted)" }}>
+                      <td colSpan={12} style={{ padding: 12, color: "var(--text-muted)" }}>
                         Use Search or Show Whole Students to view data.
                       </td>
                     </tr>
                   ) : loading ? (
                     <tr>
-                      <td colSpan={9} style={{ padding: 12, color: "var(--text-muted)" }}>
+                      <td colSpan={12} style={{ padding: 12, color: "var(--text-muted)" }}>
                         <span role="status" aria-live="polite">Loading students...</span>
                       </td>
                     </tr>
                   ) : rows.length === 0 ? (
                     <tr>
-                      <td colSpan={9} style={{ padding: 12, color: "var(--text-muted)" }}>
+                      <td colSpan={12} style={{ padding: 12, color: "var(--text-muted)" }}>
                         {error ? "Failed to load data" : "No Students Found"}
                       </td>
                     </tr>
@@ -454,7 +488,12 @@ export function StudentListPanel() {
                         <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
                           {`${row.first_name || ""} ${row.last_name || ""}`.trim() || "-"}
                         </td>
+                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.date_of_birth || "Data Not Available"}</td>
                         <td style={{ padding: 8, borderBottom: "1px solid var(--line)", textTransform: "capitalize" }}>{row.gender || "-"}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.category ? categoryNameById.get(row.category) || "Data Not Available" : "Data Not Available"}</td>
+                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
+                          {row.phone || (row.guardian ? guardianById.get(row.guardian)?.phone : "") || "Data Not Available"}
+                        </td>
                         <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{classNameById.get(Number(row.current_class)) || "-"}</td>
                         <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{sectionNameById.get(Number(row.current_section)) || "-"}</td>
                         <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>

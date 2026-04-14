@@ -157,7 +157,7 @@ REST_FRAMEWORK = {
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ),
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    "DEFAULT_PAGINATION_CLASS": "config.pagination.ApiPageNumberPagination",
     "PAGE_SIZE": 25,
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -168,6 +168,28 @@ REST_FRAMEWORK = {
     "DEFAULT_EXCEPTION_HANDLER": "config.exception_handler.custom_exception_handler",
     "EXCEPTION_HANDLER": "config.exception_handler.custom_exception_handler",
 }
+
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+            "TIMEOUT": int(os.getenv("DJANGO_CACHE_TIMEOUT", "300")),
+            "OPTIONS": {
+                "socket_connect_timeout": 3,
+                "socket_timeout": 3,
+            },
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "eskoolia-default-cache",
+            "TIMEOUT": int(os.getenv("DJANGO_CACHE_TIMEOUT", "300")),
+        }
+    }
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "School ERP API",
@@ -197,5 +219,5 @@ try:
 except (ValueError, TypeError):
     pass
 
-CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+CELERY_BROKER_URL = REDIS_URL or "redis://127.0.0.1:6379/0"
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL

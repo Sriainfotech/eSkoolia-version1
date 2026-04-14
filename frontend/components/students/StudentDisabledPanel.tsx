@@ -143,7 +143,7 @@ export function StudentDisabledPanel() {
   const [hydratedFromUrl, setHydratedFromUrl] = useState(false);
 
   const validClasses = useMemo(
-    () => classes.filter((item) => Number.isInteger(item.id) && item.id > 0 && /[A-Za-z]/.test(String(item.name || ""))),
+    () => classes.filter((item) => Number.isInteger(item.id) && item.id > 0),
     [classes],
   );
   const classMap = useMemo(() => new Map(validClasses.map((item) => [item.id, item.name])), [validClasses]);

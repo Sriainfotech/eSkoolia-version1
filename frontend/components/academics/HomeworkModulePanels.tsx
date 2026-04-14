@@ -533,6 +533,10 @@ export function HomeworkListPagePanel() {
 
   const saveEvaluation = async () => {
     if (!selectedHomework) return;
+    if (evaluationDate && selectedHomework.submission_date && evaluationDate < selectedHomework.submission_date) {
+      setError("Evaluation date must be on or after submission date.");
+      return;
+    }
     try {
       setSavingEval(true);
       setError("");
@@ -906,6 +910,7 @@ export function HomeworkEvaluationReportPagePanel() {
                   <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Homework Date</th>
                   <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Submission Date</th>
                   <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Evaluation Date</th>
+                  <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Marks</th>
                   <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Completed</th>
                   <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Incomplete</th>
                   <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Pending</th>
@@ -918,6 +923,7 @@ export function HomeworkEvaluationReportPagePanel() {
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.homework_date}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.submission_date}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.evaluation_date || "-"}</td>
+                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.marks}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.completed}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.incomplete}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.pending}</td>

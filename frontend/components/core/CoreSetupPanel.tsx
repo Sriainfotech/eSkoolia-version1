@@ -6,6 +6,7 @@ import { compareAcademicsClasses, sortAcademicsClasses } from "@/lib/classOrderi
 
 type AcademicYear = { id: number; name: string; start_date: string; end_date: string; is_current: boolean };
 type SchoolClass = { id: number; name: string; numeric_order: number; sections: Section[] };
+type ClassOption = { value: string; label: string; disabled?: boolean };
 type Section = { id: number; school_class: number; name: string; capacity: number };
 type Subject = { id: number; name: string; code: string; subject_type: string };
 
@@ -320,25 +321,41 @@ function AcademicYearsSection() {
 }
 
 // ─── Classes ─────────────────────────────────────────────────────────────────
-const CLASS_NAME_REGEX = /^[A-Za-z0-9 \-]+$/;
-const CLASS_DEFAULT_ORDER = 1000;
-const CLASS_NUMBER_NAME_REGEX = /^class\s*(\d{1,2})$|^(\d{1,2})$/i;
-
-function parseClassNumberFromName(value: string): number | null {
-  const trimmed = (value || "").trim();
-  const match = trimmed.match(CLASS_NUMBER_NAME_REGEX);
-  if (!match) return null;
-  const raw = match[1] || match[2];
-  const parsed = Number(raw);
-  return Number.isInteger(parsed) ? parsed : null;
-}
+const DEFAULT_CLASS_OPTIONS: ClassOption[] = [
+  { value: "Nursery", label: "Nursery" },
+  { value: "LKG", label: "LKG" },
+  { value: "UKG", label: "UKG" },
+  ...Array.from({ length: 12 }, (_, index) => {
+    const grade = index + 1;
+    return { value: `Grade ${grade}`, label: `Grade ${grade}` };
+  }),
+];
 
 function normalizeClassName(value: string): string {
-  return (value || "").trim().replace(/\s+/g, " ").toLowerCase();
+  const cleaned = (value || "").trim().replace(/\s+/g, " ");
+  if (!cleaned) return "";
+
+  const upper = cleaned.toUpperCase();
+  if (upper === "NURSERY") return "Nursery";
+  if (upper === "LKG") return "LKG";
+  if (upper === "UKG") return "UKG";
+
+  const gradeMatch = upper.match(/^GRADE\s*([1-9]|1[0-2])$/);
+  if (gradeMatch) {
+    return `Grade ${Number(gradeMatch[1])}`;
+  }
+
+  const numericMatch = upper.match(/^([1-9]|1[0-2])$/);
+  if (numericMatch) {
+    return `Grade ${Number(numericMatch[1])}`;
+  }
+
+  return cleaned;
 }
 
 function ClassesSection() {
   const [items, setItems] = useState<SchoolClass[]>([]);
+  const [classOptions, setClassOptions] = useState<ClassOption[]>(DEFAULT_CLASS_OPTIONS);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(10);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -404,27 +421,56 @@ function ClassesSection() {
   };
   useEffect(() => { load(); }, []);
 
+  useEffect(() => {
+    let active = true;
+
+    const loadClassOptions = async () => {
+      try {
+        const response = await apiFetch<ClassOption[]>('/api/v1/core/classes/options/');
+        if (active && Array.isArray(response) && response.length) {
+          setClassOptions(response);
+        }
+      } catch {
+        if (active) {
+          setClassOptions(DEFAULT_CLASS_OPTIONS);
+        }
+      }
+    };
+
+    void loadClassOptions();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const classDropdownOptions = useMemo(() => {
+    const allowedOptions = classOptions.length ? classOptions : DEFAULT_CLASS_OPTIONS;
+    const normalizedCurrentValue = normalizeClassName(name);
+    if (isEditMode && name && !allowedOptions.some((option) => option.value === normalizedCurrentValue)) {
+      return [{ value: name, label: `Current value: ${name}`, disabled: true }, ...allowedOptions];
+    }
+    return allowedOptions;
+  }, [classOptions, isEditMode, name]);
+
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const trimmedName = name.trim();
     const nextErrors: { name?: string } = {};
-    const parsedClassNumber = parseClassNumberFromName(trimmedName);
+    const canonicalName = normalizeClassName(trimmedName);
+    const allowedClassOptions = classOptions.length ? classOptions : DEFAULT_CLASS_OPTIONS;
 
     if (!trimmedName) {
       nextErrors.name = "Class name is required.";
     } else if (trimmedName.length < 1 || trimmedName.length > 50) {
       nextErrors.name = "Class name must be between 1 and 50 characters.";
-    } else if (!CLASS_NAME_REGEX.test(trimmedName)) {
-      nextErrors.name = "Only letters, numbers, spaces and hyphens are allowed.";
-    } else if (parsedClassNumber !== null && (parsedClassNumber < 1 || parsedClassNumber > 12)) {
-      nextErrors.name = "Only classes 1 to 12 are allowed.";
-    } else if (!editingId && items.some((row) => {
-      const existingName = row.name || "";
-      const existingNumber = parseClassNumberFromName(existingName);
-      if (parsedClassNumber !== null && existingNumber !== null) {
-        return parsedClassNumber === existingNumber;
+    } else if (!allowedClassOptions.some((option) => option.value === canonicalName)) {
+      nextErrors.name = "Select Nursery, LKG, UKG, or Grade 1 to Grade 12.";
+    } else if (items.some((row) => {
+      if (editingId && row.id === editingId) {
+        return false;
       }
-      return normalizeClassName(existingName) === normalizeClassName(trimmedName);
+      return normalizeClassName(row.name || "") === canonicalName;
     })) {
       nextErrors.name = "Class name already exists.";
     }
@@ -438,7 +484,7 @@ function ClassesSection() {
 
     try {
       setSaving(true); setError(""); setSuccess(""); setFieldErrors({});
-      const payload = { name: trimmedName, numeric_order: CLASS_DEFAULT_ORDER };
+      const payload = { name: canonicalName };
       await apiFetch(
         editingId ? `/api/v1/core/classes/${editingId}/` : "/api/v1/core/classes/",
         { method: editingId ? "PATCH" : "POST", body: JSON.stringify(payload) }
@@ -457,7 +503,7 @@ function ClassesSection() {
 
   const edit = (row: SchoolClass) => {
     setEditingId(row.id);
-    setName(row.name || "");
+    setName(normalizeClassName(row.name || "") || row.name || "");
     setError("");
     setSuccess("");
     setFieldErrors({});
@@ -562,27 +608,27 @@ function ClassesSection() {
       <form onSubmit={submit} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 14, alignItems: "start" }}>
         <div>
           <label style={classLabelStyle}>Class *</label>
-          <input
+          <select
             required
             value={name}
             onChange={e => {
               const nextValue = e.target.value;
               setName(nextValue);
-              const parsedNumber = parseClassNumberFromName(nextValue);
               setFieldErrors((prev) => ({
                 ...prev,
-                name: nextValue && !CLASS_NAME_REGEX.test(nextValue.trim())
-                  ? "Only letters, numbers, spaces and hyphens are allowed."
-                  : parsedNumber !== null && (parsedNumber < 1 || parsedNumber > 12)
-                    ? "Only classes 1 to 12 are allowed."
-                  : undefined,
+                name: undefined,
               }));
             }}
-            onBlur={() => setName((prev) => prev.replace(/\s+/g, " ").trim() === "" ? prev : prev.replace(/\s+/g, " "))}
-            placeholder="e.g. Grade 1"
-            maxLength={50}
+            onBlur={() => setName((prev) => normalizeClassName(prev))}
             style={{ ...classFieldStyle, borderColor: fieldErrors.name ? "#dc2626" : "var(--line)" }}
-          />
+          >
+            <option value="" disabled>Select a class</option>
+            {classDropdownOptions.map((option) => (
+              <option key={option.value} value={option.value} disabled={option.disabled}>
+                {option.label}
+              </option>
+            ))}
+          </select>
           <span style={classErrorStyle}>{fieldErrors.name || ""}</span>
         </div>
         <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>

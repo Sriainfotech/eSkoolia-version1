@@ -124,11 +124,26 @@ function extractApiErrorMessage(body: unknown, status: number): string {
   return `Request failed with status ${status}`;
 }
 
+async function fetchWithRetry(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (error) {
+    const message = error instanceof Error ? error.message.toLowerCase() : "";
+    const isNetworkLike = message.includes("fetch") || message.includes("network") || message.includes("failed");
+    if (!isNetworkLike) {
+      throw error;
+    }
+
+    // Retry once for transient browser/network failures (e.g., interrupted upload request).
+    return fetch(input, init);
+  }
+}
+
 async function refreshAccessToken(): Promise<string | null> {
   const refresh = getRefreshToken();
   if (!refresh) return null;
 
-  const res = await fetch(`${API_BASE_URL}/api/v1/auth/refresh/`, {
+  const res = await fetchWithRetry(`${API_BASE_URL}/api/v1/auth/refresh/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refresh }),
@@ -171,7 +186,7 @@ export async function apiRequestWithRefresh<T>(path: string, options?: RequestIn
     token = refreshed;
   }
 
-  let response = await fetch(`${API_BASE_URL}${path}`, {
+  let response = await fetchWithRetry(`${API_BASE_URL}${path}`, {
     ...options,
     headers:
       options?.body instanceof FormData
@@ -187,7 +202,7 @@ export async function apiRequestWithRefresh<T>(path: string, options?: RequestIn
     const refreshed = await refreshAccessToken();
     if (!refreshed) throw new Error("401");
 
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetchWithRetry(`${API_BASE_URL}${path}`, {
       ...options,
       headers:
         options?.body instanceof FormData

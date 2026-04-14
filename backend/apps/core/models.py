@@ -1,5 +1,6 @@
 import re
 
+from django.core.exceptions import ValidationError
 from django.db import models
 from decimal import Decimal
 
@@ -35,6 +36,8 @@ class Class(models.Model):
     numeric_order = models.PositiveSmallIntegerField(default=0, help_text="For sorting")
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class_names = ["Nursery", "LKG", "UKG"] + [f"Grade {index}" for index in range(1, 13)]
+
     class Meta:
         db_table = "school_classes"
         ordering = ["numeric_order", "name", "id"]
@@ -43,22 +46,59 @@ class Class(models.Model):
         ]
 
     @staticmethod
-    def resolve_numeric_order(name):
-        cleaned = (name or "").strip().upper()
-        if cleaned == "LKG":
-            return 1
-        if cleaned == "UKG":
-            return 2
+    def normalize_name(name):
+        cleaned = " ".join((name or "").strip().split())
+        if not cleaned:
+            return None
 
-        match = re.search(r"(?<!\d)(1[0-2]|[1-9])(?!\d)", cleaned)
+        upper = cleaned.upper()
+        if upper == "NURSERY":
+            return "Nursery"
+        if upper == "LKG":
+            return "LKG"
+        if upper == "UKG":
+            return "UKG"
+
+        match = re.fullmatch(r"(?:GRADE\s*)?([1-9]|1[0-2])", upper)
         if match:
-            return int(match.group(1)) + 2
+            return f"Grade {int(match.group(1))}"
+
+        return None
+
+    @classmethod
+    def resolve_numeric_order(cls, name):
+        normalized = cls.normalize_name(name)
+        if normalized == "Nursery":
+            return 1
+        if normalized == "LKG":
+            return 2
+        if normalized == "UKG":
+            return 3
+
+        match = re.fullmatch(r"Grade ([1-9]|1[0-2])", normalized or "")
+        if match:
+            return int(match.group(1)) + 3
 
         return 1000
 
+    @classmethod
+    def valid_class_options(cls):
+        return [{"value": name, "label": name} for name in cls.class_names]
+
     def save(self, *args, **kwargs):
-        if not self.numeric_order:
-            self.numeric_order = self.resolve_numeric_order(self.name)
+        normalized_name = self.normalize_name(self.name)
+        if not normalized_name:
+            raise ValidationError({"name": "Class name must be Nursery, LKG, UKG, or Grade 1 to Grade 12."})
+
+        self.name = normalized_name
+        self.numeric_order = self.resolve_numeric_order(normalized_name)
+
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None:
+            update_fields = set(update_fields)
+            update_fields.update({"name", "numeric_order"})
+            kwargs["update_fields"] = list(update_fields)
+
         super().save(*args, **kwargs)
 
     def __str__(self):

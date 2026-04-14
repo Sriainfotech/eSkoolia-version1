@@ -7,8 +7,9 @@ from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
-from django.db.models import Avg, Case, Count, IntegerField, Q, Value, When
+from django.db.models import Avg, Count, Q
 from config.pagination import ApiPageNumberPagination
 from .models import AcademicYear, Class, ClassPeriod, ClassRoom, Section, Subject, Vehicle, TransportRoute, AssignVehicle
 from .models import BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate
@@ -61,6 +62,7 @@ class TenantQueryMixin:
 
 class PermissionScopedViewSet(viewsets.ModelViewSet):
     permission_codes = {}
+    pagination_class = ApiPageNumberPagination
 
     def get_required_permission_code(self):
         action = getattr(self, "action", None)
@@ -95,36 +97,22 @@ class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Class.objects.prefetch_related("sections").annotate(
-            admission_order=Case(
-                When(name__iexact="Nursery", then=Value(0)),
-                When(name__iexact="LKG", then=Value(1)),
-                When(name__iexact="UKG", then=Value(2)),
-                When(name__iexact="1", then=Value(3)),
-                When(name__iexact="2", then=Value(4)),
-                When(name__iexact="3", then=Value(5)),
-                When(name__iexact="4", then=Value(6)),
-                When(name__iexact="5", then=Value(7)),
-                When(name__iexact="6", then=Value(8)),
-                When(name__iexact="7", then=Value(9)),
-                When(name__iexact="8", then=Value(10)),
-                When(name__iexact="9", then=Value(11)),
-                When(name__iexact="10", then=Value(12)),
-                When(name__iexact="11", then=Value(13)),
-                When(name__iexact="12", then=Value(14)),
-                default=Value(2000),
-                output_field=IntegerField(),
-            )
-        ).order_by("admission_order", "numeric_order", "name", "id")
+        qs = Class.objects.prefetch_related("sections").order_by("numeric_order", "name", "id")
         if user.is_superuser:
             return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
 
+    @action(detail=False, methods=["get"])
+    def options(self, request):
+        return Response(Class.valid_class_options())
+
     def create(self, request, *args, **kwargs):
         try:
             return super().create(request, *args, **kwargs)
+        except DjangoValidationError as exc:
+            raise ValidationError(getattr(exc, "message_dict", {"name": exc.messages}))
         except IntegrityError as exc:
             message = str(exc).lower()
             if "school_classes.school_id" in message and "school_classes.name" in message:
@@ -134,6 +122,8 @@ class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         try:
             return super().update(request, *args, **kwargs)
+        except DjangoValidationError as exc:
+            raise ValidationError(getattr(exc, "message_dict", {"name": exc.messages}))
         except IntegrityError as exc:
             message = str(exc).lower()
             if "school_classes.school_id" in message and "school_classes.name" in message:
@@ -143,6 +133,8 @@ class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         try:
             return super().partial_update(request, *args, **kwargs)
+        except DjangoValidationError as exc:
+            raise ValidationError(getattr(exc, "message_dict", {"name": exc.messages}))
         except IntegrityError as exc:
             message = str(exc).lower()
             if "school_classes.school_id" in message and "school_classes.name" in message:

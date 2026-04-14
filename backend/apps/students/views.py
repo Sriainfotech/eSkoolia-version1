@@ -1,4 +1,5 @@
 from django.db import IntegrityError, transaction
+import logging
 import csv
 import io
 import os
@@ -50,8 +51,12 @@ from .serializers import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class TenantScopedModelViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = ApiPageNumberPagination
     model = None
     permission_codes = {}
 
@@ -346,6 +351,43 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @action(detail=True, methods=["post"], url_path="assign-students")
+    def assign_students(self, request, *args, **kwargs):
+        group = self.get_object()
+        raw_ids = request.data.get("student_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return Response(
+                {"success": False, "message": "student_ids is required.", "field_errors": {"student_ids": "Select at least one student."}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        valid_ids = []
+        for value in raw_ids:
+            try:
+                valid_ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
+
+        if not valid_ids:
+            return Response(
+                {"success": False, "message": "No valid student ids provided.", "field_errors": {"student_ids": "Invalid student ids."}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        students_qs = Student.objects.filter(id__in=valid_ids)
+        if not request.user.is_superuser:
+            students_qs = students_qs.filter(school_id=request.user.school_id)
+
+        updated = students_qs.update(student_group=group)
+        return Response(
+            {
+                "success": True,
+                "message": f"{updated} student(s) assigned to group successfully.",
+                "updated": updated,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 class GuardianViewSet(TenantScopedModelViewSet):
     model = Guardian
@@ -381,18 +423,44 @@ class StudentViewSet(TenantScopedModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Student.objects.select_related(
-            "school",
-            "academic_year",
-            "category",
-            "student_group",
-            "guardian",
-            "current_class",
-            "current_section",
-            "admission_inquiry",
-        )
+        action = getattr(self, "action", None)
 
-        if getattr(self, "action", None) in {"retrieve", "create", "update", "partial_update"}:
+        if action == "list":
+            qs = Student.objects.select_related("current_class", "current_section", "guardian", "category", "student_group").only(
+                "id",
+                "school_id",
+                "academic_year_id",
+                "admission_no",
+                "roll_no",
+                "first_name",
+                "last_name",
+                "date_of_birth",
+                "gender",
+                "phone",
+                "category_id",
+                "student_group_id",
+                "guardian_id",
+                "current_class_id",
+                "current_section_id",
+                "status",
+                "is_disabled",
+                "is_active",
+                "is_deleted",
+                "created_at",
+            )
+        else:
+            qs = Student.objects.select_related(
+                "school",
+                "academic_year",
+                "category",
+                "student_group",
+                "guardian",
+                "current_class",
+                "current_section",
+                "admission_inquiry",
+            )
+
+        if action in {"retrieve", "create", "update", "partial_update"}:
             qs = qs.prefetch_related("documents")
 
         search = (self.request.query_params.get("search") or "").strip()
@@ -402,6 +470,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         is_active_param = (self.request.query_params.get("is_active") or "").strip().lower()
         include_deleted = (self.request.query_params.get("include_deleted") or "").strip().lower() in {"1", "true", "yes"}
         deleted_only = (self.request.query_params.get("deleted_only") or "").strip().lower() in {"1", "true", "yes"}
+        unassigned_only = (self.request.query_params.get("unassigned") or "").strip().lower() in {"1", "true", "yes"}
 
         if deleted_only:
             qs = qs.filter(is_deleted=True)
@@ -447,6 +516,8 @@ class StudentViewSet(TenantScopedModelViewSet):
             qs = qs.filter(current_class_id=class_id)
         if section_id:
             qs = qs.filter(current_section_id=section_id)
+        if unassigned_only:
+            qs = qs.filter(current_class_id__isnull=True, current_section_id__isnull=True)
         if academic_year_id:
             qs = qs.filter(academic_year_id=academic_year_id)
         if is_active_param in {"1", "true", "yes"}:
@@ -1054,21 +1125,36 @@ class StudentViewSet(TenantScopedModelViewSet):
         )
 
     def _audit_log(self, *, action, student, request, note="", metadata=None):
-        school = student.school or getattr(request.user, "school", None)
-        if not school:
-            return
-        StudentRecordAudit.objects.create(
-            school=school,
-            student=student,
-            action=action,
-            performed_by=request.user,
-            note=note,
-            metadata=metadata or {},
-        )
+        try:
+            school = getattr(student, "school", None)
+            if not school:
+                return
+            StudentRecordAudit.objects.create(
+                school=school,
+                student=student,
+                action=action,
+                performed_by=request.user,
+                note=note,
+                metadata=metadata or {},
+            )
+        except Exception:
+            # Audit failures should not block primary record operations.
+            logger.exception("Unable to write student audit log")
+
+    def _get_student_for_record_action(self, request, pk):
+        qs = Student.objects.select_related("school")
+        if not request.user.is_superuser:
+            qs = qs.filter(school_id=request.user.school_id)
+        return qs.filter(pk=pk).first()
 
     @action(detail=True, methods=["post"], url_path="soft-delete")
     def soft_delete(self, request, *args, **kwargs):
-        student = self.get_object()
+        student = self._get_student_for_record_action(request, kwargs.get("pk"))
+        if not student:
+            return Response(
+                {"success": False, "message": "Student record not found", "field_errors": {}},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         if student.is_deleted:
             return Response(
                 {"success": False, "message": "Student record already deleted", "field_errors": {}},
@@ -1101,28 +1187,46 @@ class StudentViewSet(TenantScopedModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="restore")
     def restore(self, request, *args, **kwargs):
-        student = self.get_object()
+        student = self._get_student_for_record_action(request, kwargs.get("pk"))
+        if not student:
+            return Response(
+                {"success": False, "message": "Student record not found", "field_errors": {}},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         if not student.is_deleted:
             return Response(
                 {"success": False, "message": "Student is not deleted", "field_errors": {}},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        student.is_deleted = False
-        student.is_disabled = False
-        student.is_active = True
-        student.status = "active"
-        student.deleted_at = None
-        student.deleted_by = None
-        student.save(update_fields=["is_deleted", "is_disabled", "is_active", "status", "deleted_at", "deleted_by", "updated_at"])
+        try:
+            with transaction.atomic():
+                student.is_deleted = False
+                student.is_disabled = False
+                student.is_active = True
+                student.status = "active"
+                student.deleted_at = None
+                student.deleted_by = None
+                student.save(update_fields=["is_deleted", "is_disabled", "is_active", "status", "deleted_at", "deleted_by", "updated_at"])
 
-        self._audit_log(
-            action=StudentRecordAudit.ACTION_RESTORE,
-            student=student,
-            request=request,
-            note="Student restored",
-            metadata={"student_id": student.id, "admission_no": student.admission_no},
-        )
+                self._audit_log(
+                    action=StudentRecordAudit.ACTION_RESTORE,
+                    student=student,
+                    request=request,
+                    note="Student restored",
+                    metadata={"student_id": student.id, "admission_no": student.admission_no},
+                )
+        except IntegrityError:
+            return Response(
+                {"success": False, "message": "Unable to restore student due to data dependency.", "field_errors": {}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            logger.exception("Restore student failed")
+            return Response(
+                {"success": False, "message": "Unable to restore student at this time.", "field_errors": {}},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
         return Response({"success": True, "message": "Student restored successfully"}, status=status.HTTP_200_OK)
 
@@ -1134,7 +1238,12 @@ class StudentViewSet(TenantScopedModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        student = self.get_object()
+        student = self._get_student_for_record_action(request, kwargs.get("pk"))
+        if not student:
+            return Response(
+                {"success": False, "message": "Student record not found", "field_errors": {}},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         if self._linked_record_exists(student):
             return Response(
                 {
@@ -1145,15 +1254,44 @@ class StudentViewSet(TenantScopedModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        self._audit_log(
-            action=StudentRecordAudit.ACTION_PERMANENT_DELETE,
-            student=student,
-            request=request,
-            note="Student permanently deleted",
-            metadata={"student_id": student.id, "admission_no": student.admission_no},
-        )
+        try:
+            with transaction.atomic():
+                self._audit_log(
+                    action=StudentRecordAudit.ACTION_PERMANENT_DELETE,
+                    student=student,
+                    request=request,
+                    note="Student permanently deleted",
+                    metadata={"student_id": student.id, "admission_no": student.admission_no},
+                )
+                student.delete()
+        except ProtectedError:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Unable to permanently delete student due to linked records",
+                    "field_errors": {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except IntegrityError:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Unable to permanently delete student due to data dependency.",
+                    "field_errors": {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Unable to permanently delete student at this time.",
+                    "field_errors": {},
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
-        student.delete()
         return Response({"success": True, "message": "Student permanently deleted successfully"}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="bulk-import")

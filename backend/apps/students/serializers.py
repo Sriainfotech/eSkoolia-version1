@@ -557,7 +557,13 @@ class StudentSerializer(serializers.ModelSerializer):
                 students_in_section = students_in_section.filter(school_id=school_id)
             if self.instance:
                 students_in_section = students_in_section.exclude(id=self.instance.id)
-            if students_in_section.count() >= selected_section.capacity:
+            # Legacy data can have missing/invalid capacity values; avoid runtime errors.
+            capacity = getattr(selected_section, "capacity", None)
+            try:
+                capacity_value = int(capacity) if capacity is not None else None
+            except (TypeError, ValueError):
+                capacity_value = None
+            if capacity_value and students_in_section.count() >= capacity_value:
                 errors["section"] = "Section capacity is full"
 
         gender = (attrs.get("gender") or getattr(self.instance, "gender", "")).lower()
@@ -683,9 +689,16 @@ class StudentListSerializer(serializers.ModelSerializer):
             "roll_no",
             "first_name",
             "last_name",
+            "date_of_birth",
             "gender",
+            "phone",
+            "category",
+            "student_group",
+            "guardian",
             "current_class",
             "current_section",
+            "status",
+            "is_deleted",
             "is_disabled",
             "is_active",
             "created_at",

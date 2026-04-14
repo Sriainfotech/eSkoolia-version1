@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { TopToast } from "@/components/common/TopToast";
 
 type ApiList<T> = T[] | { results?: T[]; count?: number; next?: string | null; previous?: string | null };
 
@@ -175,6 +176,7 @@ export function StudentDeleteRecordPanel() {
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const classMap = useMemo(() => new Map(classes.map((item) => [item.id, item.name])), [classes]);
@@ -324,6 +326,18 @@ export function StudentDeleteRecordPanel() {
     setSelectedStudentIds([]);
   }, [classId, sectionId, deletedOnly, debouncedSearch, activeTab]);
 
+  useEffect(() => {
+    if (error) {
+      setToast({ message: error, tone: "error" });
+    }
+  }, [error]);
+
+  useEffect(() => {
+    if (success) {
+      setToast({ message: success, tone: "success" });
+    }
+  }, [success]);
+
   const openConfirm = (mode: "soft-delete" | "restore" | "permanent-delete", student: StudentRow) => {
     setConfirmState({ mode, student });
     setConfirmText("");
@@ -420,17 +434,15 @@ export function StudentDeleteRecordPanel() {
         await loadAudits();
       }
     } catch (err) {
-      if (confirmState.mode === "restore") {
-        setError("Failed to restore student");
+      const parsed = parseError(err);
+      if (parsed === "Cannot delete student. Linked records exist") {
+        setError("Cannot delete student. Linked records exist");
+      } else if (parsed === "Unable to permanently delete student due to linked records") {
+        setError("Unable to permanently delete student due to linked records");
+      } else if (confirmState.mode === "restore") {
+        setError(parsed || "Failed to restore student");
       } else {
-        const parsed = parseError(err);
-        if (parsed === "Cannot delete student. Linked records exist") {
-          setError("Cannot delete student. Linked records exist");
-        } else if (parsed === "Unable to permanently delete student due to linked records") {
-          setError("Unable to permanently delete student due to linked records");
-        } else {
-          setError(parsed || "Failed to delete student. Please try again");
-        }
+        setError(parsed || "Failed to delete student. Please try again");
       }
     } finally {
       setBusyId(null);
@@ -453,6 +465,13 @@ export function StudentDeleteRecordPanel() {
 
   return (
     <div className="legacy-panel">
+      {toast ? (
+        <TopToast
+          message={toast.message}
+          tone={toast.tone}
+          onClose={() => setToast(null)}
+        />
+      ) : null}
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>

@@ -305,22 +305,27 @@ class ClassRoutineSlotSerializer(LegacyAliasMixin):
     def _overlap_exists(self, queryset, start_time, end_time):
         return queryset.filter(start_time__lt=end_time, end_time__gt=start_time).exists()
 
+    def _value_from_attrs_or_instance(self, attrs, key):
+        if key in attrs:
+            return attrs.get(key)
+        return getattr(self.instance, key, None)
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
 
-        school = attrs.get("school") or getattr(self.instance, "school", None)
+        school = self._value_from_attrs_or_instance(attrs, "school")
         request = self.context.get("request")
         if not school and request and getattr(request.user, "school", None):
             school = request.user.school
 
-        academic_year = attrs.get("academic_year") or getattr(self.instance, "academic_year", None)
-        school_class = attrs.get("school_class") or getattr(self.instance, "school_class", None)
-        section = attrs.get("section") or getattr(self.instance, "section", None)
-        subject = attrs.get("subject") or getattr(self.instance, "subject", None)
-        teacher = attrs.get("teacher") or getattr(self.instance, "teacher", None)
-        day = attrs.get("day") or getattr(self.instance, "day", None)
-        start_time = attrs.get("start_time") or getattr(self.instance, "start_time", None)
-        end_time = attrs.get("end_time") or getattr(self.instance, "end_time", None)
+        academic_year = self._value_from_attrs_or_instance(attrs, "academic_year")
+        school_class = self._value_from_attrs_or_instance(attrs, "school_class")
+        section = self._value_from_attrs_or_instance(attrs, "section")
+        subject = self._value_from_attrs_or_instance(attrs, "subject")
+        teacher = self._value_from_attrs_or_instance(attrs, "teacher")
+        day = self._value_from_attrs_or_instance(attrs, "day")
+        start_time = self._value_from_attrs_or_instance(attrs, "start_time")
+        end_time = self._value_from_attrs_or_instance(attrs, "end_time")
         is_break = bool(attrs.get("is_break", getattr(self.instance, "is_break", False)))
         room_id, room = self._normalize_room(attrs)
 
@@ -584,6 +589,7 @@ class HomeworkSerializer(LegacyAliasMixin):
         description = (attrs.get("description") or getattr(self.instance, "description", "") or "").strip()
         homework_date = attrs.get("homework_date") or getattr(self.instance, "homework_date", None)
         submission_date = attrs.get("submission_date") or getattr(self.instance, "submission_date", None)
+        evaluation_date = attrs.get("evaluation_date") if "evaluation_date" in attrs else getattr(self.instance, "evaluation_date", None)
 
         errors = {}
 
@@ -600,6 +606,9 @@ class HomeworkSerializer(LegacyAliasMixin):
 
         if homework_date and submission_date and submission_date < homework_date:
             errors.setdefault("submission_date", []).append("Submission date must be on or after homework date")
+
+        if evaluation_date and submission_date and evaluation_date < submission_date:
+            errors.setdefault("evaluation_date", []).append("Evaluation date must be on or after submission date")
 
         if section and school_class and section.school_class_id != school_class.id:
             raise serializers.ValidationError({"message": "Invalid class and section combination"})

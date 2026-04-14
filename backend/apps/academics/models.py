@@ -101,7 +101,13 @@ class ClassRoutineSlot(models.Model):
         blank=True,
         related_name="routine_slots",
     )
-    subject = models.ForeignKey("core.Subject", on_delete=models.CASCADE, related_name="routine_slots")
+    subject = models.ForeignKey(
+        "core.Subject",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="routine_slots",
+    )
     teacher = models.ForeignKey(
         "users.User",
         on_delete=models.SET_NULL,

@@ -1,5 +1,8 @@
 from decimal import Decimal
+import hashlib
+import json
 
+from django.core.cache import cache
 from django.core.paginator import EmptyPage, Paginator
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -56,6 +59,7 @@ class BaseReportAPIView(APIView):
     export_filename = "report"
     export_title = "Report"
     export_columns = ()
+    cache_timeout_seconds = 120
 
     def get_school_id(self, request):
         if request.user.is_superuser and "school_id" in request.query_params:
@@ -74,6 +78,19 @@ class BaseReportAPIView(APIView):
         service = getattr(ReportQueryService, self.service_method)
         return service(school_id, filters)
 
+    def _build_cache_key(self, request, school_id, filters):
+        payload = {
+            "path": request.path,
+            "query": request.query_params.dict(),
+            "school_id": school_id,
+            "user_id": request.user.id,
+            "filters": filters,
+            "service": self.service_method,
+        }
+        encoded = json.dumps(payload, sort_keys=True, default=str)
+        digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+        return f"reports:v1:{self.service_method}:{digest}"
+
     def get(self, request, *args, **kwargs):
         school_id = self.get_school_id(request)
         if not school_id:
@@ -83,8 +100,15 @@ class BaseReportAPIView(APIView):
         filter_serializer.is_valid(raise_exception=True)
         filters = filter_serializer.validated_data
 
-        queryset = self.get_queryset(school_id, filters)
         export_format = filters.get("export")
+        cache_key = None
+        if not export_format:
+            cache_key = self._build_cache_key(request, school_id, filters)
+            cached_payload = cache.get(cache_key)
+            if cached_payload is not None:
+                return Response(cached_payload, status=status.HTTP_200_OK)
+
+        queryset = self.get_queryset(school_id, filters)
 
         if export_format:
             rows = [self.map_row(item) for item in queryset]
@@ -108,14 +132,19 @@ class BaseReportAPIView(APIView):
         rows = [self.map_row(item) for item in current_page]
         serialized_rows = self.row_serializer_class(rows, many=True)
 
+        payload = {
+            "count": paginator.count,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": paginator.num_pages,
+            "results": serialized_rows.data,
+        }
+
+        if cache_key:
+            cache.set(cache_key, payload, self.cache_timeout_seconds)
+
         return Response(
-            {
-                "count": paginator.count,
-                "page": page,
-                "page_size": page_size,
-                "total_pages": paginator.num_pages,
-                "results": serialized_rows.data,
-            },
+            payload,
             status=status.HTTP_200_OK,
         )
 

@@ -32,7 +32,20 @@ class ReportQueryService:
             "student__current_section",
             "assignment",
             "assignment__fees_type",
-        ).filter(school_id=school_id)
+        ).filter(school_id=school_id).only(
+            "id",
+            "paid_at",
+            "amount_paid",
+            "method",
+            "transaction_reference",
+            "student__admission_no",
+            "student__first_name",
+            "student__last_name",
+            "student__current_class__name",
+            "student__current_section__name",
+            "assignment__status",
+            "assignment__fees_type__name",
+        )
 
         queryset = ReportQueryService._apply_date_range(
             queryset,
@@ -67,6 +80,17 @@ class ReportQueryService:
         queryset = LedgerEntry.objects.select_related("account", "created_by").filter(
             school_id=school_id,
             account__account_type="expense",
+        ).only(
+            "id",
+            "entry_date",
+            "amount",
+            "reference_no",
+            "description",
+            "account__code",
+            "account__name",
+            "created_by__first_name",
+            "created_by__last_name",
+            "created_by__username",
         )
 
         queryset = ReportQueryService._apply_date_range(
@@ -94,7 +118,21 @@ class ReportQueryService:
             "current_class",
             "current_section",
             "guardian",
-        ).filter(school_id=school_id)
+        ).filter(school_id=school_id).only(
+            "id",
+            "admission_no",
+            "roll_no",
+            "first_name",
+            "last_name",
+            "gender",
+            "is_disabled",
+            "current_class__name",
+            "current_section__name",
+            "guardian__first_name",
+            "guardian__last_name",
+            "guardian__phone",
+            "guardian__email",
+        )
 
         if filters.get("class_id"):
             queryset = queryset.filter(current_class_id=filters["class_id"])
@@ -141,7 +179,17 @@ class ReportQueryService:
             "student",
             "student__current_class",
             "student__current_section",
-        ).filter(school_id=school_id)
+        ).filter(school_id=school_id).only(
+            "id",
+            "attendance_date",
+            "attendance_type",
+            "notes",
+            "student__admission_no",
+            "student__first_name",
+            "student__last_name",
+            "student__current_class__name",
+            "student__current_section__name",
+        )
 
         queryset = ReportQueryService._apply_date_range(
             queryset,
@@ -169,7 +217,20 @@ class ReportQueryService:
             "section",
             "subject",
             "student",
-        ).filter(school_id=school_id)
+        ).filter(school_id=school_id).only(
+            "id",
+            "total_marks",
+            "total_gpa_point",
+            "total_gpa_grade",
+            "is_absent",
+            "exam_term__title",
+            "school_class__name",
+            "section__name",
+            "subject__name",
+            "student__admission_no",
+            "student__first_name",
+            "student__last_name",
+        )
 
         if filters.get("exam_term_id"):
             queryset = queryset.filter(exam_term_id=filters["exam_term_id"])
@@ -219,7 +280,23 @@ class ReportQueryService:
             "member",
             "member__student",
             "member__staff",
-        ).filter(school_id=school_id)
+        ).filter(school_id=school_id).only(
+            "id",
+            "issue_date",
+            "due_date",
+            "return_date",
+            "status",
+            "fine_amount",
+            "book__title",
+            "member__member_type",
+            "member__card_no",
+            "member__student__admission_no",
+            "member__student__first_name",
+            "member__student__last_name",
+            "member__staff__staff_no",
+            "member__staff__first_name",
+            "member__staff__last_name",
+        )
 
         queryset = ReportQueryService._apply_date_range(
             queryset,
@@ -280,7 +357,17 @@ class ReportQueryService:
             "staff",
             "staff__department",
             "staff__designation",
-        ).filter(school_id=school_id)
+        ).filter(school_id=school_id).only(
+            "id",
+            "attendance_date",
+            "attendance_type",
+            "note",
+            "staff__staff_no",
+            "staff__first_name",
+            "staff__last_name",
+            "staff__department__name",
+            "staff__designation__title",
+        )
 
         queryset = ReportQueryService._apply_date_range(
             queryset,
@@ -314,7 +401,18 @@ class ReportQueryService:
             "current_section",
             "transport_route",
             "vehicle",
-        ).filter(school_id=school_id).filter(Q(transport_route__isnull=False) | Q(vehicle__isnull=False))
+        ).filter(school_id=school_id).filter(Q(transport_route__isnull=False) | Q(vehicle__isnull=False)).only(
+            "id",
+            "admission_no",
+            "first_name",
+            "last_name",
+            "current_class__name",
+            "current_section__name",
+            "transport_route__title",
+            "transport_route__fare",
+            "vehicle__number",
+            "vehicle__model",
+        )
 
         if filters.get("class_id"):
             queryset = queryset.filter(current_class_id=filters["class_id"])
@@ -336,7 +434,17 @@ class ReportQueryService:
 
     @staticmethod
     def inventory_stock(school_id: int, filters: dict):
-        queryset = Item.objects.select_related("category", "supplier").filter(school_id=school_id)
+        queryset = Item.objects.select_related("category", "supplier").filter(school_id=school_id).only(
+            "id",
+            "item_code",
+            "name",
+            "quantity",
+            "reorder_level",
+            "unit_cost",
+            "unit_price",
+            "category__name",
+            "supplier__name",
+        )
 
         if filters.get("category_id"):
             queryset = queryset.filter(category_id=filters["category_id"])
@@ -365,7 +473,22 @@ class ReportQueryService:
             "record__school_class",
             "record__section",
             "assigned_by",
-        ).filter(school_id=school_id)
+        ).filter(school_id=school_id).only(
+            "id",
+            "created_at",
+            "incident__title",
+            "incident__point",
+            "student__admission_no",
+            "student__first_name",
+            "student__last_name",
+            "student__current_class__name",
+            "student__current_section__name",
+            "record__school_class__name",
+            "record__section__name",
+            "assigned_by__first_name",
+            "assigned_by__last_name",
+            "assigned_by__username",
+        )
 
         queryset = ReportQueryService._apply_date_range(
             queryset,

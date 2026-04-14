@@ -12,6 +12,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from config.pagination import ApiPageNumberPagination
 
 from apps.core.models import AcademicYear, Class, ClassRoom, Section, Subject
 from apps.hr.models import Staff
@@ -1983,6 +1984,7 @@ class ExamMeritPrintAPIView(ExamTenantMixin, APIView):
 
 class SchoolScopedModelViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = ApiPageNumberPagination
     permission_codes = {}
 
     def get_required_permission_code(self):

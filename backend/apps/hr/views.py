@@ -1,4 +1,5 @@
 from decimal import Decimal
+import json
 import re
 
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -13,6 +14,7 @@ from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated, NotFound, PermissionDenied, ValidationError
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, Section
@@ -310,7 +312,9 @@ class StaffViewSet(SchoolScopedModelViewSet):
     permission_codes = {
         "*": "human_resource.staff.view",
         "next_staff_no": "human_resource.staff.view",
+        "form_options": "human_resource.staff.view",
     }
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def success_response(self, message, data=None, status_code=status.HTTP_200_OK):
         return Response(
@@ -409,10 +413,73 @@ class StaffViewSet(SchoolScopedModelViewSet):
         if designation_id and not desg_qs.filter(id=designation_id).exists():
             raise NotFound("Designation not found")
 
+    def _normalize_staff_request_data(self, request):
+        data = {}
+        if hasattr(request.data, "keys"):
+            for key in request.data.keys():
+                if hasattr(request.data, "getlist"):
+                    values = request.data.getlist(key)
+                    data[key] = values if len(values) > 1 else (values[0] if values else None)
+                else:
+                    data[key] = request.data.get(key)
+        else:
+            data = dict(request.data)
+
+        file_name_fields = [
+            "resume",
+            "joining_letter",
+            "tenth_certificate",
+            "eleventh_certificate",
+            "aadhar_card",
+            "driving_license_doc",
+        ]
+
+        for field_name in file_name_fields:
+            uploaded = request.FILES.get(field_name)
+            if uploaded is not None:
+                data[field_name] = uploaded.name
+
+        uploaded_staff_photo = request.FILES.get("staff_photo")
+        if uploaded_staff_photo is not None:
+            data["staff_photo"] = uploaded_staff_photo
+
+        other_docs = []
+        if hasattr(request.data, "getlist"):
+            other_docs.extend([str(item).strip() for item in request.data.getlist("other_document") if str(item).strip()])
+        if hasattr(request.FILES, "getlist"):
+            other_docs.extend([file_obj.name for file_obj in request.FILES.getlist("other_document") if getattr(file_obj, "name", "")])
+        if other_docs:
+            data["other_document"] = other_docs
+        elif "other_document" in data and isinstance(data.get("other_document"), str):
+            value = str(data.get("other_document") or "").strip()
+            if value:
+                try:
+                    parsed_other = json.loads(value)
+                    if isinstance(parsed_other, list):
+                        data["other_document"] = [str(item).strip() for item in parsed_other if str(item).strip()]
+                    else:
+                        data["other_document"] = [value]
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    data["other_document"] = [value]
+
+        custom_field = data.get("custom_field")
+        if isinstance(custom_field, str):
+            custom_field_text = custom_field.strip()
+            if custom_field_text:
+                try:
+                    parsed_custom = json.loads(custom_field_text)
+                    if isinstance(parsed_custom, dict):
+                        data["custom_field"] = parsed_custom
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    pass
+
+        return data
+
     def create(self, request, *args, **kwargs):
         try:
             self._validate_related_ids(request)
-            serializer = self.get_serializer(data=request.data)
+            payload = self._normalize_staff_request_data(request)
+            serializer = self.get_serializer(data=payload)
             serializer.is_valid(raise_exception=True)
             self.perform_create(serializer)
             return self.success_response(
@@ -428,7 +495,8 @@ class StaffViewSet(SchoolScopedModelViewSet):
             partial = kwargs.pop("partial", False)
             self._validate_related_ids(request)
             instance = self.get_object()
-            serializer = self.get_serializer(instance, data=request.data, partial=partial)
+            payload = self._normalize_staff_request_data(request)
+            serializer = self.get_serializer(instance, data=payload, partial=partial)
             serializer.is_valid(raise_exception=True)
             self.perform_update(serializer)
             return self.success_response("Staff updated successfully", serializer.data)
@@ -438,6 +506,34 @@ class StaffViewSet(SchoolScopedModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
+
+    @action(detail=False, methods=["get"], url_path="form-options")
+    def form_options(self, request):
+        from apps.access_control.models import Role
+
+        school_id = request.user.school_id
+
+        role_qs = Role.objects.all().order_by("name")
+        dept_qs = Department.objects.filter(is_active=True).order_by("name")
+        desg_qs = Designation.objects.filter(is_active=True).order_by("name")
+
+        if school_id and not request.user.is_superuser:
+            role_qs = role_qs.filter(school_id=school_id)
+            dept_qs = dept_qs.filter(school_id=school_id)
+            desg_qs = desg_qs.filter(school_id=school_id)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Staff form options fetched successfully",
+                "data": {
+                    "roles": list(role_qs.values("id", "name")),
+                    "departments": list(dept_qs.values("id", "name", "description", "is_active")),
+                    "designations": list(desg_qs.values("id", "name", "department", "is_active")),
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
     def get_queryset(self):
         """Return school staff members. Optionally filter by driver role for vehicle dropdown."""

@@ -414,14 +414,6 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
   };
 
   const loadItems = async () => {
-    const requireCriteria = type === "as" || type === "ot";
-    if (requireCriteria && !classId && !sectionId) {
-      setError(messages.noCriteria);
-      setItems([]);
-      setHasSearched(false);
-      return;
-    }
-
     try {
       setLoading(true);
       setError("");
@@ -450,15 +442,25 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
     try {
       setError("");
       const row = await apiGet<UploadedContent>(`/api/v1/academics/upload-contents/${id}/`);
-      const fileUrl = resolveUrl(row.upload_file || row.source_url);
-      if (fileUrl) {
-        window.open(fileUrl, "_blank", "noopener,noreferrer");
-        return;
-      }
       setViewing(row);
     } catch {
       setError(messages.viewFail);
     }
+  };
+
+  const downloadFromView = (row: UploadedContent) => {
+    const fileUrl = resolveUrl(row.upload_file || row.source_url);
+    if (!fileUrl) {
+      setError(messages.downloadFail);
+      return;
+    }
+    const anchor = document.createElement("a");
+    anchor.href = fileUrl;
+    anchor.download = fileNameFromPath(row.upload_file || row.source_url || row.content_title || "download");
+    anchor.rel = "noopener noreferrer";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
   };
 
   const editItem = async (id: number) => {
@@ -699,7 +701,10 @@ function ContentListPagePanel({ title, type, lockType }: { title: string; type: 
                     </a>
                   ) : "-"}
                 </p>
-                <button type="button" onClick={() => setViewing(null)} style={buttonStyle("#6b7280")}>Close</button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button type="button" onClick={() => downloadFromView(viewing)} style={buttonStyle("#475569")}>Download</button>
+                  <button type="button" onClick={() => setViewing(null)} style={buttonStyle("#6b7280")}>Close</button>
+                </div>
               </div>
             </div>
           )}
