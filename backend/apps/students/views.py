@@ -538,6 +538,120 @@ class StudentViewSet(TenantScopedModelViewSet):
             return qs.filter(school_id=user.school_id)
         return qs.none()
 
+    def _summary_queryset(self):
+        user = self.request.user
+        qs = Student.objects.all()
+
+        if user.is_superuser:
+            qs = qs
+        elif user.school_id:
+            qs = qs.filter(school_id=user.school_id)
+        else:
+            return qs.none()
+
+        search = (self.request.query_params.get("search") or "").strip()
+        class_id = self.request.query_params.get("class") or self.request.query_params.get("current_class")
+        section_id = self.request.query_params.get("section") or self.request.query_params.get("current_section")
+        academic_year_id = self.request.query_params.get("academic_year")
+        is_active_param = (self.request.query_params.get("is_active") or "").strip().lower()
+        include_deleted = (self.request.query_params.get("include_deleted") or "").strip().lower() in {"1", "true", "yes"}
+        deleted_only = (self.request.query_params.get("deleted_only") or "").strip().lower() in {"1", "true", "yes"}
+        unassigned_only = (self.request.query_params.get("unassigned") or "").strip().lower() in {"1", "true", "yes"}
+
+        if search and not re.fullmatch(r"[A-Za-z0-9 _\-./]+", search):
+            raise ValidationError({"search": "Please enter valid search text"})
+
+        if deleted_only:
+            qs = qs.filter(is_deleted=True)
+        elif not include_deleted:
+            qs = qs.filter(is_deleted=False)
+
+        if class_id and not str(class_id).isdigit():
+            raise ValidationError({"current_class": "Please select a valid class."})
+        if section_id and not str(section_id).isdigit():
+            raise ValidationError({"current_section": "Please select a valid section."})
+        if academic_year_id and not str(academic_year_id).isdigit():
+            raise ValidationError({"academic_year": "Please select a valid academic year."})
+
+        from apps.core.models import AcademicYear, Class, Section
+
+        if class_id:
+            class_qs = Class.objects.filter(id=int(class_id))
+            if not user.is_superuser:
+                class_qs = class_qs.filter(school_id=user.school_id)
+            if not class_qs.exists():
+                raise ValidationError({"current_class": "Selected class is not available."})
+
+        if section_id:
+            section_qs = Section.objects.filter(id=int(section_id))
+            if class_id:
+                section_qs = section_qs.filter(school_class_id=int(class_id))
+            if not user.is_superuser:
+                section_qs = section_qs.filter(school_class__school_id=user.school_id)
+            if not section_qs.exists():
+                raise ValidationError({"current_section": "Selected section is not available."})
+
+        if academic_year_id:
+            year_qs = AcademicYear.objects.filter(id=int(academic_year_id))
+            if not user.is_superuser:
+                year_qs = year_qs.filter(school_id=user.school_id)
+            if not year_qs.exists():
+                raise ValidationError({"academic_year": "Selected academic year is not available."})
+
+        if class_id:
+            qs = qs.filter(current_class_id=class_id)
+        if section_id:
+            qs = qs.filter(current_section_id=section_id)
+        if unassigned_only:
+            qs = qs.filter(current_class_id__isnull=True, current_section_id__isnull=True)
+        if academic_year_id:
+            qs = qs.filter(academic_year_id=academic_year_id)
+        if is_active_param in {"1", "true", "yes"}:
+            qs = qs.filter(is_active=True)
+        elif is_active_param in {"0", "false", "no"}:
+            qs = qs.filter(is_active=False)
+        if search:
+            qs = qs.filter(
+                Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+                | Q(admission_no__icontains=search)
+                | Q(roll_no__icontains=search)
+            )
+
+        return qs
+
+    @action(detail=False, methods=["get"], url_path="summary")
+    def summary(self, request, *args, **kwargs):
+        base_qs = self._summary_queryset()
+        non_deleted_qs = base_qs.filter(is_deleted=False)
+        archived_qs = base_qs.filter(is_deleted=True)
+
+        now = timezone.now()
+        first_day_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        total_count = non_deleted_qs.count()
+        active_count = non_deleted_qs.filter(is_active=True).count()
+        inactive_count = non_deleted_qs.filter(is_active=False).count()
+        archived_count = archived_qs.count()
+        new_count = non_deleted_qs.filter(created_at__gte=first_day_of_month).count()
+        docs_pending_count = non_deleted_qs.filter(Q(phone__isnull=True) | Q(phone="") | Q(date_of_birth__isnull=True) | Q(is_disabled=True)).count()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Student summary retrieved successfully",
+                "data": {
+                    "total_count": total_count,
+                    "active_count": active_count,
+                    "inactive_count": inactive_count,
+                    "archived_count": archived_count,
+                    "new_count": new_count,
+                    "docs_pending_count": docs_pending_count,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
+
     def _field_alias(self, field):
         aliases = {
             "current_class": "class",
@@ -1157,8 +1271,8 @@ class StudentViewSet(TenantScopedModelViewSet):
             )
         if student.is_deleted:
             return Response(
-                {"success": False, "message": "Student record already deleted", "field_errors": {}},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"success": True, "message": "Student is already in archived status", "field_errors": {}},
+                status=status.HTTP_200_OK,
             )
 
         if self._linked_record_exists(student):
@@ -1195,8 +1309,8 @@ class StudentViewSet(TenantScopedModelViewSet):
             )
         if not student.is_deleted:
             return Response(
-                {"success": False, "message": "Student is not deleted", "field_errors": {}},
-                status=status.HTTP_400_BAD_REQUEST,
+                {"success": True, "message": "Student is already active (not archived)", "field_errors": {}},
+                status=status.HTTP_200_OK,
             )
 
         try:

@@ -150,6 +150,122 @@ const DEFAULT_STATE_CITY_MAP: Record<string, string[]> = {
   Kerala: ["Kochi", "Thiruvananthapuram", "Kozhikode"],
 };
 
+const CLASS_ORDER = ["LKG", "UKG", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"];
+
+const MOTHER_TONGUES = [
+  "Hindi",
+  "English",
+  "Bengali",
+  "Telugu",
+  "Marathi",
+  "Tamil",
+  "Urdu",
+  "Gujarati",
+  "Kannada",
+  "Malayalam",
+  "Odia",
+  "Punjabi",
+  "Assamese",
+  "Maithili",
+  "Sanskrit",
+  "Konkani",
+  "Nepali",
+  "Sindhi",
+  "Dogri",
+  "Manipuri",
+  "Bodo",
+  "Santali",
+  "Kashmiri",
+  "Other",
+];
+
+const NAV_ITEMS = [
+  { id: "identity", label: "Identity", description: "Basic profile, DOB, photo", index: 1 },
+  { id: "academic", label: "Academic", description: "Class, section, year", index: 2 },
+  { id: "contact", label: "Contact & address", description: "Phone, email, location", index: 3 },
+  { id: "guardians", label: "Guardians", description: "Parent/guardian details", index: 4 },
+  { id: "documents", label: "Documents", description: "Consent and student records", index: 5 },
+  { id: "review", label: "Review", description: "Final check before submit", index: 6 },
+] as const;
+
+type NavItemId = (typeof NAV_ITEMS)[number]["id"];
+
+const CLASS_AGE_RULES_STRICT: Record<string, { min: number; max: number }> = {
+  LKG: { min: 3.5, max: 5.5 },
+  UKG: { min: 4.5, max: 6.5 },
+  "1": { min: 5.5, max: 7.5 },
+  "2": { min: 6.5, max: 8.5 },
+  "3": { min: 7.5, max: 9.5 },
+  "4": { min: 8.5, max: 10.5 },
+  "5": { min: 9.5, max: 11.5 },
+  "6": { min: 10.5, max: 12.5 },
+  "7": { min: 11.5, max: 13.5 },
+  "8": { min: 12.5, max: 14.5 },
+  "9": { min: 13.5, max: 15.5 },
+  "10": { min: 14.5, max: 16.5 },
+  "11": { min: 15.5, max: 18 },
+  "12": { min: 16.5, max: 19 },
+};
+
+function toTitleCase(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatDobDisplayFromISO(value: string): string {
+  if (!value) return "";
+  const parts = value.split("-");
+  if (parts.length !== 3) return "";
+  return `${parts[2]} / ${parts[1]} / ${parts[0]}`;
+}
+
+function toDobMask(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 8);
+  const dd = digits.slice(0, 2);
+  const mm = digits.slice(2, 4);
+  const yyyy = digits.slice(4, 8);
+  if (digits.length <= 2) return dd;
+  if (digits.length <= 4) return `${dd} / ${mm}`;
+  return `${dd} / ${mm} / ${yyyy}`;
+}
+
+function parseDobMaskedToISO(masked: string): string {
+  const digits = masked.replace(/\D/g, "");
+  if (digits.length !== 8) return "";
+  const dd = digits.slice(0, 2);
+  const mm = digits.slice(2, 4);
+  const yyyy = digits.slice(4, 8);
+  const date = new Date(`${yyyy}-${mm}-${dd}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  if (date.getFullYear() !== Number(yyyy) || date.getMonth() + 1 !== Number(mm) || date.getDate() !== Number(dd)) return "";
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function getDraftTimeAgoText(dateValue: number | null): string {
+  if (!dateValue) return "Draft not saved yet";
+  const diffMs = Math.max(0, Date.now() - dateValue);
+  const mins = Math.max(0, Math.floor(diffMs / 60000));
+  if (mins < 1) return "Draft saved just now";
+  if (mins === 1) return "Draft saved 1m ago";
+  return `Draft saved ${mins}m ago`;
+}
+
+function buildDefaultAdmissionNo(): string {
+  const year = new Date().getFullYear();
+  const serial = Math.floor(1000 + Math.random() * 9000);
+  return `ADM${year}${serial}`;
+}
+
+function isProgressFieldFilled(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") return value.trim().length > 0;
+  return Boolean(value);
+}
+
 function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
 }
@@ -160,12 +276,9 @@ async function fetchAllPages<T>(basePath: string, pageSize = 100): Promise<T[]> 
   while (page <= 50) {
     const separator = basePath.includes("?") ? "&" : "?";
     const payload = await apiGet<ApiList<T>>(`${basePath}${separator}page=${page}&page_size=${pageSize}`);
-    const pageItems = listData(payload);
-    rows.push(...pageItems);
-    const count = Array.isArray(payload) ? pageItems.length : Number(payload.count || 0);
-    if (pageItems.length < pageSize || (count > 0 && rows.length >= count)) {
-      break;
-    }
+    const items = listData(payload);
+    rows.push(...items);
+    if (items.length < pageSize) break;
     page += 1;
   }
   return rows;
@@ -183,13 +296,6 @@ async function apiPostJson<T>(path: string, payload: unknown): Promise<T> {
   });
 }
 
-async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
-  return apiRequestWithRefresh<T>(path, {
-    method: "POST",
-    body: formData,
-  });
-}
-
 async function apiPutJson<T>(path: string, payload: unknown): Promise<T> {
   return apiRequestWithRefresh<T>(path, {
     method: "PUT",
@@ -198,25 +304,11 @@ async function apiPutJson<T>(path: string, payload: unknown): Promise<T> {
   });
 }
 
-function fieldStyle(hasError = false) {
-  return {
-    width: "100%",
-    minHeight: 40,
-    border: `1px solid ${hasError ? "#dc2626" : "var(--line)"}`,
-    borderRadius: 10,
-    padding: "10px 12px",
-    lineHeight: 1.3,
-    background: "#fff",
-  } as const;
-}
-
-function helperTextStyle() {
-  return {
-    margin: "4px 0 0",
-    color: "#64748b",
-    fontSize: 12,
-    lineHeight: 1.4,
-  } as const;
+async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
+  return apiRequestWithRefresh<T>(path, {
+    method: "POST",
+    body: formData,
+  });
 }
 
 function boxStyle() {
@@ -338,6 +430,7 @@ async function compressImage(file: File, maxWidth = 1200, quality = 0.8): Promis
 }
 
 export function StudentAddPanel() {
+  const STUDENT_DRAFT_STORAGE_KEY = "students:add:draft:v1";
   const searchParams = useSearchParams();
   const modeParam = (searchParams.get("mode") || "add").toLowerCase();
   const isViewMode = modeParam === "view";
@@ -406,6 +499,8 @@ export function StudentAddPanel() {
   const [sectionLoadError, setSectionLoadError] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [toastMessage, setToastMessage] = useState("");
+  const [toastType, setToastType] = useState<"success" | "error">("success");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [guardianValidationError, setGuardianValidationError] = useState("");
   const [checkingAdmission, setCheckingAdmission] = useState(false);
@@ -418,7 +513,32 @@ export function StudentAddPanel() {
   const [manualAddressMode, setManualAddressMode] = useState(false);
   const [lastPinLookup, setLastPinLookup] = useState("");
   const [pendingSectionId, setPendingSectionId] = useState("");
+  const [activeNavSection, setActiveNavSection] = useState<NavItemId>("identity");
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
+  const [draftLabel, setDraftLabel] = useState("Draft not saved yet");
+  const [currentEnrolledCount, setCurrentEnrolledCount] = useState("1,533");
+  const [admissionNoEditable, setAdmissionNoEditable] = useState(false);
+  const [dobDisplay, setDobDisplay] = useState("");
+  const [classAgeWarning, setClassAgeWarning] = useState("");
+  const [motherTongue, setMotherTongue] = useState("");
+  const [otherMotherTongue, setOtherMotherTongue] = useState("");
+  const [religion, setReligion] = useState("Prefer not to say");
+  const [nationality, setNationality] = useState("Indian");
+  const [otherNationality, setOtherNationality] = useState("");
+  const [admissionType, setAdmissionType] = useState("New admission");
+  const [previousSchoolName, setPreviousSchoolName] = useState("");
+  const [rteCertificateNo, setRteCertificateNo] = useState("");
+  const [consentChecked, setConsentChecked] = useState(false);
+  const [medicalNotes, setMedicalNotes] = useState("");
+  const [docBirthCertificate, setDocBirthCertificate] = useState(false);
+  const [docAadhaar, setDocAadhaar] = useState(false);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraError, setCameraError] = useState("");
+  const toastTimerRef = useRef<number | null>(null);
 
   const pinIsValid = /^\d{6}$/.test(pincode.trim());
 
@@ -448,9 +568,63 @@ export function StudentAddPanel() {
     [classes],
   );
 
+  const orderedClasses = useMemo(() => {
+    return [...validClasses].sort((a, b) => {
+      const aName = String(a.name || "").trim();
+      const bName = String(b.name || "").trim();
+      const aIndex = CLASS_ORDER.indexOf(aName);
+      const bIndex = CLASS_ORDER.indexOf(bName);
+      if (aIndex === -1 && bIndex === -1) return aName.localeCompare(bName);
+      if (aIndex === -1) return 1;
+      if (bIndex === -1) return -1;
+      return aIndex - bIndex;
+    });
+  }, [validClasses]);
+
   const stateOptions = useMemo(() => Object.keys(stateCityMap).sort((a, b) => a.localeCompare(b)), [stateCityMap]);
 
   const canSubmit = !loading && !saving && !photoUploading && !sectionLoading && !classId ? false : !loading && !saving && !photoUploading && !sectionLoading;
+
+  const progressFields = [
+    rollNo,
+    firstName,
+    lastName,
+    dateOfBirth,
+    academicYearId,
+    gender === "other" ? customGender : "",
+    bloodGroup,
+    phone,
+    email,
+    addressLine,
+    city,
+    district,
+    stateName,
+    pincode,
+    photo,
+    categoryId,
+    guardianId,
+    classId,
+    sectionId,
+    motherTongue,
+    motherTongue === "Other" ? otherMotherTongue : "",
+    religion !== "Prefer not to say" ? religion : "",
+    nationality !== "Indian" ? nationality : "",
+    nationality === "Other" ? otherNationality : "",
+    admissionType !== "New admission" ? admissionType : "",
+    previousSchoolName,
+    rteCertificateNo,
+    consentChecked,
+    medicalNotes,
+    docBirthCertificate,
+    docAadhaar,
+    isDisabled,
+    statusValue !== "active" ? statusValue : "",
+  ];
+
+  const completedProgressFields = progressFields.filter(isProgressFieldFilled).length;
+  const footerProgressPercent = progressFields.length > 0 ? Math.round((completedProgressFields / progressFields.length) * 100) : 0;
+  const footerProgressBucket = Math.min(100, Math.floor(footerProgressPercent / 10) * 10);
+  const footerProgressClass = `progress-fill-${footerProgressBucket}`;
 
   const loadBaseLookups = async () => {
     try {
@@ -470,6 +644,104 @@ export function StudentAddPanel() {
       setError(parseError(loadError));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const saveDraftSnapshot = () => {
+    if (typeof window === "undefined") return;
+    const payload = {
+      savedAt: Date.now(),
+      admissionNo,
+      rollNo,
+      firstName,
+      lastName,
+      dateOfBirth,
+      academicYearId,
+      gender,
+      customGender,
+      bloodGroup,
+      phone,
+      email,
+      addressLine,
+      city,
+      district,
+      stateName,
+      pincode,
+      photo,
+      photoName,
+      statusValue,
+      categoryId,
+      guardianId,
+      classId,
+      sectionId,
+      isDisabled,
+      motherTongue,
+      otherMotherTongue,
+      religion,
+      nationality,
+      otherNationality,
+      admissionType,
+      previousSchoolName,
+      rteCertificateNo,
+      consentChecked,
+      medicalNotes,
+      docBirthCertificate,
+      docAadhaar,
+    };
+    window.localStorage.setItem(STUDENT_DRAFT_STORAGE_KEY, JSON.stringify(payload));
+  };
+
+  const restoreDraftSnapshot = () => {
+    if (typeof window === "undefined" || isExistingStudentMode) return false;
+    const raw = window.localStorage.getItem(STUDENT_DRAFT_STORAGE_KEY);
+    if (!raw) return false;
+
+    try {
+      const draft = JSON.parse(raw) as Record<string, unknown>;
+      setAdmissionNo(String(draft.admissionNo || buildDefaultAdmissionNo()));
+      setRollNo(String(draft.rollNo || ""));
+      setFirstName(String(draft.firstName || ""));
+      setLastName(String(draft.lastName || ""));
+      setDateOfBirth(String(draft.dateOfBirth || ""));
+      setAcademicYearId(String(draft.academicYearId || ""));
+      setGender(String(draft.gender || "male"));
+      setCustomGender(String(draft.customGender || ""));
+      setBloodGroup(String(draft.bloodGroup || ""));
+      setPhone(String(draft.phone || ""));
+      setEmail(String(draft.email || ""));
+      setAddressLine(String(draft.addressLine || ""));
+      setCity(String(draft.city || ""));
+      setDistrict(String(draft.district || ""));
+      setStateName(String(draft.stateName || ""));
+      setPincode(String(draft.pincode || ""));
+      setPhoto(String(draft.photo || ""));
+      setPhotoName(String(draft.photoName || ""));
+      setStatusValue((String(draft.statusValue || "active") as "active" | "inactive" | "transferred" | "dropped"));
+      setCategoryId(String(draft.categoryId || ""));
+      setGuardianId(String(draft.guardianId || ""));
+      const restoredClassId = String(draft.classId || "");
+      const restoredSectionId = String(draft.sectionId || "");
+      setClassId(restoredClassId);
+      setSectionId("");
+      setPendingSectionId(restoredSectionId);
+      setIsDisabled(Boolean(draft.isDisabled));
+      setMotherTongue(String(draft.motherTongue || ""));
+      setOtherMotherTongue(String(draft.otherMotherTongue || ""));
+      setReligion(String(draft.religion || "Prefer not to say"));
+      setNationality(String(draft.nationality || "Indian"));
+      setOtherNationality(String(draft.otherNationality || ""));
+      setAdmissionType(String(draft.admissionType || "New admission"));
+      setPreviousSchoolName(String(draft.previousSchoolName || ""));
+      setRteCertificateNo(String(draft.rteCertificateNo || ""));
+      setConsentChecked(Boolean(draft.consentChecked));
+      setMedicalNotes(String(draft.medicalNotes || ""));
+      setDocBirthCertificate(Boolean(draft.docBirthCertificate));
+      setDocAadhaar(Boolean(draft.docAadhaar));
+      setDraftSavedAt(typeof draft.savedAt === "number" ? draft.savedAt : Date.now());
+      return true;
+    } catch {
+      window.localStorage.removeItem(STUDENT_DRAFT_STORAGE_KEY);
+      return false;
     }
   };
 
@@ -631,6 +903,11 @@ export function StudentAddPanel() {
         await loadBaseLookups();
         if (isExistingStudentMode && studentId) {
           await loadStudentForMode(studentId);
+        } else {
+          const restored = restoreDraftSnapshot();
+          if (!restored) {
+            setAdmissionNo((prev) => prev || buildDefaultAdmissionNo());
+          }
         }
       } catch (loadError) {
         setError(parseError(loadError));
@@ -638,6 +915,64 @@ export function StudentAddPanel() {
     };
     void loadAll();
   }, []);
+
+  useEffect(() => {
+    const flag = window.localStorage.getItem("eskoolia_scan_banner_dismissed") === "true";
+    setBannerDismissed(flag);
+  }, []);
+
+  useEffect(() => {
+    setDraftLabel(getDraftTimeAgoText(draftSavedAt));
+    const timer = window.setInterval(() => {
+      setDraftLabel(getDraftTimeAgoText(draftSavedAt));
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, [draftSavedAt]);
+
+  useEffect(() => {
+    const fetchCount = async () => {
+      try {
+        // TODO: GET /api/students/count when backend endpoint is ready.
+        const data = await apiGet<{ count?: number }>("/api/v1/students/students/?page_size=1");
+        if (typeof data?.count === "number") {
+          setCurrentEnrolledCount(new Intl.NumberFormat("en-IN").format(data.count));
+        }
+      } catch {
+        setCurrentEnrolledCount("1,533");
+      }
+    };
+    void fetchCount();
+  }, []);
+
+  useEffect(() => {
+    const updateActiveSection = () => {
+      const stickyOffset = 120;
+      const scanLine = window.scrollY + stickyOffset;
+      let nextActive: NavItemId = NAV_ITEMS[0]?.id || "identity";
+
+      for (const item of NAV_ITEMS) {
+        const section = document.getElementById(item.id);
+        if (!section) continue;
+        if (section.offsetTop <= scanLine) {
+          nextActive = item.id;
+        }
+      }
+
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) {
+        nextActive = NAV_ITEMS[NAV_ITEMS.length - 1]?.id || nextActive;
+      }
+
+      setActiveNavSection((prev) => (prev === nextActive ? prev : nextActive));
+    };
+
+    updateActiveSection();
+    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+    return () => {
+      window.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
+  }, [loading]);
 
   useEffect(() => {
     if (!classId) {
@@ -675,8 +1010,151 @@ export function StudentAddPanel() {
     return () => window.clearTimeout(timer);
   }, [pincode]);
 
+  useEffect(() => {
+    if (!dateOfBirth) return;
+    setDobDisplay(formatDobDisplayFromISO(dateOfBirth));
+  }, [dateOfBirth]);
+
+  const showToast = (message: string, type: "success" | "error" = "success", durationMs = 60000) => {
+    setToastType(type);
+    setToastMessage(message);
+
+    if (toastTimerRef.current) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage("");
+      toastTimerRef.current = null;
+    }, durationMs);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!dateOfBirth || !classId) {
+      setClassAgeWarning("");
+      return;
+    }
+    const selectedClass = orderedClasses.find((item) => String(item.id) === classId);
+    const className = String(selectedClass?.name || "").trim();
+    const rule = CLASS_AGE_RULES_STRICT[className];
+    if (!rule) {
+      setClassAgeWarning("");
+      return;
+    }
+    const dobDate = new Date(`${dateOfBirth}T00:00:00`);
+    if (Number.isNaN(dobDate.getTime())) return;
+    const yearName = String(validAcademicYears.find((item) => String(item.id) === academicYearId)?.name || "");
+    const refYear = /^\d{4}/.test(yearName) ? Number(yearName.slice(0, 4)) : new Date().getFullYear();
+    const refDate = new Date(`${refYear}-06-01T00:00:00`);
+    const age = (refDate.getTime() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+    if (age < rule.min || age > rule.max) {
+      setClassAgeWarning(`Age-class mismatch: expected ${rule.min}-${rule.max} years for this grade.`);
+      return;
+    }
+    setClassAgeWarning("");
+  }, [dateOfBirth, classId, academicYearId, orderedClasses, validAcademicYears]);
+
+  useEffect(() => {
+    if (!success) return;
+    showToast(success, "success", 60000);
+  }, [success]);
+
+  useEffect(() => {
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      let changed = false;
+
+      const clearIf = (field: string, condition: boolean) => {
+        if (next[field] && condition) {
+          delete next[field];
+          changed = true;
+        }
+      };
+
+      const cleanFirstName = sanitizeText(firstName);
+      const cleanLastName = sanitizeText(lastName);
+      const dobDate = dateOfBirth ? new Date(dateOfBirth) : null;
+      const hasValidDobDate = Boolean(dobDate && !Number.isNaN(dobDate.getTime()) && dobDate <= new Date());
+
+      let hasValidClassAge = true;
+      if (hasValidDobDate && classId) {
+        const age = (Date.now() - (dobDate as Date).getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+        if (age < 3) {
+          hasValidClassAge = false;
+        } else {
+          const selectedClass = validClasses.find((item) => String(item.id) === classId);
+          const className = String(selectedClass?.name || "");
+          const classMatch = className.match(/\d+/);
+          const classNumber = classMatch ? Number(classMatch[0]) : null;
+          if (classNumber && CLASS_AGE_RULES[classNumber]) {
+            const [minAge, maxAge] = CLASS_AGE_RULES[classNumber];
+            hasValidClassAge = age >= minAge && age <= maxAge;
+          }
+        }
+      }
+
+      clearIf("first_name", Boolean(cleanFirstName && isAlphabetsOnly(cleanFirstName)));
+      clearIf("last_name", Boolean(cleanLastName && isAlphabetsOnly(cleanLastName)));
+      clearIf("dob", Boolean(hasValidDobDate && hasValidClassAge));
+      clearIf("gender", Boolean(gender));
+      clearIf("custom_gender", gender !== "other" || Boolean(sanitizeText(customGender)));
+      clearIf("mother_tongue", Boolean(motherTongue));
+      clearIf("other_mother_tongue", motherTongue !== "Other" || Boolean(sanitizeText(otherMotherTongue)));
+      clearIf("nationality", Boolean(nationality));
+      clearIf("other_nationality", nationality !== "Other" || Boolean(sanitizeText(otherNationality)));
+      clearIf("academic_year", Boolean(academicYearId && validAcademicYears.some((row) => String(row.id) === academicYearId)));
+      clearIf("class", Boolean(classId && validClasses.some((row) => String(row.id) === classId)));
+      clearIf("section", Boolean(sectionId && sections.some((item) => String(item.id) === sectionId)));
+      clearIf("phone", isValidPhone(phone));
+      clearIf("email", !email.trim() || isValidEmail(email));
+      clearIf("state", Boolean(sanitizeText(stateName)));
+      clearIf("district", Boolean(sanitizeText(district)));
+      clearIf("city", Boolean(sanitizeText(city)));
+      clearIf("pincode", !pincode.trim() || isValidPincode(pincode));
+      clearIf("guardian", Boolean(guardianId));
+      clearIf("consent", Boolean(consentChecked));
+      clearIf("rte_certificate", admissionType !== "RTE Quota" || Boolean(sanitizeText(rteCertificateNo)));
+
+      return changed ? next : prev;
+    });
+  }, [
+    firstName,
+    lastName,
+    dateOfBirth,
+    classId,
+    validClasses,
+    gender,
+    customGender,
+    motherTongue,
+    otherMotherTongue,
+    nationality,
+    otherNationality,
+    academicYearId,
+    validAcademicYears,
+    sectionId,
+    sections,
+    phone,
+    email,
+    stateName,
+    district,
+    city,
+    pincode,
+    guardianId,
+    consentChecked,
+    admissionType,
+    rteCertificateNo,
+  ]);
+
   const resetStudentForm = () => {
-    setAdmissionNo("");
+    setAdmissionNo(buildDefaultAdmissionNo());
     setRollNo("");
     setFirstName("");
     setLastName("");
@@ -711,6 +1189,22 @@ export function StudentAddPanel() {
     setStateCityMap(DEFAULT_STATE_CITY_MAP);
     setManualAddressMode(false);
     setLastPinLookup("");
+    setAdmissionNoEditable(false);
+    setDobDisplay("");
+    setClassAgeWarning("");
+    setMotherTongue("");
+    setOtherMotherTongue("");
+    setReligion("Prefer not to say");
+    setNationality("Indian");
+    setOtherNationality("");
+    setAdmissionType("New admission");
+    setPreviousSchoolName("");
+    setRteCertificateNo("");
+    setConsentChecked(false);
+    setMedicalNotes("");
+    setDocBirthCertificate(false);
+    setDocAadhaar(false);
+    setDraftSavedAt(null);
   };
 
   const setSingleFieldError = (field: string, message: string) => {
@@ -720,6 +1214,138 @@ export function StudentAddPanel() {
       else delete next[field];
       return next;
     });
+  };
+
+  const saveDraftNow = () => {
+    setDraftSavedAt(Date.now());
+    saveDraftSnapshot();
+    showToast("Draft saved successfully.", "success", 5000);
+  };
+
+  const clearDraftNow = () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(STUDENT_DRAFT_STORAGE_KEY);
+    }
+    resetStudentForm();
+    setError("");
+    setSuccess("");
+    showToast("Draft cleared.", "success", 4000);
+    jumpToSection("identity");
+  };
+
+  const dismissScanBanner = () => {
+    setBannerDismissed(true);
+    window.localStorage.setItem("eskoolia_scan_banner_dismissed", "true");
+  };
+
+  const jumpToSection = (id: string) => {
+    const target = document.getElementById(id);
+    if (!target) return;
+    // Directly set the active section before scrolling to ensure proper state
+    setActiveNavSection(id as NavItemId);
+    // Use a small delay to allow state update, then scroll
+    window.setTimeout(() => {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  };
+
+  const getSectionIndex = (id: string): number => {
+    return NAV_ITEMS.findIndex((item) => item.id === id);
+  };
+
+  const FIELD_SECTION_MAP: Record<string, NavItemId> = {
+    admission_no: "identity",
+    roll_no: "identity",
+    first_name: "identity",
+    last_name: "identity",
+    dob: "identity",
+    date_of_birth: "identity",
+    gender: "identity",
+    custom_gender: "identity",
+    blood_group: "identity",
+    mother_tongue: "identity",
+    other_mother_tongue: "identity",
+    nationality: "identity",
+    other_nationality: "identity",
+    photo: "identity",
+    academic_year: "academic",
+    class: "academic",
+    section: "academic",
+    category: "academic",
+    rte_certificate: "academic",
+    phone: "contact",
+    email: "contact",
+    address_line: "contact",
+    city: "contact",
+    district: "contact",
+    state: "contact",
+    pincode: "contact",
+    guardian: "guardians",
+    consent: "documents",
+  };
+
+  const jumpToFirstErrorSection = (errors: Record<string, string>) => {
+    const errorFields = Object.keys(errors);
+    if (errorFields.length === 0) return;
+
+    let targetSection: NavItemId | null = null;
+    for (const nav of NAV_ITEMS) {
+      const hasErrorInSection = errorFields.some((field) => FIELD_SECTION_MAP[field] === nav.id);
+      if (hasErrorInSection) {
+        targetSection = nav.id;
+        break;
+      }
+    }
+
+    if (!targetSection) {
+      targetSection = FIELD_SECTION_MAP[errorFields[0]] || null;
+    }
+
+    if (targetSection) {
+      jumpToSection(targetSection);
+    }
+  };
+
+  const renderSectionNavButtons = (currentSectionId: string) => {
+    const currentIndex = getSectionIndex(currentSectionId);
+    const hasPrev = currentIndex > 0;
+    const hasNext = currentIndex < NAV_ITEMS.length - 1;
+    const prevItem = hasPrev ? NAV_ITEMS[currentIndex - 1] : null;
+    const nextItem = hasNext ? NAV_ITEMS[currentIndex + 1] : null;
+
+    return (
+      <div className="section-nav-buttons">
+        {hasPrev ? (
+          <button
+            type="button"
+            onClick={() => jumpToSection(prevItem!.id)}
+            className="btn-nav-prev"
+          >
+            ← {prevItem!.label}
+          </button>
+        ) : (
+          <div />
+        )}
+        {hasNext ? (
+          <button
+            type="button"
+            onClick={() => jumpToSection(nextItem!.id)}
+            className="btn-nav-next"
+          >
+            {nextItem!.label} →
+          </button>
+        ) : (
+          <div />
+        )}
+      </div>
+    );
+  };
+
+  const onDobMaskedChange = (nextMasked: string) => {
+    const masked = toDobMask(nextMasked);
+    setDobDisplay(masked);
+    const iso = parseDobMaskedToISO(masked);
+    setDateOfBirth(iso);
   };
 
   const runAdmissionAvailabilityCheck = async (valueOverride?: string): Promise<boolean> => {
@@ -832,6 +1458,32 @@ export function StudentAddPanel() {
     if (classId && sectionLoading) nextErrors.section = "Please wait until sections are loaded";
     if (classId && !sectionLoading && sections.length === 0) nextErrors.section = "No sections found for selected class. Use refresh.";
 
+    if (!motherTongue) {
+      nextErrors.mother_tongue = "Mother tongue is required.";
+    }
+    if (motherTongue === "Other" && !sanitizeText(otherMotherTongue)) {
+      nextErrors.other_mother_tongue = "Please specify language.";
+    }
+
+    if (!nationality) {
+      nextErrors.nationality = "Nationality is required.";
+    }
+    if (nationality === "Other" && !sanitizeText(otherNationality)) {
+      nextErrors.other_nationality = "Please specify nationality.";
+    }
+
+    if (admissionType === "RTE Quota" && !sanitizeText(rteCertificateNo)) {
+      nextErrors.rte_certificate = "RTE certificate number is required.";
+    }
+
+    if (!consentChecked) {
+      nextErrors.consent = "Guardian consent confirmation is required.";
+    }
+
+    if (!guardianId) {
+      nextErrors.guardian = "At least one guardian is required before enrollment.";
+    }
+
     return nextErrors;
   };
 
@@ -843,6 +1495,7 @@ export function StudentAddPanel() {
       mapped[mappedField] = Array.isArray(value) ? String(value[0] || "") : String(value || "");
     }
     setFieldErrors(mapped);
+    return mapped;
   };
 
   const addGuardianInline = async () => {
@@ -927,6 +1580,106 @@ export function StudentAddPanel() {
     setSingleFieldError("photo", "");
   };
 
+  const stopStudentCamera = () => {
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    }
+    if (cameraVideoRef.current) {
+      cameraVideoRef.current.srcObject = null;
+    }
+  };
+
+  const closeStudentCamera = () => {
+    stopStudentCamera();
+    setCameraOpen(false);
+    setCameraError("");
+  };
+
+  const openStudentPhotoPicker = () => {
+    if (isViewMode || photoUploading) return;
+    if (
+      typeof navigator !== "undefined" &&
+      navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getUserMedia === "function"
+    ) {
+      setCameraError("");
+      setCameraOpen(true);
+      return;
+    }
+    photoInputRef.current?.click();
+  };
+
+  const captureStudentPhoto = async () => {
+    try {
+      const video = cameraVideoRef.current;
+      if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
+        throw new Error("Camera is not ready yet.");
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        throw new Error("Camera capture is not supported in this browser.");
+      }
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
+      if (!blob) {
+        throw new Error("Unable to capture photo.");
+      }
+
+      const file = new File([blob], `student-photo-${Date.now()}.jpg`, { type: "image/jpeg" });
+      closeStudentCamera();
+      await uploadStudentPhoto(file);
+    } catch (captureError) {
+      setCameraError(parseError(captureError) || "Unable to capture photo.");
+    }
+  };
+
+  useEffect(() => {
+    if (!cameraOpen) {
+      stopStudentCamera();
+      return;
+    }
+
+    let cancelled = false;
+
+    const startCamera = async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Camera access is not supported on this device.");
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        cameraStreamRef.current = stream;
+        if (cameraVideoRef.current) {
+          cameraVideoRef.current.srcObject = stream;
+          await cameraVideoRef.current.play().catch(() => undefined);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setCameraError(parseError(error) || "Unable to access camera.");
+        }
+      }
+    };
+
+    void startCamera();
+
+    return () => {
+      cancelled = true;
+      stopStudentCamera();
+    };
+  }, [cameraOpen]);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (isViewMode) return;
@@ -939,6 +1692,7 @@ export function StudentAddPanel() {
 
     if (Object.keys(nextErrors).length > 0) {
       setError(`Please fix ${Object.keys(nextErrors).length} validation error(s).`);
+      jumpToFirstErrorSection(nextErrors);
       return;
     }
 
@@ -946,6 +1700,7 @@ export function StudentAddPanel() {
       const ok = await runAdmissionAvailabilityCheck();
       if (!ok) {
         setError("Please resolve admission number validation first.");
+        jumpToSection("identity");
         return;
       }
     }
@@ -954,7 +1709,7 @@ export function StudentAddPanel() {
       setSaving(true);
       const isStudentActive = !isDisabled && statusValue === "active";
       const payload: StudentCreatePayload = {
-        admission_no: sanitizeText(admissionNo),
+        admission_no: sanitizeText(admissionNo).replace(/-/g, ""),
         roll_no: rollNo.trim() || undefined,
         first_name: sanitizeText(firstName),
         last_name: sanitizeText(lastName),
@@ -983,6 +1738,9 @@ export function StudentAddPanel() {
       if (isEditMode && studentId) {
         await apiPutJson<{ message?: string }>(`/api/v1/students/students/${studentId}/`, payload);
         setSuccess("Student updated successfully.");
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem("students:list:flash", "Student updated successfully.");
+        }
         setTimeout(() => {
           if (typeof window !== "undefined") {
             window.location.href = "/students/list";
@@ -990,238 +1748,118 @@ export function StudentAddPanel() {
         }, 800);
       } else {
         const response = await apiPostJson<{ message?: string; warning?: string }>("/api/v1/students/students/", payload);
-        setSuccess(response?.warning ? `Student added successfully. ${response.warning}` : "Student added successfully.");
+        const successMessage = response?.warning ? `Student added successfully. ${response.warning}` : "Student added successfully.";
+        setSuccess(successMessage);
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(STUDENT_DRAFT_STORAGE_KEY);
+        }
         resetStudentForm();
-        setTimeout(() => {
-          if (typeof window !== "undefined") {
-            window.location.href = "/students/list";
-          }
-        }, 1200);
       }
     } catch (submitError) {
-      syncApiFieldErrors(submitError as ApiError);
+      const mappedErrors = syncApiFieldErrors(submitError as ApiError);
       setError(parseError(submitError));
+      jumpToFirstErrorSection(mappedErrors);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="legacy-panel student-add-panel-wrap">
-      <section className="sms-breadcrumb mb-20">
-        <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>
-              {isViewMode ? "View Student" : isEditMode ? "Edit Student" : "Add Student"}
-            </h1>
-            <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                <Link href="/students/list" style={{ ...buttonStyle("#0f766e"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-                  Student List
-                </Link>
-                <Link href="/students/multi-class" style={{ ...buttonStyle("#1d4ed8"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-                  Multi Subject Assignment
-                </Link>
-              </div>
-            </div>
+    <div className="enroll-page student-add-panel-wrap">
+      <form onSubmit={submit} noValidate>
+        <div className="top-row">
+          <p className="crumbs">
+            <a href="/dashboard">Dashboard</a> / <a href="/students/list">Students</a> / <strong>Enroll</strong>
+          </p>
+          <div className="draft-right">
+            <span className="dot-green" />
+            <span>{draftLabel}</span>
+            <span className="avatar-circle">SR</span>
           </div>
         </div>
-      </section>
 
-      <section className="admin-visitor-area up_st_admin_visitor">
-        <div className="container-fluid p-0" style={{ display: "grid", gap: 12 }}>
-          <form onSubmit={submit} noValidate>
-            <p style={{ margin: "0 0 12px", color: "#334155", fontSize: 13 }}>
-              Required fields are marked with *.
-            </p>
+        <div className="page-title-row">
+          <div>
+            <h1 className="hero-title">
+              Enroll a <span className="title-accent">student</span>
+            </h1>
+            <p className="hero-subtitle">Admit a new student into the school records. We&apos;ll generate an admission number, place them in a class &amp; section, and notify their guardian.</p>
+          </div>
+          <div className="hero-kpi">
+            <p className="hero-kpi-count">{currentEnrolledCount}</p>
+            <p className="hero-kpi-label">CURRENTLY ENROLLED</p>
+          </div>
+        </div>
 
-            {error ? (
-              <div
-                role="alert"
-                aria-live="polite"
-                style={{
-                  margin: "0 0 12px",
-                  color: "#b91c1c",
-                  fontSize: 13,
-                  backgroundColor: "#fee2e2",
-                  padding: "12px",
-                  borderRadius: 8,
-                  border: "1px solid #fecaca",
-                  fontWeight: 500,
-                }}
-              >
-                {error}
+        {!bannerDismissed ? (
+          <div className="scan-banner">
+            <div className="scan-left">
+              <div className="scan-icon-wrap">QR</div>
+              <div>
+                <p className="scan-title">Scan to pre-fill <span className="badge-new">NEW</span></p>
+                <p className="scan-copy">Got their Aadhaar QR, previous school ID, or pre-admission slip? Scan it once and we&apos;ll fill the form automatically.</p>
               </div>
-            ) : null}
+            </div>
+            <div className="scan-actions">
+              <button type="button" className="scan-now">Scan now</button>
+              <button type="button" className="scan-dismiss" onClick={dismissScanBanner}>X</button>
+            </div>
+          </div>
+        ) : null}
 
-            {success ? (
-              <div
-                role="status"
-                aria-live="polite"
-                style={{
-                  margin: "0 0 12px",
-                  color: "#065f46",
-                  fontSize: 13,
-                  backgroundColor: "#d1fae5",
-                  padding: "12px",
-                  borderRadius: 8,
-                  border: "1px solid #a7f3d0",
-                  fontWeight: 500,
-                }}
-              >
-                {success}
+        {error ? <div className="banner-error">{error}</div> : null}
+
+        <div className="enroll-body">
+          <aside className="section-nav-wrap">
+            <nav className="section-nav" aria-label="Enroll navigation">
+              <ul className="section-nav-list">
+                {NAV_ITEMS.map((item) => (
+                  <li key={item.id} className={activeNavSection === item.id ? "nav-item active" : "nav-item"} data-target={item.id}>
+                    <button type="button" className="nav-item-inner" onClick={() => jumpToSection(item.id)}>
+                      <span className="nav-bullet">{item.index}</span>
+                      <span className="nav-text">
+                        <span className="nav-label">{item.label}</span>
+                        <span className="nav-copy">{item.description}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <div className="heads-up-card">
+                <p className="heads-up-title">Heads up</p>
+                <p className="heads-up-body">Fields marked <span className="star">*</span> are required. You can save a draft anytime and come back.</p>
               </div>
-            ) : null}
+            </nav>
+          </aside>
 
-            <fieldset disabled={isViewMode} style={{ border: 0, margin: 0, padding: 0 }}>
-            <div className="white-box" style={boxStyle()}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>Basic Information</h3>
-              <div className="student-grid">
-                <div className="field-admission" data-field="admission_no">
-                  <label htmlFor="admission_no" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Admission No *</label>
-                  <input
-                    id="admission_no"
-                    value={admissionNo}
-                    onChange={(e) => {
-                      setAdmissionNo(e.target.value);
-                      setAdmissionChecked(false);
-                      setSingleFieldError("admission_no", "");
-                    }}
-                    onBlur={() => void runAdmissionAvailabilityCheck()}
-                    style={fieldStyle(Boolean(fieldErrors.admission_no))}
-                    placeholder="e.g., ADM001"
-                    aria-invalid={Boolean(fieldErrors.admission_no)}
-                  />
-                  <p style={helperTextStyle()}>Use letters and numbers only (example: ADM001).</p>
-                  {checkingAdmission ? <p style={{ margin: "4px 0 0", color: "#1d4ed8", fontSize: 12 }}>Checking availability...</p> : null}
-                  {fieldErrors.admission_no ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.admission_no}</p> : null}
-                </div>
-
-                <div data-field="roll_no">
-                  <label htmlFor="roll_no" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Roll No</label>
-                  <input
-                    id="roll_no"
-                    value={rollNo}
-                    onChange={(e) => {
-                      const value = e.target.value.replace(/\D/g, "");
-                      setRollNo(value);
-                      setSingleFieldError("roll_no", value && !isValidNumericRoll(value) ? "Roll number must contain numbers only" : "");
-                    }}
-                    style={fieldStyle(Boolean(fieldErrors.roll_no))}
-                    inputMode="numeric"
-                  />
-                  <p style={helperTextStyle()}>Digits only. This can be auto-generated if left blank.</p>
-                  {fieldErrors.roll_no ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.roll_no}</p> : null}
-                </div>
-
-                <div data-field="first_name">
-                  <label htmlFor="first_name" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>First Name *</label>
-                  <input id="first_name" value={firstName} onChange={(e) => setFirstName(e.target.value)} style={fieldStyle(Boolean(fieldErrors.first_name))} />
-                  {fieldErrors.first_name ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.first_name}</p> : null}
-                </div>
-
-                <div data-field="last_name">
-                  <label htmlFor="last_name" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Last Name *</label>
-                  <input id="last_name" value={lastName} onChange={(e) => setLastName(e.target.value)} style={fieldStyle(Boolean(fieldErrors.last_name))} />
-                  {fieldErrors.last_name ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.last_name}</p> : null}
-                </div>
-
-                <div data-field="dob">
-                  <label htmlFor="dob" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Date of Birth *</label>
-                  <input id="dob" type="date" value={dateOfBirth} onChange={(e) => setDateOfBirth(e.target.value)} style={fieldStyle(Boolean(fieldErrors.dob))} />
-                  {fieldErrors.dob ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.dob}</p> : null}
-                </div>
-
-                <div data-field="academic_year">
-                  <label htmlFor="academic_year" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Academic Year *</label>
-                  <select id="academic_year" value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)} style={fieldStyle(Boolean(fieldErrors.academic_year))}>
-                    <option value="">Select Academic Year</option>
-                    {validAcademicYears.map((item) => (
-                      <option key={item.id} value={item.id}>{item.name}</option>
-                    ))}
-                  </select>
-                  <p style={helperTextStyle()}>Only valid academic years are listed.</p>
-                  {fieldErrors.academic_year ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.academic_year}</p> : null}
-                </div>
-
-                <div data-field="gender">
-                  <label htmlFor="gender" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Gender *</label>
-                  <select id="gender" value={gender} onChange={(e) => setGender(e.target.value)} style={fieldStyle(Boolean(fieldErrors.gender))}>
-                    <option value="male">Male</option>
-                    <option value="female">Female</option>
-                    <option value="other">Other</option>
-                  </select>
-                  {fieldErrors.gender ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.gender}</p> : null}
-                </div>
-
-                {gender === "other" ? (
-                  <div data-field="custom_gender">
-                    <label htmlFor="custom_gender" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Custom Gender *</label>
-                    <input id="custom_gender" value={customGender} onChange={(e) => setCustomGender(e.target.value)} style={fieldStyle(Boolean(fieldErrors.custom_gender))} />
-                    {fieldErrors.custom_gender ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.custom_gender}</p> : null}
-                  </div>
-                ) : null}
-
+          <div className="section-content">
+            <section className="section-card" id="identity">
+              <div className="section-card-header">
                 <div>
-                  <label htmlFor="blood_group" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Blood Group</label>
-                  <select id="blood_group" value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)} style={fieldStyle()}>
-                    <option value="">Select Blood Group</option>
-                    {"A+,A-,B+,B-,AB+,AB-,O+,O-".split(",").map((bg) => (
-                      <option key={bg} value={bg}>{bg}</option>
-                    ))}
-                  </select>
+                  <h2 className="section-title">Student <span className="title-accent">identity</span></h2>
+                  <p className="section-subtitle">Name, photo, date of birth, and a few basics.</p>
                 </div>
+                <span className="section-counter">01 / 06</span>
+              </div>
 
-                <div data-field="category">
-                  <label htmlFor="category" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Category</label>
-                  <select id="category" value={categoryId} onChange={(e) => setCategoryId(e.target.value)} style={fieldStyle(Boolean(fieldErrors.category))}>
-                    <option value="">Select Category</option>
-                    {validCategories.map((item) => (
-                      <option key={item.id} value={item.id}>{item.name}</option>
-                    ))}
-                  </select>
-                  {fieldErrors.category ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.category}</p> : null}
-                </div>
-
-                <div data-field="class">
-                  <label htmlFor="class" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Class *</label>
-                  <select
-                    id="class"
-                    value={classId}
-                    onChange={(e) => setClassId(e.target.value)}
-                    style={fieldStyle(Boolean(fieldErrors.class))}
-                  >
-                    <option value="">Select Class</option>
-                    {validClasses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                  </select>
-                  <p style={helperTextStyle()}>Only valid classes are listed.</p>
-                  {fieldErrors.class ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.class}</p> : null}
-                </div>
-
-                <div data-field="section">
-                  <label htmlFor="section" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Section *</label>
-                  <select
-                    id="section"
-                    value={sectionId}
-                    onChange={(e) => setSectionId(e.target.value)}
-                    style={fieldStyle(Boolean(fieldErrors.section))}
-                    disabled={!classId || sectionLoading}
-                  >
-                    <option value="">{classId ? (sectionLoading ? "Loading sections..." : "Select Section") : "Select class first"}</option>
-                    {sections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                  </select>
-                  {sectionLoadError ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{sectionLoadError}</p> : null}
-                  {fieldErrors.section ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.section}</p> : null}
-                </div>
-
-                <div data-field="photo">
-                  <label htmlFor="photo" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Student Photo (JPEG/PNG)</label>
+              <div className="photo-upload-block">
+                <button type="button" className={photo ? "photo-circle has-photo" : "photo-circle"} onClick={openStudentPhotoPicker}>
+                  {photo ? <img src={photo} alt="Student" /> : <><span className="camera-icon">+</span><span className="photo-label">ADD PHOTO</span></>}
+                </button>
+                <div className="photo-meta">
+                  <p className="photo-title">Student photo</p>
+                  <p className="photo-desc">Square JPG or PNG, at least 400x400px. We&apos;ll crop it into a circle for ID cards and reports.</p>
+                  <div className="photo-actions">
+                    <button type="button" className="btn-upload-file" onClick={openStudentPhotoPicker}>{photo ? "Change" : "Upload file"}</button>
+                    {photo ? <button type="button" className="btn-take-photo" onClick={clearStudentPhoto}>Remove</button> : <button type="button" className="btn-take-photo" onClick={openStudentPhotoPicker}>Take photo</button>}
+                  </div>
                   <input
                     ref={photoInputRef}
                     id="photo"
                     type="file"
-                    accept="image/jpeg,image/png"
-                    style={fieldStyle(Boolean(fieldErrors.photo))}
+                    accept="image/*"
+                    title="Student photo upload"
+                    hidden
                     onClick={(event) => {
                       event.currentTarget.value = "";
                     }}
@@ -1231,406 +1869,1306 @@ export function StudentAddPanel() {
                     }}
                     disabled={isViewMode || photoUploading}
                   />
-                  {photo ? (
-                    <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <button
-                        type="button"
-                        onClick={() => setPhotoPreviewOpen(true)}
-                        aria-label="Open photo preview"
-                        title="Open photo preview"
-                        style={{ border: "none", padding: 0, margin: 0, background: "transparent", cursor: "zoom-in" }}
-                      >
-                        <img
-                          src={photo}
-                          alt="Student photo preview"
-                          width={52}
-                          height={52}
-                          style={{
-                            width: 52,
-                            height: 52,
-                            objectFit: "cover",
-                            borderRadius: 8,
-                            border: "1px solid var(--line)",
-                            background: "#f8fafc",
-                          }}
-                        />
-                      </button>
-                      <span style={{ color: "#0f766e", fontSize: 12 }}>Uploaded: {photoName || "Student photo"}</span>
-                      {!isViewMode ? (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => photoInputRef.current?.click()}
-                            disabled={photoUploading}
-                            style={{ ...buttonStyle("#2563eb"), minHeight: 32, padding: "0 10px", fontSize: 12 }}
-                          >
-                            Replace
-                          </button>
-                          <button
-                            type="button"
-                            onClick={clearStudentPhoto}
-                            disabled={photoUploading}
-                            aria-label="Remove uploaded photo"
-                            title="Remove uploaded photo"
-                            style={{
-                              minWidth: 32,
-                              height: 32,
-                              border: "1px solid #dc2626",
-                              background: "#fff",
-                              color: "#dc2626",
-                              borderRadius: 8,
-                              cursor: "pointer",
-                              fontWeight: 700,
-                            }}
-                          >
-                            X
-                          </button>
-                        </>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {fieldErrors.photo ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.photo}</p> : null}
-                </div>
-
-                <div>
-                  <label htmlFor="status" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Status</label>
-                  <select id="status" value={statusValue} onChange={(e) => setStatusValue(e.target.value as "active" | "inactive" | "transferred" | "dropped")} style={fieldStyle()}>
-                    <option value="active">Active</option>
-                    <option value="inactive">Inactive</option>
-                    <option value="transferred">Transferred</option>
-                    <option value="dropped">Dropped</option>
-                  </select>
-                </div>
-
-                <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 26 }}>
-                  <label htmlFor="is_disabled" style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-                    <input id="is_disabled" type="checkbox" checked={isDisabled} onChange={(e) => setIsDisabled(e.target.checked)} />
-                    Mark student disabled
-                  </label>
+                  {fieldErrors.photo ? <p className="error-msg">{fieldErrors.photo}</p> : null}
                 </div>
               </div>
-            </div>
 
-            <div className="white-box" style={{ ...boxStyle(), marginTop: 12 }}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>Contact Information</h3>
-              <div className="student-grid">
-                <div data-field="phone">
-                  <label htmlFor="phone" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Phone *</label>
+              <div className="grid-3">
+                <div className="field-wrapper field-inline-action">
+                  <label className="field-label">Admission number <span className="req">*</span></label>
                   <input
-                    id="phone"
-                    value={phone}
+                    className={fieldErrors.admission_no ? "field-input error" : "field-input"}
+                    value={admissionNo}
+                    title="Admission number"
+                    placeholder="ADM20260342"
                     onChange={(e) => {
-                      const value = e.target.value.replace(/[^0-9]/g, "").slice(0, 10);
-                      setPhone(value);
-                      if (!value) {
-                        setSingleFieldError("phone", "Phone number is required");
-                      } else if (!isValidPhone(value)) {
-                        setSingleFieldError("phone", "Phone number must be exactly 10 digits");
-                      } else {
-                        setSingleFieldError("phone", "");
-                      }
+                      setAdmissionNo(e.target.value);
+                      setAdmissionChecked(false);
+                      setSingleFieldError("admission_no", "");
                     }}
                     onBlur={() => {
-                      if (!phone.trim()) {
-                        setSingleFieldError("phone", "Phone number is required");
-                      } else if (!isValidPhone(phone)) {
-                        setSingleFieldError("phone", "Phone number must be exactly 10 digits");
-                      } else {
-                        setSingleFieldError("phone", "");
-                      }
+                      const normalized = toTitleCase(admissionNo).replace(/[\s-]/g, "");
+                      setAdmissionNo(normalized);
+                      void runAdmissionAvailabilityCheck(normalized);
                     }}
-                    style={fieldStyle(Boolean(fieldErrors.phone))}
-                    inputMode="numeric"
-                    maxLength={10}
+                    readOnly={!admissionNoEditable}
                   />
-                  <p style={helperTextStyle()}>Enter exactly 10 digits (numbers only).</p>
-                  {fieldErrors.phone ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.phone}</p> : null}
+                  <button type="button" className="edit-btn" onClick={() => setAdmissionNoEditable((prev) => !prev)}>{admissionNoEditable ? "Lock" : "Edit"}</button>
+                  <p className="help-text">Auto-generated. Click Edit to customize.</p>
+                  {checkingAdmission ? <p className="status-info">Checking availability...</p> : null}
+                  {fieldErrors.admission_no ? <p className="error-msg">{fieldErrors.admission_no}</p> : null}
                 </div>
 
-                <div data-field="email">
-                  <label htmlFor="email" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Email</label>
-                  <input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} style={fieldStyle(Boolean(fieldErrors.email))} />
-                  <p style={helperTextStyle()}>Optional, but recommended for school communication.</p>
-                  {fieldErrors.email ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.email}</p> : null}
+                <div className="field-wrapper">
+                  <label className="field-label">Roll number <span className="badge badge-assigned-later">ASSIGNED LATER</span></label>
+                  <input className="field-input" title="Roll number" value="Auto when class is set" readOnly disabled />
+                  <p className="help-text">Rolls are assigned after class allocation.</p>
                 </div>
 
-                <div className="field-address">
-                  <label htmlFor="address_line" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Address Line</label>
-                  <input id="address_line" value={addressLine} onChange={(e) => setAddressLine(e.target.value)} style={fieldStyle()} />
-                  <p style={helperTextStyle()}>House no., street, and landmark.</p>
-                </div>
-
-                <div className="field-pincode" data-field="pincode">
-                  <label htmlFor="pincode" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Pincode</label>
-                  <input
-                    id="pincode"
-                    value={pincode}
-                    onChange={(e) => {
-                      const value = e.target.value.replace(/[^0-9]/g, "").slice(0, 6);
-                      setPincode(value);
-                      if (value.length < 6) {
-                        setSingleFieldError("pincode", "");
-                        setPinLookupMessage("");
-                      }
-                    }}
-                    style={fieldStyle(Boolean(fieldErrors.pincode))}
-                    inputMode="numeric"
-                    maxLength={6}
-                  />
-                  <p style={helperTextStyle()}>Enter 6 digits to auto-fill State, District, and City.</p>
-                  {pinLookupLoading ? <p style={{ margin: "4px 0 0", color: "#1d4ed8", fontSize: 12 }}>Fetching state, district, and city from PIN...</p> : null}
-                  {pinLookupMessage ? <p style={{ margin: "4px 0 0", color: pinLookupMessage.includes("auto-filled") ? "#0f766e" : "#92400e", fontSize: 12 }}>{pinLookupMessage}</p> : null}
-                  {fieldErrors.pincode ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.pincode}</p> : null}
-                  <button
-                    type="button"
-                    style={{ ...buttonStyle("#475569"), minHeight: 34, marginTop: 6 }}
-                    onClick={() => setManualAddressMode((prev) => !prev)}
-                  >
-                    {manualAddressMode ? "Use PIN Auto-Fill" : "Enter Address Manually"}
-                  </button>
-                </div>
-
-                <div>
-                  <label htmlFor="state" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>State *</label>
-                  {manualAddressMode ? (
-                    <input id="state" value={stateName} onChange={(e) => setStateName(e.target.value)} style={fieldStyle(Boolean(fieldErrors.state))} placeholder="Enter state" />
-                  ) : (
-                    <select
-                      id="state"
-                      value={stateName}
-                      onChange={(e) => {
-                        const nextState = e.target.value;
-                        setStateName(nextState);
-                        setDistrict("");
-                        setCity("");
-                        void loadCitiesForState(nextState);
-                      }}
-                      style={fieldStyle(Boolean(fieldErrors.state))}
-                      disabled={!pinIsValid}
-                    >
-                      <option value="">Select State</option>
-                      {stateOptions.map((item) => <option key={item} value={item}>{item}</option>)}
-                    </select>
-                  )}
-                  {fieldErrors.state ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.state}</p> : null}
-                </div>
-
-                <div>
-                  <label htmlFor="district" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>District *</label>
-                  <input
-                    id="district"
-                    value={district}
-                    onChange={(e) => setDistrict(e.target.value)}
-                    style={fieldStyle(Boolean(fieldErrors.district))}
-                    placeholder={pinLookupLoading ? "Fetching district from PIN..." : "Enter district"}
-                    disabled={!manualAddressMode && !pinIsValid}
-                  />
-                  {fieldErrors.district ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.district}</p> : null}
-                </div>
-
-                <div>
-                  <label htmlFor="city" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>City *</label>
-                  {manualAddressMode || cityOptions.length === 0 ? (
-                    <input
-                      id="city"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      style={fieldStyle(Boolean(fieldErrors.city))}
-                      placeholder={cityLoading ? "Loading cities..." : "Enter city"}
-                      disabled={!manualAddressMode && !pinIsValid}
-                    />
-                  ) : (
-                    <select
-                      id="city"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      style={fieldStyle(Boolean(fieldErrors.city))}
-                      disabled={cityLoading || !pinIsValid}
-                    >
-                      <option value="">{cityLoading ? "Loading cities..." : "Select City"}</option>
-                      {cityOptions.map((item) => <option key={item} value={item}>{item}</option>)}
-                    </select>
-                  )}
-                  {cityLoading ? <p style={{ margin: "4px 0 0", color: "#1d4ed8", fontSize: 12 }}>Loading city list...</p> : null}
-                  {fieldErrors.city ? <p style={{ margin: "4px 0 0", color: "#dc2626", fontSize: 12 }}>{fieldErrors.city}</p> : null}
+                <div className="field-wrapper">
+                  <label className="field-label">Status</label>
+                  <div className="status-toggle">
+                    <button type="button" className={statusValue === "active" ? "toggle-pill active" : "toggle-pill"} onClick={() => setStatusValue("active")}>Active</button>
+                    <button type="button" className={statusValue === "inactive" ? "toggle-pill active" : "toggle-pill"} onClick={() => setStatusValue("inactive")}>Inactive</button>
+                  </div>
                 </div>
               </div>
+
+              <div className="grid-3 mt-20">
+                <div className="field-wrapper"><label className="field-label">First name <span className="req">*</span></label><input className={fieldErrors.first_name ? "field-input error" : "field-input"} value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="e.g. Rahul" />{fieldErrors.first_name ? <p className="error-msg">{fieldErrors.first_name}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Middle name <span className="badge badge-optional">OPTIONAL</span></label><input className="field-input" title="Middle name" value={customGender} onChange={(e) => setCustomGender(e.target.value)} placeholder="e.g. Kumar" /></div>
+                <div className="field-wrapper"><label className="field-label">Last name <span className="req">*</span></label><input className={fieldErrors.last_name ? "field-input error" : "field-input"} value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="e.g. Sharma" />{fieldErrors.last_name ? <p className="error-msg">{fieldErrors.last_name}</p> : null}</div>
+              </div>
+
+              <div className="grid-3 mt-20">
+                <div className="field-wrapper"><label className="field-label">Date of birth <span className="req">*</span></label><input className={fieldErrors.dob ? "field-input error" : "field-input"} value={dobDisplay} onChange={(e) => onDobMaskedChange(e.target.value)} placeholder="DD / MM / YYYY" maxLength={14} />{fieldErrors.dob ? <p className="error-msg">{fieldErrors.dob}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Gender <span className="req">*</span></label><select className={fieldErrors.gender ? "field-select error" : "field-select"} title="Gender" value={gender} onChange={(e) => setGender(e.target.value)}><option value="">Select</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select>{fieldErrors.gender ? <p className="error-msg">{fieldErrors.gender}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Blood group <span className="badge badge-optional">OPTIONAL</span></label><select className="field-select" title="Blood group" value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)}><option value="">Select</option>{"A+,A-,B+,B-,AB+,AB-,O+,O-".split(",").map((bg) => <option key={bg} value={bg}>{bg}</option>)}</select></div>
+              </div>
+
+              <div className="grid-3 mt-20">
+                <div className="field-wrapper"><label className="field-label">Mother tongue <span className="req">*</span></label><select className={fieldErrors.mother_tongue ? "field-select error" : "field-select"} title="Mother tongue" value={motherTongue} onChange={(e) => setMotherTongue(e.target.value)}><option value="">Select</option>{MOTHER_TONGUES.map((row) => <option key={row} value={row}>{row}</option>)}</select>{fieldErrors.mother_tongue ? <p className="error-msg">{fieldErrors.mother_tongue}</p> : null}{motherTongue === "Other" ? <input className={fieldErrors.other_mother_tongue ? "field-input error mt-8" : "field-input mt-8"} title="Other mother tongue" value={otherMotherTongue} onChange={(e) => setOtherMotherTongue(e.target.value)} placeholder="Specify language" /> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Religion <span className="badge badge-optional">OPTIONAL</span></label><select className="field-select" title="Religion" value={religion} onChange={(e) => setReligion(e.target.value)}><option value="Prefer not to say">Prefer not to say</option><option>Hindu</option><option>Muslim</option><option>Christian</option><option>Sikh</option><option>Buddhist</option><option>Jain</option><option>Other</option></select></div>
+                <div className="field-wrapper"><label className="field-label">Nationality <span className="req">*</span></label><select className={fieldErrors.nationality ? "field-select error" : "field-select"} title="Nationality" value={nationality} onChange={(e) => setNationality(e.target.value)}><option value="Indian">Indian</option><option value="Nepali">Nepali</option><option value="Bhutanese">Bhutanese</option><option value="Other">Other</option></select>{nationality === "Other" ? <input className={fieldErrors.other_nationality ? "field-input error mt-8" : "field-input mt-8"} title="Other nationality" value={otherNationality} onChange={(e) => setOtherNationality(e.target.value)} placeholder="Specify nationality" /> : null}</div>
+              </div>
+              {renderSectionNavButtons("identity")}
+            </section>
+
+            <section className="section-card" id="academic">
+              <div className="section-card-header"><div><h2 className="section-title">Academic <span className="title-accent">placement</span></h2><p className="section-subtitle">Which year, class, section, and category this student belongs to.</p></div><span className="section-counter">02 / 06</span></div>
+              <div className="grid-3">
+                <div className="field-wrapper"><label className="field-label">Academic year <span className="req">*</span></label><select className={fieldErrors.academic_year ? "field-select error" : "field-select"} title="Academic year" value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)}><option value="">Select</option>{validAcademicYears.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{fieldErrors.academic_year ? <p className="error-msg">{fieldErrors.academic_year}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Class <span className="req">*</span></label><select className={fieldErrors.class ? "field-select error" : "field-select"} title="Class" value={classId} onChange={(e) => setClassId(e.target.value)}><option value="">Choose a class</option>{orderedClasses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{fieldErrors.class ? <p className="error-msg">{fieldErrors.class}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Section <span className="req">*</span></label><select className={fieldErrors.section ? "field-select error" : "field-select"} title="Section" value={sectionId} onChange={(e) => setSectionId(e.target.value)} disabled={!classId || sectionLoading}><option value="">{classId ? (sectionLoading ? "Loading sections..." : "Select Section") : "Pick class first"}</option>{sections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{sectionLoadError ? <p className="error-msg">{sectionLoadError}</p> : null}{fieldErrors.section ? <p className="error-msg">{fieldErrors.section}</p> : null}</div>
+              </div>
+              {classAgeWarning ? <p className="age-warning">{classAgeWarning}</p> : null}
+              <div className="grid-2 mt-20">
+                <div className="field-wrapper"><label className="field-label">Category <span className="badge badge-optional">OPTIONAL</span></label><select className={fieldErrors.category ? "field-select error" : "field-select"} title="Category" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}><option value="">Select category</option>{validCategories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+                <div className="field-wrapper"><label className="field-label">Admission type</label><select className="field-select" title="Admission type" value={admissionType} onChange={(e) => setAdmissionType(e.target.value)}><option>New admission</option><option>Transfer</option><option>Re-admission</option><option>RTE Quota</option></select></div>
+              </div>
+              {admissionType === "Transfer" ? <div className="field-wrapper mt-20"><label className="field-label">Previous school name</label><input className="field-input" title="Previous school name" value={previousSchoolName} onChange={(e) => setPreviousSchoolName(e.target.value)} /></div> : null}
+              {admissionType === "RTE Quota" ? <div className="field-wrapper mt-20"><label className="field-label">RTE certificate number <span className="req">*</span></label><input className={fieldErrors.rte_certificate ? "field-input error" : "field-input"} title="RTE certificate number" value={rteCertificateNo} onChange={(e) => setRteCertificateNo(e.target.value)} />{fieldErrors.rte_certificate ? <p className="error-msg">{fieldErrors.rte_certificate}</p> : null}</div> : null}
+              {renderSectionNavButtons("academic")}
+            </section>
+
+            <section className="section-card" id="contact">
+              <div className="section-card-header"><div><h2 className="section-title">Contact & <span className="title-accent">address</span></h2><p className="section-subtitle">How we reach the student and where they live.</p></div><span className="section-counter">03 / 06</span></div>
+              <div className="grid-2">
+                <div className="field-wrapper"><label className="field-label">Phone <span className="req">*</span></label><input className={fieldErrors.phone ? "field-input error" : "field-input"} title="Phone number" value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="10-digit mobile number" />{fieldErrors.phone ? <p className="error-msg">{fieldErrors.phone}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Email <span className="badge badge-recommended">RECOMMENDED</span></label><input className={fieldErrors.email ? "field-input error" : "field-input"} title="Student email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="student@example.com" />{fieldErrors.email ? <p className="error-msg">{fieldErrors.email}</p> : null}</div>
+              </div>
+              <div className="grid-2 mt-20">
+                <div className="field-wrapper"><label className="field-label">Pincode <span className="req">*</span></label><input className={fieldErrors.pincode ? "field-input error" : "field-input"} title="Pincode" value={pincode} onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))} maxLength={6} />{pinLookupMessage ? <p className="status-info">{pinLookupMessage}</p> : null}{fieldErrors.pincode ? <p className="error-msg">{fieldErrors.pincode}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Address line</label><input className="field-input" title="Address line" value={addressLine} onChange={(e) => setAddressLine(e.target.value)} /></div>
+              </div>
+              <div className="grid-3 mt-20">
+                <div className="field-wrapper"><label className="field-label">State <span className="req">*</span></label>{manualAddressMode ? <input className={fieldErrors.state ? "field-input error" : "field-input"} title="State" value={stateName} onChange={(e) => setStateName(e.target.value)} /> : <select className={fieldErrors.state ? "field-select error" : "field-select"} title="State" value={stateName} onChange={(e) => { const nextState = e.target.value; setStateName(nextState); setDistrict(""); setCity(""); void loadCitiesForState(nextState); }} disabled={!pinIsValid}><option value="">Select State</option>{stateOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select>}{fieldErrors.state ? <p className="error-msg">{fieldErrors.state}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">District <span className="req">*</span></label><input className={fieldErrors.district ? "field-input error" : "field-input"} title="District" value={district} onChange={(e) => setDistrict(e.target.value)} disabled={!manualAddressMode && !pinIsValid} />{fieldErrors.district ? <p className="error-msg">{fieldErrors.district}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">City <span className="req">*</span></label>{manualAddressMode || cityOptions.length === 0 ? <input className={fieldErrors.city ? "field-input error" : "field-input"} title="City" value={city} onChange={(e) => setCity(e.target.value)} disabled={!manualAddressMode && !pinIsValid} /> : <select className={fieldErrors.city ? "field-select error" : "field-select"} title="City" value={city} onChange={(e) => setCity(e.target.value)}><option value="">Select City</option>{cityOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select>}{fieldErrors.city ? <p className="error-msg">{fieldErrors.city}</p> : null}</div>
+              </div>
+              {renderSectionNavButtons("contact")}
+            </section>
+
+            <section className="section-card" id="guardians">
+              <div className="section-card-header"><div><h2 className="section-title">Family & <span className="title-accent">guardians</span></h2><p className="section-subtitle">Add at least one guardian. You can add more later from the student profile.</p></div><span className="section-counter">04 / 06</span></div>
+              <div className="grid-3">
+                <div className="field-wrapper"><label className="field-label">Select existing guardian</label><select className="field-select" title="Select existing guardian" value={guardianId} onChange={(e) => setGuardianId(e.target.value)}><option value="">Select Guardian</option>{guardians.map((g) => <option key={g.id} value={g.id}>{g.full_name} ({g.phone})</option>)}</select></div>
+                <div className="field-wrapper"><label className="field-label">Guardian name</label><input className="field-input" title="Guardian name" value={newGuardianName} onChange={(e) => setNewGuardianName(e.target.value)} /></div>
+                <div className="field-wrapper"><label className="field-label">Relation</label><select className="field-select" title="Relation" value={newGuardianRelation} onChange={(e) => setNewGuardianRelation(e.target.value)}><option value="Father">Father</option><option value="Mother">Mother</option><option value="Others">Others</option></select></div>
+                <div className="field-wrapper"><label className="field-label">Phone</label><input className="field-input" title="Guardian phone" value={newGuardianPhone} onChange={(e) => setNewGuardianPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} maxLength={10} /></div>
+                <div className="field-wrapper"><label className="field-label">Email</label><input className="field-input" title="Guardian email" value={newGuardianEmail} onChange={(e) => setNewGuardianEmail(e.target.value)} /></div>
+              </div>
+              <div className="mt-20"><button type="button" onClick={() => void addGuardianInline()} className="btn-green">Add Guardian</button>{guardianValidationError ? <p className="error-msg">{guardianValidationError}</p> : null}{fieldErrors.guardian ? <p className="error-msg">{fieldErrors.guardian}</p> : null}</div>
+              {renderSectionNavButtons("guardians")}
+            </section>
+
+            <section className="section-card" id="documents">
+              <div className="section-card-header"><div><h2 className="section-title">Know your <span className="title-accent">student</span></h2><p className="section-subtitle">Upload documents, medical info, and confirm guardian consent.</p></div><span className="section-counter">05 / 06</span></div>
+              <div className="grid-2">
+                <label className="doc-check"><input type="checkbox" checked={docBirthCertificate} onChange={(e) => setDocBirthCertificate(e.target.checked)} /> Birth certificate <span className="badge badge-required-doc">Required doc</span></label>
+                <label className="doc-check"><input type="checkbox" checked={docAadhaar} onChange={(e) => setDocAadhaar(e.target.checked)} /> Aadhaar copy <span className="badge badge-optional">Optional</span></label>
+              </div>
+              <div className="field-wrapper mt-20"><label className="field-label">Medical notes <span className="badge badge-optional">OPTIONAL</span></label><textarea className="field-textarea" title="Medical notes" value={medicalNotes} onChange={(e) => setMedicalNotes(e.target.value)} rows={3} /></div>
+              <label className="consent-row mt-20"><input type="checkbox" checked={consentChecked} onChange={(e) => setConsentChecked(e.target.checked)} /> Guardian consent confirmed <span className="req">*</span></label>
+              {fieldErrors.consent ? <p className="error-msg">{fieldErrors.consent}</p> : null}
+              {renderSectionNavButtons("documents")}
+            </section>
+
+            <section className="section-card" id="review">
+              <div className="section-card-header"><div><h2 className="section-title">Final <span className="title-accent">review</span></h2><p className="section-subtitle">Double-check before you save. You can edit any section above.</p></div><span className="section-counter">06 / 06</span></div>
+              <div className="review-grid">
+                <p><strong>Admission No:</strong> {admissionNo || "-"}</p>
+                <p><strong>Student:</strong> {[firstName, lastName].filter(Boolean).join(" ") || "-"}</p>
+                <p><strong>Class/Section:</strong> {classId && sectionId ? `${classId} / ${sectionId}` : "-"}</p>
+                <p><strong>Contact:</strong> {phone || "-"}</p>
+              </div>
+              {renderSectionNavButtons("review")}
+            </section>
+          </div>
+        </div>
+
+        <div className="sticky-footer">
+          <div className="sticky-footer-inner">
+            <div className="footer-progress-wrap" aria-label="Enrollment progress">
+              <span className="footer-progress-label">Progress</span>
+              <div className="footer-progress-track" title="Enrollment progress">
+                <span className={`footer-progress-fill ${footerProgressClass}`} />
+              </div>
+              <span className="footer-progress-value">{footerProgressPercent}% complete</span>
             </div>
 
-            <div className="white-box" style={{ ...boxStyle(), marginTop: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                <h3 style={{ marginTop: 0, marginBottom: 8 }}>Guardian Details</h3>
-                <span style={{ color: "#475569", fontSize: 12 }}>Optional: add guardian now or link later from guardian module.</span>
-              </div>
-              <div className="student-grid">
-                <div>
-                  <label htmlFor="guardian_select" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Select Existing Guardian</label>
-                  <select id="guardian_select" value={guardianId} onChange={(e) => setGuardianId(e.target.value)} style={fieldStyle()}>
-                    <option value="">Select Guardian</option>
-                    {guardians.map((g) => <option key={g.id} value={g.id}>{g.full_name} ({g.phone})</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="new_guardian_name" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Guardian Name</label>
-                  <input id="new_guardian_name" value={newGuardianName} onChange={(e) => setNewGuardianName(e.target.value)} style={fieldStyle()} />
-                </div>
-                <div>
-                  <label htmlFor="new_guardian_relation" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Relation</label>
-                  <select id="new_guardian_relation" value={newGuardianRelation} onChange={(e) => setNewGuardianRelation(e.target.value)} style={fieldStyle()}>
-                    <option value="Father">Father</option>
-                    <option value="Mother">Mother</option>
-                    <option value="Others">Others</option>
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="new_guardian_phone" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Phone</label>
-                  <input id="new_guardian_phone" value={newGuardianPhone} onChange={(e) => setNewGuardianPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} maxLength={10} style={fieldStyle()} />
-                </div>
-                <div>
-                  <label htmlFor="new_guardian_email" style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Email</label>
-                  <input id="new_guardian_email" type="email" value={newGuardianEmail} onChange={(e) => setNewGuardianEmail(e.target.value)} style={fieldStyle()} />
-                </div>
-              </div>
+            {error ? <p className="footer-status footer-status-error">{error}</p> : null}
 
-              <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                <button type="button" onClick={() => void addGuardianInline()} style={buttonStyle("#0f766e")}>Add Guardian</button>
-              </div>
-              {guardianValidationError ? <p style={{ margin: "8px 0 0", color: "#dc2626", fontSize: 12 }}>{guardianValidationError}</p> : null}
-            </div>
-            </fieldset>
-
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20, gap: 12, flexWrap: "wrap" }}>
-              <Link href="/students/list" style={{ ...buttonStyle("#6b7280"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-                Cancel
-              </Link>
+            <div className="footer-actions">
+              <button type="button" className="btn-discard" onClick={clearDraftNow}>Discard</button>
+              <button type="button" className="btn-draft" onClick={saveDraftNow}>Save draft</button>
               {isViewMode && studentId ? (
-                <Link href={`/students/add?mode=edit&id=${studentId}`} style={{ ...buttonStyle("#1d4ed8"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
-                  Edit Student
-                </Link>
+                <Link href={`/students/add?mode=edit&id=${studentId}`} className="btn-save btn-save-cta">Edit student →</Link>
               ) : (
-                <button type="submit" disabled={!canSubmit} style={{ ...buttonStyle("#1d4ed8"), opacity: !canSubmit ? 0.6 : 1 }}>
-                  {saving ? "Saving..." : isEditMode ? "Update Student" : "Save Student"}
-                </button>
+                <button type="submit" disabled={!canSubmit} className="btn-save btn-save-cta">{saving ? "Saving..." : isEditMode ? "Update student →" : "Enroll student →"}</button>
               )}
             </div>
-          </form>
-
-          {loading ? (
-            <div style={{ margin: 0, color: "var(--text-muted)", fontSize: 14, textAlign: "center", padding: "12px" }}>Loading form data...</div>
-          ) : null}
+          </div>
         </div>
-      </section>
+      </form>
 
       {photoPreviewOpen && photo ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Student photo preview"
-          onClick={() => setPhotoPreviewOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15, 23, 42, 0.68)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-            padding: 16,
-          }}
-        >
-          <div
-            onClick={(event) => event.stopPropagation()}
-            style={{
-              position: "relative",
-              maxWidth: 720,
-              width: "100%",
-              background: "#fff",
-              borderRadius: 12,
-              padding: 12,
-              border: "1px solid #e2e8f0",
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => setPhotoPreviewOpen(false)}
-              aria-label="Close photo preview"
-              style={{
-                position: "absolute",
-                top: 8,
-                right: 8,
-                width: 32,
-                height: 32,
-                borderRadius: 8,
-                border: "1px solid #cbd5e1",
-                background: "#fff",
-                cursor: "pointer",
-                fontWeight: 700,
-              }}
-            >
+        <div role="dialog" aria-modal="true" aria-label="Student photo preview" onClick={() => setPhotoPreviewOpen(false)} className="photo-preview-overlay">
+          <div onClick={(event) => event.stopPropagation()} className="photo-preview-card">
+            <button type="button" onClick={() => setPhotoPreviewOpen(false)} aria-label="Close photo preview" className="photo-preview-close">
               X
             </button>
-            <img
-              src={photo}
-              alt="Student full preview"
-              style={{
-                width: "100%",
-                maxHeight: "80vh",
-                objectFit: "contain",
-                borderRadius: 8,
-                background: "#f8fafc",
-              }}
-            />
+            <img src={photo} alt="Student full preview" className="photo-preview-image" />
           </div>
         </div>
       ) : null}
 
+      {cameraOpen ? (
+        <div role="dialog" aria-modal="true" aria-label="Capture student photo" onClick={closeStudentCamera} className="camera-overlay">
+          <div className="camera-card" onClick={(event) => event.stopPropagation()}>
+            <div className="camera-head">
+              <div>
+                <h3>Take photo</h3>
+                <p>Use your camera to capture the student photo.</p>
+              </div>
+              <button type="button" className="camera-close" onClick={closeStudentCamera} aria-label="Close camera">X</button>
+            </div>
+            <div className="camera-body">
+              {cameraError ? <p className="camera-error">{cameraError}</p> : null}
+              <video ref={cameraVideoRef} className="camera-video" autoPlay playsInline muted />
+            </div>
+            <div className="camera-actions">
+              <button type="button" className="btn-take-photo" onClick={captureStudentPhoto} disabled={photoUploading}>Capture</button>
+              <button type="button" className="btn-upload-file" onClick={closeStudentCamera}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {toastMessage ? (
+        <div className={toastType === "success" ? "save-toast save-toast-success" : "save-toast save-toast-error"} role="status" aria-live="polite">
+          {toastMessage}
+        </div>
+      ) : null}
+
       <style jsx>{`
-        .student-add-panel-wrap {
-          overflow-x: hidden;
+        .enroll-page {
+          --brand: #6c3ce1;
+          --ink: #111827;
+          --muted: #6b7280;
+          --line: #e5e7eb;
+          --bg: #fafafb;
+          overflow: visible;
+          color: var(--ink);
+          width: 100%;
+          min-height: 100vh;
+          padding: 8px;
         }
 
-        .student-grid {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(190px, 1fr));
+        .student-add-panel-wrap,
+        .student-add-panel-wrap form {
+          overflow: visible;
+        }
+
+        .student-add-panel-wrap form {
+          padding-bottom: 112px;
+        }
+
+        .top-row,
+        .page-title-row,
+        .scan-banner,
+        .banner-error,
+        .enroll-body,
+        .sticky-footer {
+          width: 100%;
+          max-width: none;
+          margin-left: 0;
+          margin-right: 0;
+        }
+
+        .top-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin: 0 0 16px;
+        }
+
+        .crumbs {
+          font-size: 13px;
+          color: var(--muted);
+          margin: 0;
+        }
+
+        .crumbs a {
+          color: var(--muted);
+          text-decoration: none;
+        }
+
+        .draft-right {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          color: var(--muted);
+          font-size: 13px;
+        }
+
+        .dot-green {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: #10b981;
+        }
+
+        .avatar-circle {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          background: var(--brand);
+          color: #fff;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 13px;
+          font-weight: 700;
+        }
+
+        .page-title-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: 32px;
+          gap: 20px;
+          padding: 0;
+        }
+
+        .hero-title {
+          margin: 0;
+          font-size: 40px;
+          font-weight: 700;
+        }
+
+        .title-accent {
+          color: var(--brand);
+          font-style: italic;
+          font-family: Georgia, "Times New Roman", serif;
+          font-weight: 400;
+        }
+
+        .hero-subtitle {
+          max-width: 520px;
+          color: var(--muted);
+          line-height: 1.5;
+          margin-top: 8px;
+          font-size: 14px;
+        }
+
+        .hero-kpi {
+          text-align: right;
+        }
+
+        .hero-kpi-count {
+          font-size: 40px;
+          font-weight: 700;
+          margin: 0;
+        }
+
+        .hero-kpi-label {
+          margin: 4px 0 0;
+          font-size: 11px;
+          letter-spacing: 0.1em;
+          color: var(--muted);
+          font-weight: 600;
+        }
+
+        .scan-banner {
+          background: #1a1a2e;
+          border-radius: 12px;
+          padding: 20px 24px;
+          margin: 0 0 24px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 16px;
+        }
+
+        .scan-left {
+          display: flex;
+          gap: 16px;
+          align-items: flex-start;
+        }
+
+        .scan-icon-wrap {
+          width: 40px;
+          height: 40px;
+          border-radius: 8px;
+          background: rgba(108, 60, 225, 0.8);
+          color: #fff;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 700;
+        }
+
+        .scan-title {
+          color: #fff;
+          font-size: 15px;
+          font-weight: 700;
+          margin: 0;
+        }
+
+        .badge-new {
+          margin-left: 8px;
+          background: #10b981;
+          color: #fff;
+          border-radius: 999px;
+          padding: 2px 8px;
+          font-size: 10px;
+          font-weight: 600;
+        }
+
+        .scan-copy {
+          color: #9ca3af;
+          margin: 4px 0 0;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
+        .scan-actions {
+          display: flex;
+          align-items: center;
           gap: 12px;
         }
 
-        .field-address {
-          grid-column: span 2;
+        .scan-now {
+          border: none;
+          background: var(--brand);
+          color: #fff;
+          border-radius: 8px;
+          padding: 10px 20px;
+          cursor: pointer;
         }
 
-        .field-admission,
-        .field-pincode {
-          grid-column: span 1;
+        .scan-dismiss {
+          width: 32px;
+          height: 32px;
+          border-radius: 6px;
+          border: none;
+          background: rgba(255, 255, 255, 0.15);
+          color: #fff;
+          cursor: pointer;
         }
 
-        input:focus,
-        select:focus,
-        button:focus,
-        a:focus {
-          outline: 3px solid #93c5fd;
-          outline-offset: 1px;
+        .banner-error,
+        .banner-success {
+          width: 100%;
+          margin: 0 0 12px;
+          border-radius: 8px;
+          padding: 10px 12px;
+          font-size: 13px;
         }
 
-        @media (max-width: 1100px) {
-          .student-grid {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+        .banner-error {
+          color: #b91c1c;
+          background: #fee2e2;
+          border: 1px solid #fecaca;
+        }
+
+        .banner-success {
+          color: #065f46;
+          background: #d1fae5;
+          border: 1px solid #a7f3d0;
+        }
+
+        .enroll-body {
+          display: flex;
+          gap: 24px;
+          align-items: flex-start;
+          overflow: visible;
+        }
+
+        .section-nav-wrap {
+          --sidebar-stick-top: 10px;
+          position: sticky;
+          top: var(--sidebar-stick-top);
+          width: 280px;
+          height: fit-content;
+          max-height: calc(100vh - var(--sidebar-stick-top) - 12px);
+          flex-shrink: 0;
+          align-self: flex-start;
+          z-index: 2;
+        }
+
+        .section-nav {
+          max-height: inherit;
+          overflow-y: auto;
+          overscroll-behavior: contain;
+          padding-right: 4px;
+        }
+
+        .section-nav-list {
+          list-style: none;
+          margin: 0;
+          padding: 0;
+        }
+
+        .nav-item {
+          position: relative;
+          margin-bottom: 4px;
+        }
+
+        .nav-item-inner {
+          width: 100%;
+          border: none;
+          background: transparent;
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          padding: 8px 12px 8px 8px;
+          border-radius: 6px;
+          cursor: pointer;
+          text-align: left;
+        }
+
+        .nav-item-inner:hover {
+          background: #f3f4f6;
+        }
+
+        .nav-bullet {
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          background: #f3f4f6;
+          color: #9ca3af;
+          border: 1px solid #e5e7eb;
+        }
+
+        .nav-label {
+          font-size: 14px;
+          color: #6b7280;
+          line-height: 1.2;
+        }
+
+        .nav-text {
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+
+        .nav-copy {
+          font-size: 12px;
+          color: #9ca3af;
+          line-height: 1.3;
+        }
+
+        .nav-item.active::before {
+          content: "";
+          position: absolute;
+          left: 0;
+          top: 4px;
+          bottom: 4px;
+          width: 3px;
+          border-radius: 0 2px 2px 0;
+          background: var(--brand);
+        }
+
+        .nav-item.active .nav-bullet {
+          background: var(--brand);
+          color: #fff;
+          border-color: var(--brand);
+        }
+
+        .nav-item.active .nav-item-inner {
+          background: #f5f3ff;
+        }
+
+        .nav-item.active .nav-label {
+          color: var(--brand);
+          font-weight: 600;
+        }
+
+        .nav-item.active .nav-copy {
+          color: #6d28d9;
+        }
+
+        .heads-up-card {
+          margin-top: 20px;
+          background: #ede9fe;
+          border-radius: 8px;
+          padding: 12px 14px;
+        }
+
+        .heads-up-title {
+          margin: 0 0 4px;
+          font-size: 13px;
+          font-weight: 700;
+        }
+
+        .heads-up-body {
+          margin: 0;
+          font-size: 12px;
+          color: #6b7280;
+          line-height: 1.5;
+        }
+
+        .star {
+          color: #dc2626;
+          font-weight: 700;
+        }
+
+        .section-nav-buttons {
+          display: flex;
+          gap: 12px;
+          margin-top: 28px;
+          justify-content: space-between;
+        }
+
+        .btn-nav-prev {
+          padding: 10px 20px;
+          border: 1px solid var(--line);
+          background: transparent;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 500;
+          color: var(--ink);
+          transition: all 0.2s ease;
+        }
+
+        .btn-nav-prev:hover {
+          background: #f3f4f6;
+          border-color: #d1d5db;
+        }
+
+        .btn-nav-next {
+          padding: 10px 20px;
+          border: 1px solid var(--primary);
+          background: var(--primary);
+          color: #fff;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 500;
+          transition: all 0.2s ease;
+        }
+
+        .btn-nav-next:hover {
+          opacity: 0.9;
+          transform: translateY(-1px);
+        }
+
+        .section-content {
+          flex: 1;
+          min-width: 0;
+          display: flex;
+          flex-direction: column;
+          gap: 24px;
+        }
+
+        .section-card {
+          background: #fff;
+          border: 1px solid #e5e7eb;
+          border-radius: 12px;
+          padding: 24px;
+          scroll-margin-top: 108px;
+        }
+
+        .section-card-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: 24px;
+        }
+
+        .section-title {
+          font-size: 28px;
+          margin: 0;
+        }
+
+        .section-subtitle {
+          margin: 6px 0 0;
+          font-size: 14px;
+          color: #6b7280;
+        }
+
+        .section-counter {
+          font-size: 13px;
+          color: #9ca3af;
+          margin-left: 16px;
+          white-space: nowrap;
+        }
+
+        .grid-3 {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 20px;
+        }
+
+        .grid-2 {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 20px;
+        }
+
+        .field-wrapper {
+          min-width: 0;
+        }
+
+        .field-label {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 13px;
+          font-weight: 500;
+          color: #374151;
+          margin-bottom: 6px;
+        }
+
+        .req {
+          color: #dc2626;
+          font-weight: 700;
+        }
+
+        .field-input,
+        .field-select,
+        .field-textarea {
+          width: 100%;
+          padding: 10px 12px;
+          border: 1px solid #d1d5db;
+          border-radius: 8px;
+          font-size: 14px;
+          background: #fff;
+          box-sizing: border-box;
+        }
+
+        .field-input:focus,
+        .field-select:focus,
+        .field-textarea:focus {
+          border-color: var(--brand);
+          box-shadow: 0 0 0 3px rgba(108, 60, 225, 0.12);
+          outline: none;
+        }
+
+        .field-input.error,
+        .field-select.error,
+        .field-textarea.error {
+          border-color: #dc2626;
+          background: #fef2f2;
+        }
+
+        .help-text {
+          font-size: 12px;
+          color: #6b7280;
+          margin-top: 4px;
+        }
+
+        .error-msg {
+          font-size: 12px;
+          color: #dc2626;
+          margin: 4px 0 0;
+        }
+
+        .status-info {
+          font-size: 12px;
+          color: #6b7280;
+          margin: 4px 0 0;
+        }
+
+        .badge {
+          font-size: 10px;
+          font-weight: 600;
+          padding: 2px 7px;
+          border-radius: 999px;
+        }
+
+        .badge-optional,
+        .badge-assigned-later {
+          background: #f3f4f6;
+          color: #6b7280;
+        }
+
+        .badge-recommended {
+          background: #ecfdf5;
+          color: #065f46;
+        }
+
+        .badge-required-doc {
+          background: #fef3c7;
+          color: #92400e;
+        }
+
+        .field-inline-action {
+          position: relative;
+        }
+
+        .edit-btn {
+          position: absolute;
+          right: 10px;
+          top: 34px;
+          border: none;
+          background: transparent;
+          color: var(--brand);
+          cursor: pointer;
+          font-size: 12px;
+        }
+
+        .photo-upload-block {
+          display: flex;
+          align-items: flex-start;
+          gap: 24px;
+          margin-bottom: 24px;
+        }
+
+        .photo-circle {
+          width: 128px;
+          height: 128px;
+          border-radius: 50%;
+          border: 2px dashed #d1d5db;
+          background: #fafafa;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          padding: 0;
+        }
+
+        .photo-circle.has-photo {
+          border: none;
+          overflow: hidden;
+        }
+
+        .photo-circle img {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+
+        .camera-icon {
+          font-size: 26px;
+          color: #9ca3af;
+        }
+
+        .photo-label {
+          font-size: 9px;
+          letter-spacing: 0.12em;
+          color: #9ca3af;
+          margin-top: 6px;
+        }
+
+        .photo-title {
+          margin: 0 0 4px;
+          font-size: 14px;
+          font-weight: 600;
+        }
+
+        .photo-desc {
+          margin: 0 0 12px;
+          font-size: 12px;
+          color: #6b7280;
+          line-height: 1.4;
+        }
+
+        .photo-actions {
+          display: flex;
+          gap: 12px;
+        }
+
+        .btn-upload-file {
+          padding: 7px 14px;
+          border: 1px solid #d1d5db;
+          border-radius: 6px;
+          background: #fff;
+          cursor: pointer;
+          text-decoration: none;
+          color: #374151;
+          font-size: 13px;
+        }
+
+        .btn-take-photo {
+          border: none;
+          background: none;
+          color: var(--brand);
+          text-decoration: underline;
+          cursor: pointer;
+          font-size: 13px;
+        }
+
+        .status-toggle {
+          display: flex;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+          overflow: hidden;
+        }
+
+        .toggle-pill {
+          flex: 1;
+          border: none;
+          background: #f9fafb;
+          color: #6b7280;
+          padding: 10px 0;
+          cursor: pointer;
+        }
+
+        .toggle-pill.active {
+          background: var(--brand);
+          color: #fff;
+          font-weight: 600;
+        }
+
+        .doc-check {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 10px;
+          border: 1px solid #e5e7eb;
+          border-radius: 8px;
+        }
+
+        .consent-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 14px;
+        }
+
+        .review-grid {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+        }
+
+        .age-warning {
+          margin: 12px 0 0;
+          border: 1px solid #f59e0b;
+          background: #fffbeb;
+          color: #92400e;
+          border-radius: 8px;
+          padding: 8px 10px;
+          font-size: 12px;
+        }
+
+        .sticky-footer {
+          width: 100%;
+          margin: 0;
+          padding-bottom: 0;
+        }
+
+        .sticky-footer-inner {
+          position: sticky;
+          bottom: 0;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+          background: #ffffff;
+          border-top: 1px solid #e5e7eb;
+          border-left: none;
+          border-right: none;
+          border-bottom: none;
+          border-radius: 0;
+          padding: 14px 12px;
+          z-index: 120;
+          box-shadow: none;
+          backdrop-filter: none;
+        }
+
+        .footer-progress-wrap {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          min-width: 320px;
+          max-width: 52%;
+          flex: 1;
+        }
+
+        .footer-progress-label {
+          font-size: 13px;
+          color: #6b7280;
+          white-space: nowrap;
+        }
+
+        .footer-progress-track {
+          position: relative;
+          width: 220px;
+          height: 6px;
+          border-radius: 999px;
+          background: #e5e7eb;
+          overflow: hidden;
+          flex-shrink: 0;
+        }
+
+        .footer-progress-fill {
+          display: block;
+          height: 100%;
+          border-radius: 999px;
+          background: linear-gradient(90deg, #6c3ce1 0%, #4f39f6 100%);
+          transition: width 0.25s ease;
+          width: 0;
+        }
+
+        .footer-progress-fill.progress-fill-0 { width: 0%; }
+        .footer-progress-fill.progress-fill-10 { width: 10%; }
+        .footer-progress-fill.progress-fill-20 { width: 20%; }
+        .footer-progress-fill.progress-fill-30 { width: 30%; }
+        .footer-progress-fill.progress-fill-40 { width: 40%; }
+        .footer-progress-fill.progress-fill-50 { width: 50%; }
+        .footer-progress-fill.progress-fill-60 { width: 60%; }
+        .footer-progress-fill.progress-fill-70 { width: 70%; }
+        .footer-progress-fill.progress-fill-80 { width: 80%; }
+        .footer-progress-fill.progress-fill-90 { width: 90%; }
+        .footer-progress-fill.progress-fill-100 { width: 100%; }
+
+        .footer-progress-value {
+          font-size: 14px;
+          font-weight: 600;
+          color: #6b7280;
+          white-space: nowrap;
+        }
+
+        .footer-actions {
+          display: flex;
+          gap: 14px;
+          align-items: center;
+          flex-shrink: 0;
+        }
+
+        .btn-discard {
+          border: none;
+          background: transparent;
+          color: #6b7280;
+          cursor: pointer;
+          font-size: 14px;
+          padding: 8px 4px;
+        }
+
+        .btn-discard:hover {
+          color: #374151;
+        }
+
+        .btn-draft {
+          padding: 12px 22px;
+          border: 1px solid #d1d5db;
+          border-radius: 14px;
+          background: #fff;
+          color: #374151;
+          cursor: pointer;
+          font-size: 14px;
+          line-height: 1.2;
+          text-decoration: none;
+        }
+
+        .btn-draft:hover {
+          border-color: #9ca3af;
+          background: #f9fafb;
+        }
+
+        .footer-status {
+          margin: 0;
+          padding: 6px 10px;
+          border-radius: 8px;
+          font-size: 12px;
+          max-width: 55%;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          border: 1px solid transparent;
+        }
+
+        .footer-status-success {
+          color: #065f46;
+          background: #d1fae5;
+          border-color: #a7f3d0;
+        }
+
+        .footer-status-error {
+          color: #b91c1c;
+          background: #fee2e2;
+          border-color: #fecaca;
+        }
+
+        .save-toast {
+          position: fixed;
+          right: 18px;
+          top: 20px;
+          z-index: 1200;
+          min-width: 240px;
+          max-width: min(420px, calc(100vw - 24px));
+          border-radius: 10px;
+          padding: 12px 14px;
+          font-size: 13px;
+          font-weight: 500;
+          box-shadow: 0 10px 30px rgba(15, 23, 42, 0.2);
+          border: 1px solid transparent;
+        }
+
+        .save-toast-success {
+          color: #065f46;
+          background: #d1fae5;
+          border-color: #a7f3d0;
+        }
+
+        .save-toast-error {
+          color: #b91c1c;
+          background: #fee2e2;
+          border-color: #fecaca;
+        }
+
+        .btn-cancel {
+          padding: 9px 14px;
+          border: 1px solid #d1d5db;
+          border-radius: 8px;
+          text-decoration: none;
+          color: #374151;
+          font-size: 14px;
+        }
+
+        .btn-save {
+          padding: 12px 26px;
+          border: 1px solid var(--brand);
+          background: var(--brand);
+          color: #fff;
+          border-radius: 14px;
+          cursor: pointer;
+          text-decoration: none;
+          font-size: 14px;
+          font-weight: 600;
+          box-shadow: 0 8px 22px rgba(79, 57, 246, 0.2);
+        }
+
+        .btn-save-cta:hover {
+          background: #5a2ee0;
+          border-color: #5a2ee0;
+        }
+
+        .btn-green {
+          padding: 9px 14px;
+          border: 1px solid #0f766e;
+          background: #0f766e;
+          color: #fff;
+          border-radius: 8px;
+          cursor: pointer;
+        }
+
+        .photo-preview-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.68);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+        }
+
+        .photo-preview-card {
+          position: relative;
+          max-width: 720px;
+          width: 100%;
+          background: #fff;
+          border-radius: 12px;
+          padding: 12px;
+          border: 1px solid #e2e8f0;
+        }
+
+        .photo-preview-close {
+          position: absolute;
+          top: 8px;
+          right: 8px;
+          width: 32px;
+          height: 32px;
+          border-radius: 8px;
+          border: 1px solid #cbd5e1;
+          background: #fff;
+          cursor: pointer;
+          font-weight: 700;
+        }
+
+        .photo-preview-image {
+          width: 100%;
+          max-height: 80vh;
+          object-fit: contain;
+          border-radius: 8px;
+          background: #f8fafc;
+        }
+
+        .camera-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.72);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1100;
+          padding: 16px;
+        }
+
+        .camera-card {
+          width: min(860px, 100%);
+          background: #fff;
+          border-radius: 14px;
+          border: 1px solid #e2e8f0;
+          overflow: hidden;
+          box-shadow: 0 18px 50px rgba(15, 23, 42, 0.28);
+        }
+
+        .camera-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 12px;
+          padding: 16px 18px;
+          border-bottom: 1px solid #e5e7eb;
+        }
+
+        .camera-head h3 {
+          margin: 0;
+          font-size: 18px;
+          color: #111827;
+        }
+
+        .camera-head p {
+          margin: 4px 0 0;
+          font-size: 13px;
+          color: #6b7280;
+        }
+
+        .camera-close {
+          width: 32px;
+          height: 32px;
+          border-radius: 8px;
+          border: 1px solid #d1d5db;
+          background: #fff;
+          cursor: pointer;
+          font-weight: 700;
+        }
+
+        .camera-body {
+          padding: 16px 18px;
+          background: #0f172a;
+        }
+
+        .camera-video {
+          width: 100%;
+          aspect-ratio: 4 / 3;
+          object-fit: cover;
+          background: #020617;
+          border-radius: 12px;
+        }
+
+        .camera-error {
+          margin: 0 0 12px;
+          color: #fecaca;
+          font-size: 13px;
+        }
+
+        .camera-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          padding: 14px 18px 18px;
+          background: #fff;
+        }
+
+        .mt-20 {
+          margin-top: 20px;
+        }
+
+        .mt-8 {
+          margin-top: 8px;
+        }
+
+        @media (max-width: 1024px) {
+          .enroll-body {
+            flex-direction: column;
           }
 
-          .field-address {
-            grid-column: span 2;
+          .section-nav-wrap {
+            position: sticky;
+            top: 10px;
+            width: 100%;
+            max-height: none;
+          }
+
+          .section-nav {
+            overflow: visible;
+            padding-right: 0;
           }
         }
 
-        @media (max-width: 640px) {
-          .student-grid {
+        @media (max-width: 768px) {
+          .grid-3,
+          .grid-2,
+          .review-grid {
             grid-template-columns: 1fr;
           }
 
-          .field-address,
-          .field-admission,
-          .field-pincode {
-            grid-column: span 1;
+          .page-title-row,
+          .top-row,
+          .scan-banner {
+            flex-direction: column;
+            align-items: flex-start;
+          }
+
+          .hero-kpi {
+            text-align: left;
+          }
+
+          .scan-actions {
+            width: 100%;
+          }
+
+          .sticky-footer {
+            width: 100%;
+          }
+
+          .sticky-footer-inner {
+            position: static;
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .footer-progress-wrap,
+          .footer-actions {
+            width: 100%;
+            max-width: 100%;
+          }
+
+          .footer-actions {
+            justify-content: space-between;
+          }
+
+          .footer-progress-track {
+            width: 100%;
+          }
+
+          .footer-status {
+            max-width: 100%;
+            white-space: normal;
           }
         }
       `}</style>

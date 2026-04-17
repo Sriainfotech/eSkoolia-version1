@@ -1,0 +1,1767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Enroll Student — Eskoolia</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --brand: #4729F4;
+    --brand-soft: #EEEBFF;
+    --brand-softer: #F6F4FF;
+    --brand-deep: #2E1AA8;
+    --ink: #0B0B14;
+    --ink-2: #3A3A4A;
+    --ink-3: #6B6B7B;
+    --ink-4: #9CA0AE;
+    --line: #E6E6EC;
+    --line-2: #F1F1F5;
+    --bg: #FAFAFB;
+    --surface: #FFFFFF;
+    --green: #0A8C5A;
+    --green-soft: #E4F6ED;
+    --red: #C2264E;
+    --red-soft: #FCE8EE;
+    --amber: #B4721B;
+    --amber-soft: #FDF1DC;
+    --shadow-sm: 0 1px 2px rgba(11, 11, 20, 0.04);
+    --shadow-md: 0 4px 16px rgba(11, 11, 20, 0.06), 0 1px 3px rgba(11, 11, 20, 0.04);
+    --shadow-lg: 0 24px 48px -12px rgba(11, 11, 20, 0.18), 0 4px 12px rgba(11, 11, 20, 0.06);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', -apple-system, sans-serif;
+    font-feature-settings: 'ss01', 'cv11';
+    background: var(--bg);
+    color: var(--ink);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+    padding-bottom: 80px;
+  }
+
+  /* ---------- Top bar ---------- */
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    padding: 14px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    backdrop-filter: blur(8px);
+    background: rgba(255,255,255,0.92);
+  }
+  .crumbs { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-3); }
+  .crumbs a { color: var(--ink-3); text-decoration: none; }
+  .crumbs a:hover { color: var(--brand); }
+  .crumbs .sep { color: var(--ink-4); }
+  .crumbs .current { color: var(--ink); font-weight: 500; }
+  .topbar-right { display: flex; align-items: center; gap: 14px; }
+  .save-status {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--ink-3);
+  }
+  .save-status .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px var(--green-soft);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .avatar { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--brand), var(--brand-deep)); color: white; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+
+  /* ---------- Layout ---------- */
+  .wrap {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 40px 32px 60px;
+  }
+  .hero { margin-bottom: 32px; display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; }
+  .hero h1 {
+    font-family: 'Instrument Serif', serif;
+    font-size: 48px; font-weight: 400;
+    letter-spacing: -0.02em; line-height: 1;
+  }
+  .hero h1 em { font-style: italic; color: var(--brand); }
+  .hero p { color: var(--ink-3); margin-top: 8px; max-width: 520px; }
+  .hero-side {
+    display: flex; align-items: center; gap: 20px;
+    color: var(--ink-3); font-size: 12px;
+  }
+  .hero-side .big { font-family: 'Instrument Serif', serif; font-size: 32px; color: var(--ink); line-height: 1; }
+  .hero-side .lbl { text-transform: uppercase; letter-spacing: 0.06em; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 40px;
+    align-items: flex-start;
+  }
+
+  /* ---------- Section navigator (sticky) ---------- */
+  .nav {
+    position: sticky;
+    top: 90px;
+  }
+  .nav-list {
+    list-style: none;
+    border-left: 1px solid var(--line);
+  }
+  .nav-list li a {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px;
+    margin-left: -1px;
+    font-size: 13px;
+    color: var(--ink-3);
+    text-decoration: none;
+    border-left: 1px solid transparent;
+    transition: all 0.15s;
+    font-weight: 500;
+  }
+  .nav-list li a:hover { color: var(--ink); }
+  .nav-list li a.active {
+    color: var(--brand); border-left-color: var(--brand);
+  }
+  .nav-list li a .n {
+    width: 20px; height: 20px; border-radius: 50%;
+    background: var(--line-2); color: var(--ink-3);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 600;
+    transition: all 0.15s;
+  }
+  .nav-list li a.active .n { background: var(--brand); color: white; }
+  .nav-list li a.done .n { background: var(--green); color: white; }
+  .nav-hint {
+    margin-top: 20px; padding: 14px 16px;
+    background: var(--brand-softer);
+    border-radius: 10px;
+    font-size: 12px; color: var(--ink-2);
+    line-height: 1.55;
+  }
+  .nav-hint b { display: block; color: var(--ink); margin-bottom: 3px; }
+
+  /* ---------- Sections ---------- */
+  .main { max-width: 900px; }
+  section.card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 28px 32px 32px;
+    margin-bottom: 20px;
+    scroll-margin-top: 100px;
+  }
+  .section-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  .section-head h2 {
+    font-family: 'Instrument Serif', serif;
+    font-size: 26px; font-weight: 400;
+    letter-spacing: -0.01em;
+  }
+  .section-head h2 em { font-style: italic; color: var(--brand); }
+  .section-head p { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+  .section-num {
+    font-family: 'Instrument Serif', serif;
+    font-size: 14px; color: var(--ink-4);
+    letter-spacing: 0.04em;
+  }
+
+  /* form grid */
+  .row { display: grid; gap: 20px 20px; margin-bottom: 20px; }
+  .row.c2 { grid-template-columns: 1fr 1fr; }
+  .row.c3 { grid-template-columns: 1fr 1fr 1fr; }
+  .row.photo { grid-template-columns: 140px 1fr; align-items: flex-start; gap: 28px; }
+
+  .field { display: flex; flex-direction: column; }
+  .field label {
+    font-size: 12px; font-weight: 500; color: var(--ink-2);
+    margin-bottom: 6px;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .field label .req { color: var(--red); }
+  .field label .opt {
+    font-size: 10px; font-weight: 400;
+    color: var(--ink-4);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-left: auto;
+  }
+  .input, .select, .textarea {
+    font-family: inherit; font-size: 14px;
+    padding: 11px 13px; border-radius: 9px;
+    border: 1px solid var(--line); background: var(--bg);
+    color: var(--ink); outline: none;
+    transition: all 0.15s;
+    width: 100%;
+  }
+  .input:focus, .select:focus, .textarea:focus {
+    background: var(--surface);
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px rgba(71, 41, 244, 0.12);
+  }
+  .input::placeholder { color: var(--ink-4); }
+  .select {
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6B7B' stroke-width='2.5' stroke-linecap='round'%3e%3cpolyline points='6 9 12 15 18 9'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    padding-right: 36px;
+  }
+  .field .hint {
+    font-size: 11px; color: var(--ink-4); margin-top: 5px;
+    display: none;
+  }
+  .field:focus-within .hint { display: block; color: var(--ink-3); }
+  .field.has-adorn { position: relative; }
+  .field.has-adorn .adorn {
+    position: absolute; right: 8px; bottom: 7px;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .mini-action {
+    font-family: inherit; font-size: 11px; font-weight: 500;
+    background: var(--brand-soft); color: var(--brand);
+    border: none; padding: 5px 10px; border-radius: 6px;
+    cursor: pointer;
+  }
+  .mini-action:hover { background: var(--brand); color: white; }
+
+  /* auto-generated pill inside input */
+  .auto-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; font-weight: 600;
+    background: var(--green-soft); color: var(--green);
+    padding: 2px 7px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-left: 6px;
+  }
+
+  /* Photo uploader */
+  .photo-zone {
+    width: 140px; height: 140px;
+    border-radius: 50%;
+    border: 2px dashed var(--line);
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: var(--ink-4);
+    position: relative;
+    overflow: hidden;
+  }
+  .photo-zone:hover {
+    border-color: var(--brand);
+    background: var(--brand-softer);
+    color: var(--brand);
+  }
+  .photo-zone svg { margin-bottom: 6px; }
+  .photo-zone .pz-label {
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .photo-zone img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .photo-info {
+    display: flex; flex-direction: column; justify-content: center;
+    height: 140px;
+  }
+  .photo-info h4 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .photo-info p { font-size: 12px; color: var(--ink-3); margin-bottom: 12px; max-width: 360px; }
+  .photo-info .btns { display: flex; gap: 8px; }
+
+  /* Dependency callout when Class selected */
+  .dep-callout {
+    grid-column: 1 / -1;
+    padding: 10px 14px;
+    background: var(--brand-softer);
+    border: 1px solid var(--brand-soft);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--ink-2);
+    display: none;
+    align-items: center;
+    gap: 8px;
+  }
+  .dep-callout.show { display: flex; }
+  .dep-callout svg { color: var(--brand); }
+
+  /* Status toggle */
+  .toggle-row {
+    display: flex; gap: 8px;
+    background: var(--line-2);
+    padding: 3px; border-radius: 10px;
+  }
+  .toggle-row input { display: none; }
+  .toggle-row label {
+    flex: 1; text-align: center; padding: 9px;
+    border-radius: 7px; font-size: 13px;
+    cursor: pointer; color: var(--ink-3); font-weight: 500;
+    transition: all 0.15s;
+    margin: 0;
+  }
+  .toggle-row input:checked + label {
+    background: var(--surface); color: var(--ink);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* Pincode with auto-fill feedback */
+  .pin-feedback {
+    display: none;
+    margin-top: 6px; padding: 8px 12px;
+    background: var(--green-soft);
+    border-radius: 7px;
+    font-size: 12px; color: var(--green);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .pin-feedback svg { flex-shrink: 0; }
+  .pin-feedback b { color: var(--ink); margin-right: 2px; }
+  .pin-feedback.hidden { display: none; }
+  .pin-feedback .undo {
+    margin-left: auto; font-size: 11px; color: var(--ink-3);
+    background: none; border: none; cursor: pointer; text-decoration: underline;
+  }
+
+  /* Guardian card */
+  .guardian {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin-bottom: 12px;
+    background: var(--bg);
+    position: relative;
+  }
+  .guardian-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .guardian-head h4 { font-size: 13px; font-weight: 600; }
+  .guardian-head .badge {
+    font-size: 10px; font-weight: 600;
+    background: var(--brand-soft); color: var(--brand);
+    padding: 2px 8px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-left: 8px;
+  }
+  .guardian-remove {
+    background: none; border: none; cursor: pointer;
+    color: var(--ink-4); padding: 4px;
+    border-radius: 5px;
+  }
+  .guardian-remove:hover { color: var(--red); background: var(--red-soft); }
+  .add-guardian {
+    width: 100%; padding: 14px;
+    background: transparent;
+    border: 1.5px dashed var(--line);
+    border-radius: 12px;
+    cursor: pointer;
+    color: var(--ink-3);
+    font-family: inherit; font-size: 13px; font-weight: 500;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: all 0.15s;
+  }
+  .add-guardian:hover {
+    border-color: var(--brand);
+    background: var(--brand-softer);
+    color: var(--brand);
+  }
+  .link-existing {
+    font-size: 12px; color: var(--brand);
+    background: none; border: none; cursor: pointer;
+    text-decoration: underline; padding: 0;
+    margin-bottom: 14px;
+    font-family: inherit;
+  }
+
+  /* Review summary */
+  .review { display: grid; grid-template-columns: 1fr 1fr; gap: 20px 32px; }
+  .review-item {
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line-2);
+  }
+  .review-item .k {
+    font-size: 11px; color: var(--ink-3);
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-bottom: 4px;
+  }
+  .review-item .v { font-size: 14px; color: var(--ink); font-weight: 500; }
+  .review-item .v.empty { color: var(--ink-4); font-style: italic; font-weight: 400; }
+
+  /* ---------- Sticky footer bar ---------- */
+  .footbar {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    background: rgba(255,255,255,0.94);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid var(--line);
+    padding: 14px 32px;
+    z-index: 40;
+  }
+  .footbar-inner {
+    max-width: 1240px; margin: 0 auto;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .foot-progress {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 12px; color: var(--ink-3);
+  }
+  .foot-progress .bar {
+    width: 160px; height: 6px;
+    background: var(--line-2); border-radius: 999px;
+    overflow: hidden;
+  }
+  .foot-progress .fill {
+    width: 45%; height: 100%;
+    background: linear-gradient(90deg, var(--brand), var(--brand-deep));
+    border-radius: 999px;
+    transition: width 0.3s;
+  }
+  .foot-spacer { flex: 1; }
+
+  /* buttons */
+  .btn {
+    font-family: inherit; font-size: 13px; font-weight: 500;
+    padding: 11px 18px; border-radius: 9px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: var(--brand); color: white;
+    box-shadow: 0 1px 2px rgba(71, 41, 244, 0.25), inset 0 1px 0 rgba(255,255,255,0.15);
+  }
+  .btn-primary:hover { background: var(--brand-deep); }
+  .btn-ghost { background: transparent; color: var(--ink-2); border-color: var(--line); }
+  .btn-ghost:hover { background: var(--line-2); border-color: var(--ink-4); }
+  .btn-link { background: none; color: var(--ink-3); border: none; padding: 8px 12px; }
+  .btn-link:hover { color: var(--ink); }
+
+  /* Notes */
+  .notes {
+    margin-top: 40px; padding: 24px 28px;
+    background: var(--surface); border: 1px dashed var(--line);
+    border-radius: 14px;
+  }
+  .notes h3 { font-family: 'Instrument Serif', serif; font-weight: 400; font-size: 22px; margin-bottom: 12px; }
+  .notes ol { padding-left: 20px; color: var(--ink-2); font-size: 13px; }
+  .notes li { margin-bottom: 6px; }
+  .notes code { background: var(--line-2); padding: 1px 6px; border-radius: 3px; font-size: 12px; }
+  .notes h4 {
+    font-size: 13px; font-weight: 600;
+    margin-top: 16px; margin-bottom: 8px;
+    color: var(--ink);
+  }
+  .copy-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+  .copy-table th, .copy-table td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line-2);
+    vertical-align: top;
+  }
+  .copy-table th {
+    color: var(--ink-3); font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    font-size: 10px;
+    background: var(--bg);
+  }
+  .copy-table .old { color: var(--ink-4); text-decoration: line-through; font-size: 11px; }
+  .copy-table .new { color: var(--ink); font-weight: 500; }
+
+  /* ---------- Scan bar ---------- */
+  .scan-bar {
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    background: linear-gradient(135deg, #0B0B14 0%, #1F1B3D 100%);
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    color: white;
+    position: relative;
+    overflow: hidden;
+  }
+  .scan-bar::before {
+    content: '';
+    position: absolute;
+    right: -40px; top: -40px;
+    width: 160px; height: 160px;
+    background: radial-gradient(circle, rgba(71, 41, 244, 0.35), transparent 70%);
+    pointer-events: none;
+  }
+  .scan-icon {
+    width: 44px; height: 44px;
+    border-radius: 10px;
+    background: rgba(71, 41, 244, 0.25);
+    border: 1px solid rgba(124, 93, 255, 0.4);
+    display: flex; align-items: center; justify-content: center;
+    color: #C4B5FD;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+  }
+  .scan-text { flex: 1; position: relative; z-index: 1; }
+  .scan-text h4 {
+    font-size: 14px; font-weight: 600;
+    margin-bottom: 2px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .scan-text .new-tag {
+    font-size: 9px; font-weight: 700;
+    background: var(--brand); color: white;
+    padding: 2px 6px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .scan-text p {
+    font-size: 12px;
+    color: rgba(255,255,255,0.65);
+    max-width: 520px;
+  }
+  .scan-actions {
+    display: flex; gap: 8px;
+    position: relative; z-index: 1;
+  }
+  .btn-scan {
+    background: var(--brand);
+    color: white;
+    border: 1px solid var(--brand-deep);
+    padding: 10px 18px;
+    border-radius: 9px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    transition: all 0.15s;
+  }
+  .btn-scan:hover { background: var(--brand-deep); }
+  .scan-dismiss {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.15);
+    color: rgba(255,255,255,0.6);
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .scan-dismiss:hover { background: rgba(255,255,255,0.08); color: white; }
+
+  /* ---------- Scan modal ---------- */
+  .scan-modal-scrim {
+    position: fixed; inset: 0;
+    background: rgba(11, 11, 20, 0.68);
+    backdrop-filter: blur(4px);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s;
+    z-index: 60;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .scan-modal-scrim.open { opacity: 1; pointer-events: auto; }
+  .scan-modal {
+    background: var(--surface);
+    border-radius: 16px;
+    width: 440px; max-width: 92vw;
+    padding: 28px;
+    box-shadow: var(--shadow-lg);
+    transform: scale(0.96);
+    transition: transform 0.22s;
+  }
+  .scan-modal-scrim.open .scan-modal { transform: scale(1); }
+  .scan-modal h3 {
+    font-family: 'Instrument Serif', serif;
+    font-size: 24px; font-weight: 400;
+    margin-bottom: 4px;
+  }
+  .scan-modal h3 em { font-style: italic; color: var(--brand); }
+  .scan-modal .sub { font-size: 12px; color: var(--ink-3); margin-bottom: 20px; }
+  .scan-frame {
+    aspect-ratio: 1;
+    background: #0B0B14;
+    border-radius: 12px;
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+  .scan-frame::before {
+    content: '';
+    position: absolute;
+    inset: 20px;
+    border: 2px solid rgba(71, 41, 244, 0.6);
+    border-radius: 8px;
+  }
+  .scan-corner {
+    position: absolute;
+    width: 24px; height: 24px;
+    border: 3px solid var(--brand);
+  }
+  .scan-corner.tl { top: 12px; left: 12px; border-right: none; border-bottom: none; border-radius: 6px 0 0 0; }
+  .scan-corner.tr { top: 12px; right: 12px; border-left: none; border-bottom: none; border-radius: 0 6px 0 0; }
+  .scan-corner.bl { bottom: 12px; left: 12px; border-right: none; border-top: none; border-radius: 0 0 0 6px; }
+  .scan-corner.br { bottom: 12px; right: 12px; border-left: none; border-top: none; border-radius: 0 0 6px 0; }
+  .scan-line {
+    position: absolute;
+    left: 30px; right: 30px;
+    top: 30px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--brand), transparent);
+    box-shadow: 0 0 12px var(--brand);
+    animation: scanLine 1.8s ease-in-out infinite;
+  }
+  @keyframes scanLine {
+    0%, 100% { top: 30px; }
+    50% { top: calc(100% - 30px); }
+  }
+  .scan-caption {
+    position: absolute;
+    bottom: 12px; left: 0; right: 0;
+    text-align: center;
+    font-size: 11px;
+    color: rgba(255,255,255,0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .scan-types {
+    display: flex; gap: 6px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .scan-type {
+    font-size: 11px;
+    padding: 4px 9px;
+    background: var(--line-2);
+    color: var(--ink-3);
+    border-radius: 5px;
+  }
+  .scan-compliance {
+    font-size: 11px;
+    color: var(--ink-3);
+    padding: 10px 12px;
+    background: var(--amber-soft);
+    border-radius: 8px;
+    border-left: 3px solid var(--amber);
+    margin-bottom: 16px;
+  }
+  .scan-compliance b { color: var(--amber); }
+  .scan-modal-foot {
+    display: flex; justify-content: flex-end; gap: 8px;
+  }
+
+  /* ---------- Documents section ---------- */
+  .doc-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+  .doc-card {
+    border: 1.5px dashed var(--line);
+    border-radius: 12px;
+    padding: 18px 18px 16px;
+    background: var(--bg);
+    transition: all 0.15s;
+    cursor: pointer;
+    position: relative;
+  }
+  .doc-card:hover {
+    border-color: var(--brand);
+    background: var(--brand-softer);
+  }
+  .doc-card.uploaded {
+    border-style: solid;
+    border-color: var(--green);
+    background: var(--green-soft);
+    cursor: default;
+  }
+  .doc-card.conditional { display: none; }
+  .doc-card.conditional.show { display: block; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  .doc-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 10px;
+  }
+  .doc-icon {
+    width: 36px; height: 36px;
+    border-radius: 9px;
+    background: var(--brand-soft);
+    color: var(--brand);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .doc-card.uploaded .doc-icon { background: var(--green); color: white; }
+  .doc-tag {
+    font-size: 10px; font-weight: 600;
+    padding: 3px 8px; border-radius: 999px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .doc-tag.req { background: var(--red-soft); color: var(--red); }
+  .doc-tag.opt { background: var(--line-2); color: var(--ink-3); }
+  .doc-tag.masked { background: var(--amber-soft); color: var(--amber); }
+  .doc-tag.cond { background: var(--brand-soft); color: var(--brand); }
+  .doc-title { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+  .doc-desc { font-size: 11px; color: var(--ink-3); line-height: 1.45; margin-bottom: 12px; }
+  .doc-upload-btn {
+    font-size: 11px; font-weight: 500;
+    color: var(--brand);
+    display: flex; align-items: center; gap: 5px;
+  }
+  .doc-card.uploaded .doc-upload-btn { color: var(--green); }
+  .doc-filename {
+    font-size: 11px;
+    color: var(--ink-2);
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .doc-filename svg { color: var(--green); }
+
+  /* RTE banner */
+  .rte-banner {
+    padding: 16px 20px;
+    background: linear-gradient(135deg, var(--amber-soft), #FFF9EC);
+    border: 1px solid #F4D896;
+    border-radius: 12px;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    margin-bottom: 20px;
+  }
+  .rte-icon {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    background: var(--amber);
+    color: white;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .rte-body h4 {
+    font-size: 13px; font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 3px;
+  }
+  .rte-body p {
+    font-size: 12px;
+    color: var(--ink-2);
+    line-height: 1.55;
+  }
+  .rte-body a {
+    color: var(--amber);
+    font-weight: 500;
+  }
+
+  /* Consent checkbox */
+  .consent {
+    display: flex;
+    gap: 12px;
+    padding: 16px 18px;
+    background: var(--brand-softer);
+    border: 1px solid var(--brand-soft);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .consent:hover { border-color: var(--brand); }
+  .consent.checked {
+    background: var(--brand-soft);
+    border-color: var(--brand);
+  }
+  .consent input { display: none; }
+  .consent-box {
+    width: 18px; height: 18px;
+    border: 1.5px solid var(--ink-4);
+    border-radius: 5px;
+    background: white;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    margin-top: 1px;
+    transition: all 0.12s;
+  }
+  .consent.checked .consent-box {
+    background: var(--brand);
+    border-color: var(--brand);
+  }
+  .consent-box svg { display: none; color: white; }
+  .consent.checked .consent-box svg { display: block; }
+  .consent-text {
+    font-size: 12px;
+    color: var(--ink-2);
+    line-height: 1.55;
+  }
+  .consent-text b { color: var(--ink); display: block; margin-bottom: 2px; font-size: 13px; }
+
+  @media (max-width: 900px) {
+    .doc-grid { grid-template-columns: 1fr; }
+    .scan-bar { flex-direction: column; align-items: flex-start; text-align: left; }
+  }
+
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: 1fr; }
+    .nav { position: static; }
+    .row.c2, .row.c3 { grid-template-columns: 1fr; }
+    .row.photo { grid-template-columns: 1fr; }
+    .review { grid-template-columns: 1fr; }
+    .hero { flex-direction: column; align-items: flex-start; }
+    .hero h1 { font-size: 36px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="crumbs">
+    <a href="#">Dashboard</a>
+    <span class="sep">/</span>
+    <a href="#">Students</a>
+    <span class="sep">/</span>
+    <span class="current">Enroll</span>
+  </div>
+  <div class="topbar-right">
+    <div class="save-status">
+      <span class="dot"></span>
+      <span>Draft saved <b id="savedAgo">2s ago</b></span>
+    </div>
+    <div class="avatar">SR</div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- Hero -->
+  <div class="hero">
+    <div>
+      <h1>Enroll a <em>student</em></h1>
+      <p>Admit a new student into the school records. We'll generate an admission number, place them in a class &amp; section, and notify their guardian.</p>
+    </div>
+    <div class="hero-side">
+      <div>
+        <div class="big">1,533</div>
+        <div class="lbl">Currently enrolled</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scan bar -->
+  <div class="scan-bar" id="scanBar">
+    <div class="scan-icon">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10M7 8v8M11 8v8M15 8v8"/></svg>
+    </div>
+    <div class="scan-text">
+      <h4>Scan to pre-fill <span class="new-tag">New</span></h4>
+      <p>Got their Aadhaar QR, previous school ID, or pre-admission slip? Scan it once and we'll fill the form automatically.</p>
+    </div>
+    <div class="scan-actions">
+      <button class="btn-scan" onclick="openScanModal()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="10" rx="1"/><path d="M5 7v10M8 7v10M11 7v10M14 7v10M17 7v10"/></svg>
+        Scan now
+      </button>
+      <button class="scan-dismiss" onclick="this.closest('.scan-bar').style.display='none'" title="Dismiss">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- Sticky section nav -->
+    <aside class="nav">
+      <ul class="nav-list">
+        <li><a href="#sec-identity" class="active"><span class="n">1</span> Identity</a></li>
+        <li><a href="#sec-academic"><span class="n">2</span> Academic</a></li>
+        <li><a href="#sec-contact"><span class="n">3</span> Contact &amp; address</a></li>
+        <li><a href="#sec-guardian"><span class="n">4</span> Guardians</a></li>
+        <li><a href="#sec-documents"><span class="n">5</span> Documents</a></li>
+        <li><a href="#sec-review"><span class="n">6</span> Review</a></li>
+      </ul>
+      <div class="nav-hint">
+        <b>Heads up</b>
+        Fields marked <span style="color: var(--red);">*</span> are required. You can save a draft anytime and come back.
+      </div>
+    </aside>
+
+    <!-- Main form -->
+    <div class="main">
+
+      <!-- 1. Identity -->
+      <section class="card" id="sec-identity">
+        <div class="section-head">
+          <div>
+            <h2>Student <em>identity</em></h2>
+            <p>Name, photo, date of birth, and a few basics.</p>
+          </div>
+          <span class="section-num">01 / 06</span>
+        </div>
+
+        <div class="row photo">
+          <div class="photo-zone" id="photoZone" onclick="document.getElementById('photoInput').click()">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2Z"/><circle cx="12" cy="13" r="4"/></svg>
+            <span class="pz-label">Add photo</span>
+            <input type="file" id="photoInput" accept="image/*" style="display:none;">
+          </div>
+          <div class="photo-info">
+            <h4>Student photo</h4>
+            <p>Square JPG or PNG, at least 400×400px. We'll crop it into a circle for ID cards and reports.</p>
+            <div class="btns">
+              <button class="btn btn-ghost" style="padding: 7px 12px; font-size: 12px;">Upload file</button>
+              <button class="btn btn-link" style="padding: 7px 10px; font-size: 12px;">Take photo</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="row c3">
+          <div class="field has-adorn">
+            <label>Admission number <span class="req">*</span></label>
+            <input class="input" type="text" value="ADM-2026-0342" readonly id="admNo">
+            <div class="adorn">
+              <button class="mini-action" onclick="editAdm()">Edit</button>
+            </div>
+            <div class="hint">Generated from your school prefix + academic year + sequence. Override only if you're migrating existing records.</div>
+          </div>
+          <div class="field">
+            <label>Roll number <span class="opt">assigned later</span></label>
+            <input class="input" type="text" placeholder="Auto when class is set">
+            <div class="hint">Rolls are assigned after class allocation. Leave blank to auto-number.</div>
+          </div>
+          <div class="field">
+            <label>Status</label>
+            <div class="toggle-row">
+              <input type="radio" name="status" id="stAct" checked><label for="stAct">Active</label>
+              <input type="radio" name="status" id="stIna"><label for="stIna">Inactive</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="row c3">
+          <div class="field">
+            <label>First name <span class="req">*</span></label>
+            <input class="input" type="text" placeholder="e.g. Rahul">
+          </div>
+          <div class="field">
+            <label>Middle name <span class="opt">optional</span></label>
+            <input class="input" type="text" placeholder="e.g. Kumar">
+          </div>
+          <div class="field">
+            <label>Last name <span class="req">*</span></label>
+            <input class="input" type="text" placeholder="e.g. Sharma">
+          </div>
+        </div>
+
+        <div class="row c3">
+          <div class="field">
+            <label>Date of birth <span class="req">*</span></label>
+            <input class="input" type="text" placeholder="DD / MM / YYYY" onfocus="this.type='date'" onblur="if(!this.value)this.type='text'">
+            <div class="hint">Used for age-based class eligibility and certificates.</div>
+          </div>
+          <div class="field">
+            <label>Gender <span class="req">*</span></label>
+            <select class="select">
+              <option>Select</option>
+              <option>Female</option>
+              <option>Male</option>
+              <option>Other</option>
+              <option>Prefer not to say</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Blood group <span class="opt">optional</span></label>
+            <select class="select">
+              <option>Select</option>
+              <option>A+</option><option>A−</option>
+              <option>B+</option><option>B−</option>
+              <option>O+</option><option>O−</option>
+              <option>AB+</option><option>AB−</option>
+            </select>
+            <div class="hint">Useful during medical emergencies — recommended, not required.</div>
+          </div>
+        </div>
+
+        <div class="row c3">
+          <div class="field">
+            <label>Mother tongue <span class="req">*</span></label>
+            <select class="select">
+              <option>Select language</option>
+              <option>Hindi</option>
+              <option>English</option>
+              <option>Telugu</option>
+              <option>Tamil</option>
+              <option>Kannada</option>
+              <option>Malayalam</option>
+              <option>Marathi</option>
+              <option>Gujarati</option>
+              <option>Bengali</option>
+              <option>Punjabi</option>
+              <option>Urdu</option>
+              <option>Odia</option>
+              <option>Assamese</option>
+              <option>Sanskrit</option>
+              <option>Other</option>
+            </select>
+            <div class="hint">Used for first-language class allocation and state reporting.</div>
+          </div>
+          <div class="field">
+            <label>Religion <span class="opt">optional</span></label>
+            <select class="select">
+              <option>Prefer not to say</option>
+              <option>Hindu</option>
+              <option>Muslim</option>
+              <option>Christian</option>
+              <option>Sikh</option>
+              <option>Buddhist</option>
+              <option>Jain</option>
+              <option>Parsi</option>
+              <option>Other</option>
+            </select>
+            <div class="hint">Collected only for minority certification and government scheme eligibility. Never shared.</div>
+          </div>
+          <div class="field">
+            <label>Nationality <span class="req">*</span></label>
+            <select class="select">
+              <option>Indian</option>
+              <option>Non-Resident Indian (NRI)</option>
+              <option>Person of Indian Origin (PIO)</option>
+              <option>Foreign national</option>
+            </select>
+            <div class="hint">Defaults to Indian. NRI and foreign nationals have separate fee structures.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. Academic -->
+      <section class="card" id="sec-academic">
+        <div class="section-head">
+          <div>
+            <h2>Academic <em>placement</em></h2>
+            <p>Which year, class, section, and category this student belongs to.</p>
+          </div>
+          <span class="section-num">02 / 06</span>
+        </div>
+
+        <div class="row c3">
+          <div class="field">
+            <label>Academic year <span class="req">*</span></label>
+            <select class="select" id="ayear">
+              <option>2026 – 27</option>
+              <option>2025 – 26</option>
+            </select>
+            <div class="hint">Defaults to the current running year.</div>
+          </div>
+          <div class="field">
+            <label>Class <span class="req">*</span></label>
+            <select class="select" id="classSel" onchange="onClassChange()">
+              <option value="">Choose a class</option>
+              <option>Nursery</option><option>LKG</option><option>UKG</option>
+              <option>Grade 1</option><option>Grade 2</option><option>Grade 3</option>
+              <option>Grade 4</option><option>Grade 5</option><option>Grade 6</option>
+              <option>Grade 7</option><option>Grade 8</option><option>Grade 9</option>
+              <option>Grade 10</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Section <span class="req">*</span></label>
+            <select class="select" id="sectionSel" disabled>
+              <option>Pick class first</option>
+            </select>
+          </div>
+          <div class="dep-callout" id="depCallout">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.9 4.9l2.9 2.9M16.2 16.2l2.9 2.9M2 12h4M18 12h4M4.9 19.1l2.9-2.9M16.2 7.8l2.9-2.9"/></svg>
+            <span id="depText">3 sections available, 24 seats remaining.</span>
+          </div>
+        </div>
+
+        <div class="row c2">
+          <div class="field">
+            <label>Category <span class="opt">optional</span></label>
+            <select class="select">
+              <option>Select category</option>
+              <option>Open</option>
+              <option>EWS</option>
+              <option>OBC</option>
+              <option>SC</option>
+              <option>ST</option>
+              <option>SEBC</option>
+              <option>Scholarship</option>
+            </select>
+            <div class="hint">Used for reserved-seat reporting and fee rule matching.</div>
+          </div>
+          <div class="field">
+            <label>Admission type</label>
+            <select class="select">
+              <option>New admission</option>
+              <option>Transfer</option>
+              <option>Re-admission</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Contact & Address -->
+      <section class="card" id="sec-contact">
+        <div class="section-head">
+          <div>
+            <h2>Contact &amp; <em>address</em></h2>
+            <p>How we reach the student and where they live.</p>
+          </div>
+          <span class="section-num">03 / 06</span>
+        </div>
+
+        <div class="row c2">
+          <div class="field">
+            <label>Phone <span class="req">*</span></label>
+            <input class="input" type="tel" placeholder="10-digit mobile number" maxlength="10">
+            <div class="hint">Used for OTP login to the Parent App and emergency alerts.</div>
+          </div>
+          <div class="field">
+            <label>Email <span class="opt">recommended</span></label>
+            <input class="input" type="email" placeholder="student@example.com">
+            <div class="hint">For report cards and newsletters.</div>
+          </div>
+        </div>
+
+        <div class="row c2">
+          <div class="field">
+            <label>Pincode <span class="req">*</span></label>
+            <input class="input" type="text" placeholder="6 digits" maxlength="6" id="pinInput" oninput="onPinInput(this.value)">
+            <div class="pin-feedback" id="pinFeedback" style="display:none;">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+              <span>Auto-filled <b id="pinFilled">Sangareddy, Telangana</b></span>
+              <button class="undo" onclick="undoPin()">Clear</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>Address line <span class="req">*</span></label>
+            <input class="input" type="text" placeholder="House no, street, landmark">
+          </div>
+        </div>
+
+        <div class="row c3">
+          <div class="field">
+            <label>City <span class="req">*</span></label>
+            <input class="input" type="text" id="cityInput">
+          </div>
+          <div class="field">
+            <label>District <span class="req">*</span></label>
+            <input class="input" type="text" id="distInput">
+          </div>
+          <div class="field">
+            <label>State <span class="req">*</span></label>
+            <select class="select" id="stateInput">
+              <option value="">Select state</option>
+              <option>Andhra Pradesh</option>
+              <option>Karnataka</option>
+              <option>Maharashtra</option>
+              <option>Tamil Nadu</option>
+              <option>Telangana</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. Guardians -->
+      <section class="card" id="sec-guardian">
+        <div class="section-head">
+          <div>
+            <h2>Family &amp; <em>guardians</em></h2>
+            <p>Add at least one guardian. You can add more later from the student profile.</p>
+          </div>
+          <span class="section-num">04 / 06</span>
+        </div>
+
+        <button class="link-existing">
+          ↳ Link an existing guardian (for siblings already enrolled)
+        </button>
+
+        <div class="guardian" id="guardian1">
+          <div class="guardian-head">
+            <div>
+              <h4>Guardian 1 <span class="badge">Primary</span></h4>
+            </div>
+            <button class="guardian-remove" title="Remove"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          </div>
+          <div class="row c3">
+            <div class="field">
+              <label>Full name <span class="req">*</span></label>
+              <input class="input" type="text" placeholder="e.g. Rajesh Sharma">
+            </div>
+            <div class="field">
+              <label>Relation <span class="req">*</span></label>
+              <select class="select">
+                <option>Father</option>
+                <option>Mother</option>
+                <option>Guardian</option>
+                <option>Grandparent</option>
+                <option>Sibling</option>
+                <option>Other</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Phone <span class="req">*</span></label>
+              <input class="input" type="tel" placeholder="10-digit mobile" maxlength="10">
+            </div>
+          </div>
+          <div class="row c2">
+            <div class="field">
+              <label>Email <span class="opt">optional</span></label>
+              <input class="input" type="email" placeholder="guardian@example.com">
+            </div>
+            <div class="field">
+              <label>Occupation <span class="opt">optional</span></label>
+              <input class="input" type="text" placeholder="e.g. Engineer">
+            </div>
+          </div>
+        </div>
+
+        <button class="add-guardian" onclick="addGuardian()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          Add another guardian
+        </button>
+      </section>
+
+      <!-- 5. Documents -->
+      <section class="card" id="sec-documents">
+        <div class="section-head">
+          <div>
+            <h2>Know your <em>student</em></h2>
+            <p>Upload the documents your school needs on file. Some appear only when relevant — for example, caste certificate shows up if you picked a reserved category.</p>
+          </div>
+          <span class="section-num">05 / 06</span>
+        </div>
+
+        <div class="doc-grid">
+          <!-- Birth certificate -->
+          <div class="doc-card" onclick="uploadDoc(this, 'Birth_Certificate.pdf')">
+            <div class="doc-head">
+              <div class="doc-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+              </div>
+              <span class="doc-tag req">Required</span>
+            </div>
+            <div class="doc-title">Birth certificate</div>
+            <div class="doc-desc">Government-issued proof of date of birth. PDF, JPG, or PNG up to 5 MB.</div>
+            <div class="doc-upload-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 3v13M6 9l6-6 6 6M3 21h18"/></svg>
+              Upload file
+            </div>
+          </div>
+
+          <!-- Aadhaar -->
+          <div class="doc-card" onclick="uploadDoc(this, 'Aadhaar_XXXX-XXXX-4327.pdf')">
+            <div class="doc-head">
+              <div class="doc-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M15 8h2M15 12h2M7 14h10"/></svg>
+              </div>
+              <span class="doc-tag masked">Masked</span>
+            </div>
+            <div class="doc-title">Aadhaar card</div>
+            <div class="doc-desc">We store only the last 4 digits. The full number is never saved to disk or shared.</div>
+            <div class="doc-upload-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 3v13M6 9l6-6 6 6M3 21h18"/></svg>
+              Upload file
+            </div>
+          </div>
+
+          <!-- Transfer Certificate (conditional) -->
+          <div class="doc-card conditional" data-cond="transfer" onclick="uploadDoc(this, 'TC_PrevSchool.pdf')">
+            <div class="doc-head">
+              <div class="doc-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="m9 14 2 2 4-4"/></svg>
+              </div>
+              <span class="doc-tag cond">Transfer only</span>
+            </div>
+            <div class="doc-title">Transfer Certificate (TC)</div>
+            <div class="doc-desc">Issued by the previous school. Must show school seal and date of leaving.</div>
+            <div class="doc-upload-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 3v13M6 9l6-6 6 6M3 21h18"/></svg>
+              Upload file
+            </div>
+          </div>
+
+          <!-- Previous Marksheet (conditional) -->
+          <div class="doc-card conditional" data-cond="transfer" onclick="uploadDoc(this, 'Previous_Marksheet.pdf')">
+            <div class="doc-head">
+              <div class="doc-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11H5v10h14V11h-4"/><path d="M9 11V5a3 3 0 0 1 6 0v6"/></svg>
+              </div>
+              <span class="doc-tag cond">Transfer only</span>
+            </div>
+            <div class="doc-title">Previous marksheet</div>
+            <div class="doc-desc">Last annual result from previous school. Used for class placement verification.</div>
+            <div class="doc-upload-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 3v13M6 9l6-6 6 6M3 21h18"/></svg>
+              Upload file
+            </div>
+          </div>
+
+          <!-- Caste certificate (conditional) -->
+          <div class="doc-card conditional" data-cond="reserved" onclick="uploadDoc(this, 'Caste_Certificate.pdf')">
+            <div class="doc-head">
+              <div class="doc-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2 4 7v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V7l-8-5Z"/><path d="m9 12 2 2 4-4"/></svg>
+              </div>
+              <span class="doc-tag cond">Category based</span>
+            </div>
+            <div class="doc-title">Caste / Income certificate</div>
+            <div class="doc-desc">Required for reserved categories. Must be issued by competent authority and be currently valid.</div>
+            <div class="doc-upload-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 3v13M6 9l6-6 6 6M3 21h18"/></svg>
+              Upload file
+            </div>
+          </div>
+
+          <!-- Medical info -->
+          <div class="doc-card" onclick="uploadDoc(this, 'Medical_Info.pdf')">
+            <div class="doc-head">
+              <div class="doc-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20"/><circle cx="12" cy="12" r="10"/></svg>
+              </div>
+              <span class="doc-tag opt">Optional</span>
+            </div>
+            <div class="doc-title">Medical information</div>
+            <div class="doc-desc">Allergies, ongoing conditions, emergency contact for medical decisions. Stored encrypted.</div>
+            <div class="doc-upload-btn">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 3v13M6 9l6-6 6 6M3 21h18"/></svg>
+              Upload file
+            </div>
+          </div>
+        </div>
+
+        <!-- RTE compliance banner -->
+        <div class="rte-banner">
+          <div class="rte-icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2 4 7v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V7l-8-5Z"/></svg>
+          </div>
+          <div class="rte-body">
+            <h4>RTE Act 2009 compliance</h4>
+            <p>Students admitted under the 25% EWS/DG quota must have their income or caste certificate verified within 30 days. All personal data is stored per the Digital Personal Data Protection Act, 2023 and is never shared with third parties without parental consent. <a href="#">Read our data policy →</a></p>
+          </div>
+        </div>
+
+        <!-- Parent consent -->
+        <div class="consent" id="consent" onclick="toggleConsent()">
+          <div class="consent-box">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <div class="consent-text">
+            <b>Parent / Guardian consent</b>
+            I confirm that the student's parent or legal guardian has authorized me to submit these documents and has consented to their storage for school records, admissions, fee management, and legally required reporting. I understand that withdrawing consent requires a written request.
+          </div>
+          <input type="checkbox" id="consentCheck">
+        </div>
+      </section>
+
+      <!-- 6. Review -->
+      <section class="card" id="sec-review">
+        <div class="section-head">
+          <div>
+            <h2>Final <em>review</em></h2>
+            <p>Double-check before you save. You can edit any section above.</p>
+          </div>
+          <span class="section-num">06 / 06</span>
+        </div>
+
+        <div class="review">
+          <div class="review-item">
+            <div class="k">Admission No.</div>
+            <div class="v">ADM-2026-0342</div>
+          </div>
+          <div class="review-item">
+            <div class="k">Full name</div>
+            <div class="v empty">Not yet entered</div>
+          </div>
+          <div class="review-item">
+            <div class="k">Class &amp; section</div>
+            <div class="v empty">Not yet picked</div>
+          </div>
+          <div class="review-item">
+            <div class="k">Guardian</div>
+            <div class="v empty">Not yet added</div>
+          </div>
+          <div class="review-item">
+            <div class="k">Contact</div>
+            <div class="v empty">Not yet entered</div>
+          </div>
+          <div class="review-item">
+            <div class="k">Category</div>
+            <div class="v empty">Open (default)</div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- Designer notes + copy rationale -->
+  <div class="notes">
+    <h3>What's new in this revision</h3>
+    <ol>
+      <li><b>Scan-to-pre-fill bar at the top.</b> Dark, prominent, dismissible. Supports Aadhaar QR, previous school ID, and Eskoolia pre-admission slips. Aadhaar masking is enforced at the UI layer — never show more than the last 4 digits.</li>
+      <li><b>Mother tongue, Religion, Nationality added to Identity.</b> Mother tongue is required (state reporting). Religion defaults to "Prefer not to say" and is optional. Nationality defaults to Indian.</li>
+      <li><b>New Documents section (05 / 06).</b> Six document upload cards with conditional visibility: Birth certificate (required), Aadhaar (masked), TC + Previous marksheet (only when Admission type = Transfer), Caste/Income certificate (only when Category ≠ Open), Medical info (optional).</li>
+      <li><b>RTE Act 2009 compliance banner</b> under the document grid. Explains the 30-day verification rule for EWS/DG admissions and links to the data policy.</li>
+      <li><b>Parent consent checkbox</b> before Review. Legally this is the cheapest piece of the form to build and the most expensive one to forget.</li>
+      <li><b>Try it:</b> Click "Scan now" in the top bar → "Simulate scan" to see fields auto-fill. Change Admission type to Transfer in the Academic section → TC and Marksheet cards appear. Change Category to any reserved category → Caste certificate card appears.</li>
+    </ol>
+
+    <h3>What changed from the previous revision</h3>
+    <ol>
+      <li><b>Single scrollable form with sticky section nav</b> — not a wizard. Your admission staff will do this 20×/day; wizards add friction for power users. Sections let first-timers jump around.</li>
+      <li><b>Auto-generated admission number</b> shown in the field as <code>ADM-2026-0342</code> with an "Edit" micro-action. Defaults to the right thing; override is one click away.</li>
+      <li><b>Drag-drop photo circle</b> replaces the plain file picker. Shows what the ID card will actually look like.</li>
+      <li><b>Helper text hides by default, shows on focus.</b> No wall of instructions. The rule: if users need it, they'll tab into the field and see it.</li>
+      <li><b>Dependency callout for Class → Section</b> (the purple strip) shows seat availability the moment a class is picked. That's data the admin needs to decide, not a dead "Select class first" message.</li>
+      <li><b>Pincode auto-fill has a visible feedback strip</b> with the matched location and a "Clear" link if the lookup is wrong. No more silent magic.</li>
+      <li><b>Guardian as a card</b>, not a flat row of fields. Makes "Add another guardian" feel like a real action. Primary guardian is flagged.</li>
+      <li><b>Review section at the bottom</b> shows what's been entered and what's still empty — prevents saving a half-empty record.</li>
+      <li><b>Sticky footer</b> with progress bar, draft save state, and a primary Save button that is <i>always</i> enabled — clicking it with missing required fields jumps you to the first missing field. Disabled save buttons are user-hostile.</li>
+      <li><b>"Mark student disabled" checkbox removed.</b> Status toggle already covers Active/Inactive. One job, one control.</li>
+      <li><b>"Multi Subject Assignment" button removed.</b> It doesn't belong on an individual add-student page.</li>
+    </ol>
+
+    <h4>Word choices — what I changed and why</h4>
+    <table class="copy-table">
+      <thead><tr><th>Before</th><th>After</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="old">Add Student</td>
+          <td class="new">Enroll a student</td>
+          <td>"Add" is database language. "Enroll" is what schools actually do — it implies placement, fees, records, not just a new row.</td>
+        </tr>
+        <tr>
+          <td class="old">Basic Information</td>
+          <td class="new">Student identity</td>
+          <td>"Basic" is filler. "Identity" is what this section actually captures.</td>
+        </tr>
+        <tr>
+          <td class="old">Contact Information</td>
+          <td class="new">Contact &amp; address</td>
+          <td>Shorter, more specific. Drops the generic "information."</td>
+        </tr>
+        <tr>
+          <td class="old">Guardian Details</td>
+          <td class="new">Family &amp; guardians</td>
+          <td>Warmer. "Details" is bureaucratic noise.</td>
+        </tr>
+        <tr>
+          <td class="old">Admission No *</td>
+          <td class="new">Admission number <span class="auto-pill" style="margin:0;">Auto</span></td>
+          <td>Full word is clearer. The Auto badge tells users they don't have to think about it.</td>
+        </tr>
+        <tr>
+          <td class="old">Digits only. Can be auto-generated if left blank.</td>
+          <td class="new">Rolls are assigned after class allocation. Leave blank to auto-number.</td>
+          <td>Explains <i>why</i> the field can wait — not just what the rule is.</td>
+        </tr>
+        <tr>
+          <td class="old">Required fields are marked with *.</td>
+          <td class="new">[removed — marks live on the fields themselves]</td>
+          <td>A sentence telling you to look for asterisks is wasted cognitive load when you can just… look.</td>
+        </tr>
+        <tr>
+          <td class="old">Enter exactly 10 digits (numbers only).</td>
+          <td class="new">Used for OTP login to the Parent App and emergency alerts.</td>
+          <td>Old text tells <i>what</i> to do. New text tells <i>why</i> — so users care enough to get it right.</td>
+        </tr>
+        <tr>
+          <td class="old">Optional, but recommended for school communication.</td>
+          <td class="new">For report cards and newsletters.</td>
+          <td>Specific beats vague.</td>
+        </tr>
+        <tr>
+          <td class="old">Enter 6 digits to auto-fill State, District, and City.</td>
+          <td class="new">[removed — replaced by live feedback strip after entry]</td>
+          <td>Show the result, don't pre-explain the mechanic.</td>
+        </tr>
+        <tr>
+          <td class="old">Only valid academic years are listed.</td>
+          <td class="new">Defaults to the current running year.</td>
+          <td>Old text is defensive ("don't worry, we validated"). New text is useful ("here's what you'll get").</td>
+        </tr>
+        <tr>
+          <td class="old">Only valid classes are listed.</td>
+          <td class="new">[removed — redundant]</td>
+          <td>Obviously only valid classes are listed. Who thought to say this?</td>
+        </tr>
+        <tr>
+          <td class="old">Mark student disabled (checkbox)</td>
+          <td class="new">[removed — Status toggle handles this]</td>
+          <td>Two controls, one job. Also: "disabled" is harsh and overloaded (disability vs. inactive). Use "Inactive."</td>
+        </tr>
+        <tr>
+          <td class="old">Save Student</td>
+          <td class="new">Enroll student</td>
+          <td>Matches the page verb. Also: "Save" is passive (stores a record). "Enroll" is active (commits a decision).</td>
+        </tr>
+        <tr>
+          <td class="old">Choose File · No file chosen</td>
+          <td class="new">Add photo (drag-drop zone) + Upload file / Take photo buttons</td>
+          <td>Default browser file input is ugly and unclear. Custom zone also opens the door for webcam capture.</td>
+        </tr>
+        <tr>
+          <td class="old">Select Guardian (dropdown labeled "Select Existing Guardian")</td>
+          <td class="new">↳ Link an existing guardian (for siblings already enrolled)</td>
+          <td>Old label doesn't explain <i>why</i> you'd want to do this. Siblings sharing guardians is the actual use case.</td>
+        </tr>
+        <tr>
+          <td class="old">Cancel / Save Student (bottom right, static)</td>
+          <td class="new">Sticky bar: Discard / Save draft / Save student — with progress bar</td>
+          <td>Footer follows you down the page. Draft save covers the "I got interrupted" case. Progress bar reduces anxiety on a long form.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h4>One more thing</h4>
+    <p style="font-size: 12px; color: var(--ink-2);">
+      The <b>Review</b> section at the bottom isn't decorative — it's the cheapest quality gate you'll ever build. Admission staff make typos. A glance-at-this-before-saving summary catches 80% of "oh wait, wrong class" mistakes that otherwise turn into messy backend cleanup. Cost to build: ~2 hours. Value: every wrong admission you don't have to unpick.
+    </p>
+  </div>
+</div>
+
+<!-- Scan modal -->
+<div class="scan-modal-scrim" id="scanModal" onclick="if(event.target===this)closeScanModal()">
+  <div class="scan-modal">
+    <h3>Scan to <em>pre-fill</em></h3>
+    <p class="sub">Point your camera at the barcode or QR code. We'll extract what we can and fill the form.</p>
+    <div class="scan-frame">
+      <div class="scan-corner tl"></div>
+      <div class="scan-corner tr"></div>
+      <div class="scan-corner bl"></div>
+      <div class="scan-corner br"></div>
+      <div class="scan-line" id="scanLine"></div>
+      <div class="scan-caption" id="scanCaption">Looking for code…</div>
+    </div>
+    <div class="scan-types">
+      <span class="scan-type">Aadhaar QR</span>
+      <span class="scan-type">Prev. school ID</span>
+      <span class="scan-type">Pre-admission slip</span>
+    </div>
+    <div class="scan-compliance">
+      <b>Privacy:</b> Aadhaar numbers are masked to the last 4 digits before storage. Scanning requires parent consent per UIDAI guidelines.
+    </div>
+    <div class="scan-modal-foot">
+      <button class="btn btn-ghost" onclick="closeScanModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="simulateScan()">Simulate scan</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sticky footer -->
+<div class="footbar">
+  <div class="footbar-inner">
+    <div class="foot-progress">
+      <span>Progress</span>
+      <div class="bar"><div class="fill" id="progFill"></div></div>
+      <span><b id="progPct">0%</b> complete</span>
+    </div>
+    <div class="foot-spacer"></div>
+    <button class="btn btn-link">Discard</button>
+    <button class="btn btn-ghost">Save draft</button>
+    <button class="btn btn-primary">
+      Enroll student
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+    </button>
+  </div>
+</div>
+
+<script>
+  // photo preview
+  document.getElementById('photoInput').addEventListener('change', e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const url = URL.createObjectURL(f);
+    document.getElementById('photoZone').innerHTML = `<img src="${url}">`;
+  });
+
+  // pincode auto-fill simulation
+  const pinDB = {
+    '502001': { city: 'Sangareddy', dist: 'Sangareddy', state: 'Telangana' },
+    '500001': { city: 'Hyderabad', dist: 'Hyderabad', state: 'Telangana' },
+    '400001': { city: 'Mumbai', dist: 'Mumbai City', state: 'Maharashtra' },
+    '560001': { city: 'Bengaluru', dist: 'Bengaluru Urban', state: 'Karnataka' }
+  };
+  function onPinInput(v) {
+    if (v.length === 6 && pinDB[v]) {
+      const { city, dist, state } = pinDB[v];
+      document.getElementById('cityInput').value = city;
+      document.getElementById('distInput').value = dist;
+      document.getElementById('stateInput').value = state;
+      const fb = document.getElementById('pinFeedback');
+      fb.style.display = 'flex';
+      document.getElementById('pinFilled').textContent = `${city}, ${state}`;
+      updateProgress();
+    } else if (v.length < 6) {
+      document.getElementById('pinFeedback').style.display = 'none';
+    }
+  }
+  function undoPin() {
+    document.getElementById('pinInput').value = '';
+    document.getElementById('cityInput').value = '';
+    document.getElementById('distInput').value = '';
+    document.getElementById('stateInput').value = '';
+    document.getElementById('pinFeedback').style.display = 'none';
+  }
+
+  // Class → section dependency
+  const seatsMap = {
+    'Grade 1': { sections: ['A', 'B', 'C'], seats: 24 },
+    'Grade 5': { sections: ['A', 'B'], seats: 12 },
+    'Grade 10': { sections: ['A', 'B', 'C', 'D'], seats: 8 }
+  };
+  function onClassChange() {
+    const cls = document.getElementById('classSel').value;
+    const sec = document.getElementById('sectionSel');
+    const cal = document.getElementById('depCallout');
+    if (!cls) { sec.disabled = true; sec.innerHTML = '<option>Pick class first</option>'; cal.classList.remove('show'); return; }
+    const data = seatsMap[cls] || { sections: ['A', 'B'], seats: 20 };
+    sec.disabled = false;
+    sec.innerHTML = data.sections.map(s => `<option>Section ${s}</option>`).join('');
+    document.getElementById('depText').innerHTML = `<b>${data.sections.length}</b> sections available · <b>${data.seats}</b> seats remaining in ${cls}.`;
+    cal.classList.add('show');
+    updateProgress();
+  }
+
+  // admission no edit
+  function editAdm() {
+    const inp = document.getElementById('admNo');
+    inp.readOnly = false;
+    inp.focus();
+    inp.select();
+  }
+
+  // guardian add
+  let gcount = 1;
+  function addGuardian() {
+    gcount++;
+    const html = `
+      <div class="guardian">
+        <div class="guardian-head">
+          <h4>Guardian ${gcount}</h4>
+          <button class="guardian-remove" onclick="this.closest('.guardian').remove()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="row c3">
+          <div class="field"><label>Full name <span class="req">*</span></label><input class="input" type="text"></div>
+          <div class="field"><label>Relation <span class="req">*</span></label><select class="select"><option>Father</option><option>Mother</option><option>Guardian</option><option>Other</option></select></div>
+          <div class="field"><label>Phone <span class="req">*</span></label><input class="input" type="tel" maxlength="10"></div>
+        </div>
+      </div>`;
+    document.querySelector('.add-guardian').insertAdjacentHTML('beforebegin', html);
+  }
+
+  // scroll-spy for sticky nav
+  const navLinks = document.querySelectorAll('.nav-list a');
+  const sections = [...document.querySelectorAll('section.card')];
+  function spy() {
+    const y = window.scrollY + 140;
+    let cur = sections[0].id;
+    sections.forEach(s => { if (s.offsetTop <= y) cur = s.id; });
+    navLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + cur));
+  }
+  window.addEventListener('scroll', spy);
+
+  // nav click smooth
+  navLinks.forEach(a => a.addEventListener('click', e => {
+    e.preventDefault();
+    document.querySelector(a.getAttribute('href')).scrollIntoView({ behavior: 'smooth' });
+  }));
+
+  // --- Scan modal ---
+  function openScanModal() {
+    document.getElementById('scanModal').classList.add('open');
+    document.getElementById('scanCaption').textContent = 'Looking for code…';
+  }
+  function closeScanModal() {
+    document.getElementById('scanModal').classList.remove('open');
+  }
+  function simulateScan() {
+    const cap = document.getElementById('scanCaption');
+    cap.textContent = 'Code detected — reading…';
+    setTimeout(() => {
+      cap.textContent = '✓ Aadhaar QR verified';
+      // Simulate pre-fill
+      const inputs = document.querySelectorAll('#sec-identity .input[type="text"]');
+      const nameInputs = [...inputs].filter(i => i.placeholder && i.placeholder.startsWith('e.g.'));
+      if (nameInputs[0]) nameInputs[0].value = 'Rahul';
+      if (nameInputs[1]) nameInputs[1].value = 'Kumar';
+      if (nameInputs[2]) nameInputs[2].value = 'Sharma';
+      // set mother tongue + nationality
+      const selects = document.querySelectorAll('#sec-identity .select');
+      selects.forEach(s => {
+        [...s.options].forEach(o => { if (o.value === 'Telugu' || o.text === 'Telugu') s.value = o.value || o.text; });
+      });
+      updateProgress();
+      setTimeout(() => {
+        closeScanModal();
+      }, 800);
+    }, 1400);
+  }
+
+  // --- Document upload ---
+  function uploadDoc(card, filename) {
+    if (card.classList.contains('uploaded')) return;
+    card.classList.add('uploaded');
+    const btn = card.querySelector('.doc-upload-btn');
+    btn.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+      Uploaded
+    `;
+    const desc = card.querySelector('.doc-desc');
+    desc.innerHTML += `<div class="doc-filename"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>${filename}</div>`;
+    updateProgress();
+  }
+
+  // --- Consent toggle ---
+  function toggleConsent() {
+    const el = document.getElementById('consent');
+    const inp = document.getElementById('consentCheck');
+    inp.checked = !inp.checked;
+    el.classList.toggle('checked', inp.checked);
+  }
+
+  // --- Conditional document visibility ---
+  function updateConditionalDocs() {
+    // Transfer documents
+    const admTypeSelect = [...document.querySelectorAll('#sec-academic .select')].find(s => [...s.options].some(o => o.text === 'Transfer'));
+    const isTransfer = admTypeSelect && admTypeSelect.value === 'Transfer';
+    document.querySelectorAll('[data-cond="transfer"]').forEach(c => c.classList.toggle('show', isTransfer));
+
+    // Reserved category → caste certificate
+    const catSelect = [...document.querySelectorAll('#sec-academic .select')].find(s => [...s.options].some(o => o.text === 'EWS'));
+    const reservedValues = ['EWS', 'OBC', 'SC', 'ST', 'SEBC', 'Scholarship'];
+    const isReserved = catSelect && reservedValues.includes(catSelect.value);
+    document.querySelectorAll('[data-cond="reserved"]').forEach(c => c.classList.toggle('show', isReserved));
+  }
+  document.addEventListener('change', updateConditionalDocs);
+
+  // progress based on filled inputs
+  function updateProgress() {
+    const required = document.querySelectorAll('.input, .select');
+    let filled = 0;
+    required.forEach(i => { if (i.value && i.value !== 'Select' && !i.value.startsWith('Pick')) filled++; });
+    const pct = Math.min(100, Math.round((filled / required.length) * 100));
+    document.getElementById('progFill').style.width = pct + '%';
+    document.getElementById('progPct').textContent = pct + '%';
+  }
+  document.addEventListener('input', updateProgress);
+  document.addEventListener('change', updateProgress);
+
+  // save status ticker
+  let sec = 2;
+  setInterval(() => {
+    sec += 1;
+    const t = sec < 60 ? sec + 's ago' : Math.floor(sec/60) + 'm ago';
+    document.getElementById('savedAgo').textContent = t;
+  }, 1000);
+
+  updateProgress();
+</script>
+</body>
+</html>
