@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Spinner } from "@/components/common/Spinner";
 import { TopToast } from "@/components/common/TopToast";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import styles from "./StudentMultiClassPanel.module.css";
 
 type ApiList<T> = T[] | { results?: T[]; count?: number; next?: string | null; previous?: string | null };
 
@@ -84,53 +85,6 @@ async function apiPost<T>(path: string, payload: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-}
-
-function fieldStyle() {
-  return {
-    width: "100%",
-    height: 36,
-    border: "1px solid var(--line)",
-    borderRadius: 8,
-    padding: "0 10px",
-  } as const;
-}
-
-function boxStyle() {
-  return {
-    background: "var(--surface)",
-    border: "1px solid var(--line)",
-    borderRadius: "var(--radius)",
-    padding: 16,
-  } as const;
-}
-
-function buttonStyle(color = "var(--primary)") {
-  return {
-    height: 34,
-    border: `1px solid ${color}`,
-    background: color,
-    color: "#fff",
-    borderRadius: 8,
-    padding: "0 10px",
-    cursor: "pointer",
-  } as const;
-}
-
-function chipStyle() {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-    padding: "4px 10px",
-    borderRadius: 999,
-    background: "#eff6ff",
-    color: "#1d4ed8",
-    border: "1px solid #bfdbfe",
-    fontSize: 12,
-    lineHeight: 1.2,
-    whiteSpace: "nowrap",
-  } as const;
 }
 
 function parseError(error: unknown): { message: string; fieldErrors: Record<string, string> } {
@@ -525,18 +479,18 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
       />
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>Multi Subject Assignment</h1>
-            <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
-              <div style={{ display: "flex", gap: 8 }}>
-                <Link href="/students/add" style={{ ...buttonStyle("#16a34a"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
+          <div className={styles.headerRow}>
+            <h1 className={styles.headerTitle}>Multi Subject Assignment</h1>
+            <div className={styles.headerMetaWrap}>
+              <div className={styles.actionRow}>
+                <Link href="/students/add" className={`${styles.btn} ${styles.btnGreen} ${styles.linkBtn}`}>
                   Add Student
                 </Link>
-                <Link href="/students/list" style={{ ...buttonStyle("#0ea5e9"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
+                <Link href="/students/list" className={`${styles.btn} ${styles.btnSky} ${styles.linkBtn}`}>
                   Student List
                 </Link>
               </div>
-              <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+              <div className={styles.crumbRow}>
                 <span>Dashboard</span>
                 <span>/</span>
                 <span>Student Information</span>
@@ -549,13 +503,14 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
       </section>
 
       <section className="admin-visitor-area up_st_admin_visitor">
-        <div className="container-fluid p-0" style={{ display: "grid", gap: 12 }}>
-          <div className="white-box" style={boxStyle()}>
-            <h3 style={{ marginTop: 0, marginBottom: 12 }}>Select Criteria</h3>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(150px, 1fr))", gap: 8 }}>
+        <div className={`container-fluid p-0 ${styles.pageGrid}`}>
+          <div className={`white-box ${styles.box}`}>
+            <h3 className={styles.sectionTitle}>Select Criteria</h3>
+            <div className={styles.criteriaGrid}>
               <div>
-                <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Academic Year *</label>
+                <label className={styles.fieldLabel}>Academic Year *</label>
                 <select
+                  title="Academic Year"
                   value={academicYearId}
                   onChange={(event) => {
                     setAcademicYearId(event.target.value);
@@ -563,7 +518,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                     setAssignmentMap({});
                     setCurrentPage(1);
                   }}
-                  style={fieldStyle()}
+                  className={styles.field}
                 >
                   <option value="">Select Year</option>
                   {academicYears.map((item) => (
@@ -572,12 +527,13 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                     </option>
                   ))}
                 </select>
-                {fieldErrors.academic_year && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.academic_year}</p>}
+                {fieldErrors.academic_year && <p className={styles.fieldError}>{fieldErrors.academic_year}</p>}
               </div>
 
               <div>
-                <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Class *</label>
+                <label className={styles.fieldLabel}>Class *</label>
                 <select
+                  title="Class"
                   value={classId}
                   onChange={(event) => {
                     setClassId(event.target.value);
@@ -586,7 +542,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                     setAssignmentMap({});
                     setCurrentPage(1);
                   }}
-                  style={fieldStyle()}
+                  className={styles.field}
                 >
                   <option value="">Select Class</option>
                   {classes.map((item) => (
@@ -595,12 +551,13 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                     </option>
                   ))}
                 </select>
-                {fieldErrors.class && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.class}</p>}
+                {fieldErrors.class && <p className={styles.fieldError}>{fieldErrors.class}</p>}
               </div>
 
               <div>
-                <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Section *</label>
+                <label className={styles.fieldLabel}>Section *</label>
                 <select
+                  title="Section"
                   value={sectionId}
                   onChange={(event) => {
                     setSectionId(event.target.value);
@@ -608,7 +565,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                     setAssignmentMap({});
                     setCurrentPage(1);
                   }}
-                  style={fieldStyle()}
+                  className={styles.field}
                   disabled={!classId || loadingSections}
                 >
                   <option value="">{loadingSections ? "Loading sections..." : classId ? "Select Section" : "Select class first"}</option>
@@ -619,82 +576,53 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                   ))}
                 </select>
                 {loadingSections ? (
-                  <p style={{ margin: "6px 0 0", color: "var(--text-muted)", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <p className={`${styles.mutedNote} ${styles.inlineLoading}`}>
                     <Spinner size={12} color="var(--primary)" /> Loading sections...
                   </p>
                 ) : null}
-                {fieldErrors.section && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.section}</p>}
+                {fieldErrors.section && <p className={styles.fieldError}>{fieldErrors.section}</p>}
               </div>
 
               <div>
-                <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Search Student</label>
+                <label className={styles.fieldLabel}>Search Student</label>
                 <input
                   value={searchText}
                   onChange={(event) => setSearchText(event.target.value)}
                   placeholder="Name / Admission / Roll"
-                  style={fieldStyle()}
+                  className={styles.field}
                 />
               </div>
 
               <div>
-                <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Optional Subject</label>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, height: 36 }}>
+                <label className={styles.fieldLabel}>Optional Subject</label>
+                <label className={styles.optionalLabel}>
                   <input type="checkbox" checked={isOptional} onChange={(event) => setIsOptional(event.target.checked)} />
                   Mark as optional
                 </label>
               </div>
             </div>
 
-            <div style={{ marginTop: 12 }} ref={subjectDropdownRef}>
-              <label style={{ display: "block", marginBottom: 6, fontSize: 13 }}>Subjects * (Multi Select)</label>
-              <div style={{ position: "relative" }}>
+            <div className={styles.subjectWrap} ref={subjectDropdownRef}>
+              <label className={styles.fieldLabel}>Subjects * (Multi Select)</label>
+              <div className={styles.relative}>
                 <button
                   type="button"
                   onClick={() => setSubjectDropdownOpen((prev) => !prev)}
-                  style={{
-                    ...fieldStyle(),
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    background: "#fff",
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
+                  className={`${styles.field} ${styles.fieldButton}`}
                 >
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{subjectSummary}</span>
-                  <span style={{ marginLeft: 10, color: "#64748b" }}>▾</span>
+                  <span className={styles.ellipsis}>{subjectSummary}</span>
+                  <span className={styles.dropdownArrow}>▾</span>
                 </button>
 
                 {subjectDropdownOpen ? (
-                  <div
-                    style={{
-                      position: "absolute",
-                      zIndex: 20,
-                      top: "calc(100% + 6px)",
-                      left: 0,
-                      right: 0,
-                      background: "#fff",
-                      border: "1px solid var(--line)",
-                      borderRadius: 12,
-                      boxShadow: "0 12px 32px rgba(15, 23, 42, 0.12)",
-                      overflow: "hidden",
-                    }}
-                  >
-                    <div style={{ maxHeight: 220, overflowY: "auto", padding: 8 }}>
+                  <div className={styles.dropdown}>
+                    <div className={styles.dropdownList}>
                       {subjects.map((item) => {
                         const checked = selectedSubjectIds.includes(item.id);
                         return (
                           <label
                             key={item.id}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 10,
-                              padding: "10px 12px",
-                              borderRadius: 10,
-                              cursor: "pointer",
-                              background: checked ? "#eff6ff" : "transparent",
-                            }}
+                            className={`${styles.subjectItem} ${checked ? styles.subjectItemChecked : ""}`}
                           >
                             <input
                               type="checkbox"
@@ -705,41 +633,46 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                                 );
                               }}
                             />
-                            <span style={{ fontSize: 14, color: "#334155" }}>{item.name}</span>
+                            <span className={styles.subjectName}>{item.name}</span>
                           </label>
                         );
                       })}
                     </div>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: 10, borderTop: "1px solid var(--line)", background: "#f8fafc" }}>
-                      <button type="button" style={buttonStyle("#64748b")} disabled={selectedSubjectIds.length === 0} onClick={() => setSelectedSubjectIds([])}>
+                    <div className={styles.dropdownFooter}>
+                      <button
+                        type="button"
+                        className={`${styles.btn} ${styles.btnSlate}`}
+                        disabled={selectedSubjectIds.length === 0}
+                        onClick={() => setSelectedSubjectIds([])}
+                      >
                         Clear
                       </button>
-                      <button type="button" style={buttonStyle()} onClick={() => setSubjectDropdownOpen(false)}>
+                      <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={() => setSubjectDropdownOpen(false)}>
                         Done
                       </button>
                     </div>
                   </div>
                 ) : null}
               </div>
-              <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <div className={styles.chipRow}>
                 {selectedSubjects.slice(0, 3).map((item) => (
-                  <span key={item.id} style={chipStyle()}>
+                  <span key={item.id} className={styles.chip}>
                     {item.name}
                   </span>
                 ))}
                 {selectedSubjects.length > 3 ? (
-                  <span style={{ ...chipStyle(), background: "#f8fafc", color: "#475569", borderColor: "#cbd5e1" }}>
+                  <span className={`${styles.chip} ${styles.chipMuted}`}>
                     +{selectedSubjects.length - 3} more
                   </span>
                 ) : null}
               </div>
-              {fieldErrors.subject_ids && <p style={{ margin: "6px 0 0", color: "var(--warning)", fontSize: 12 }}>{fieldErrors.subject_ids}</p>}
+              {fieldErrors.subject_ids && <p className={styles.fieldError}>{fieldErrors.subject_ids}</p>}
             </div>
 
-            <div style={{ marginTop: 24, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <button type="button" style={buttonStyle()} disabled={!isAssignEnabled} onClick={() => void assignSubjects()}>
+            <div className={styles.assignRow}>
+              <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} disabled={!isAssignEnabled} onClick={() => void assignSubjects()}>
                 {assigning ? (
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                  <span className={styles.inlineSpinner}>
                     <Spinner size={14} />
                     Assigning...
                   </span>
@@ -747,73 +680,75 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                   "Assign Subjects to Selected Students"
                 )}
               </button>
-              <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+              <span className={styles.smallMuted}>
                 {selectedStudentIds.length} selected
               </span>
             </div>
           </div>
 
-          <div className="white-box" style={boxStyle()}>
-            <h3 style={{ marginTop: 0, marginBottom: 12 }}>Student List</h3>
+          <div className={`white-box ${styles.box}`}>
+            <h3 className={styles.sectionTitle}>Student List</h3>
 
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--line)", padding: "8px 6px" }}>
+                    <th className={styles.th}>
                       <input
                         type="checkbox"
+                        title="Select all visible students"
                         checked={students.length > 0 && students.every((item) => selectedStudentIds.includes(item.id))}
                         onChange={toggleAllVisibleStudents}
                       />
                     </th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--line)", padding: "8px 6px" }}>Admission No</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--line)", padding: "8px 6px" }}>Roll No</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--line)", padding: "8px 6px" }}>Student Name</th>
-                    <th style={{ textAlign: "left", borderBottom: "1px solid var(--line)", padding: "8px 6px" }}>Current Subjects</th>
+                    <th className={styles.th}>Admission No</th>
+                    <th className={styles.th}>Roll No</th>
+                    <th className={styles.th}>Student Name</th>
+                    <th className={styles.th}>Current Subjects</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loadingStudents ? (
                     <tr>
-                      <td colSpan={5} style={{ padding: 12, color: "var(--text-muted)" }}>
+                      <td colSpan={5} className={styles.tableState}>
                         Loading students...
                       </td>
                     </tr>
                   ) : students.length === 0 ? (
                     <tr>
-                      <td colSpan={5} style={{ padding: 12, color: "var(--text-muted)" }}>
+                      <td colSpan={5} className={styles.tableState}>
                         No students found.
                       </td>
                     </tr>
                   ) : (
                     students.map((student) => (
                       <tr key={student.id}>
-                        <td style={{ padding: "8px 6px", borderBottom: "1px solid #eef2f7" }}>
+                        <td className={styles.td}>
                           <input
                             type="checkbox"
+                            title={`Select ${studentLabel(student)}`}
                             checked={selectedStudentIds.includes(student.id)}
                             onChange={() => toggleStudentSelection(student.id)}
                           />
                         </td>
-                        <td style={{ padding: "8px 6px", borderBottom: "1px solid #eef2f7" }}>{student.admission_no || "-"}</td>
-                        <td style={{ padding: "8px 6px", borderBottom: "1px solid #eef2f7" }}>{student.roll_no || "-"}</td>
-                        <td style={{ padding: "8px 6px", borderBottom: "1px solid #eef2f7" }}>{studentLabel(student)}</td>
-                        <td style={{ padding: "8px 6px", borderBottom: "1px solid #eef2f7" }}>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <td className={styles.td}>{student.admission_no || "-"}</td>
+                        <td className={styles.td}>{student.roll_no || "-"}</td>
+                        <td className={styles.td}>{studentLabel(student)}</td>
+                        <td className={styles.td}>
+                          <div className={styles.chipRow}>
                             {(assignmentMap[student.id] || []).length > 0 ? (
                               <>
                                 {(assignmentMap[student.id] || []).slice(0, 3).map((subjectName) => (
-                                  <span key={subjectName} style={chipStyle()}>{subjectName}</span>
+                                  <span key={subjectName} className={styles.chip}>{subjectName}</span>
                                 ))}
                                 {(assignmentMap[student.id] || []).length > 3 ? (
-                                  <span style={{ ...chipStyle(), background: "#f8fafc", color: "#475569", borderColor: "#cbd5e1" }}>
+                                  <span className={`${styles.chip} ${styles.chipMuted}`}>
                                     +{(assignmentMap[student.id] || []).length - 3} more
                                   </span>
                                 ) : null}
                               </>
                             ) : (
-                              <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Not assigned</span>
+                              <span className={styles.mutedNote}>Not assigned</span>
                             )}
                           </div>
                         </td>
@@ -824,12 +759,12 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
               </table>
             </div>
 
-            <div style={{ marginTop: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <div style={{ color: "var(--text-muted)", fontSize: 13 }}>
+            <div className={styles.paginationRow}>
+              <div className={styles.smallMuted}>
                 Showing {displayFrom}-{displayTo} of {totalStudents} students | Page {currentPage} of {totalPages}
               </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: "var(--text-muted)" }}>
+              <div className={styles.paginationActions}>
+                <label className={styles.pageSizeLabel}>
                   Page size
                   <select
                     value={pageSize}
@@ -838,7 +773,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                       setCurrentPage(1);
                       setSelectedStudentIds([]);
                     }}
-                    style={{ ...fieldStyle(), width: 88 }}
+                    className={`${styles.field} ${styles.pageSizeSelect}`}
                   >
                     {[5, 10, 15, 20, 25, 30, 35, 40, 45, 50].map((size) => (
                       <option key={size} value={size}>{size}</option>
@@ -847,7 +782,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                 </label>
                 <button
                   type="button"
-                  style={buttonStyle("#64748b")}
+                  className={`${styles.btn} ${styles.btnSlate}`}
                   disabled={currentPage <= 1 || loadingStudents}
                   onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
                 >
@@ -855,7 +790,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
                 </button>
                 <button
                   type="button"
-                  style={buttonStyle("#64748b")}
+                  className={`${styles.btn} ${styles.btnSlate}`}
                   disabled={currentPage >= totalPages || loadingStudents}
                   onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
                 >
@@ -865,9 +800,9 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
             </div>
           </div>
 
-          {loadingMeta && <p style={{ margin: 0, color: "var(--text-muted)" }}>Loading data...</p>}
-          {loadingSections && <p style={{ margin: 0, color: "var(--text-muted)" }}><Spinner size={14} color="var(--primary)" /> Loading sections for selected class...</p>}
-          {loadingAssignments && <p style={{ margin: 0, color: "var(--text-muted)" }}><Spinner size={14} color="var(--primary)" /> Loading current subject assignments...</p>}
+          {loadingMeta && <p className={styles.loadingLine}>Loading data...</p>}
+          {loadingSections && <p className={styles.loadingLineWithSpinner}><Spinner size={14} color="var(--primary)" /> Loading sections for selected class...</p>}
+          {loadingAssignments && <p className={styles.loadingLineWithSpinner}><Spinner size={14} color="var(--primary)" /> Loading current subject assignments...</p>}
         </div>
       </section>
     </div>

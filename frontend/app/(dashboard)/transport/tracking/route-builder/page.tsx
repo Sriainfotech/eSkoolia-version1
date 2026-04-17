@@ -51,7 +51,7 @@ export default function RouteBuilderPage() {
   const removeStop = (index: number) => {
     const updated = stops.filter((_, i) => i !== index);
     // Recalculate orders and types
-    const reordered = updated.map((stop, i) => ({
+    const reordered: Stop[] = updated.map((stop, i): Stop => ({
       ...stop,
       order: i + 1,
       type: i === 0 ? 'start' : i === updated.length - 1 ? 'end' : 'middle',
@@ -68,7 +68,7 @@ export default function RouteBuilderPage() {
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
     [updated[index], updated[targetIndex]] = [updated[targetIndex], updated[index]];
 
-    const reordered = updated.map((stop, i) => ({
+    const reordered: Stop[] = updated.map((stop, i): Stop => ({
       ...stop,
       order: i + 1,
       type: i === 0 ? 'start' : i === updated.length - 1 ? 'end' : 'middle',
