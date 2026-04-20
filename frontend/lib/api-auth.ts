@@ -139,46 +139,7 @@ async function fetchWithRetry(input: RequestInfo | URL, init?: RequestInit): Pro
   }
 }
 
-async function refreshAccessToken(): Promise<string | null> {
-  const refresh = getRefreshToken();
-  if (!refresh) return null;
-
-  const res = await fetchWithRetry(`${API_BASE_URL}/api/v1/auth/refresh/`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh }),
-  });
-
-  if (!res.ok) {
-    clearAuthTokens();
-    if (typeof window !== "undefined") {
-      window.location.href = "/login";
-    }
-    return null;
-  }
-
-  const data = (await res.json()) as { access?: string };
-  if (!data.access) {
-    clearAuthTokens();
-    if (typeof window !== "undefined") {
-      window.location.href = "/login";
-    }
-    return null;
-  }
-
-  setAuthTokens(data.access, refresh);
-  return data.access;
-}
-
-function withAuthHeaders(token: string, headers?: HeadersInit): HeadersInit {
-  const base: Record<string, string> = { Authorization: `Bearer ${token}` };
-  if (headers && typeof headers === "object" && !Array.isArray(headers)) {
-    return { ...base, ...(headers as Record<string, string>) };
-  }
-  return base;
-}
-
-export async function apiRequestWithRefresh<T>(path: string, options?: RequestInit): Promise<T> {
+async function requestWithRefreshResponse(path: string, options?: RequestInit): Promise<Response> {
   let token = getAccessToken();
   if (!token) {
     const refreshed = await refreshAccessToken();
@@ -232,6 +193,101 @@ export async function apiRequestWithRefresh<T>(path: string, options?: RequestIn
     throw apiError;
   }
 
+  return response;
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  const refresh = getRefreshToken();
+  if (!refresh) return null;
+
+  const res = await fetchWithRetry(`${API_BASE_URL}/api/v1/auth/refresh/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh }),
+  });
+
+  if (!res.ok) {
+    clearAuthTokens();
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
+    return null;
+  }
+
+  const data = (await res.json()) as { access?: string };
+  if (!data.access) {
+    clearAuthTokens();
+    if (typeof window !== "undefined") {
+      window.location.href = "/login";
+    }
+    return null;
+  }
+
+  setAuthTokens(data.access, refresh);
+  return data.access;
+}
+
+function withAuthHeaders(token: string, headers?: HeadersInit): HeadersInit {
+  const base: Record<string, string> = { Authorization: `Bearer ${token}` };
+  if (headers && typeof headers === "object" && !Array.isArray(headers)) {
+    return { ...base, ...(headers as Record<string, string>) };
+  }
+  return base;
+}
+
+function toNumericId(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeIdsDeep(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeIdsDeep(item));
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  const source = value as Record<string, unknown>;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(source)) {
+    normalized[key] = normalizeIdsDeep(item);
+  }
+
+  const currentId = toNumericId(normalized.id);
+  if (currentId !== null) {
+    normalized.id = currentId;
+    return normalized;
+  }
+
+  const pkId = toNumericId(normalized.pk);
+  if (pkId !== null) {
+    normalized.id = pkId;
+    return normalized;
+  }
+
+  const idLikeKeys = Object.keys(normalized).filter((key) => key.endsWith("_id") && toNumericId(normalized[key]) !== null);
+  if (idLikeKeys.length === 1) {
+    const key = idLikeKeys[0];
+    const fallbackId = toNumericId(normalized[key]);
+    if (fallbackId !== null) {
+      normalized.id = fallbackId;
+    }
+  }
+
+  return normalized;
+}
+
+export async function apiRequestWithRefresh<T>(path: string, options?: RequestInit): Promise<T> {
+  const response = await requestWithRefreshResponse(path, options);
+
   if (response.status === 204) {
     return undefined as T;
   }
@@ -239,5 +295,10 @@ export async function apiRequestWithRefresh<T>(path: string, options?: RequestIn
   if (!text) {
     return undefined as T;
   }
-  return JSON.parse(text) as T;
+  const parsed = JSON.parse(text) as unknown;
+  return normalizeIdsDeep(parsed) as T;
+}
+
+export async function apiRequestWithRefreshResponse(path: string, options?: RequestInit): Promise<Response> {
+  return requestWithRefreshResponse(path, options);
 }

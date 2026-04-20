@@ -1,5 +1,5 @@
-import { StudentCategoryPanel } from "@/components/students/StudentCategoryPanel";
+import { StudentCategoryManagerPanel } from "@/components/students/StudentCategoryManagerPanel";
 
 export default function StudentCategoryPage() {
-  return <StudentCategoryPanel />;
+  return <StudentCategoryManagerPanel />;
 }

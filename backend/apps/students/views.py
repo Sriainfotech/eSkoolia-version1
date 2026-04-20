@@ -7,6 +7,7 @@ import re
 from uuid import uuid4
 from datetime import datetime
 from django.conf import settings
+from django.http import HttpResponse
 from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.utils import timezone
@@ -121,6 +122,48 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
     pagination_class = ApiPageNumberPagination
     permission_codes = {"*": "student_info.student_category.view"}
 
+    def _restore_soft_deleted_category(self, request, validated_data):
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        if not school_id:
+            school = getattr(request, "school", None)
+            school_id = getattr(school, "id", None)
+        if not school_id:
+            return None
+
+        name = str(validated_data.get("name") or "").strip()
+        code = str(validated_data.get("code") or "").strip()
+        deleted_qs = StudentCategory.objects.filter(school_id=school_id, is_deleted=True)
+
+        name_match = deleted_qs.filter(name__iexact=name).order_by("-id").first() if name else None
+        code_match = deleted_qs.filter(code__iexact=code).order_by("-id").first() if code else None
+
+        if name_match and code_match and name_match.id != code_match.id:
+            raise ValidationError({"detail": "A deleted category with matching name/code conflict exists."})
+
+        target = name_match or code_match
+        if not target:
+            return None
+
+        target.name = name
+        target.code = validated_data.get("code")
+        target.description = validated_data.get("description") or ""
+        target.status = validated_data.get("status") or "active"
+        target.is_deleted = False
+        target.deleted_at = None
+        target.deleted_by = None
+        target.save(
+            update_fields=[
+                "name",
+                "code",
+                "description",
+                "status",
+                "is_deleted",
+                "deleted_at",
+                "deleted_by",
+            ]
+        )
+        return target
+
     def _build_validation_error_response(self, field_errors=None, message="Validation failed"):
         return Response(
             {
@@ -147,12 +190,100 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
                 return str(errors[0])
         return "Validation failed"
 
+    def _fallback_category_description(self, name, code=None, students_count=0):
+        safe_name = str(name or "").strip() or "this category"
+        safe_code = str(code or "").strip()
+        count = max(0, int(students_count or 0))
+
+        usage_line = (
+            f"This category currently covers {count} enrolled student{'s' if count != 1 else ''}."
+            if count
+            else "Use this category to group students consistently across admissions, fees, and reporting."
+        )
+        code_line = f" Category code: {safe_code}." if safe_code else ""
+        return (
+            f"Category for {safe_name.lower()} used in admissions, fees, and academic reports."
+            f"{code_line} {usage_line}"
+        ).strip()
+
+    def _generate_category_description_with_ai(self, name, code=None, students_count=0):
+        fallback = self._fallback_category_description(name, code, students_count)
+        if not getattr(settings, "CATEGORY_AI_SUGGESTION_ENABLED", False):
+            return fallback, "fallback"
+
+        api_key = getattr(settings, "CATEGORY_AI_OPENAI_API_KEY", "")
+        endpoint = getattr(settings, "CATEGORY_AI_OPENAI_ENDPOINT", "")
+        model = getattr(settings, "CATEGORY_AI_OPENAI_MODEL", "gpt-4o-mini")
+
+        if not api_key or not endpoint:
+            return fallback, "fallback"
+
+        prompt = (
+            "Write one concise admin-ready category description (max 220 characters). "
+            "Use neutral professional language for school ERP. "
+            "Return only the description text without quotes or markdown.\n"
+            f"Category: {name}\n"
+            f"Code: {code or 'N/A'}\n"
+            f"Students Count: {students_count or 0}"
+        )
+
+        try:
+            response = requests.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "You create short and practical school ERP descriptions.",
+                        },
+                        {
+                            "role": "user",
+                            "content": prompt,
+                        },
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 120,
+                },
+                timeout=8,
+            )
+            if not response.ok:
+                logger.warning("AI suggestion request failed: %s", response.text[:300])
+                return fallback, "fallback"
+
+            data = response.json() if response.content else {}
+            choices = data.get("choices") if isinstance(data, dict) else []
+            message = (
+                ((choices or [])[0] or {}).get("message", {}).get("content", "")
+                if isinstance(choices, list)
+                else ""
+            )
+            suggestion = str(message or "").strip().replace("\n", " ")
+            if not suggestion:
+                return fallback, "fallback"
+
+            return suggestion[:500], "ai"
+        except Exception as exc:
+            logger.warning("AI suggestion error: %s", exc)
+            return fallback, "fallback"
+
     def get_queryset(self):
-        qs = super().get_queryset().order_by("name")
+        qs = super().get_queryset().filter(is_deleted=False).annotate(
+            students_count=Count(
+                "students",
+                filter=Q(students__is_deleted=False),
+                distinct=True,
+            )
+        ).order_by("name")
         params = self.request.query_params
         search = str(params.get("search") or params.get("q") or "").strip()
         status_filter = str(params.get("status") or "").strip().lower()
         name_filter = str(params.get("name") or "").strip()
+        attention_filter = str(params.get("attention") or "").strip().lower() in {"1", "true", "yes"}
 
         if search:
             qs = qs.filter(
@@ -164,7 +295,83 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
             qs = qs.filter(name__icontains=name_filter)
         if status_filter in {"active", "inactive"}:
             qs = qs.filter(status=status_filter)
+        if attention_filter:
+            qs = qs.filter(
+                Q(code__isnull=True)
+                | Q(code="")
+                | Q(description__isnull=True)
+                | Q(description="")
+            )
         return qs
+
+    @action(detail=False, methods=["get"], url_path="summary")
+    def summary(self, request):
+        qs = self.get_queryset()
+        total_count = qs.count()
+        active_count = qs.filter(status="active").count()
+        inactive_count = qs.filter(status="inactive").count()
+        attention_count = qs.filter(
+            Q(code__isnull=True)
+            | Q(code="")
+            | Q(description__isnull=True)
+            | Q(description="")
+        ).count()
+
+        top_categories = list(
+            qs.order_by("-students_count", "name").values("id", "name", "students_count")[:7]
+        )
+        total_students = sum(int(item.get("students_count") or 0) for item in top_categories)
+
+        recent_activity = []
+        for category in qs.order_by("-created_at")[:5]:
+            recent_activity.append(
+                {
+                    "id": category.id,
+                    "name": category.name,
+                    "action": "created",
+                    "status": category.status,
+                    "created_at": category.created_at,
+                }
+            )
+
+        return Response(
+            {
+                "success": True,
+                "total_count": total_count,
+                "active_count": active_count,
+                "inactive_count": inactive_count,
+                "attention_count": attention_count,
+                "top_categories": top_categories,
+                "top_total_students": total_students,
+                "recent_activity": recent_activity,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["get"], url_path="export")
+    def export(self, request):
+        qs = self.get_queryset().order_by("name")
+
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow(["Category", "Code", "Students", "Status", "Description", "Created At"])
+
+        for category in qs:
+            writer.writerow(
+                [
+                    category.name,
+                    category.code or "",
+                    category.students_count or 0,
+                    category.status,
+                    category.description or "",
+                    timezone.localtime(category.created_at).strftime("%Y-%m-%d %H:%M:%S") if category.created_at else "",
+                ]
+            )
+
+        filename = f"student_categories_{timezone.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        response = HttpResponse(buffer.getvalue(), content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
 
     @action(detail=False, methods=["get"], url_path="check-name")
     def check_name(self, request):
@@ -178,11 +385,79 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
         exists = queryset.exists()
         return Response({"success": True, "exists": exists, "message": "Category exists." if exists else "Category available."})
 
+    @action(detail=False, methods=["get"], url_path="check-code")
+    def check_code(self, request):
+        code = str(request.query_params.get("code") or "").strip()
+        if not code:
+            return Response({"success": True, "exists": False, "message": "Code is optional."})
+
+        queryset = self.get_queryset().filter(code__iexact=code)
+        if request.query_params.get("exclude_id"):
+            queryset = queryset.exclude(id=request.query_params.get("exclude_id"))
+        exists = queryset.exists()
+        return Response({"success": True, "exists": exists, "message": "Code exists." if exists else "Code available."})
+
+    @action(detail=False, methods=["post"], url_path="ai-description-suggestion")
+    def ai_description_suggestion(self, request):
+        name = str(request.data.get("name") or "").strip()
+        code = str(request.data.get("code") or "").strip()
+        students_count = request.data.get("students_count") or 0
+
+        if not name:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Category name is required to generate description.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        suggestion, source = self._generate_category_description_with_ai(
+            name=name,
+            code=code,
+            students_count=students_count,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "suggestion": suggestion,
+                "source": source,
+                "message": "Suggestion generated successfully.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
             field_errors = self._normalize_field_errors(serializer.errors)
             return self._build_validation_error_response(field_errors, self._first_error_message(field_errors))
+
+        try:
+            restored = self._restore_soft_deleted_category(request, serializer.validated_data)
+        except ValidationError as exc:
+            details = exc.detail if isinstance(exc.detail, dict) else {"detail": [str(exc.detail)]}
+            field_errors = self._normalize_field_errors(details)
+            return self._build_validation_error_response(field_errors, self._first_error_message(field_errors))
+        except IntegrityError:
+            return self._build_validation_error_response(
+                {"name": ["Category name already exists."]},
+                "Category name already exists.",
+            )
+
+        if restored:
+            response_serializer = self.get_serializer(restored)
+            headers = self.get_success_headers(response_serializer.data)
+            return Response(
+                {
+                    "success": True,
+                    "message": "Student category restored successfully.",
+                    "data": response_serializer.data,
+                },
+                status=status.HTTP_201_CREATED,
+                headers=headers,
+            )
 
         try:
             self.perform_create(serializer)
@@ -261,6 +536,60 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
 
         return Response({"success": True, "message": message})
 
+    @action(detail=True, methods=["patch"], url_path="deactivate")
+    def deactivate(self, request, pk=None):
+        """
+        Production-grade deactivate endpoint.
+        Sets is_active=False while preserving historical data.
+        
+        Returns:
+        - 200 OK on success
+        - 404 Not Found if category doesn't exist
+        - 400 Bad Request if category is already inactive
+        """
+        try:
+            instance = self.get_object()
+        except Exception:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Category not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not instance.is_active and str(instance.status).lower() == "inactive":
+            return Response(
+                {
+                    "success": False,
+                    "message": "Category is already deactivated.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            instance.is_active = False
+            instance.status = "inactive"
+            instance.save(update_fields=["is_active", "status"])
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Category deactivated successfully.",
+                    "data": StudentCategorySerializer(instance, context={"request": request}).data,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.error(f"Error deactivating category {instance.id}: {str(e)}")
+            return Response(
+                {
+                    "success": False,
+                    "message": "Something went wrong. Please try again later.",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
     @action(detail=False, methods=["delete"], url_path="bulk-delete")
     def bulk_delete(self, request):
         ids = request.data.get("ids") or []
@@ -270,28 +599,70 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
         queryset = self.get_queryset().filter(id__in=ids)
         blocked = queryset.filter(students__isnull=False).distinct()
         if blocked.exists():
-            return self._build_validation_error_response({}, "One or more selected categories are assigned to students and cannot be deleted.")
+            return self._build_validation_error_response({}, "Students are assigned to one or more selected categories.")
 
         count = queryset.count()
         queryset.delete()
         return Response({"success": True, "message": f"{count} categories deleted successfully."}, status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
-        instance = self.get_object()
-        if instance.students.exists():
-            return self._build_validation_error_response(
-                {},
-                "Cannot delete category as it is assigned to students",
+        """
+        Production-grade delete endpoint with conflict handling.
+        
+        Returns:
+        - 409 Conflict if students are assigned to the category
+        - 404 Not Found if category doesn't exist
+        - 200 OK if deletion is successful
+        """
+        try:
+            instance = self.get_object()
+        except Exception:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Category not found.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
             )
 
-        self.perform_destroy(instance)
-        return Response(
-            {
-                "success": True,
-                "message": "Student category deleted successfully.",
-            },
-            status=status.HTTP_200_OK,
-        )
+        # Check if students are assigned to this category
+        student_count = instance.students.filter(is_deleted=False).count()
+        if student_count > 0:
+            return Response(
+                {
+                    "success": False,
+                    "code": "CATEGORY_IN_USE",
+                    "message": "This category is assigned to students and cannot be deleted.",
+                    "details": "Please reassign students or deactivate the category instead.",
+                    "student_count": student_count,
+                    "suggested_action": "deactivate",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        try:
+            # Perform soft delete instead of hard delete for audit trail
+            instance.is_deleted = True
+            instance.deleted_at = timezone.now()
+            instance.deleted_by = request.user
+            instance.save(update_fields=["is_deleted", "deleted_at", "deleted_by"])
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Category deleted successfully.",
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.error(f"Error deleting category {instance.id}: {str(e)}")
+            return Response(
+                {
+                    "success": False,
+                    "message": "Something went wrong. Please try again later.",
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class StudentGroupViewSet(TenantScopedModelViewSet):

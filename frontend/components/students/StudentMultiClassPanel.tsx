@@ -350,6 +350,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
     if (!loadingMeta) {
       void loadStudents();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadingMeta, currentPage, pageSize, classId, sectionId, academicYearId, debouncedSearchText]);
 
   useEffect(() => {
@@ -362,6 +363,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
     if (!loadingMeta) {
       void loadAssignments();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadingMeta, academicYearId, classId, sectionId]);
 
   useEffect(() => {

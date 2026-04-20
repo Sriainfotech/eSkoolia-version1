@@ -232,6 +232,7 @@ export function StudentUnassignedPanel() {
       void loadStudents();
     }, 10);
     return () => window.clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, pageSize, debouncedSearch]);
 
   useEffect(() => {

@@ -198,6 +198,7 @@ export function TransportRoutePanel() {
 
   useEffect(() => {
     void loadRoutes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

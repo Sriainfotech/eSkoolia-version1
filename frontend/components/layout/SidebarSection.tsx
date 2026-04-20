@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import styles from "@/components/layout/Sidebar.module.css";
 import { SidebarItem } from "@/components/layout/sidebar-menu.data";
 
@@ -62,7 +63,11 @@ export function SidebarSection({ item, pathname, expanded, activeId, depth, onTo
           {item.icon ? <img src={item.icon} alt="" className={styles.itemIcon} aria-hidden="true" /> : null}
           <span>{item.name}</span>
         </span>
-        {hasChildren ? <span className={styles.caret}>{isExpanded ? "-" : "+"}</span> : null}
+        {hasChildren ? (
+          <span className={styles.caret} aria-hidden="true">
+            {isExpanded ? <ChevronDown size={14} strokeWidth={2} /> : <ChevronRight size={14} strokeWidth={2} />}
+          </span>
+        ) : null}
       </button>
       {hasChildren && isExpanded ? (
         <div className={styles.children}>

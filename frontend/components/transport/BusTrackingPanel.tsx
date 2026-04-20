@@ -450,7 +450,7 @@ export default function BusTrackingPanel({ hideHeader = false }: BusTrackingPane
 
       return left.vehicleNo.localeCompare(right.vehicleNo);
     });
-  }, [alerts, assignmentByVehicle, latestAlertByVehicle, locationByVehicle, pickupUpdates, routeById, searchTerm, selectedRouteId, selectedStatus, students, stopsByRoute, vehicles]);
+  }, [assignmentByVehicle, latestAlertByVehicle, locationByVehicle, pickupUpdates, routeById, searchTerm, selectedRouteId, selectedStatus, students, stopsByRoute, vehicles]);
 
   const selectedBus = useMemo(() => {
     return liveBuses.find((bus) => bus.vehicleId === selectedBusId) || liveBuses[0] || null;
@@ -774,6 +774,7 @@ export default function BusTrackingPanel({ hideHeader = false }: BusTrackingPane
 
   useEffect(() => {
     void loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

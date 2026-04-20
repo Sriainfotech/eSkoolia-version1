@@ -481,6 +481,8 @@ export function StudentAddPanel() {
   const [photoUploading, setPhotoUploading] = useState(false);
   const [photoCleared, setPhotoCleared] = useState(false);
   const [photoPreviewOpen, setPhotoPreviewOpen] = useState(false);
+  const [capturedPhotoFile, setCapturedPhotoFile] = useState<File | null>(null);
+  const [capturedPhotoPreviewUrl, setCapturedPhotoPreviewUrl] = useState("");
   const [statusValue, setStatusValue] = useState<"active" | "inactive" | "transferred" | "dropped">("active");
   const [categoryId, setCategoryId] = useState("");
   const [guardianId, setGuardianId] = useState("");
@@ -541,6 +543,7 @@ export function StudentAddPanel() {
   const toastTimerRef = useRef<number | null>(null);
 
   const pinIsValid = /^\d{6}$/.test(pincode.trim());
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const validAcademicYears = useMemo(
     () => academicYears.filter((item) => /^\d{4}-\d{4}$/.test(String(item.name || "").trim())),
@@ -1540,14 +1543,14 @@ export function StudentAddPanel() {
     }
   };
 
-  const uploadStudentPhoto = async (file: File) => {
+  const uploadStudentPhoto = async (file: File): Promise<boolean> => {
     if (!["image/jpeg", "image/png"].includes(file.type)) {
       setSingleFieldError("photo", "Only JPEG and PNG files are allowed");
-      return;
+      return false;
     }
     if (file.size > 4 * 1024 * 1024) {
       setSingleFieldError("photo", "Please choose an image up to 4MB before compression");
-      return;
+      return false;
     }
 
     try {
@@ -1563,13 +1566,25 @@ export function StudentAddPanel() {
       setPhotoName(file.name);
       setPhotoCleared(false);
       setSuccess("Photo uploaded securely.");
+      return true;
     } catch (uploadError) {
       setSingleFieldError("photo", parseError(uploadError));
       setPhoto("");
       setPhotoName("");
+      return false;
     } finally {
       setPhotoUploading(false);
     }
+  };
+
+  const clearCapturedPhotoDraft = () => {
+    setCapturedPhotoFile(null);
+    setCapturedPhotoPreviewUrl((prev) => {
+      if (prev) {
+        URL.revokeObjectURL(prev);
+      }
+      return "";
+    });
   };
 
   const clearStudentPhoto = () => {
@@ -1592,17 +1607,24 @@ export function StudentAddPanel() {
 
   const closeStudentCamera = () => {
     stopStudentCamera();
+    clearCapturedPhotoDraft();
     setCameraOpen(false);
     setCameraError("");
   };
 
-  const openStudentPhotoPicker = () => {
+  const openStudentFilePicker = () => {
+    if (isViewMode || photoUploading) return;
+    photoInputRef.current?.click();
+  };
+
+  const openStudentCamera = () => {
     if (isViewMode || photoUploading) return;
     if (
       typeof navigator !== "undefined" &&
       navigator.mediaDevices &&
       typeof navigator.mediaDevices.getUserMedia === "function"
     ) {
+      clearCapturedPhotoDraft();
       setCameraError("");
       setCameraOpen(true);
       return;
@@ -1632,12 +1654,39 @@ export function StudentAddPanel() {
       }
 
       const file = new File([blob], `student-photo-${Date.now()}.jpg`, { type: "image/jpeg" });
-      closeStudentCamera();
-      await uploadStudentPhoto(file);
+      setCapturedPhotoFile(file);
+      setCapturedPhotoPreviewUrl((prev) => {
+        if (prev) {
+          URL.revokeObjectURL(prev);
+        }
+        return URL.createObjectURL(file);
+      });
+      setCameraError("");
     } catch (captureError) {
       setCameraError(parseError(captureError) || "Unable to capture photo.");
     }
   };
+
+  const retakeCapturedPhoto = () => {
+    clearCapturedPhotoDraft();
+    setCameraError("");
+  };
+
+  const applyCapturedPhoto = async () => {
+    if (!capturedPhotoFile) return;
+    const uploaded = await uploadStudentPhoto(capturedPhotoFile);
+    if (!uploaded) return;
+    closeStudentCamera();
+    setPhotoPreviewOpen(true);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (capturedPhotoPreviewUrl) {
+        URL.revokeObjectURL(capturedPhotoPreviewUrl);
+      }
+    };
+  }, [capturedPhotoPreviewUrl]);
 
   useEffect(() => {
     if (!cameraOpen) {
@@ -1843,15 +1892,22 @@ export function StudentAddPanel() {
               </div>
 
               <div className="photo-upload-block">
-                <button type="button" className={photo ? "photo-circle has-photo" : "photo-circle"} onClick={openStudentPhotoPicker}>
+                <button type="button" className={photo ? "photo-circle has-photo" : "photo-circle"} onClick={openStudentFilePicker}>
                   {photo ? <img src={photo} alt="Student" /> : <><span className="camera-icon">+</span><span className="photo-label">ADD PHOTO</span></>}
                 </button>
                 <div className="photo-meta">
                   <p className="photo-title">Student photo</p>
                   <p className="photo-desc">Square JPG or PNG, at least 400x400px. We&apos;ll crop it into a circle for ID cards and reports.</p>
                   <div className="photo-actions">
-                    <button type="button" className="btn-upload-file" onClick={openStudentPhotoPicker}>{photo ? "Change" : "Upload file"}</button>
-                    {photo ? <button type="button" className="btn-take-photo" onClick={clearStudentPhoto}>Remove</button> : <button type="button" className="btn-take-photo" onClick={openStudentPhotoPicker}>Take photo</button>}
+                    <button type="button" className="btn-upload-file" onClick={openStudentFilePicker}>{photo ? "Change" : "Upload file"}</button>
+                    {photo ? (
+                      <>
+                        <button type="button" className="btn-upload-file" onClick={() => setPhotoPreviewOpen(true)}>View image</button>
+                        <button type="button" className="btn-take-photo" onClick={clearStudentPhoto}>Remove</button>
+                      </>
+                    ) : (
+                      <button type="button" className="btn-take-photo" onClick={openStudentCamera}>Take photo</button>
+                    )}
                   </div>
                   <input
                     ref={photoInputRef}
@@ -1921,7 +1977,7 @@ export function StudentAddPanel() {
               </div>
 
               <div className="grid-3 mt-20">
-                <div className="field-wrapper"><label className="field-label">Date of birth <span className="req">*</span></label><input className={fieldErrors.dob ? "field-input error" : "field-input"} value={dobDisplay} onChange={(e) => onDobMaskedChange(e.target.value)} placeholder="DD / MM / YYYY" maxLength={14} />{fieldErrors.dob ? <p className="error-msg">{fieldErrors.dob}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Date of birth <span className="req">*</span></label><input type="date" title="Date of birth" className={fieldErrors.dob ? "field-input error" : "field-input"} value={dateOfBirth} max={todayIso} onChange={(e) => { setDateOfBirth(e.target.value); setSingleFieldError("dob", ""); }} />{fieldErrors.dob ? <p className="error-msg">{fieldErrors.dob}</p> : null}</div>
                 <div className="field-wrapper"><label className="field-label">Gender <span className="req">*</span></label><select className={fieldErrors.gender ? "field-select error" : "field-select"} title="Gender" value={gender} onChange={(e) => setGender(e.target.value)}><option value="">Select</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select>{fieldErrors.gender ? <p className="error-msg">{fieldErrors.gender}</p> : null}</div>
                 <div className="field-wrapper"><label className="field-label">Blood group <span className="badge badge-optional">OPTIONAL</span></label><select className="field-select" title="Blood group" value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)}><option value="">Select</option>{"A+,A-,B+,B-,AB+,AB-,O+,O-".split(",").map((bg) => <option key={bg} value={bg}>{bg}</option>)}</select></div>
               </div>
@@ -2055,11 +2111,24 @@ export function StudentAddPanel() {
             </div>
             <div className="camera-body">
               {cameraError ? <p className="camera-error">{cameraError}</p> : null}
-              <video ref={cameraVideoRef} className="camera-video" autoPlay playsInline muted />
+              {capturedPhotoPreviewUrl ? (
+                <img src={capturedPhotoPreviewUrl} alt="Captured student preview" className="camera-preview-image" />
+              ) : (
+                <video ref={cameraVideoRef} className="camera-video" autoPlay playsInline muted />
+              )}
             </div>
             <div className="camera-actions">
-              <button type="button" className="btn-take-photo" onClick={captureStudentPhoto} disabled={photoUploading}>Capture</button>
-              <button type="button" className="btn-upload-file" onClick={closeStudentCamera}>Cancel</button>
+              {capturedPhotoPreviewUrl ? (
+                <>
+                  <button type="button" className="btn-upload-file" onClick={retakeCapturedPhoto} disabled={photoUploading}>Retake</button>
+                  <button type="button" className="btn-take-photo" onClick={() => void applyCapturedPhoto()} disabled={photoUploading}>Use photo</button>
+                </>
+              ) : (
+                <>
+                  <button type="button" className="btn-take-photo" onClick={captureStudentPhoto} disabled={photoUploading}>Capture</button>
+                  <button type="button" className="btn-upload-file" onClick={closeStudentCamera}>Cancel</button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -3076,6 +3145,14 @@ export function StudentAddPanel() {
           width: 100%;
           aspect-ratio: 4 / 3;
           object-fit: cover;
+          background: #020617;
+          border-radius: 12px;
+        }
+
+        .camera-preview-image {
+          width: 100%;
+          aspect-ratio: 4 / 3;
+          object-fit: contain;
           background: #020617;
           border-radius: 12px;
         }

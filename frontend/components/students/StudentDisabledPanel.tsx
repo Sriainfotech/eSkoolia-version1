@@ -315,6 +315,7 @@ export function StudentDisabledPanel() {
       void loadStudents();
     }, 350);
     return () => window.clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydratedFromUrl, page, pageSize, classId, sectionId, debouncedNameQuery, debouncedAdmissionQuery]);
 
   useEffect(() => {
@@ -322,6 +323,7 @@ export function StudentDisabledPanel() {
       return;
     }
     syncUrl();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydratedFromUrl, nameQuery, admissionQuery, classId, sectionId, page, pageSize]);
 
   useEffect(() => {

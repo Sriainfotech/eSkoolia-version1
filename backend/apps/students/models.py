@@ -1,3 +1,4 @@
+
 from django.db import models
 import uuid
 
@@ -8,6 +9,16 @@ class StudentCategory(models.Model):
     description = models.TextField(blank=True)
     code = models.CharField(max_length=30, blank=True, null=True)
     status = models.CharField(max_length=10, choices=[("active", "Active"), ("inactive", "Inactive")], default="active")
+    is_active = models.BooleanField(default=True)
+    is_deleted = models.BooleanField(default=False, db_index=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="student_categories_deleted",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

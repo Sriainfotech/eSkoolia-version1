@@ -51,6 +51,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
       // Clear users if search is between 0-1 characters
       setUsers([]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, isOpen, userType]);
 
   const fetchAllUsers = async () => {

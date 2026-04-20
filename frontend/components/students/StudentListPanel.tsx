@@ -269,6 +269,7 @@ export function StudentListPanel() {
     };
 
     void loadStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearch, classFilter, sectionFilter, refreshTick]);
 
   useEffect(() => {

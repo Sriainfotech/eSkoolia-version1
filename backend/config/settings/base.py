@@ -221,3 +221,12 @@ except (ValueError, TypeError):
 
 CELERY_BROKER_URL = REDIS_URL or "redis://127.0.0.1:6379/0"
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+
+# Optional AI suggestion settings for student category descriptions
+CATEGORY_AI_SUGGESTION_ENABLED = os.getenv("CATEGORY_AI_SUGGESTION_ENABLED", "False").lower() == "true"
+CATEGORY_AI_OPENAI_API_KEY = os.getenv("CATEGORY_AI_OPENAI_API_KEY", "").strip()
+CATEGORY_AI_OPENAI_ENDPOINT = os.getenv(
+    "CATEGORY_AI_OPENAI_ENDPOINT",
+    "https://api.openai.com/v1/chat/completions",
+).strip()
+CATEGORY_AI_OPENAI_MODEL = os.getenv("CATEGORY_AI_OPENAI_MODEL", "gpt-4o-mini").strip()

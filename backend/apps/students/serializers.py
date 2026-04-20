@@ -28,6 +28,7 @@ class PincodeLookupQuerySerializer(serializers.Serializer):
 
 class StudentCategorySerializer(serializers.ModelSerializer):
     NAME_PATTERN = re.compile(r"^[A-Za-z0-9 ]+$")
+    students_count = serializers.IntegerField(read_only=True)
 
     def validate_name(self, value):
         name = str(value or "").strip()
@@ -45,7 +46,7 @@ class StudentCategorySerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         school_id = getattr(getattr(request, "user", None), "school_id", None)
         if school_id:
-            queryset = StudentCategory.objects.filter(school_id=school_id, name__iexact=name)
+            queryset = StudentCategory.objects.filter(school_id=school_id, is_deleted=False, name__iexact=name)
             if self.instance:
                 queryset = queryset.exclude(id=self.instance.id)
             if queryset.exists():
@@ -68,7 +69,7 @@ class StudentCategorySerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         school_id = getattr(getattr(request, "user", None), "school_id", None)
         if school_id:
-            queryset = StudentCategory.objects.filter(school_id=school_id, code__iexact=code)
+            queryset = StudentCategory.objects.filter(school_id=school_id, is_deleted=False, code__iexact=code)
             if self.instance:
                 queryset = queryset.exclude(id=self.instance.id)
             if queryset.exists():
@@ -85,8 +86,21 @@ class StudentCategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StudentCategory
-        fields = ["id", "school", "name", "description", "code", "status", "created_at"]
-        read_only_fields = ["id", "school", "created_at"]
+        fields = [
+            "id",
+            "school",
+            "name",
+            "description",
+            "code",
+            "status",
+            "is_active",
+            "is_deleted",
+            "deleted_at",
+            "deleted_by",
+            "students_count",
+            "created_at",
+        ]
+        read_only_fields = ["id", "school", "created_at", "is_deleted", "deleted_at", "deleted_by"]
 
 
 class StudentGroupSerializer(serializers.ModelSerializer):

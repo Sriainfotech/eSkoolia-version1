@@ -9,11 +9,6 @@ const nextConfig = {
       config.cache = { type: "memory" };
     }
 
-    // Keep Node runtime chunk resolution aligned with emitted server chunk directory.
-    if (isServer && config.output) {
-      config.output.chunkFilename = "chunks/[name].js";
-    }
-
     return config;
   },
 };

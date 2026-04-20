@@ -250,6 +250,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
     } else if (activeGroup) {
       fetchGroupMessages(activeGroup.id);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeUser, activeGroup]);
 
   useEffect(() => {
@@ -273,6 +274,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
     };
 
     syncBlockedState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeUser?.user_id]);
 
   const fetchMessages = async (userId: number) => {
@@ -626,6 +628,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
         wsRef.current.close();
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeUser?.user_id, currentUserId, onIncomingMessage]);
 
   useEffect(() => {

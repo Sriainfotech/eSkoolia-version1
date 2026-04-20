@@ -285,6 +285,7 @@ export function StudentGroupPanel() {
 
   useEffect(() => {
     void load(currentPage, pageSize, debouncedSearch, sortBy);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, pageSize, debouncedSearch, sortBy]);
 
   useEffect(() => {
