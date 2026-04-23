@@ -166,10 +166,64 @@ class GuardianSerializer(serializers.ModelSerializer):
 
 
 class StudentDocumentSerializer(serializers.ModelSerializer):
+    uploaded_by_name = serializers.CharField(source="uploaded_by.full_name", read_only=True)
+    file_url = serializers.SerializerMethodField(read_only=True)
+    
     class Meta:
         model = StudentDocument
-        fields = ["id", "student", "title", "file_url", "uploaded_at"]
-        read_only_fields = ["id", "uploaded_at"]
+        fields = [
+            "id",
+            "student",
+            "school",
+            "document_type",
+            "title",
+            "file",
+            "file_url",
+            "original_name",
+            "file_size",
+            "uploaded_by",
+            "uploaded_by_name",
+            "is_verified",
+            "remarks",
+            "uploaded_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "school", "file_size", "uploaded_by", "uploaded_at", "updated_at"]
+
+    def get_file_url(self, obj):
+        if obj.file:
+            request = self.context.get("request")
+            if request:
+                return request.build_absolute_uri(obj.file.url)
+            return obj.file.url
+        return None
+
+    def validate_file(self, value):
+        # Validate file type
+        allowed_extensions = [".pdf", ".jpg", ".jpeg", ".png"]
+        file_name = value.name.lower()
+        if not any(file_name.endswith(ext) for ext in allowed_extensions):
+            raise serializers.ValidationError(
+                "Only PDF, JPG, JPEG, and PNG files are allowed."
+            )
+        
+        # Validate file size (5MB = 5242880 bytes)
+        if value.size > 5242880:
+            raise serializers.ValidationError("File size must be less than 5MB.")
+        
+        return value
+
+    def create(self, validated_data):
+        file_obj = validated_data.get("file")
+        if file_obj:
+            validated_data["file_size"] = file_obj.size
+            validated_data["original_name"] = file_obj.name
+        
+        request = self.context.get("request")
+        if request and request.user:
+            validated_data["uploaded_by"] = request.user
+        
+        return super().create(validated_data)
 
 
 class StudentTransferHistorySerializer(serializers.ModelSerializer):
@@ -528,6 +582,8 @@ class StudentSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         attrs = super().validate(attrs)
         errors = {}
+        raw_draft_flag = self.initial_data.get("is_draft") if hasattr(self, "initial_data") else None
+        is_draft = str(raw_draft_flag).strip().lower() in {"1", "true", "yes"}
 
         if self.instance is None:
             for field, message in self.REQUIRED_CREATE_FIELDS.items():
@@ -586,7 +642,7 @@ class StudentSerializer(serializers.ModelSerializer):
             errors["custom_gender"] = "Custom gender is required"
 
         phone = (attrs.get("phone") or getattr(self.instance, "phone", "")).strip()
-        if not phone:
+        if not phone and not is_draft:
             errors["phone"] = "Phone number is required"
 
         if errors:
@@ -595,6 +651,7 @@ class StudentSerializer(serializers.ModelSerializer):
 
     def to_internal_value(self, data):
         mutable = dict(data)
+        mutable.pop("is_draft", None)
         if "class" in mutable and "current_class" not in mutable:
             mutable["current_class"] = mutable.get("class")
         if "section" in mutable and "current_section" not in mutable:

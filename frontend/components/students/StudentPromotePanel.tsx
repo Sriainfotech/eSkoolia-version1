@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TopToast } from "@/components/common/TopToast";
+import { studentThemeClassName } from "./studentTheme";
 
 type ApiList<T> = T[] | { results?: T[] };
 
@@ -494,7 +495,7 @@ export function StudentPromotePanel() {
   };
 
   return (
-    <div className="legacy-panel student-promote-panel">
+    <div className={`${studentThemeClassName} legacy-panel student-promote-panel`}>
       {toast ? (
         <TopToast
           message={toast.message}
@@ -512,9 +513,9 @@ export function StudentPromotePanel() {
       `}</style>
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}><span aria-hidden="true" style={{ color: "#5D87FF" }}>🎓</span> Student Promote</h1>
-            <div style={{ display: "flex", gap: 8, color: "#666666", fontSize: 13 }}>
+          <div className="student-page-header">
+            <h1 className="student-page-title">Student Promote</h1>
+            <div className="student-page-crumbs">
               <span>Dashboard</span>
               <span>/</span>
               <span>Student Information</span>

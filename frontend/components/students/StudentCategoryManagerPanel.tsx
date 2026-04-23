@@ -16,7 +16,7 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { apiRequestWithRefresh, apiRequestWithRefreshResponse } from "@/lib/api-auth";
 import { DeleteCategoryModal } from "./DeleteCategoryModal";
 import { ToastContainer, toast } from "react-toastify";
 

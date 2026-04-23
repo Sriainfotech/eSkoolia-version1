@@ -1,16 +1,90 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { API_BASE_URL } from "@/lib/api";
+import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { clearAuthTokens, getAccessToken, getRefreshToken } from "@/lib/auth";
 import { BackButton } from "@/components/common/BackButton";
+
+type MePayload = {
+  id?: number;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
+};
+
+function getInitialsFromName(name: string): string {
+  const words = name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (words.length === 0) return "U";
+  if (words.length === 1) return words[0].slice(0, 1).toUpperCase();
+
+  return `${words[0].slice(0, 1)}${words[words.length - 1].slice(0, 1)}`.toUpperCase();
+}
 
 export function Topbar() {
   const pathname = usePathname();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
+  const [currentUser, setCurrentUser] = useState<MePayload | null>(null);
   const showBackButton = pathname !== "/dashboard";
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadCurrentUser = async () => {
+      try {
+        const me = await apiRequestWithRefresh<MePayload>("/api/v1/auth/me/");
+        if (mounted) {
+          setCurrentUser(me);
+        }
+      } catch {
+        if (mounted) {
+          setCurrentUser(null);
+        }
+      }
+    };
+
+    void loadCurrentUser();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const currentUserInitials = useMemo(() => {
+    const first = String(currentUser?.first_name || "").trim();
+    const last = String(currentUser?.last_name || "").trim();
+    const username = String(currentUser?.username || "").trim();
+    const email = String(currentUser?.email || "").trim();
+
+    if (first || last) {
+      return getInitialsFromName(`${first} ${last}`);
+    }
+    if (username) {
+      return getInitialsFromName(username.replace(/[._-]+/g, " "));
+    }
+    if (email.includes("@")) {
+      return getInitialsFromName(email.split("@")[0] || "");
+    }
+    return "U";
+  }, [currentUser]);
+
+  const currentUserLabel = useMemo(() => {
+    const first = String(currentUser?.first_name || "").trim();
+    const last = String(currentUser?.last_name || "").trim();
+    const username = String(currentUser?.username || "").trim();
+    const fullName = `${first} ${last}`.trim();
+
+    if (fullName) return fullName;
+    if (username) return username;
+    return "Admin";
+  }, [currentUser]);
 
   const handleLogout = async () => {
     if (loggingOut) return;
@@ -72,7 +146,7 @@ export function Topbar() {
         >
           {loggingOut ? "Logging out..." : "Logout"}
         </button>
-        <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Admin</span>
+        <span style={{ fontSize: 13, color: "var(--text-muted)" }}>{currentUserLabel}</span>
         <div
           style={{
             width: 34,
@@ -85,7 +159,7 @@ export function Topbar() {
             fontWeight: 700,
           }}
         >
-          A
+          {currentUserInitials}
         </div>
       </div>
     </header>

@@ -60,6 +60,16 @@ type StudentCreatePayload = {
   current_section: number;
   is_disabled: boolean;
   is_active: boolean;
+  is_draft?: boolean;
+};
+
+type StudentCreateResponse = {
+  id?: number;
+  message?: string;
+  warning?: string;
+  data?: {
+    id?: number;
+  };
 };
 
 type StudentDetail = {
@@ -94,6 +104,14 @@ type ApiError = Error & {
     field_errors?: Record<string, string | string[]>;
     message?: string;
   };
+};
+
+type MePayload = {
+  id?: number;
+  username?: string;
+  first_name?: string;
+  last_name?: string;
+  email?: string;
 };
 
 type PincodeLookupResponse = {
@@ -253,11 +271,8 @@ function getDraftTimeAgoText(dateValue: number | null): string {
   return `Draft saved ${mins}m ago`;
 }
 
-function buildDefaultAdmissionNo(): string {
-  const year = new Date().getFullYear();
-  const serial = Math.floor(1000 + Math.random() * 9000);
-  return `ADM${year}${serial}`;
-}
+let cachedGeneratedAdmissionNo: string | null = null;
+let pendingAdmissionNoRequest: Promise<string> | null = null;
 
 function isProgressFieldFilled(value: unknown): boolean {
   if (typeof value === "boolean") return value;
@@ -311,6 +326,34 @@ async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
   });
 }
 
+async function fetchNextAdmissionNoFromApi(): Promise<string> {
+  if (cachedGeneratedAdmissionNo) {
+    return cachedGeneratedAdmissionNo;
+  }
+
+  if (!pendingAdmissionNoRequest) {
+    pendingAdmissionNoRequest = (async () => {
+      const payload = await apiGet<{ success?: boolean; admission_no?: string }>("/api/v1/students/students/next-admission-no/");
+      const admissionNo = String(payload?.admission_no || "").trim();
+      if (!admissionNo) {
+        throw new Error("Unable to fetch next admission number.");
+      }
+      cachedGeneratedAdmissionNo = admissionNo;
+      return admissionNo;
+    })();
+  }
+
+  try {
+    return await pendingAdmissionNoRequest;
+  } finally {
+    pendingAdmissionNoRequest = null;
+  }
+}
+
+function invalidateGeneratedAdmissionNoCache(): void {
+  cachedGeneratedAdmissionNo = null;
+}
+
 function boxStyle() {
   return {
     background: "var(--surface)",
@@ -340,6 +383,25 @@ function parseError(error: unknown) {
   if (message) return message;
   if (error instanceof Error && error.message) return error.message;
   return "Unable to save student.";
+}
+
+function parseFieldErrors(error: unknown): string[] {
+  const apiError = error as ApiError;
+  const source = apiError?.details?.field_errors;
+  if (!source) return [];
+
+  const errors: string[] = [];
+  for (const [field, value] of Object.entries(source)) {
+    const fieldLabel = field.replace(/_/g, " ");
+    if (Array.isArray(value)) {
+      const first = String(value[0] || "").trim();
+      if (first) errors.push(`${fieldLabel}: ${first}`);
+      continue;
+    }
+    const text = String(value || "").trim();
+    if (text) errors.push(`${fieldLabel}: ${text}`);
+  }
+  return errors;
 }
 
 function parsePincodeError(error: unknown): string {
@@ -378,6 +440,15 @@ function isLikelyValidClassName(value: string): boolean {
   }
   if (["abc", "adc", "asdf", "test", "demo"].includes(lowered)) return false;
   return /[A-Za-z0-9]/.test(clean);
+}
+
+function getInitialsFromName(value: string): string {
+  const parts = sanitizeText(value)
+    .split(/\s+/)
+    .filter(Boolean);
+  if (parts.length === 0) return "U";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
 }
 
 function isAlphabetsOnly(value: string): boolean {
@@ -459,8 +530,10 @@ export function StudentAddPanel() {
   const [guardians, setGuardians] = useState<Guardian[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
+  const [currentUser, setCurrentUser] = useState<MePayload | null>(null);
 
   const [admissionNo, setAdmissionNo] = useState("");
+  const [isManualEdit, setIsManualEdit] = useState(false);
   const [rollNo, setRollNo] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -538,9 +611,43 @@ export function StudentAddPanel() {
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+  const birthCertInputRef = useRef<HTMLInputElement | null>(null);
+  const aadhaarInputRef = useRef<HTMLInputElement | null>(null);
+  const medicalInputRef = useRef<HTMLInputElement | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const toastTimerRef = useRef<number | null>(null);
+  const admissionNoRef = useRef("");
+  const isManualEditRef = useRef(false);
+  const admissionNoInitRequestedRef = useRef(false);
+
+  // Track newly created student ID so documents can be uploaded immediately after creation
+  const [newlyCreatedStudentId, setNewlyCreatedStudentId] = useState<number | null>(null);
+  const [autoSaving, setAutoSaving] = useState(false);
+
+  // Consolidated document upload state with proper status management
+  type DocumentStatus = "idle" | "validating" | "uploading" | "success" | "error";
+  
+  interface DocumentState {
+    status: DocumentStatus;
+    fileName: string;
+    url: string | null;
+    error: string | null;
+    uploadedAt: string | null;
+  }
+
+  const [documents, setDocuments] = useState<{
+    birth_certificate: DocumentState;
+    aadhaar_card: DocumentState;
+    medical_information: DocumentState;
+  }>({
+    birth_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+    aadhaar_card: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+    medical_information: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+  });
+
+  // Track last error toast ID to avoid duplicates
+  const [lastErrorToastId, setLastErrorToastId] = useState<string | null>(null);
 
   const pinIsValid = /^\d{6}$/.test(pincode.trim());
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -584,7 +691,59 @@ export function StudentAddPanel() {
     });
   }, [validClasses]);
 
+  const selectedClass = useMemo(
+    () => orderedClasses.find((item) => String(item.id) === classId) || null,
+    [orderedClasses, classId],
+  );
+
+  const studentForm = useMemo(
+    () => ({
+      admission_no: admissionNo.trim(),
+      first_name: firstName.trim(),
+      last_name: lastName.trim(),
+      date_of_birth: dateOfBirth,
+      gender: gender,
+      class_id: classId,
+      class_name: String(selectedClass?.name || "").trim(),
+      section_id: sectionId,
+      academic_year_id: academicYearId,
+    }),
+    [admissionNo, firstName, lastName, dateOfBirth, gender, classId, selectedClass, sectionId, academicYearId],
+  );
+
+  const studentFormRef = useRef(studentForm);
+
+  useEffect(() => {
+    studentFormRef.current = studentForm;
+  }, [studentForm]);
+
+  useEffect(() => {
+    isManualEditRef.current = isManualEdit;
+  }, [isManualEdit]);
+
+  useEffect(() => {
+    admissionNoRef.current = admissionNo;
+  }, [admissionNo]);
+
   const stateOptions = useMemo(() => Object.keys(stateCityMap).sort((a, b) => a.localeCompare(b)), [stateCityMap]);
+
+  const currentUserInitials = useMemo(() => {
+    const first = String(currentUser?.first_name || "").trim();
+    const last = String(currentUser?.last_name || "").trim();
+    const username = String(currentUser?.username || "").trim();
+    const email = String(currentUser?.email || "").trim();
+
+    if (first || last) {
+      return getInitialsFromName(`${first} ${last}`);
+    }
+    if (username) {
+      return getInitialsFromName(username.replace(/[._-]+/g, " "));
+    }
+    if (email.includes("@")) {
+      return getInitialsFromName(email.split("@")[0] || "");
+    }
+    return "U";
+  }, [currentUser]);
 
   const canSubmit = !loading && !saving && !photoUploading && !sectionLoading && !classId ? false : !loading && !saving && !photoUploading && !sectionLoading;
 
@@ -643,6 +802,13 @@ export function StudentAddPanel() {
       setCategories(categoryRows);
       setGuardians(guardianRows);
       setClasses(classData);
+
+      try {
+        const me = await apiGet<MePayload>("/api/v1/auth/me/");
+        setCurrentUser(me);
+      } catch {
+        setCurrentUser(null);
+      }
     } catch (loadError) {
       setError(parseError(loadError));
     } finally {
@@ -655,6 +821,7 @@ export function StudentAddPanel() {
     const payload = {
       savedAt: Date.now(),
       admissionNo,
+      isManualEdit,
       rollNo,
       firstName,
       lastName,
@@ -701,7 +868,8 @@ export function StudentAddPanel() {
 
     try {
       const draft = JSON.parse(raw) as Record<string, unknown>;
-      setAdmissionNo(String(draft.admissionNo || buildDefaultAdmissionNo()));
+      setAdmissionNo(String(draft.admissionNo || ""));
+      setIsManualEdit(Boolean(draft.isManualEdit));
       setRollNo(String(draft.rollNo || ""));
       setFirstName(String(draft.firstName || ""));
       setLastName(String(draft.lastName || ""));
@@ -774,6 +942,7 @@ export function StudentAddPanel() {
   const loadStudentForMode = async (targetStudentId: number) => {
     const data = await apiGet<StudentDetail>(`/api/v1/students/students/${targetStudentId}/`);
     setAdmissionNo(String(data.admission_no || ""));
+    setIsManualEdit(false);
     setRollNo(String(data.roll_no || ""));
     setFirstName(String(data.first_name || ""));
     setLastName(String(data.last_name || ""));
@@ -900,6 +1069,24 @@ export function StudentAddPanel() {
     }
   };
 
+  const initializeAdmissionNo = async (force = false) => {
+    if (isExistingStudentMode) return;
+    if (admissionNoInitRequestedRef.current) return;
+    if (isManualEditRef.current) return;
+    if (!force && admissionNoRef.current.trim()) return;
+
+    admissionNoInitRequestedRef.current = true;
+    try {
+      const nextAdmissionNo = await fetchNextAdmissionNoFromApi();
+      setAdmissionNo((prev) => {
+        if (isManualEditRef.current) return prev;
+        return prev.trim() ? prev : nextAdmissionNo;
+      });
+    } catch (e) {
+      console.error("Failed to initialize admission number:", e);
+    }
+  };
+
   useEffect(() => {
     const loadAll = async () => {
       try {
@@ -909,7 +1096,7 @@ export function StudentAddPanel() {
         } else {
           const restored = restoreDraftSnapshot();
           if (!restored) {
-            setAdmissionNo((prev) => prev || buildDefaultAdmissionNo());
+            await initializeAdmissionNo();
           }
         }
       } catch (loadError) {
@@ -1157,7 +1344,9 @@ export function StudentAddPanel() {
   ]);
 
   const resetStudentForm = () => {
-    setAdmissionNo(buildDefaultAdmissionNo());
+    setAdmissionNo("");
+    setIsManualEdit(false);
+    admissionNoInitRequestedRef.current = false;
     setRollNo("");
     setFirstName("");
     setLastName("");
@@ -1230,6 +1419,7 @@ export function StudentAddPanel() {
       window.localStorage.removeItem(STUDENT_DRAFT_STORAGE_KEY);
     }
     resetStudentForm();
+    void initializeAdmissionNo(true);
     setError("");
     setSuccess("");
     showToast("Draft cleared.", "success", 4000);
@@ -1680,6 +1870,396 @@ export function StudentAddPanel() {
     setPhotoPreviewOpen(true);
   };
 
+  // Auto-save student draft when Identity + Academic fields are complete
+  const autoSaveStudentDraft = async (): Promise<number | null> => {
+    // If already saved, return the ID
+    if (newlyCreatedStudentId) {
+      return newlyCreatedStudentId;
+    }
+
+    const snapshot = studentFormRef.current;
+    const classIdNum = Number(snapshot.class_id);
+    const sectionIdNum = Number(snapshot.section_id);
+    const academicYearNum = Number(snapshot.academic_year_id);
+    const missingFields: string[] = [];
+    if (!snapshot.first_name) missingFields.push("First Name");
+    if (!snapshot.last_name) missingFields.push("Last Name");
+    if (!snapshot.admission_no) missingFields.push("Admission Number");
+    if (!snapshot.date_of_birth) missingFields.push("Date of Birth");
+    if (!snapshot.gender) missingFields.push("Gender");
+    if (!snapshot.academic_year_id || Number.isNaN(academicYearNum) || academicYearNum <= 0) missingFields.push("Academic Year");
+    if (!snapshot.class_id || Number.isNaN(classIdNum) || classIdNum <= 0) missingFields.push("Class");
+    if (!snapshot.section_id || Number.isNaN(sectionIdNum) || sectionIdNum <= 0) missingFields.push("Section");
+
+    if (missingFields.length > 0) {
+      showToast(`⚠️ Please complete Identity and Academic details before uploading documents. Missing: ${missingFields.join(", ")}`, "error");
+      return null;
+    }
+
+    const admissionAvailable = await runAdmissionAvailabilityCheck(snapshot.admission_no);
+    if (!admissionAvailable) {
+      jumpToSection("identity");
+      showToast("⚠️ Admission number already exists. Please enter a unique admission number before uploading documents.", "error");
+      return null;
+    }
+
+    setAutoSaving(true);
+    try {
+      const isStudentActive = statusValue === "active";
+      const payload: StudentCreatePayload = {
+        admission_no: snapshot.admission_no || "",
+        roll_no: rollNo.trim() || undefined,
+        first_name: snapshot.first_name,
+        last_name: snapshot.last_name,
+        date_of_birth: snapshot.date_of_birth || undefined,
+        academic_year: academicYearNum,
+        gender: snapshot.gender === "other" ? customGender : snapshot.gender,
+        custom_gender: gender === "other" ? customGender : undefined,
+        blood_group: bloodGroup.trim() || undefined,
+        phone: phone.trim() || undefined,
+        email: email.trim() || undefined,
+        address_line: addressLine.trim() || undefined,
+        city: city.trim() || undefined,
+        district: district.trim() || undefined,
+        state: stateName.trim() || undefined,
+        pincode: pincode.trim() || undefined,
+        photo: photo ? photo : undefined,
+        status: statusValue,
+        category: categoryId ? Number(categoryId) : undefined,
+        guardian: guardianId ? Number(guardianId) : undefined,
+        current_class: classIdNum,
+        current_section: sectionIdNum,
+        is_disabled: isDisabled,
+        is_active: isStudentActive,
+        is_draft: true,
+      };
+
+      const response = await apiPostJson<StudentCreateResponse>("/api/v1/students/students/", payload);
+      const createdStudentId = Number(response?.id ?? response?.data?.id);
+
+      if (Number.isFinite(createdStudentId) && createdStudentId > 0) {
+        setNewlyCreatedStudentId(createdStudentId);
+        invalidateGeneratedAdmissionNoCache();
+        console.log("✅ Student auto-saved with ID:", createdStudentId);
+        showToast("✅ Student draft saved. Ready for document uploads.", "success");
+        return createdStudentId;
+      } else {
+        throw new Error("No student ID returned from server");
+      }
+    } catch (err) {
+      const fieldErrors = parseFieldErrors(err);
+      const admissionError = fieldErrors.find((msg) => msg.toLowerCase().startsWith("admission no:"));
+      if (admissionError) {
+        const specific = admissionError.split(":").slice(1).join(":").trim() || "Admission number already exists";
+        setSingleFieldError("admission_no", specific);
+        jumpToSection("identity");
+        showToast(`❌ ${specific}. Please use a unique admission number.`, "error");
+        console.error("❌ Auto-save duplicate admission number:", err);
+        return null;
+      }
+
+      const errorMsg = fieldErrors.length > 0
+        ? `Unable to save student record. ${fieldErrors[0]}`
+        : (parseError(err) || "Failed to save student draft.");
+      showToast(`❌ ${errorMsg}`, "error");
+      console.error("❌ Auto-save error:", err);
+      return null;
+    } finally {
+      setAutoSaving(false);
+    }
+  };
+
+  // Validate required identity fields for student creation
+  const validateIdentityFields = (): { valid: boolean; missingFields: string[]; academicIncomplete: boolean } => {
+    const snapshot = studentFormRef.current;
+    const missingFields: string[] = [];
+    let academicIncomplete = false;
+    
+    if (!snapshot.first_name) missingFields.push("First Name");
+    if (!snapshot.last_name) missingFields.push("Last Name");
+    if (!snapshot.date_of_birth) missingFields.push("Date of Birth");
+    if (!snapshot.gender) missingFields.push("Gender");
+    if (!snapshot.academic_year_id || Number(snapshot.academic_year_id) <= 0) {
+      missingFields.push("Academic Year");
+      academicIncomplete = true;
+    }
+    if (!snapshot.class_id || Number(snapshot.class_id) <= 0) {
+      missingFields.push("Class");
+      academicIncomplete = true;
+    }
+    if (!snapshot.section_id || Number(snapshot.section_id) <= 0) {
+      missingFields.push("Section");
+      academicIncomplete = true;
+    }
+
+    console.log("🔍 Identity field validation:", {
+      valid: missingFields.length === 0,
+      missingFields,
+      formState: snapshot,
+      filledFields: {
+        firstName: !!snapshot.first_name,
+        lastName: !!snapshot.last_name,
+        dob: !!snapshot.date_of_birth,
+        gender: !!snapshot.gender,
+        academicYear: !!snapshot.academic_year_id,
+        classId: !!snapshot.class_id,
+        sectionId: !!snapshot.section_id,
+      },
+    });
+
+    return { valid: missingFields.length === 0, missingFields, academicIncomplete };
+  };
+
+  // Document Upload Handler - Completely rewritten with proper state management
+  const uploadDocumentFile = async (
+    file: File,
+    documentType: string
+  ) => {
+    console.log("📂 Upload initiated:", { documentType, fileName: file.name, fileSize: file.size });
+
+    // ============================================================
+    // STEP 1: FILE VALIDATION
+    // ============================================================
+    const allowedTypes = [".pdf", ".jpg", ".jpeg", ".png"];
+    const fileName = file.name.toLowerCase();
+    if (!allowedTypes.some((ext) => fileName.endsWith(ext))) {
+      const errorMsg = "❌ Only PDF, JPG, JPEG, and PNG files are allowed.";
+      console.error("📋 File type validation failed:", errorMsg);
+      showToast(errorMsg, "error");
+      return;
+    }
+
+    if (file.size > 5242880) {
+      const errorMsg = "❌ File size must be less than 5MB.";
+      console.error("📋 File size validation failed:", errorMsg);
+      showToast(errorMsg, "error");
+      return;
+    }
+
+    console.log("✅ File validation passed");
+
+    // ============================================================
+    // STEP 2: UPDATE STATE - SET UPLOADING
+    // ============================================================
+    setDocuments((prev) => ({
+      ...prev,
+      [documentType]: {
+        ...prev[documentType as keyof typeof prev],
+        status: "uploading" as DocumentStatus,
+        error: null,
+      },
+    }));
+
+    console.log("🔄 Set status to uploading for:", documentType);
+
+    try {
+      // ============================================================
+      // STEP 3: CHECK STUDENT ID & VALIDATE IDENTITY FIELDS
+      // ============================================================
+      let effectiveStudentId = studentId || newlyCreatedStudentId;
+      
+      console.log("📋 Student ID check:", {
+        currentStudentId: studentId,
+        newlyCreatedId: newlyCreatedStudentId,
+        effective: effectiveStudentId,
+      });
+
+      if (!effectiveStudentId) {
+        // No student ID - must validate identity fields first
+        const { valid, missingFields, academicIncomplete } = validateIdentityFields();
+
+        if (!valid) {
+          const errorMsg = academicIncomplete
+            ? "Please complete Academic section and select Class before uploading documents."
+            : `Please complete required Identity fields first: ${missingFields.join(", ")}`;
+          console.warn("❌ Identity fields incomplete:", missingFields);
+          
+          // Keep document cards stable and show a toast-driven validation message.
+          setDocuments((prev) => ({
+            ...prev,
+            [documentType]: {
+              ...prev[documentType as keyof typeof prev],
+              status: "idle" as DocumentStatus,
+              error: null,
+            },
+          }));
+
+          showToast(`⚠️ ${errorMsg}`, "error");
+          return;
+        }
+
+        // Identity fields are complete - attempt auto-save
+        console.log("✅ Identity fields complete, attempting auto-save...");
+        try {
+          effectiveStudentId = await autoSaveStudentDraft();
+          
+          if (!effectiveStudentId) {
+            throw new Error("Auto-save returned no student ID");
+          }
+
+          console.log("✅ Auto-save successful, student ID:", effectiveStudentId);
+          setNewlyCreatedStudentId(effectiveStudentId);
+        } catch (saveErr) {
+          const fieldErrors = parseFieldErrors(saveErr);
+          const errorMsg = fieldErrors.length > 0
+            ? `Unable to save student record. ${fieldErrors[0]}`
+            : (parseError(saveErr) || "Unable to prepare student draft before upload.");
+          console.error("❌ Auto-save failed:", saveErr);
+
+          setDocuments((prev) => ({
+            ...prev,
+            [documentType]: {
+              ...prev[documentType as keyof typeof prev],
+              status: "idle" as DocumentStatus,
+              error: null,
+            },
+          }));
+
+          showToast(`⚠️ ${errorMsg}`, "error");
+          return;
+        }
+      }
+
+      // ============================================================
+      // STEP 4: UPLOAD DOCUMENT
+      // ============================================================
+      const formData = new FormData();
+      formData.append("student_id", String(effectiveStudentId));
+      formData.append("student_draft_id", String(effectiveStudentId));
+      formData.append("document_type", documentType);
+      formData.append("file", file);
+
+      console.log("🚀 Uploading document:", {
+        studentId: effectiveStudentId,
+        documentType,
+        fileName: file.name,
+        endpoint: "/api/students/documents/upload_document/",
+      });
+
+      const response = await apiRequestWithRefresh("/api/students/documents/upload_document/", {
+        method: "POST",
+        body: formData,
+      });
+
+      console.log("📥 Upload response received:", response);
+
+      // ============================================================
+      // STEP 5: VALIDATE RESPONSE
+      // ============================================================
+      const isSuccess = response && (
+        response.id || 
+        response.file || 
+        response.original_name || 
+        response.uploaded_at
+      );
+
+      if (!isSuccess) {
+        throw new Error("Invalid response from server - missing required fields");
+      }
+
+      // ============================================================
+      // STEP 6: UPDATE STATE - SUCCESS
+      // ============================================================
+      const displayFileName = response.original_name || file.name;
+      const fileUrl = response.file_url || response.file || null;
+
+      setDocuments((prev) => ({
+        ...prev,
+        [documentType]: {
+          status: "success" as DocumentStatus,
+          fileName: displayFileName,
+          url: fileUrl,
+          error: null,
+          uploadedAt: response.uploaded_at || new Date().toISOString(),
+        },
+      }));
+
+      console.log("✅ Document state updated to SUCCESS:", {
+        documentType,
+        fileName: displayFileName,
+        uploadedAt: response.uploaded_at,
+      });
+
+      // Clear any previous error toast
+      setLastErrorToastId(null);
+
+      // Show success toast
+      showToast(`✅ ${documentType.replace(/_/g, " ").toUpperCase()} uploaded successfully!`, "success");
+
+    } catch (err) {
+      // ============================================================
+      // STEP 7: HANDLE ERROR
+      // ============================================================
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error("❌ Document upload failed:", {
+        documentType,
+        error: errorMessage,
+        fullError: err,
+      });
+
+      // Update state to error
+      setDocuments((prev) => {
+        const current = prev[documentType as keyof typeof prev];
+        if (current.status === "success") {
+          return prev;
+        }
+        return {
+          ...prev,
+          [documentType]: {
+            ...current,
+            status: "idle" as DocumentStatus,
+            error: null,
+          },
+        };
+      });
+
+      // Show error toast
+      const displayError = errorMessage.startsWith("❌") || errorMessage.startsWith("⚠️") 
+        ? errorMessage 
+        : `❌ ${errorMessage}`;
+      
+      showToast(displayError, "error");
+    }
+  };
+
+  const handleBirthCertUpload = () => {
+    console.log("🖱️ Birth certificate upload button clicked");
+    birthCertInputRef.current?.click();
+  };
+
+  const handleAadhaarUpload = () => {
+    console.log("🖱️ Aadhaar upload button clicked");
+    aadhaarInputRef.current?.click();
+  };
+
+  const handleMedicalUpload = () => {
+    console.log("🖱️ Medical information upload button clicked");
+    medicalInputRef.current?.click();
+  };
+
+  const handleDocumentFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    documentType: string
+  ) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      console.log("📂 File selected for upload:", {
+        documentType,
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+      });
+      
+      try {
+        await uploadDocumentFile(file, documentType);
+      } catch (err) {
+        console.error("❌ Unexpected error in handleDocumentFileChange:", err);
+      }
+    }
+    // Reset input to allow re-selection of same file
+    e.target.value = "";
+  };
+
   useEffect(() => {
     return () => {
       if (capturedPhotoPreviewUrl) {
@@ -1697,25 +2277,82 @@ export function StudentAddPanel() {
     let cancelled = false;
 
     const startCamera = async () => {
+      setCameraError("");
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
           throw new Error("Camera access is not supported on this device.");
         }
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false,
-        });
+
+        // Try preferred camera constraints first, then fall back for desktop/browser compatibility.
+        const constraintsList: MediaStreamConstraints[] = [
+          {
+            video: {
+              facingMode: { ideal: "environment" },
+              width: { ideal: 1280 },
+              height: { ideal: 960 },
+            },
+            audio: false,
+          },
+          {
+            video: {
+              facingMode: "user",
+              width: { ideal: 1280 },
+              height: { ideal: 960 },
+            },
+            audio: false,
+          },
+          { video: true, audio: false },
+        ];
+
+        let stream: MediaStream | null = null;
+        let lastError: unknown = null;
+
+        for (const constraints of constraintsList) {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia(constraints);
+            break;
+          } catch (streamError) {
+            lastError = streamError;
+          }
+        }
+
+        if (!stream) {
+          throw lastError ?? new Error("Unable to access camera.");
+        }
+
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
           return;
         }
+
+        stopStudentCamera();
         cameraStreamRef.current = stream;
         if (cameraVideoRef.current) {
-          cameraVideoRef.current.srcObject = stream;
-          await cameraVideoRef.current.play().catch(() => undefined);
+          const videoEl = cameraVideoRef.current;
+          videoEl.srcObject = stream;
+          videoEl.muted = true;
+          videoEl.setAttribute("playsinline", "true");
+
+          try {
+            await videoEl.play();
+          } catch {
+            // Some browsers need metadata before playback can start.
+            await new Promise<void>((resolve) => {
+              const onLoaded = () => {
+                videoEl.removeEventListener("loadedmetadata", onLoaded);
+                void videoEl.play().finally(() => resolve());
+              };
+              videoEl.addEventListener("loadedmetadata", onLoaded, { once: true });
+            });
+          }
         }
       } catch (error) {
         if (!cancelled) {
+          const apiError = error as Error;
+          if (apiError?.name === "NotAllowedError") {
+            setCameraError("Camera permission was blocked. Allow camera access in the browser and try again.");
+            return;
+          }
           setCameraError(parseError(error) || "Unable to access camera.");
         }
       }
@@ -1796,13 +2433,31 @@ export function StudentAddPanel() {
           }
         }, 800);
       } else {
-        const response = await apiPostJson<{ message?: string; warning?: string }>("/api/v1/students/students/", payload);
+        const response = await apiPostJson<StudentCreateResponse>("/api/v1/students/students/", payload);
+        const createdStudentId = Number(response?.id ?? response?.data?.id);
+        
+        // Capture the newly created student ID so documents can be uploaded
+        if (Number.isFinite(createdStudentId) && createdStudentId > 0) {
+          setNewlyCreatedStudentId(createdStudentId);
+          invalidateGeneratedAdmissionNoCache();
+          console.log("✅ New student created with ID:", createdStudentId);
+        }
+        
         const successMessage = response?.warning ? `Student added successfully. ${response.warning}` : "Student added successfully.";
         setSuccess(successMessage);
+        
+        // Don't reset the form or redirect - keep student ID so documents can be uploaded
         if (typeof window !== "undefined") {
           window.localStorage.removeItem(STUDENT_DRAFT_STORAGE_KEY);
         }
-        resetStudentForm();
+        
+        // Only navigate to list after a delay if no documents need to be uploaded
+        // For now, stay on the page so user can upload documents
+        // setTimeout(() => {
+        //   if (typeof window !== "undefined") {
+        //     window.location.href = "/students/list";
+        //   }
+        // }, 1200);
       }
     } catch (submitError) {
       const mappedErrors = syncApiFieldErrors(submitError as ApiError);
@@ -1823,7 +2478,7 @@ export function StudentAddPanel() {
           <div className="draft-right">
             <span className="dot-green" />
             <span>{draftLabel}</span>
-            <span className="avatar-circle">SR</span>
+            <span className="avatar-circle">{currentUserInitials}</span>
           </div>
         </div>
 
@@ -1939,12 +2594,14 @@ export function StudentAddPanel() {
                     placeholder="ADM20260342"
                     onChange={(e) => {
                       setAdmissionNo(e.target.value);
+                      setIsManualEdit(true);
                       setAdmissionChecked(false);
                       setSingleFieldError("admission_no", "");
                     }}
                     onBlur={() => {
-                      const normalized = toTitleCase(admissionNo).replace(/[\s-]/g, "");
+                      const normalized = sanitizeText(admissionNo).replace(/[\s-]/g, "");
                       setAdmissionNo(normalized);
+                      setIsManualEdit(true);
                       void runAdmissionAvailabilityCheck(normalized);
                     }}
                     readOnly={!admissionNoEditable}
@@ -2039,25 +2696,203 @@ export function StudentAddPanel() {
             </section>
 
             <section className="section-card" id="documents">
-              <div className="section-card-header"><div><h2 className="section-title">Know your <span className="title-accent">student</span></h2><p className="section-subtitle">Upload documents, medical info, and confirm guardian consent.</p></div><span className="section-counter">05 / 06</span></div>
-              <div className="grid-2">
-                <label className="doc-check"><input type="checkbox" checked={docBirthCertificate} onChange={(e) => setDocBirthCertificate(e.target.checked)} /> Birth certificate <span className="badge badge-required-doc">Required doc</span></label>
-                <label className="doc-check"><input type="checkbox" checked={docAadhaar} onChange={(e) => setDocAadhaar(e.target.checked)} /> Aadhaar copy <span className="badge badge-optional">Optional</span></label>
+              <div className="section-card-header">
+                <div>
+                  <h2 className="section-title">Know your <span className="title-accent">student</span></h2>
+                  <p className="section-subtitle">Upload the documents your school needs on file. Some appear only when relevant — for example, caste certificate shows up if you picked a reserved category.</p>
+                </div>
+                <span className="section-counter">05 / 06</span>
               </div>
-              <div className="field-wrapper mt-20"><label className="field-label">Medical notes <span className="badge badge-optional">OPTIONAL</span></label><textarea className="field-textarea" title="Medical notes" value={medicalNotes} onChange={(e) => setMedicalNotes(e.target.value)} rows={3} /></div>
-              <label className="consent-row mt-20"><input type="checkbox" checked={consentChecked} onChange={(e) => setConsentChecked(e.target.checked)} /> Guardian consent confirmed <span className="req">*</span></label>
-              {fieldErrors.consent ? <p className="error-msg">{fieldErrors.consent}</p> : null}
+
+              {/* Hidden File Inputs */}
+              <input 
+                type="file" 
+                ref={birthCertInputRef} 
+                className="hidden-file-input"
+                title="Birth certificate file input"
+                accept=".pdf,.jpg,.jpeg,.png"
+                onChange={(e) => handleDocumentFileChange(e, "birth_certificate")}
+              />
+              <input 
+                type="file" 
+                ref={aadhaarInputRef} 
+                className="hidden-file-input"
+                title="Aadhaar card file input"
+                accept=".pdf,.jpg,.jpeg,.png"
+                onChange={(e) => handleDocumentFileChange(e, "aadhaar_card")}
+              />
+              <input 
+                type="file" 
+                ref={medicalInputRef} 
+                className="hidden-file-input"
+                title="Medical information file input"
+                accept=".pdf,.jpg,.jpeg,.png"
+                onChange={(e) => handleDocumentFileChange(e, "medical_information")}
+              />
+
+              {/* Document Cards Grid */}
+              <div className="doc-upload-grid">
+                {/* Birth Certificate Card */}
+                <div className={`doc-card ${documents.birth_certificate.status === "success" ? "doc-card-success" : documents.birth_certificate.status === "error" ? "doc-card-error" : documents.birth_certificate.status === "uploading" ? "doc-card-uploading" : ""}`}>
+                  <div className="doc-card-header">
+                    <div className="doc-icon-box">
+                      {documents.birth_certificate.status === "success" ? "✓" : documents.birth_certificate.status === "error" ? "✗" : "📋"}
+                    </div>
+                    <span className="doc-badge doc-badge-required">REQUIRED</span>
+                  </div>
+                  <h3 className="doc-card-title">Birth certificate</h3>
+                  {documents.birth_certificate.status === "success" ? (
+                    <>
+                      <p className="doc-success-msg">✓ Uploaded</p>
+                      <p className="doc-success-filename">{documents.birth_certificate.fileName}</p>
+                    </>
+                  ) : documents.birth_certificate.status === "error" ? (
+                    <>
+                      <p className="doc-error-msg">✗ Upload failed</p>
+                      <p className="doc-error-detail">{documents.birth_certificate.error}</p>
+                    </>
+                  ) : documents.birth_certificate.status === "uploading" ? (
+                    <p className="doc-uploading-msg">⏳ Uploading...</p>
+                  ) : (
+                    <p className="doc-card-desc">Government-issued proof of date of birth. PDF, JPG, or PNG up to 5 MB.</p>
+                  )}
+                  <button 
+                    type="button" 
+                    className="doc-upload-btn"
+                    onClick={handleBirthCertUpload}
+                    disabled={documents.birth_certificate.status === "uploading"}
+                  >
+                    {documents.birth_certificate.status === "uploading" ? "⏳ Uploading..." : documents.birth_certificate.status === "success" ? "↻ Replace" : "↑ Upload file"}
+                  </button>
+                </div>
+
+                {/* Aadhaar Card */}
+                <div className={`doc-card ${documents.aadhaar_card.status === "success" ? "doc-card-success" : documents.aadhaar_card.status === "error" ? "doc-card-error" : documents.aadhaar_card.status === "uploading" ? "doc-card-uploading" : ""}`}>
+                  <div className="doc-card-header">
+                    <div className="doc-icon-box">
+                      {documents.aadhaar_card.status === "success" ? "✓" : documents.aadhaar_card.status === "error" ? "✗" : "🆔"}
+                    </div>
+                    <span className="doc-badge doc-badge-masked">MASKED</span>
+                  </div>
+                  <h3 className="doc-card-title">Aadhaar card</h3>
+                  {documents.aadhaar_card.status === "success" ? (
+                    <>
+                      <p className="doc-success-msg">✓ Uploaded</p>
+                      <p className="doc-success-filename">{documents.aadhaar_card.fileName}</p>
+                    </>
+                  ) : documents.aadhaar_card.status === "error" ? (
+                    <>
+                      <p className="doc-error-msg">✗ Upload failed</p>
+                      <p className="doc-error-detail">{documents.aadhaar_card.error}</p>
+                    </>
+                  ) : documents.aadhaar_card.status === "uploading" ? (
+                    <p className="doc-uploading-msg">⏳ Uploading...</p>
+                  ) : (
+                    <p className="doc-card-desc">We store only the last 4 digits. The full number is never saved to disk or shared.</p>
+                  )}
+                  <button 
+                    type="button" 
+                    className="doc-upload-btn"
+                    onClick={handleAadhaarUpload}
+                    disabled={documents.aadhaar_card.status === "uploading"}
+                  >
+                    {documents.aadhaar_card.status === "uploading" ? "⏳ Uploading..." : documents.aadhaar_card.status === "success" ? "↻ Replace" : "↑ Upload file"}
+                  </button>
+                </div>
+
+                {/* Medical Information */}
+                <div className={`doc-card doc-card-medical ${documents.medical_information.status === "success" ? "doc-card-success" : documents.medical_information.status === "error" ? "doc-card-error" : documents.medical_information.status === "uploading" ? "doc-card-uploading" : ""}`}>
+                  <div className="doc-card-header">
+                    <div className="doc-icon-box">
+                      {documents.medical_information.status === "success" ? "✓" : documents.medical_information.status === "error" ? "✗" : "💊"}
+                    </div>
+                    <span className="doc-badge doc-badge-optional">OPTIONAL</span>
+                  </div>
+                  <h3 className="doc-card-title">Medical information</h3>
+                  {documents.medical_information.status === "success" ? (
+                    <>
+                      <p className="doc-success-msg">✓ Uploaded</p>
+                      <p className="doc-success-filename">{documents.medical_information.fileName}</p>
+                    </>
+                  ) : documents.medical_information.status === "error" ? (
+                    <>
+                      <p className="doc-error-msg">✗ Upload failed</p>
+                      <p className="doc-error-detail">{documents.medical_information.error}</p>
+                    </>
+                  ) : documents.medical_information.status === "uploading" ? (
+                    <p className="doc-uploading-msg">⏳ Uploading...</p>
+                  ) : (
+                    <p className="doc-card-desc">Allergies, ongoing conditions, emergency contact for medical decisions. Stored encrypted.</p>
+                  )}
+                  <button 
+                    type="button" 
+                    className="doc-upload-btn"
+                    onClick={handleMedicalUpload}
+                    disabled={documents.medical_information.status === "uploading"}
+                  >
+                    {documents.medical_information.status === "uploading" ? "⏳ Uploading..." : documents.medical_information.status === "success" ? "↻ Replace" : "↑ Upload file"}
+                  </button>
+                </div>
+
+                {/* RTE Act 2009 Compliance Box */}
+                <div className="doc-rte-box doc-rte-full-width">
+                  <span className="doc-rte-icon">🛡️</span>
+                  <div>
+                    <h4 className="doc-rte-title">RTE Act 2009 compliance</h4>
+                    <p className="doc-rte-text">Students admitted under the 25% EWS/DG quota must have their income or caste certificate verified within 30 days. All personal data is stored per the Digital Personal Data Protection Act, 2023 and is never shared with third parties without parental consent. <a href="#" className="doc-rte-link">Read our data policy →</a></p>
+                  </div>
+                </div>
+
+                {/* Parent/Guardian Consent Box */}
+                <div className="doc-consent-box doc-consent-full-width">
+                  <label className="doc-consent-label">
+                    <input 
+                      type="checkbox" 
+                      className="doc-consent-checkbox" 
+                      checked={consentChecked} 
+                      onChange={(e) => setConsentChecked(e.target.checked)} 
+                    />
+                    <div>
+                      <div className="doc-consent-title">Parent / Guardian consent</div>
+                      <p className="doc-consent-text">I confirm that the student's parent or legal guardian has authorized me to submit these documents and has consented to their storage for school records, admissions, fee management, and legally required reporting. I understand that withdrawing consent requires a written request.</p>
+                    </div>
+                  </label>
+                  {fieldErrors.consent ? <p className="error-msg">{fieldErrors.consent}</p> : null}
+                </div>
+              </div>
+
               {renderSectionNavButtons("documents")}
             </section>
 
+            {/* REVIEW SECTION */}
             <section className="section-card" id="review">
-              <div className="section-card-header"><div><h2 className="section-title">Final <span className="title-accent">review</span></h2><p className="section-subtitle">Double-check before you save. You can edit any section above.</p></div><span className="section-counter">06 / 06</span></div>
-              <div className="review-grid">
-                <p><strong>Admission No:</strong> {admissionNo || "-"}</p>
-                <p><strong>Student:</strong> {[firstName, lastName].filter(Boolean).join(" ") || "-"}</p>
-                <p><strong>Class/Section:</strong> {classId && sectionId ? `${classId} / ${sectionId}` : "-"}</p>
-                <p><strong>Contact:</strong> {phone || "-"}</p>
+              <div className="section-card-header">
+                <div>
+                  <h2 className="section-title">Final <span className="title-accent">review</span></h2>
+                  <p className="section-subtitle">Double-check before you save. You can edit any section above.</p>
+                </div>
+                <span className="section-counter">06 / 06</span>
               </div>
+
+              <div className="review-summary-grid">
+                <div className="review-item">
+                  <div className="review-label">ADMISSION NO</div>
+                  <div className="review-value">{admissionNo || "Not yet entered"}</div>
+                </div>
+                <div className="review-item">
+                  <div className="review-label">FULL NAME</div>
+                  <div className="review-value">{[firstName, lastName].filter(Boolean).join(" ") || "Not yet entered"}</div>
+                </div>
+                <div className="review-item">
+                  <div className="review-label">CLASS / SECTION</div>
+                  <div className="review-value">{classId && sectionId ? `${classId} / ${sectionId}` : "Not yet entered"}</div>
+                </div>
+                <div className="review-item">
+                  <div className="review-label">CONTACT</div>
+                  <div className="review-value">{phone || "Not yet entered"}</div>
+                </div>
+              </div>
+
               {renderSectionNavButtons("review")}
             </section>
           </div>
@@ -3097,12 +3932,15 @@ export function StudentAddPanel() {
         }
 
         .camera-card {
-          width: min(860px, 100%);
+          width: min(600px, 95%);
+          max-height: 85vh;
           background: #fff;
           border-radius: 14px;
           border: 1px solid #e2e8f0;
           overflow: hidden;
           box-shadow: 0 18px 50px rgba(15, 23, 42, 0.28);
+          display: flex;
+          flex-direction: column;
         }
 
         .camera-head {
@@ -3139,10 +3977,16 @@ export function StudentAddPanel() {
         .camera-body {
           padding: 16px 18px;
           background: #0f172a;
+          flex: 1;
+          overflow-y: auto;
+          display: flex;
+          align-items: center;
+          justify-content: center;
         }
 
         .camera-video {
           width: 100%;
+          max-height: 50vh;
           aspect-ratio: 4 / 3;
           object-fit: cover;
           background: #020617;
@@ -3151,6 +3995,7 @@ export function StudentAddPanel() {
 
         .camera-preview-image {
           width: 100%;
+          max-height: 50vh;
           aspect-ratio: 4 / 3;
           object-fit: contain;
           background: #020617;
@@ -3179,6 +4024,363 @@ export function StudentAddPanel() {
           margin-top: 8px;
         }
 
+        /* ==== DOCUMENTS SECTION ==== */
+        .doc-upload-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 16px 18px;
+          margin-bottom: 24px;
+        }
+
+        .doc-card {
+          padding: 22px;
+          background: #ffffff;
+          border: 1px solid #E7EAF1;
+          border-radius: 20px;
+          height: 160px;
+          display: flex;
+          flex-direction: column;
+          transition: all 220ms ease;
+          cursor: pointer;
+        }
+
+        .doc-card-medical {
+          height: 150px;
+          margin-top: 8px;
+        }
+
+        .doc-card:hover {
+          border-color: #5B3DF5;
+          box-shadow: 0 0 0 4px rgba(91, 61, 245, 0.08), 0 4px 12px rgba(0, 0, 0, 0.06);
+          transform: translateY(-2px);
+        }
+
+        .doc-card:focus {
+          outline: 2px solid #5B3DF5;
+          outline-offset: 2px;
+        }
+
+        .doc-card-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: 10px;
+        }
+
+        .doc-icon-box {
+          width: 40px;
+          height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: #F3EEFF;
+          border-radius: 10px;
+          font-size: 20px;
+          flex-shrink: 0;
+        }
+
+        .doc-badge {
+          display: inline-block;
+          padding: 4px 10px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.5px;
+          text-transform: uppercase;
+        }
+
+        .doc-badge-required {
+          background: #FEE2E2;
+          color: #991B1B;
+        }
+
+        .doc-badge-masked {
+          background: #FED7AA;
+          color: #92400E;
+        }
+
+        .doc-badge-optional {
+          background: #F3F4F6;
+          color: #6B7280;
+        }
+
+        .doc-card-title {
+          margin: 0 0 6px;
+          font-size: 15px;
+          font-weight: 600;
+          color: #111827;
+        }
+
+        .doc-card-desc {
+          margin: 0 0 10px;
+          font-size: 13px;
+          color: #64748B;
+          line-height: 1.4;
+          flex: 1;
+        }
+
+        .doc-upload-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 0;
+          border: none;
+          background: none;
+          color: #5B3DF5;
+          cursor: pointer;
+          font-size: 13px;
+          font-weight: 500;
+          text-decoration: none;
+          transition: all 0.15s ease;
+          margin-top: auto;
+        }
+
+        .doc-upload-btn:hover {
+          color: #4C33E6;
+          text-decoration: underline;
+        }
+
+        /* RTE Box */
+        .doc-rte-box {
+          display: flex;
+          gap: 14px;
+          padding: 20px 24px;
+          background: #FEF3C7;
+          border: 1px solid #FCD34D;
+          border-radius: 18px;
+          margin-top: 4px;
+        }
+
+        .doc-rte-full-width {
+          grid-column: 1 / -1;
+          margin-top: 4px;
+        }
+
+        .doc-rte-icon {
+          font-size: 24px;
+          flex-shrink: 0;
+        }
+
+        .doc-rte-title {
+          margin: 0 0 6px;
+          font-size: 14px;
+          font-weight: 600;
+          color: #92400E;
+        }
+
+        .doc-rte-text {
+          margin: 0;
+          font-size: 13px;
+          color: #78350F;
+          line-height: 1.6;
+        }
+
+        .doc-rte-link {
+          color: #B45309;
+          text-decoration: underline;
+          font-weight: 500;
+        }
+
+        .doc-rte-link:hover {
+          color: #92400E;
+        }
+
+        /* Consent Box */
+        .doc-consent-box {
+          padding: 20px 24px;
+          background: #F8F7FF;
+          border: 1px solid #C4B5FD;
+          border-radius: 18px;
+        }
+
+        .doc-consent-full-width {
+          grid-column: 1 / -1;
+          margin-top: 4px;
+        }
+
+        .doc-consent-label {
+          display: flex;
+          gap: 12px;
+          align-items: flex-start;
+          cursor: pointer;
+        }
+
+        .doc-consent-checkbox {
+          width: 18px;
+          height: 18px;
+          margin-top: 4px;
+          cursor: pointer;
+          flex-shrink: 0;
+          accent-color: #5B3DF5;
+        }
+
+        .doc-consent-title {
+          margin: 0 0 6px;
+          font-size: 14px;
+          font-weight: 600;
+          color: #111827;
+        }
+
+        .doc-consent-text {
+          margin: 0;
+          font-size: 13px;
+          color: #4B5563;
+          line-height: 1.6;
+        }
+
+        /* Document Success State */
+        .doc-card.doc-card-success {
+          background: #D1FAE5;
+          border-color: #6EE7B7;
+        }
+
+        .doc-card-success .doc-card-header {
+          margin-bottom: 8px;
+        }
+
+        .doc-card-success .doc-icon-box {
+          background: #10B981;
+          color: #ffffff;
+          font-size: 24px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .doc-success-msg {
+          margin: 0;
+          font-size: 13px;
+          color: #059669;
+          font-weight: 600;
+        }
+
+        .doc-success-filename {
+          margin: 4px 0 0;
+          font-size: 12px;
+          color: #047857;
+          font-weight: 500;
+          word-break: break-all;
+        }
+
+        .doc-card-success .doc-upload-btn {
+          color: #10B981;
+        }
+
+        .doc-card-success .doc-upload-btn:hover {
+          color: #059669;
+        }
+
+        /* Document Error State */
+        .doc-card.doc-card-error {
+          background: #FEE2E2;
+          border-color: #FCA5A5;
+        }
+
+        .doc-card-error .doc-icon-box {
+          background: #DC2626;
+          color: #ffffff;
+          font-size: 24px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .doc-error-msg {
+          margin: 0;
+          font-size: 13px;
+          color: #991B1B;
+          font-weight: 600;
+        }
+
+        .doc-error-detail {
+          margin: 4px 0 0;
+          font-size: 12px;
+          color: #7F1D1D;
+          font-weight: 400;
+          word-break: break-all;
+          line-height: 1.3;
+        }
+
+        .doc-card-error .doc-upload-btn {
+          color: #DC2626;
+        }
+
+        .doc-card-error .doc-upload-btn:hover {
+          color: #991B1B;
+        }
+
+        /* Document Uploading State */
+        .doc-card.doc-card-uploading {
+          background: #EFF6FF;
+          border-color: #93C5FD;
+        }
+
+        .doc-card-uploading .doc-icon-box {
+          background: #3B82F6;
+          color: #ffffff;
+          font-size: 24px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        .doc-uploading-msg {
+          margin: 0;
+          font-size: 13px;
+          color: #1E40AF;
+          font-weight: 600;
+        }
+
+        .doc-card-uploading .doc-upload-btn {
+          color: #3B82F6;
+          cursor: not-allowed;
+          opacity: 0.6;
+        }
+
+        /* Hidden file inputs */
+        .hidden-file-input {
+          display: none;
+        }
+
+        /* Review Section */
+        .review-summary-grid {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 20px;
+          background: #F8F9FB;
+          padding: 20px;
+          border-radius: 12px;
+        }
+
+        .review-item {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .review-label {
+          font-size: 11px;
+          letter-spacing: 0.1em;
+          font-weight: 600;
+          color: #64748B;
+          margin-bottom: 6px;
+        }
+
+        .review-value {
+          font-size: 14px;
+          color: #111827;
+          line-height: 1.5;
+        }
+
         @media (max-width: 1024px) {
           .enroll-body {
             flex-direction: column;
@@ -3201,6 +4403,14 @@ export function StudentAddPanel() {
           .grid-3,
           .grid-2,
           .review-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .doc-upload-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .review-summary-grid {
             grid-template-columns: 1fr;
           }
 

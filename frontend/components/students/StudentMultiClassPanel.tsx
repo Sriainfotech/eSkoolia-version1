@@ -6,6 +6,7 @@ import { Spinner } from "@/components/common/Spinner";
 import { TopToast } from "@/components/common/TopToast";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import styles from "./StudentMultiClassPanel.module.css";
+import { studentThemeClassName } from "./studentTheme";
 
 type ApiList<T> = T[] | { results?: T[]; count?: number; next?: string | null; previous?: string | null };
 
@@ -470,7 +471,7 @@ export function StudentMultiClassPanel({ selectedStudentId }: { selectedStudentI
   const displayTo = Math.min(currentPage * pageSize, totalStudents);
 
   return (
-    <div className="legacy-panel">
+    <div className={`${studentThemeClassName} legacy-panel`}>
       <TopToast
         message={error || success}
         tone={error ? "error" : "success"}

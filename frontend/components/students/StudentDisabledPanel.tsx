@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable */
+
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -8,6 +10,7 @@ import { buildPaginationQuery, extractListData, extractPaginationMeta, type List
 import { PaginationControls } from "@/components/common/PaginationControls";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { usePersistentPagination } from "@/hooks/usePersistentPagination";
+import { studentThemeClassName } from "./studentTheme";
 
 type StudentRow = {
   id: number;
@@ -445,13 +448,13 @@ export function StudentDisabledPanel() {
   };
 
   return (
-    <div className="legacy-panel">
+    <div className={`${studentThemeClassName} legacy-panel student-disabled-panel`}>
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>Disabled Students</h1>
-            <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
-              <div style={{ display: "flex", gap: 8 }}>
+          <div className="student-page-header student-page-header-actions">
+            <h1 className="student-page-title">Disabled Students</h1>
+            <div className="student-page-side">
+              <div className="student-page-links-row">
                 <Link href="/students/list" style={{ ...buttonStyle("#0ea5e9"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
                   Student List
                 </Link>
@@ -465,7 +468,7 @@ export function StudentDisabledPanel() {
                   {refreshing ? "Refreshing..." : "🔄 Refresh"}
                 </button>
               </div>
-              <div style={{ display: "flex", gap: 8, color: "#666", fontSize: 13 }}>
+              <div className="student-page-crumbs">
                 <span>Dashboard</span>
                 <span>/</span>
                 <span>Student Information</span>

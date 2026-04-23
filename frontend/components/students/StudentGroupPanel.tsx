@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { studentThemeClassName } from "./studentTheme";
 
 type StudentGroup = {
   id: number;
@@ -569,7 +570,7 @@ export function StudentGroupPanel() {
   const isFormValid = sanitizePlainText(name).length >= 3 && sanitizePlainText(description).length <= 255 && !hasFieldErrors;
 
   return (
-    <div className="legacy-panel student-group-panel">
+    <div className={`${studentThemeClassName} legacy-panel student-group-panel`}>
       <style>{`
         .student-group-panel button:focus,
         .student-group-panel input:focus,
@@ -617,9 +618,9 @@ export function StudentGroupPanel() {
       `}</style>
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>👥 Student Group</h1>
-            <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+          <div className="student-page-header">
+            <h1 className="student-page-title">Student Group</h1>
+            <div className="student-page-crumbs">
               <span>Dashboard</span>
               <span>/</span>
               <span>Student Information</span>

@@ -808,3 +808,113 @@ tr.date-alert:hover {
     font-size: 28px;
   }
 }
+
+.dashboard-main .student-theme {
+  font-family: var(--font-manrope), "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.dashboard-main .student-theme h1,
+.dashboard-main .student-theme h2,
+.dashboard-main .student-theme h3,
+.dashboard-main .student-theme h4 {
+  font-family: var(--font-playfair-display), "Times New Roman", serif;
+  letter-spacing: -0.02em;
+}
+
+.dashboard-main .student-theme .sms-breadcrumb {
+  margin-bottom: 22px;
+}
+
+.dashboard-main .student-theme .admin-visitor-area,
+.dashboard-main .student-theme .white-box,
+.dashboard-main .student-theme [class*="table-wrap"],
+.dashboard-main .student-theme [class*="list-shell"],
+.dashboard-main .student-theme [class*="table-card"],
+.dashboard-main .student-theme [class*="summary-card"] {
+  border-radius: 16px;
+}
+
+.dashboard-main .student-theme button,
+.dashboard-main .student-theme .btn,
+.dashboard-main .student-theme [class*="btn-"] {
+  font-family: inherit;
+}
+
+.dashboard-main .student-theme input,
+.dashboard-main .student-theme select,
+.dashboard-main .student-theme textarea {
+  font-family: inherit;
+}
+
+.dashboard-main .student-theme .student-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 16px;
+  background: linear-gradient(135deg, #ffffff 0%, #f5f9ff 70%);
+  padding: 14px 16px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.07);
+}
+
+.dashboard-main .student-theme .student-page-header.student-page-header-actions {
+  align-items: flex-start;
+}
+
+.dashboard-main .student-theme .student-page-title {
+  margin: 0;
+  font-size: clamp(22px, 2vw, 28px);
+  color: #0b1f45;
+}
+
+.dashboard-main .student-theme .student-page-side {
+  display: grid;
+  gap: 8px;
+  justify-items: end;
+}
+
+.dashboard-main .student-theme .student-page-jump-wrap {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+
+.dashboard-main .student-theme .student-page-jump-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.dashboard-main .student-theme .student-page-links-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.dashboard-main .student-theme .student-page-crumbs {
+  display: flex;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 900px) {
+  .dashboard-main .student-theme .student-page-header,
+  .dashboard-main .student-theme .student-page-header.student-page-header-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .dashboard-main .student-theme .student-page-side,
+  .dashboard-main .student-theme .student-page-jump-wrap {
+    justify-items: start;
+  }
+
+  .dashboard-main .student-theme .student-page-links-row,
+  .dashboard-main .student-theme .student-page-crumbs {
+    justify-content: flex-start;
+  }
+}

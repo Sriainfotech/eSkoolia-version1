@@ -1,5 +1,5 @@
-import StudentAttendancePanel from "@/components/attendance/StudentAttendancePanel";
+import StudentAttendancePremiumPanel from "@/components/attendance/StudentAttendancePremiumPanel";
 
 export default function StudentAttendancePage() {
-  return <StudentAttendancePanel />;
+  return <StudentAttendancePremiumPanel />;
 }

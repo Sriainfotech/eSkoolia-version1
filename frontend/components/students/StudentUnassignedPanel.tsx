@@ -6,6 +6,7 @@ import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { usePersistentPagination } from "@/hooks/usePersistentPagination";
+import { studentThemeClassName } from "./studentTheme";
 
 type StudentRow = {
   id: number;
@@ -322,7 +323,7 @@ export function StudentUnassignedPanel() {
   };
 
   return (
-    <div className="legacy-panel unassigned-panel">
+    <div className={`${studentThemeClassName} legacy-panel unassigned-panel`}>
       <style>{`
         @keyframes unassignedShimmer {
           0% { background-position: 200% 0; }
@@ -338,12 +339,12 @@ export function StudentUnassignedPanel() {
       `}</style>
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>Unassigned Student</h1>
-            <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
-              <div style={{ display: "grid", gap: 6, justifyItems: "end", marginTop: 4 }}>
-                <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: 18 }}>Jump To</span>
-                <div style={{ display: "flex", gap: 8, marginLeft: 18 }}>
+          <div className="student-page-header student-page-header-actions">
+            <h1 className="student-page-title">Unassigned Student</h1>
+            <div className="student-page-side">
+              <div className="student-page-jump-wrap">
+                <span className="student-page-jump-label">Jump To</span>
+                <div className="student-page-links-row">
                 <Link href="/students/multi-class" style={{ ...buttonStyle("#16a34a"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
                   Multi Class Student
                 </Link>
@@ -352,7 +353,7 @@ export function StudentUnassignedPanel() {
                 </Link>
               </div>
               </div>
-              <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+              <div className="student-page-crumbs">
                 <Link href="/dashboard" style={{ color: "inherit", textDecoration: "none" }}>Dashboard</Link>
                 <span>/</span>
                 <Link href="/students/list" style={{ color: "inherit", textDecoration: "none" }}>Student Information</Link>

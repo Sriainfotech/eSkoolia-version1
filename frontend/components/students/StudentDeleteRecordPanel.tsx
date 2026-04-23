@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TopToast } from "@/components/common/TopToast";
+import { studentThemeClassName } from "./studentTheme";
 
 type ApiList<T> = T[] | { results?: T[]; count?: number; next?: string | null; previous?: string | null };
 
@@ -464,7 +465,7 @@ export function StudentDeleteRecordPanel() {
   };
 
   return (
-    <div className="legacy-panel">
+    <div className={`${studentThemeClassName} legacy-panel`}>
       {toast ? (
         <TopToast
           message={toast.message}
@@ -474,10 +475,10 @@ export function StudentDeleteRecordPanel() {
       ) : null}
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>Delete Student Record</h1>
-            <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
-              <div style={{ display: "flex", gap: 8 }}>
+          <div className="student-page-header student-page-header-actions">
+            <h1 className="student-page-title">Delete Student Record</h1>
+            <div className="student-page-side">
+              <div className="student-page-links-row">
                 <Link href="/students/list" style={{ ...buttonStyle("#0ea5e9"), display: "inline-flex", alignItems: "center", textDecoration: "none" }}>
                   Student List
                 </Link>
@@ -485,7 +486,7 @@ export function StudentDeleteRecordPanel() {
                   Multi Subject Assignment
                 </Link>
               </div>
-              <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+              <div className="student-page-crumbs">
                 <span>Dashboard</span>
                 <span>/</span>
                 <span>Student Information</span>

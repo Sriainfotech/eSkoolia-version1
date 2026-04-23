@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { Spinner } from "@/components/common/Spinner";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { studentThemeClassName } from "./studentTheme";
 
 type ApiList<T> = T[] | { results?: T[] };
 
@@ -435,12 +436,12 @@ export function StudentExportPanel() {
   };
 
   return (
-    <div className="legacy-panel">
+    <div className={`${studentThemeClassName} legacy-panel`}>
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>Student Export</h1>
-            <div style={{ display: "flex", gap: 8, color: "#555", fontSize: 13 }}>
+          <div className="student-page-header">
+            <h1 className="student-page-title">Student Export</h1>
+            <div className="student-page-crumbs">
               <span>Dashboard</span>
               <span>/</span>
               <span>Student Information</span>

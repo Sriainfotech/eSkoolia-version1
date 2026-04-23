@@ -777,6 +777,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         "create": "student_info.add_student.view",
         "update": "student_info.add_student.view",
         "partial_update": "student_info.add_student.view",
+        "next_admission_no": "student_info.add_student.view",
         "check_admission_no": "student_info.add_student.view",
         "upload_photo": "student_info.add_student.view",
         "pincode_details": "student_info.add_student.view",
@@ -1329,6 +1330,50 @@ class StudentViewSet(TenantScopedModelViewSet):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
 
+    @action(detail=False, methods=["get"], url_path="next-admission-no")
+    def next_admission_no(self, request):
+        current_year = timezone.now().year
+        prefix = f"ADM{current_year}"
+        pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$", re.IGNORECASE)
+
+        max_sequence = 0
+        queryset = Student.objects.all()
+        user = request.user
+        if not user.is_superuser:
+            if not user.school_id:
+                return Response(
+                    {
+                        "success": False,
+                        "message": "Unable to determine school for admission number generation.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            queryset = queryset.filter(school_id=user.school_id)
+        elif user.school_id:
+            queryset = queryset.filter(school_id=user.school_id)
+
+        queryset = queryset.filter(admission_no__istartswith=prefix).values_list("admission_no", flat=True)
+        for value in queryset.iterator():
+            match = pattern.match(str(value or "").strip())
+            if not match:
+                continue
+            sequence = int(match.group(1))
+            if sequence > max_sequence:
+                max_sequence = sequence
+
+        next_sequence = max_sequence + 1
+        admission_no = f"{prefix}{next_sequence:04d}"
+
+        return Response(
+            {
+                "success": True,
+                "admission_no": admission_no,
+                "sequence": next_sequence,
+                "message": "Next admission number generated successfully.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
     @action(detail=False, methods=["get"], url_path="check-admission-no")
     def check_admission_no(self, request):
         admission_no = str(request.query_params.get("admission_no") or "").strip()
@@ -1837,16 +1882,114 @@ class StudentViewSet(TenantScopedModelViewSet):
 class StudentDocumentViewSet(TenantScopedModelViewSet):
     serializer_class = StudentDocumentSerializer
     model = StudentDocument
+    parser_classes = (MultiPartParser, FormParser)
     permission_codes = {"*": "student_info.student_list.view"}
 
     def get_queryset(self):
         user = self.request.user
-        qs = StudentDocument.objects.select_related("student__school")
+        qs = StudentDocument.objects.select_related("student__school", "uploaded_by")
         if user.is_superuser:
             return qs
         if user.school_id:
-            return qs.filter(student__school_id=user.school_id)
+            return qs.filter(school_id=user.school_id)
         return qs.none()
+
+    @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser])
+    def upload_document(self, request):
+        """
+        Upload a student document.
+        
+        Expects:
+        - student_id (required): Student ID (database ID or UUID)
+        - document_type (required): Document type (birth_certificate, aadhaar_card, medical_information)
+        - file (required): File to upload
+        """
+        try:
+            student_id_input = request.data.get("student_id")
+            document_type = request.data.get("document_type")
+            file_obj = request.FILES.get("file")
+            
+            logger.info(f"Document upload attempt: student_id={student_id_input}, document_type={document_type}, file={file_obj.name if file_obj else None}")
+            
+            # Validations
+            if not student_id_input:
+                return Response(
+                    {"error": "Student ID is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not document_type:
+                return Response(
+                    {"error": "Document type is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not file_obj:
+                return Response(
+                    {"error": "No file selected."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check student exists and user has access
+            # Try to get by student_id (UUID) first, then by id (database ID)
+            student = None
+            try:
+                # First try as UUID
+                student = Student.objects.get(student_id=student_id_input)
+            except Student.DoesNotExist:
+                try:
+                    # Try as numeric ID
+                    student = Student.objects.get(id=int(student_id_input))
+                except (Student.DoesNotExist, ValueError):
+                    logger.warning(f"Student not found with ID: {student_id_input}")
+                    return Response(
+                        {"error": "Student not found."},
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            
+            # Check permission
+            if not request.user.is_superuser and student.school_id != request.user.school_id:
+                logger.warning(f"Permission denied: user school {request.user.school_id} != student school {student.school_id}")
+                raise PermissionDenied("You don't have permission to upload documents for this student.")
+            
+            # Validate file type
+            allowed_extensions = [".pdf", ".jpg", ".jpeg", ".png"]
+            file_name_lower = file_obj.name.lower()
+            if not any(file_name_lower.endswith(ext) for ext in allowed_extensions):
+                return Response(
+                    {"error": "Only PDF, JPG, JPEG, and PNG files are allowed."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validate file size (5MB)
+            if file_obj.size > 5242880:
+                return Response(
+                    {"error": "File size must be less than 5MB."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create document record
+            document = StudentDocument.objects.create(
+                student=student,
+                school=student.school,
+                document_type=document_type,
+                title=document_type.replace("_", " ").title(),
+                file=file_obj,
+                original_name=file_obj.name,
+                file_size=file_obj.size,
+                uploaded_by=request.user,
+            )
+            
+            # Serialize and return
+            serializer = self.get_serializer(document)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        except Exception as e:
+            logger.error(f"Document upload error: {str(e)}", exc_info=True)
+            return Response(
+                {"error": "An error occurred during file upload. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class StudentTransferHistoryViewSet(TenantScopedModelViewSet):

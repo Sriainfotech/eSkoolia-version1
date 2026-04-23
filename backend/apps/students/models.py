@@ -201,14 +201,34 @@ class Student(models.Model):
 
 
 class StudentDocument(models.Model):
+    DOCUMENT_TYPES = [
+        ("birth_certificate", "Birth Certificate"),
+        ("aadhaar_card", "Aadhaar Card"),
+        ("medical_information", "Medical Information"),
+        ("caste_certificate", "Caste Certificate"),
+        ("other", "Other"),
+    ]
+    
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="documents")
-    title = models.CharField(max_length=150)
-    file_url = models.URLField(max_length=400)
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="student_documents", null=True, blank=True)
+    document_type = models.CharField(max_length=30, choices=DOCUMENT_TYPES, default="other")
+    title = models.CharField(max_length=150, blank=True)
+    file = models.FileField(upload_to="student_documents/%Y/%m/", null=True, blank=True)
+    original_name = models.CharField(max_length=255, blank=True)
+    file_size = models.PositiveBigIntegerField(help_text="File size in bytes", null=True, blank=True)
+    uploaded_by = models.ForeignKey("users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="student_documents_uploaded")
+    is_verified = models.BooleanField(default=False)
+    remarks = models.TextField(blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "student_documents"
         ordering = ["-uploaded_at"]
+        indexes = [
+            models.Index(fields=["student", "document_type"], name="idx_student_doc_type"),
+            models.Index(fields=["school"], name="idx_student_doc_school"),
+        ]
 
 
 class StudentTransferHistory(models.Model):
