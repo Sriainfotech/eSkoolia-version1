@@ -80,6 +80,7 @@ export default function StudentAttendanceCreatePanel() {
   const [years, setYears] = useState<AcademicYear[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
+  const [loadingSections, setLoadingSections] = useState(false);
 
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
@@ -107,30 +108,16 @@ export default function StudentAttendanceCreatePanel() {
     const load = async () => {
       try {
         setError("");
-        const [yearData, classData, sectionData] = await Promise.allSettled([
+        const [yearData, classData] = await Promise.allSettled([
           apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
-          apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
-          apiGet<ApiList<Section>>("/api/v1/core/sections/"),
+          apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/?page_size=200"),
         ]);
 
         const loadedYears = yearData.status === "fulfilled" ? listData(yearData.value) : [];
         const loadedClasses = classData.status === "fulfilled" ? listData(classData.value) : [];
-        let loadedSections: Section[] = sectionData.status === "fulfilled" ? listData(sectionData.value) : [];
-
-        if (!loadedSections.length) {
-          loadedSections = loadedClasses.flatMap((schoolClass) => {
-            const classWithSections = schoolClass as SchoolClass & { sections?: Array<{ id: number; name: string }> };
-            return (classWithSections.sections || []).map((section) => ({
-              id: section.id,
-              name: section.name,
-              school_class: schoolClass.id,
-            }));
-          });
-        }
-
+  
         setYears(loadedYears);
         setClasses(loadedClasses);
-        setSections(loadedSections);
       } catch (err) {
         const message = err instanceof Error ? err.message : "";
         setError(message && message !== "401" ? message : "Unable to load attendance criteria.");
@@ -139,11 +126,22 @@ export default function StudentAttendanceCreatePanel() {
     void load();
   }, []);
 
-  const filteredSections = useMemo(() => {
-    const id = Number(classId);
-    if (!id) return [];
-    return sections.filter((s) => s.school_class === id);
-  }, [classId, sections]);
+  const filteredSections = sections;
+
+  const loadSectionsForClass = async (targetClassId: string) => {
+    if (!targetClassId) { setSections([]); return; }
+    setLoadingSections(true);
+    try {
+      const data = await apiGet<ApiList<Section>>(
+        `/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`
+      );
+      setSections(listData(data));
+    } catch {
+      setSections([]);
+    } finally {
+      setLoadingSections(false);
+    }
+  };
 
   const searchStudents = async () => {
     if (!classId || !sectionId || !attendanceDate) {
@@ -344,10 +342,12 @@ export default function StudentAttendanceCreatePanel() {
               <select
                 value={classId}
                 onChange={(e) => {
-                  setClassId(e.target.value);
+                  const next = e.target.value;
+                  setClassId(next);
                   setSectionId("");
                   setLoaded(false);
                   setStudents([]);
+                  void loadSectionsForClass(next);
                 }}
                 style={fieldStyle()}
               >
@@ -360,8 +360,9 @@ export default function StudentAttendanceCreatePanel() {
                   setSectionId(e.target.value);
                   setLoaded(false);
                   setStudents([]);
-                }}
-                style={fieldStyle()}
+                disabled={loadingSections || !classId}
+              >
+                <option value="">{loadingSections ? "Loading..." : classId ? "Section" : "Select class first"}
               >
                 <option value="">Section</option>
                 {filteredSections.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
