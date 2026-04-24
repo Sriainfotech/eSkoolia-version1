@@ -869,12 +869,14 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
 
         school_filter = self.school_filter(request)
 
-        # Per-class student totals
-        from apps.core.models import Class
-        classes = Class.objects.filter(**school_filter).prefetch_related("students")
-        total_by_class: dict[int, int] = {}
-        for cls in classes:
-            total_by_class[cls.id] = cls.students.filter(is_active=True).count()
+        # Per-class student totals — query directly from Student model using current_class FK
+        student_counts = (
+            Student.objects.filter(is_active=True, **school_filter)
+            .exclude(current_class=None)
+            .values("current_class_id")
+            .annotate(count=Count("id"))
+        )
+        total_by_class: dict[int, int] = {row["current_class_id"]: row["count"] for row in student_counts}
 
         # Per-class attendance aggregates for the date
         rows = (
@@ -897,8 +899,11 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
                     "late": row["late"] or 0,
                 }
 
+        # Build result using union of both sets so all classes are represented
+        all_class_ids = set(total_by_class.keys()) | set(counts_by_class.keys())
         result = []
-        for cls_id, total in total_by_class.items():
+        for cls_id in all_class_ids:
+            total = total_by_class.get(cls_id, 0)
             c = counts_by_class.get(cls_id, {"present": 0, "absent": 0, "late": 0})
             marked = c["present"] + c["absent"] + c["late"]
             result.append({
