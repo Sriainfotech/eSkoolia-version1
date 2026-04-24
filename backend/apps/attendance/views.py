@@ -4,7 +4,8 @@ from datetime import date, datetime
 from io import BytesIO, StringIO
 
 from django.http import HttpResponse
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, models, transaction
+from django.db.models import Count, Case, When, IntegerField
 from rest_framework import permissions, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
@@ -153,85 +154,104 @@ class StudentSearchAPIView(AttendanceTenantMixin, APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        students = Student.objects.filter(
+        include_legacy_payload = str(request.data.get("include_legacy_payload", "false")).lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+
+        students = list(
+            Student.objects.filter(
             current_class_id=class_id,
-            current_section_id=section_id,
             is_active=True,
             **self.school_filter(request),
-        ).order_by("id")
+            )
+            .filter(
+            # Include students assigned to this section OR students with the right class but no section
+            models.Q(current_section_id=section_id) | models.Q(current_section_id__isnull=True)
+            )
+            .order_by("id")
+            .values("id", "admission_no", "first_name", "last_name", "roll_no")
+        )
 
-        already_assigned_students = []
-        new_students = []
         attendance_type = ""
 
+        # Query attendance by student_ids (not class/section) so records saved
+        # without class_id/section_id are still found (backward-compatible).
+        student_ids = [s["id"] for s in students]
         attendance_rows = {
             row.student_id: row
             for row in StudentAttendance.objects.filter(
                 attendance_date=attendance_date,
-                class_id=class_id,
-                section_id=section_id,
+                student_id__in=student_ids,
                 **self.school_filter(request),
             )
         }
 
-        for student in students:
-            attendance = attendance_rows.get(student.id)
-            if attendance:
-                already_assigned_students.append(
-                    {
-                        "id": attendance.id,
-                        "student_id": attendance.student_id,
-                        "attendance_type": attendance.attendance_type,
-                        "notes": attendance.notes,
-                    }
-                )
-                attendance_type = attendance.attendance_type
-            else:
-                new_students.append(
-                    {
-                        "id": student.id,
-                        "admission_no": student.admission_no,
-                        "first_name": student.first_name,
-                        "last_name": student.last_name,
-                        "roll_no": student.roll_no,
-                    }
-                )
-
-        class_info = Class.objects.filter(id=class_id).first()
-        section_info = Section.objects.filter(id=section_id).first()
-
-        # Build student table rows in one payload for frontend parity rendering.
         table_students = []
         for student in students:
-            att = attendance_rows.get(student.id)
+            sid = student["id"]
+            att = attendance_rows.get(sid)
+            if attendance_type == "" and att:
+                attendance_type = att.attendance_type
             table_students.append(
                 {
-                    "id": student.id,
-                    "admission_no": student.admission_no,
-                    "first_name": student.first_name,
-                    "last_name": student.last_name,
-                    "roll_no": student.roll_no,
+                    "id": sid,
+                    "admission_no": student["admission_no"],
+                    "first_name": student["first_name"],
+                    "last_name": student["last_name"],
+                    "roll_no": student["roll_no"],
                     "attendance_type": att.attendance_type if att else None,
                     "attendance_note": att.notes if att else "",
+                    "lunch": att.lunch if att else False,
                 }
             )
 
-        classes = Class.objects.filter(**self.school_filter(request)).order_by("numeric_order", "name")
         response_data = {
-            "classes": [{"id": c.id, "class_name": c.name} for c in classes],
             "date": attendance_date,
             "class_id": class_id,
             "section_id": section_id,
             "attendance_type": attendance_type,
-            "already_assigned_students": already_assigned_students,
-            "new_students": new_students,
             "students": table_students,
-            "search_info": {
-                "class_name": class_info.name if class_info else "",
-                "section_name": section_info.name if section_info else "",
-                "date": attendance_date,
-            },
         }
+
+        # Optional backward-compatible payload for legacy clients.
+        if include_legacy_payload:
+            class_info = Class.objects.filter(id=class_id).first()
+            section_info = Section.objects.filter(id=section_id).first()
+            classes = Class.objects.filter(**self.school_filter(request)).order_by("numeric_order", "name")
+
+            already_assigned_students = []
+            new_students = []
+            for student in students:
+                sid = student["id"]
+                att = attendance_rows.get(sid)
+                if att:
+                    already_assigned_students.append(
+                        {
+                            "id": att.id,
+                            "student_id": att.student_id,
+                            "attendance_type": att.attendance_type,
+                            "notes": att.notes,
+                            "lunch": att.lunch,
+                        }
+                    )
+                else:
+                    new_students.append(student)
+
+            response_data.update(
+                {
+                    "classes": [{"id": c.id, "class_name": c.name} for c in classes],
+                    "already_assigned_students": already_assigned_students,
+                    "new_students": new_students,
+                    "search_info": {
+                        "class_name": class_info.name if class_info else "",
+                        "section_name": section_info.name if section_info else "",
+                        "date": attendance_date,
+                    },
+                }
+            )
+
         return Response(response_data)
 
 
@@ -244,60 +264,71 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
             req.is_valid(raise_exception=True)
             data = req.validated_data
 
-            # Validation: Check if attendance already exists
-            existing_attendance = StudentAttendance.objects.filter(
-                attendance_date=data["date"],
-                class_id=data.get("class_id"),
-                section_id=data.get("section_id"),
-                **self.school_filter(request),
-            ).exists()
-            if existing_attendance:
-                return Response(
-                    {"success": False, "message": "Attendance already exists for this date. You can update the existing records."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            # Validation: Check if all students have a status
             attendance_map = data.get("attendance") or data.get("attendance_type") or {}
+            lunch_map = data.get("lunch") or {}
             lock_attendance = data.get("lock_attendance", False)
 
-            if not attendance_map:
+            if not attendance_map and not lunch_map:
                 return Response(
-                    {"success": False, "message": "Please mark attendance for all students"},
+                    {"success": False, "message": "Please provide attendance or lunch data"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
             attendance_ids = set(data.get("id", []))
-            status_count = len([v for k, v in attendance_map.items() if str(k) in [str(i) for i in attendance_ids]])
-            if status_count != len(attendance_ids):
+            attendance_ids_str = {str(i) for i in attendance_ids}
+            lunch_count = len([v for k, v in lunch_map.items() if str(k) in attendance_ids_str])
+            status_count = len([v for k, v in attendance_map.items() if str(k) in attendance_ids_str])
+
+            # Require full status coverage only for status submissions.
+            if attendance_map and status_count != len(attendance_ids):
                 return Response(
                     {"success": False, "message": "Please mark attendance for all students"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Validation: Check if students exist for class and section
-            students = Student.objects.filter(
-                current_class_id=data.get("class_id"),
-                current_section_id=data.get("section_id"),
-                **self.school_filter(request),
-            )
-            if not students.exists():
+            # Require full lunch coverage only for lunch-only submissions.
+            if not attendance_map and lunch_map and lunch_count != len(attendance_ids):
+                return Response(
+                    {"success": False, "message": "Please mark lunch status for all students"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            school_scope = self.school_filter(request)
+            student_scope = Student.objects.filter(id__in=attendance_ids, **school_scope)
+            if data.get("class_id"):
+                student_scope = student_scope.filter(current_class_id=data.get("class_id"))
+            if data.get("section_id"):
+                student_scope = student_scope.filter(
+                    models.Q(current_section_id=data.get("section_id")) | models.Q(current_section_id__isnull=True)
+                )
+
+            students = list(student_scope.select_related("guardian"))
+            if not students:
                 return Response(
                     {"success": False, "message": "No students found for selected class and section"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            student_map = {s.id: s for s in students}
+
             note_map = data.get("note") or data.get("attendance_note") or {}
 
             with transaction.atomic():
                 for student_id in data["id"]:
+                    if student_id not in student_map:
+                        continue
+
+                    existing_lunch = False
+                    existing_type = None
                     # Delete existing attendance for same date
                     existing = StudentAttendance.objects.filter(
                         student_id=student_id,
                         attendance_date=data["date"],
-                        **self.school_filter(request),
+                        **school_scope,
                     ).first()
                     if existing and not existing.is_locked:
+                        existing_lunch = existing.lunch
+                        existing_type = existing.attendance_type
                         existing.delete()
                     elif existing and existing.is_locked:
                         return Response(
@@ -322,7 +353,7 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                                 {"success": False, "message": "Invalid attendance status"},
                                 status=status.HTTP_400_BAD_REQUEST,
                             )
-                        attendance.attendance_type = raw_type or "P"
+                        attendance.attendance_type = raw_type or existing_type or "P"
 
                         raw_note = note_map.get(str(student_id))
                         if raw_note is None:
@@ -337,17 +368,22 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                             )
                         attendance.notes = note_text
 
+                    raw_lunch = lunch_map.get(str(student_id))
+                    if raw_lunch is None:
+                        raw_lunch = lunch_map.get(student_id)
+                    attendance.lunch = bool(raw_lunch) if raw_lunch is not None else existing_lunch
+
                     attendance.attendance_date = data["date"]
                     attendance.school = request.user.school
-                    attendance.academic_year_id = request.data.get("academic_year_id")
-                    attendance.class_id = request.data.get("class_id")
-                    attendance.section_id = request.data.get("section_id")
+                    attendance.academic_year_id = data.get("academic_year_id")
+                    attendance.class_id = data.get("class_id")
+                    attendance.section_id = data.get("section_id")
                     attendance.marked_by = request.user
                     attendance.is_locked = lock_attendance
                     attendance.save()
 
-                    if attendance.attendance_type == "P":
-                        student = Student.objects.filter(id=student_id, **self.school_filter(request)).select_related("guardian").first()
+                    if attendance_map and attendance.attendance_type == "P" and existing_type != "P":
+                        student = student_map.get(student_id)
                         if student:
                             send_present_attendance_notifications(student, attendance.attendance_date)
 
@@ -815,3 +851,107 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+
+
+class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
+    """Returns per-class attendance breakdown for a given date."""
+
+    def get(self, request):
+        from datetime import date as date_type
+        date_str = request.query_params.get("date") or str(date_type.today())
+        try:
+            parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response(
+                {"success": False, "message": "Invalid date format. Use YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        school_filter = self.school_filter(request)
+
+        # Per-class student totals
+        from apps.core.models import Class
+        classes = Class.objects.filter(**school_filter).prefetch_related("students")
+        total_by_class: dict[int, int] = {}
+        for cls in classes:
+            total_by_class[cls.id] = cls.students.filter(is_active=True).count()
+
+        # Per-class attendance aggregates for the date
+        rows = (
+            StudentAttendance.objects.filter(attendance_date=parsed_date, **school_filter)
+            .values("class_id")
+            .annotate(
+                present=Count(Case(When(attendance_type="P", then=1), output_field=IntegerField())),
+                absent=Count(Case(When(attendance_type="A", then=1), output_field=IntegerField())),
+                late=Count(Case(When(attendance_type="L", then=1), output_field=IntegerField())),
+            )
+        )
+
+        counts_by_class: dict[int, dict] = {}
+        for row in rows:
+            cid = row["class_id"]
+            if cid is not None:
+                counts_by_class[cid] = {
+                    "present": row["present"] or 0,
+                    "absent": row["absent"] or 0,
+                    "late": row["late"] or 0,
+                }
+
+        result = []
+        for cls_id, total in total_by_class.items():
+            c = counts_by_class.get(cls_id, {"present": 0, "absent": 0, "late": 0})
+            marked = c["present"] + c["absent"] + c["late"]
+            result.append({
+                "class_id": cls_id,
+                "total": total,
+                "present": c["present"],
+                "absent": c["absent"],
+                "late": c["late"],
+                "unmarked": max(0, total - marked),
+                "pct": round((c["present"] / total) * 100) if total > 0 else 0,
+            })
+
+        return Response({"date": date_str, "classes": result})
+
+
+class StudentAttendanceDailySummaryAPIView(AttendanceTenantMixin, APIView):
+    """Returns aggregated attendance counts for a given date (school-wide)."""
+
+    def get(self, request):
+        from datetime import date as date_type
+        date_str = request.query_params.get("date") or str(date_type.today())
+        try:
+            parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response(
+                {"success": False, "message": "Invalid date format. Use YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        school_filter = self.school_filter(request)
+
+        total = Student.objects.filter(is_active=True, **school_filter).count()
+
+        counts = StudentAttendance.objects.filter(
+            attendance_date=parsed_date,
+            **school_filter,
+        ).aggregate(
+            present=Count(Case(When(attendance_type="P", then=1), output_field=IntegerField())),
+            absent=Count(Case(When(attendance_type="A", then=1), output_field=IntegerField())),
+            late=Count(Case(When(attendance_type="L", then=1), output_field=IntegerField())),
+        )
+
+        present = counts.get("present") or 0
+        absent = counts.get("absent") or 0
+        late = counts.get("late") or 0
+        marked = present + absent + late
+        unmarked = max(0, total - marked)
+
+        return Response({
+            "date": date_str,
+            "total_students": total,
+            "present": present,
+            "absent": absent,
+            "late": late,
+            "unmarked": unmarked,
+        })
