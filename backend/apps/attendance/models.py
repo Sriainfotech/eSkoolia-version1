@@ -29,6 +29,7 @@ class StudentAttendance(models.Model):
     attendance_date = models.DateField()
     attendance_type = models.CharField(max_length=1, choices=ATTENDANCE_TYPE_CHOICES)
     notes = models.TextField(blank=True, default="", max_length=250)
+    lunch = models.BooleanField(default=False, help_text="Student had lunch")
     is_locked = models.BooleanField(default=False, help_text="Prevents editing of locked attendance")
     marked_by = models.ForeignKey(
         "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="attendances_marked"

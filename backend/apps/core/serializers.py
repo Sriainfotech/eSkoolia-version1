@@ -146,12 +146,28 @@ class SectionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Section
-        fields = ["id", "school_class", "name", "capacity", "created_at"]
-        read_only_fields = ["id", "created_at"]
+        fields = ["id", "school_class", "name", "capacity", "student_count", "created_at"]
+        read_only_fields = ["id", "student_count", "created_at"]
+
+    def get_student_count(self, obj):
+        # Use annotation if available (avoids N+1), else fall back to query
+        if hasattr(obj, '_student_count'):
+            return obj._student_count
+        from apps.students.models import Student
+        return Student.objects.filter(current_section=obj, is_active=True).count()
+
+    student_count = serializers.SerializerMethodField()
 
 
 class ClassSerializer(serializers.ModelSerializer):
     sections = SectionSerializer(many=True, read_only=True)
+    total_students = serializers.SerializerMethodField()
+
+    def get_total_students(self, obj):
+        if hasattr(obj, '_total_students'):
+            return obj._total_students
+        from apps.students.models import Student
+        return Student.objects.filter(current_class=obj, is_active=True).count()
 
     def _school_id(self):
         request = self.context.get("request")
@@ -178,8 +194,8 @@ class ClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Class
-        fields = ["id", "school", "name", "numeric_order", "sections", "created_at"]
-        read_only_fields = ["id", "school", "numeric_order", "sections", "created_at"]
+        fields = ["id", "school", "name", "numeric_order", "sections", "total_students", "created_at"]
+        read_only_fields = ["id", "school", "numeric_order", "sections", "total_students", "created_at"]
 
 
 class SubjectSerializer(serializers.ModelSerializer):

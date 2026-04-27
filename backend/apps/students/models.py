@@ -34,10 +34,22 @@ class StudentCategory(models.Model):
 
 
 class StudentGroup(models.Model):
+    GROUP_TYPE_CHOICES = [
+        ("HOUSE", "House"),
+        ("CLUB", "Club"),
+        ("CUSTOM", "Custom"),
+    ]
+
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="student_groups")
     name = models.CharField(max_length=80)
+    type = models.CharField(max_length=10, choices=GROUP_TYPE_CHOICES, default="CUSTOM")
+    emoji = models.CharField(max_length=10, default="📚")
     description = models.TextField(blank=True)
+    color = models.CharField(max_length=20, default="#00b894")
+    bg_color = models.CharField(max_length=20, default="#e6f9f5")
+    capacity = models.PositiveIntegerField(default=40)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "student_groups"

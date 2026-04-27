@@ -104,7 +104,14 @@ class StudentCategorySerializer(serializers.ModelSerializer):
 
 
 class StudentGroupSerializer(serializers.ModelSerializer):
-    students_count = serializers.IntegerField(read_only=True)
+    students_count = serializers.IntegerField(read_only=True, default=0)
+
+    # Club color palettes (cycled by existing club count mod 4)
+    CLUB_COLORS = ["#2980b9", "#27ae60", "#f39c12", "#8e44ad"]
+    CLUB_BG_COLORS = ["#e8f4fd", "#eafaf1", "#fef9e7", "#f5eefb"]
+    # House color palettes (cycled by existing house count mod 4)
+    HOUSE_COLORS = ["#00b894", "#6c5ce7", "#e67e22", "#2980b9"]
+    HOUSE_BG_COLORS = ["#e6f9f5", "#f0eeff", "#fef3e8", "#e8f4fd"]
 
     def _clean_text(self, value):
         return strip_tags(str(value or "")).strip()
@@ -130,14 +137,36 @@ class StudentGroupSerializer(serializers.ModelSerializer):
 
     def validate_description(self, value):
         description = self._clean_text(value)
-        if len(description) > 255:
-            raise serializers.ValidationError("Description must not exceed 255 characters.")
+        if len(description) > 500:
+            raise serializers.ValidationError("Description must not exceed 500 characters.")
         return description
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        group_type = validated_data.get("type", "CUSTOM")
+
+        # Auto-assign colors if not provided
+        if "color" not in validated_data or not validated_data.get("color"):
+            if group_type == "CLUB" and school_id:
+                idx = StudentGroup.objects.filter(school_id=school_id, type="CLUB").count() % 4
+                validated_data["color"] = self.CLUB_COLORS[idx]
+                validated_data["bg_color"] = self.CLUB_BG_COLORS[idx]
+            elif group_type == "HOUSE" and school_id:
+                idx = StudentGroup.objects.filter(school_id=school_id, type="HOUSE").count() % 4
+                validated_data["color"] = self.HOUSE_COLORS[idx]
+                validated_data["bg_color"] = self.HOUSE_BG_COLORS[idx]
+
+        return super().create(validated_data)
 
     class Meta:
         model = StudentGroup
-        fields = ["id", "school", "name", "description", "students_count", "created_at"]
-        read_only_fields = ["id", "school", "students_count", "created_at"]
+        fields = [
+            "id", "school", "name", "type", "emoji", "description",
+            "color", "bg_color", "capacity", "students_count",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "school", "students_count", "created_at", "updated_at"]
 
 
 class GuardianSerializer(serializers.ModelSerializer):

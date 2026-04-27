@@ -99,7 +99,9 @@ if DATABASE_URL:
         if resolved_engine != "django.db.backends.sqlite3"
         else (unquote(parsed_db_url.path) or str(BASE_DIR / "db.sqlite3"))
     )
-    resolved_options = {}
+    resolved_options = {
+        "connect_timeout": 10,  # 10 sec timeout — lets Neon wake up without hanging
+    }
     query_params = parse_qs(parsed_db_url.query or "")
     resolved_sslmode = (query_params.get("sslmode", [""])[0] or os.getenv("DB_SSLMODE", "")).strip()
     if resolved_sslmode:
@@ -114,6 +116,13 @@ if DATABASE_URL:
             "HOST": parsed_db_url.hostname or "",
             "PORT": str(parsed_db_url.port or ""),
             **({"OPTIONS": resolved_options} if resolved_options else {}),
+            # Neon / serverless Postgres: never reuse a connection between
+            # requests — the idle connection will be dropped by Neon and
+            # the next query will fail with "getaddrinfo failed".
+            "CONN_MAX_AGE": 0,
+            # Django 4.1+: health-check each connection before use so a
+            # freshly obtained connection is guaranteed to be open.
+            "CONN_HEALTH_CHECKS": True,
         }
     }
 else:
@@ -125,6 +134,8 @@ else:
             "PASSWORD": os.getenv("DB_PASSWORD", ""),
             "HOST": os.getenv("DB_HOST", ""),
             "PORT": os.getenv("DB_PORT", ""),
+            "CONN_MAX_AGE": 0,
+            "CONN_HEALTH_CHECKS": True,
         }
     }
 

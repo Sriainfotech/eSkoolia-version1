@@ -13,4 +13,23 @@ yarn-error.log*
 # Backend migrations are source code and must be tracked
 !backend/**/migrations/
 !backend/**/migrations/*.py
-!backend/**/migrations/**/__init__.py
+!backend/**/migrations/**/__init__.py# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Django
+db.sqlite3
+*.log
+
+# Env
+.env
+
+# Next.js / Node
+frontend/node_modules/
+frontend/.next/
+out/
+
+# OS
+.DS_Store
+Thumbs.db

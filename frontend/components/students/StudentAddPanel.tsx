@@ -2139,7 +2139,7 @@ export function StudentAddPanel() {
       const response = await apiRequestWithRefresh("/api/students/documents/upload_document/", {
         method: "POST",
         body: formData,
-      });
+      }) as { id?: unknown; file?: string; file_url?: string; original_name?: string; uploaded_at?: string } | null;
 
       console.log("📥 Upload response received:", response);
 
@@ -2445,19 +2445,30 @@ export function StudentAddPanel() {
         
         const successMessage = response?.warning ? `Student added successfully. ${response.warning}` : "Student added successfully.";
         setSuccess(successMessage);
-        
-        // Don't reset the form or redirect - keep student ID so documents can be uploaded
+
+        // Write enrollment data so multi-subject page can auto-populate
         if (typeof window !== "undefined") {
           window.localStorage.removeItem(STUDENT_DRAFT_STORAGE_KEY);
+          const enrolledClass = orderedClasses.find((item) => String(item.id) === classId);
+          const enrolledSection = sections.find((item) => String(item.id) === sectionId);
+          const enrolledAcYear = academicYears.find((item) => String(item.id) === academicYearId);
+          const enrollmentPayload = {
+            name: `${firstName.trim()} ${lastName.trim()}`.trim(),
+            admissionNo: String(response?.admission_no || admissionNo).trim(),
+            rollNo: String(response?.roll_no || rollNo).trim(),
+            className: String(enrolledClass?.name || ""),
+            sectionName: String(enrolledSection?.name || ""),
+            academicYear: String(enrolledAcYear?.name || ""),
+          };
+          window.localStorage.setItem("eskoolia_last_enrolled_student", JSON.stringify(enrollmentPayload));
         }
-        
-        // Only navigate to list after a delay if no documents need to be uploaded
-        // For now, stay on the page so user can upload documents
-        // setTimeout(() => {
-        //   if (typeof window !== "undefined") {
-        //     window.location.href = "/students/list";
-        //   }
-        // }, 1200);
+
+        // Navigate to multi-subject assignment after short delay
+        setTimeout(() => {
+          if (typeof window !== "undefined") {
+            window.location.href = "/students/multi-class";
+          }
+        }, 900);
       }
     } catch (submitError) {
       const mappedErrors = syncApiFieldErrors(submitError as ApiError);

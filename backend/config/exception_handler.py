@@ -5,6 +5,8 @@ Provides standardized error responses across the API.
 
 import logging
 
+from django.db.utils import OperationalError as DjangoOperationalError
+from django.db.utils import ProgrammingError as DjangoProgrammingError
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.exceptions import APIException, ValidationError as DRFValidationError
@@ -51,6 +53,34 @@ def custom_exception_handler(exc, context):
         Response with standardized error format
     """
     
+    # Handle database connection errors (e.g. Neon free-tier auto-suspend)
+    if isinstance(exc, DjangoOperationalError):
+        logger.warning("Database connection error: %s", exc)
+        return Response(
+            {
+                "success": False,
+                "error": {
+                    "code": "database_unavailable",
+                    "message": "Database is temporarily unavailable. Please try again in a few seconds.",
+                },
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    # Handle database schema errors (e.g. unapplied migrations)
+    if isinstance(exc, DjangoProgrammingError):
+        logger.error("Database schema error (possibly unapplied migration): %s", exc)
+        return Response(
+            {
+                "success": False,
+                "error": {
+                    "code": "database_schema_error",
+                    "message": "A database schema error occurred. Please contact the administrator.",
+                },
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
     # Return a clean validation message with no nested non_field_errors structure.
     if isinstance(exc, DRFValidationError):
         message = _first_error_message(exc.detail) or "Validation failed"
