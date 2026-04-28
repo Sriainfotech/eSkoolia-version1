@@ -104,6 +104,7 @@ type ApiError = Error & {
     field_errors?: Record<string, string | string[]>;
     message?: string;
   };
+  status?: number;
 };
 
 type MePayload = {
@@ -382,7 +383,57 @@ function parseError(error: unknown) {
   const message = apiError?.details?.message;
   if (message) return message;
   if (error instanceof Error && error.message) return error.message;
-  return "Unable to save student.";
+  return "Unable to complete request.";
+}
+
+function getErrorStatus(error: unknown): number | null {
+  const apiError = error as ApiError;
+  if (typeof apiError?.status === "number") {
+    return apiError.status;
+  }
+  if (error instanceof Error) {
+    const match = error.message.match(/status\s+(\d{3})/i);
+    if (match) {
+      return Number(match[1]);
+    }
+  }
+  return null;
+}
+
+function parseEnrollmentSaveError(error: unknown): string {
+  const fieldMessages = parseFieldErrors(error);
+  if (fieldMessages.length > 0) {
+    return fieldMessages[0];
+  }
+
+  const directMessage = parseError(error);
+  const status = getErrorStatus(error);
+  const genericStatusMessage = /^Request failed with status\s+\d{3}$/i.test(directMessage);
+
+  if (!genericStatusMessage && directMessage) {
+    return directMessage;
+  }
+
+  switch (status) {
+    case 400:
+    case 422:
+      return "Unable to save student. Please review the form fields and try again.";
+    case 401:
+      return "Your session expired. Please log in again and retry saving the student.";
+    case 403:
+      return "You do not have permission to enroll students.";
+    case 404:
+      return "Unable to save student right now. Enrollment service was not found (404). Please refresh and try again.";
+    case 409:
+      return "Unable to save student due to a duplicate/conflict record. Please verify admission and roll numbers.";
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+      return "Server is temporarily unavailable while saving student. Please try again in a moment.";
+    default:
+      return "Unable to save student. Please try again.";
+  }
 }
 
 function parseFieldErrors(error: unknown): string[] {
@@ -1681,7 +1732,21 @@ export function StudentAddPanel() {
   };
 
   const syncApiFieldErrors = (apiError: ApiError) => {
-    const source = apiError.details?.field_errors || {};
+    let source: Record<string, string | string[]> = apiError.details?.field_errors || {};
+    if (Object.keys(source).length === 0 && apiError.details && typeof apiError.details === "object" && !Array.isArray(apiError.details)) {
+      const detailsPayload = apiError.details as Record<string, unknown>;
+      const fallbackSource: Record<string, string | string[]> = {};
+      for (const [field, value] of Object.entries(detailsPayload)) {
+        if (["message", "detail", "error", "success", "status", "code", "non_field_errors", "field_errors"].includes(field)) {
+          continue;
+        }
+        if (typeof value === "string" || Array.isArray(value)) {
+          fallbackSource[field] = value as string | string[];
+        }
+      }
+      source = fallbackSource;
+    }
+
     const mapped: Record<string, string> = {};
     for (const [field, value] of Object.entries(source)) {
       const mappedField = field === "date_of_birth" ? "dob" : field === "current_class" ? "class" : field === "current_section" ? "section" : field;
@@ -2472,7 +2537,7 @@ export function StudentAddPanel() {
       }
     } catch (submitError) {
       const mappedErrors = syncApiFieldErrors(submitError as ApiError);
-      setError(parseError(submitError));
+      setError(parseEnrollmentSaveError(submitError));
       jumpToFirstErrorSection(mappedErrors);
     } finally {
       setSaving(false);

@@ -22,6 +22,9 @@ from rest_framework.response import Response
 from .forms import StudentValidationModelForm
 from .models import (
     Guardian,
+    PromotionAuditLog,
+    PromotionBatch,
+    PromotionRecord,
     Student,
     StudentCategory,
     StudentDocument,
@@ -34,6 +37,13 @@ from .models import (
 )
 from .serializers import (
     GuardianSerializer,
+    PromotionAiRequestSerializer,
+    PromotionAuditLogSerializer,
+    PromotionBatchCreateSerializer,
+    PromotionBatchSerializer,
+    PromotionBulkUpdateSerializer,
+    PromotionRecordSerializer,
+    PromotionRecordUpdateSerializer,
     StudentCategorySerializer,
     StudentDocumentSerializer,
     StudentGroupSerializer,
@@ -1821,6 +1831,359 @@ class StudentTransferHistoryViewSet(TenantScopedModelViewSet):
             return qs
         if user.school_id:
             return qs.filter(student__school_id=user.school_id)
+        return qs.none()
+
+
+class PromotionBatchViewSet(TenantScopedModelViewSet):
+    serializer_class = PromotionBatchSerializer
+    model = PromotionBatch
+    permission_codes = {"*": "student_info.student_promote.view"}
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = PromotionBatch.objects.select_related("school", "academic_year", "target_year", "created_by", "confirmed_by").prefetch_related(
+            "records",
+            "records__student",
+            "records__from_class",
+            "records__from_section",
+            "records__to_class",
+            "records__to_section",
+            "records__failed_subjects",
+        )
+        if user.is_superuser:
+            return qs
+        if user.school_id:
+            return qs.filter(school_id=user.school_id)
+        return qs.none()
+
+    def _recompute_counts(self, batch: PromotionBatch):
+        total = batch.records.count()
+        promoted = batch.records.filter(status=PromotionRecord.STATUS_PROMOTE).count()
+        retained = batch.records.filter(status=PromotionRecord.STATUS_NOT_PROMOTED).count()
+        batch.total_students = total
+        batch.promoted_count = promoted
+        batch.retained_count = retained
+        batch.save(update_fields=["total_students", "promoted_count", "retained_count"])
+
+    def _get_client_ip(self, request):
+        forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.META.get("REMOTE_ADDR", "")
+
+    def _initialize_records(self, batch: PromotionBatch):
+        from apps.core.models import Class
+
+        if batch.records.exists():
+            self._recompute_counts(batch)
+            return
+
+        classes = list(Class.objects.filter(school_id=batch.school_id).order_by("numeric_order", "id"))
+        next_map = {}
+        for idx, row in enumerate(classes):
+            next_map[row.id] = classes[idx + 1].id if idx + 1 < len(classes) else None
+
+        students = Student.objects.filter(
+            school_id=batch.school_id,
+            academic_year_id=batch.academic_year_id,
+            is_active=True,
+            is_deleted=False,
+        ).select_related("current_class", "current_section")
+
+        to_create = []
+        for student in students:
+            to_create.append(
+                PromotionRecord(
+                    batch=batch,
+                    student=student,
+                    from_class=student.current_class,
+                    from_section=student.current_section,
+                    to_class_id=next_map.get(student.current_class_id),
+                    status=PromotionRecord.STATUS_PENDING,
+                )
+            )
+
+        PromotionRecord.objects.bulk_create(to_create, ignore_conflicts=True)
+        if to_create:
+            batch.status = PromotionBatch.STATUS_IN_PROGRESS
+            batch.save(update_fields=["status"])
+        self._recompute_counts(batch)
+
+    @action(detail=False, methods=["post"], url_path="create-or-get")
+    def create_or_get(self, request):
+        serializer = PromotionBatchCreateSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        school = request.user.school
+        year = data["academic_year_obj"]
+        target = data["target_year_obj"]
+
+        batch, created = PromotionBatch.objects.get_or_create(
+            school=school,
+            academic_year=year,
+            defaults={
+                "target_year": target,
+                "created_by": request.user,
+                "status": PromotionBatch.STATUS_DRAFT,
+            },
+        )
+
+        if not created and batch.status == PromotionBatch.STATUS_DRAFT and batch.target_year_id != target.id:
+            batch.target_year = target
+            batch.save(update_fields=["target_year"])
+
+        self._initialize_records(batch)
+        return Response(self.get_serializer(batch).data)
+
+    @action(detail=False, methods=["get"], url_path=r"by-year/(?P<year_name>[^/.]+)")
+    def by_year(self, request, year_name=None):
+        from apps.core.models import AcademicYear
+
+        school_id = request.user.school_id
+        year_qs = AcademicYear.objects.filter(name=year_name)
+        if not request.user.is_superuser:
+            year_qs = year_qs.filter(school_id=school_id)
+        year = year_qs.first()
+        if not year:
+            return Response({"error": "Academic year not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        batch_qs = self.get_queryset().filter(academic_year=year)
+        batch = batch_qs.first()
+        if not batch:
+            return Response({"error": "No promotion batch for this year"}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(self.get_serializer(batch).data)
+
+    @action(detail=True, methods=["post"], url_path="update-record")
+    def update_record(self, request, pk=None):
+        from apps.core.models import Section, Subject
+
+        batch = self.get_object()
+        serializer = PromotionRecordUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            record = batch.records.get(id=data["record_id"])
+        except PromotionRecord.DoesNotExist:
+            return Response({"error": "Record not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if "to_class" in data:
+            record.to_class_id = data.get("to_class")
+        if "to_section" in data:
+            section_id = data.get("to_section")
+            if section_id:
+                section = Section.objects.filter(id=section_id).first()
+                if not section:
+                    raise ValidationError({"to_section": "Invalid section."})
+                if record.to_class_id and section.school_class_id != record.to_class_id:
+                    raise ValidationError({"to_section": "Section must belong to selected class."})
+            record.to_section_id = section_id
+
+        record.status = data["status"]
+        if record.status == PromotionRecord.STATUS_NOT_PROMOTED:
+            record.retention_reason = data.get("retention_reason", "")
+            if not record.retention_reason:
+                raise ValidationError({"retention_reason": "Retention reason is required for not promoted status."})
+        else:
+            record.retention_reason = ""
+
+        if "notes" in data:
+            record.notes = data.get("notes", "")
+
+        record.decision_made_at = timezone.now()
+        record.decision_made_by = request.user
+        record.last_modified_by = request.user
+        record.save()
+
+        if "failed_subject_ids" in data:
+            subjects = Subject.objects.filter(id__in=data.get("failed_subject_ids", []), school_id=batch.school_id)
+            record.failed_subjects.set(subjects)
+
+        PromotionAuditLog.objects.create(
+            batch=batch,
+            action="record_updated",
+            performed_by=request.user,
+            record=record,
+            details=f"Record updated for {record.student.admission_no}",
+            ip_address=self._get_client_ip(request),
+        )
+
+        self._recompute_counts(batch)
+        return Response(PromotionRecordSerializer(record).data)
+
+    @action(detail=True, methods=["post"], url_path="bulk-update")
+    def bulk_update(self, request, pk=None):
+        batch = self.get_object()
+        serializer = PromotionBulkUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        records = batch.records.all()
+        scope = data["scope"]
+        if scope == "class":
+            records = records.filter(from_class_id=data["class_id"])
+        elif scope == "section":
+            records = records.filter(from_section_id=data["section_id"])
+        else:
+            records = records.filter(id__in=data["record_ids"])
+
+        now = timezone.now()
+        action_name = data["action"]
+        changed = 0
+        for record in records:
+            if action_name == "promote":
+                if not record.to_class_id:
+                    continue
+                record.status = PromotionRecord.STATUS_PROMOTE
+                record.retention_reason = ""
+            elif action_name == "skip":
+                record.status = PromotionRecord.STATUS_NOT_PROMOTED
+                record.retention_reason = record.retention_reason or PromotionRecord.REASON_OTHER
+            else:
+                record.status = PromotionRecord.STATUS_PENDING
+                record.retention_reason = ""
+                record.notes = ""
+                record.failed_subjects.clear()
+
+            record.decision_made_at = now
+            record.decision_made_by = request.user
+            record.last_modified_by = request.user
+            record.save()
+            changed += 1
+
+        PromotionAuditLog.objects.create(
+            batch=batch,
+            action=f"bulk_{action_name}",
+            performed_by=request.user,
+            details=f"Bulk action {action_name} applied to {changed} record(s)",
+            ip_address=self._get_client_ip(request),
+        )
+
+        self._recompute_counts(batch)
+        return Response({"updated": changed, "batch": self.get_serializer(batch).data})
+
+    @action(detail=True, methods=["post"], url_path="ai-recommendation")
+    def ai_recommendation(self, request, pk=None):
+        batch = self.get_object()
+        serializer = PromotionAiRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            record = batch.records.select_related("student", "from_class").get(id=data["record_id"])
+        except PromotionRecord.DoesNotExist:
+            return Response({"error": "Record not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        reason = data.get("reason") or record.retention_reason or "other"
+        failed_subject_names = list(record.failed_subjects.values_list("name", flat=True))
+        parts = [
+            f"Student {record.student.first_name} {record.student.last_name} requires review.",
+            f"Primary reason: {reason.replace('_', ' ')}.",
+        ]
+        if failed_subject_names:
+            parts.append(f"Focus subjects: {', '.join(failed_subject_names)}.")
+        parts.append("Recommendation: schedule parent meeting, assign remedial plan, and re-evaluate within 6-8 weeks.")
+        recommendation = " ".join(parts)
+
+        record.ai_recommendation = recommendation
+        record.last_modified_by = request.user
+        record.save(update_fields=["ai_recommendation", "last_modified_by", "last_modified_at"])
+
+        PromotionAuditLog.objects.create(
+            batch=batch,
+            action="ai_generated",
+            performed_by=request.user,
+            record=record,
+            details=f"AI recommendation generated for {record.student.admission_no}",
+            ip_address=self._get_client_ip(request),
+        )
+
+        return Response({"recommendation": recommendation})
+
+    @action(detail=True, methods=["post"], url_path="confirm")
+    def confirm(self, request, pk=None):
+        batch = self.get_object()
+        if batch.status == PromotionBatch.STATUS_FINALIZED:
+            return Response({"error": "Finalized batch cannot be modified."}, status=status.HTTP_400_BAD_REQUEST)
+
+        promote_records = batch.records.filter(status=PromotionRecord.STATUS_PROMOTE).select_related(
+            "student",
+            "to_class",
+            "to_section",
+        )
+
+        promoted = 0
+        with transaction.atomic():
+            for record in promote_records:
+                if not record.to_class_id:
+                    continue
+
+                student = record.student
+                StudentPromotionHistory.objects.create(
+                    student=student,
+                    from_class=student.current_class,
+                    from_section=student.current_section,
+                    to_class=record.to_class,
+                    to_section=record.to_section,
+                    from_academic_year=batch.academic_year,
+                    to_academic_year=batch.target_year,
+                    note="Promoted from Promotion Batch",
+                    promoted_by=request.user,
+                )
+                student.current_class = record.to_class
+                student.current_section = record.to_section
+                student.academic_year = batch.target_year
+                student.save(update_fields=["current_class", "current_section", "academic_year", "updated_at"])
+                promoted += 1
+
+            batch.status = PromotionBatch.STATUS_CONFIRMED
+            batch.confirmed_at = timezone.now()
+            batch.confirmed_by = request.user
+            batch.save(update_fields=["status", "confirmed_at", "confirmed_by"])
+
+        PromotionAuditLog.objects.create(
+            batch=batch,
+            action="confirmed",
+            performed_by=request.user,
+            details=f"Batch confirmed. Promoted {promoted} students.",
+            ip_address=self._get_client_ip(request),
+        )
+
+        self._recompute_counts(batch)
+        return Response({"message": f"Promotion batch confirmed. Promoted {promoted} students.", "batch": self.get_serializer(batch).data})
+
+    @action(detail=True, methods=["post"], url_path="finalize")
+    def finalize(self, request, pk=None):
+        batch = self.get_object()
+        if batch.status != PromotionBatch.STATUS_CONFIRMED:
+            return Response({"error": "Only confirmed batches can be finalized."}, status=status.HTTP_400_BAD_REQUEST)
+
+        batch.status = PromotionBatch.STATUS_FINALIZED
+        batch.save(update_fields=["status"])
+        PromotionAuditLog.objects.create(
+            batch=batch,
+            action="finalized",
+            performed_by=request.user,
+            details="Batch finalized",
+            ip_address=self._get_client_ip(request),
+        )
+        return Response(self.get_serializer(batch).data)
+
+
+class PromotionAuditLogViewSet(TenantScopedModelViewSet):
+    serializer_class = PromotionAuditLogSerializer
+    model = PromotionAuditLog
+    permission_codes = {"*": "student_info.student_promote.view"}
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = PromotionAuditLog.objects.select_related("batch", "performed_by", "record", "batch__school")
+        if user.is_superuser:
+            return qs
+        if user.school_id:
+            return qs.filter(batch__school_id=user.school_id)
         return qs.none()
 
 

@@ -642,7 +642,7 @@ export function StudentListPanel() {
             </button>
            <Link href="/students/add">
   <button className="btn btn-primary enroll-btn">
-    + Enroll student
+    Enroll Student
   </button>
 </Link>
           </div>
