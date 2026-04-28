@@ -1930,22 +1930,38 @@ class StudentDocumentViewSet(TenantScopedModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Check student exists and user has access
-            # Try to get by student_id (UUID) first, then by id (database ID)
+            # Check student exists and user has access.
+            # The frontend may send either the numeric DB id or the UUID student_id.
+            # We detect which one it is up front — querying a UUIDField with a
+            # non-UUID string raises django.core.exceptions.ValidationError, not
+            # Student.DoesNotExist, so we must validate the format ourselves.
+            import uuid as _uuid
             student = None
-            try:
-                # First try as UUID
-                student = Student.objects.get(student_id=student_id_input)
-            except Student.DoesNotExist:
+            sid_str = str(student_id_input).strip()
+
+            if sid_str.isdigit():
                 try:
-                    # Try as numeric ID
-                    student = Student.objects.get(id=int(student_id_input))
-                except (Student.DoesNotExist, ValueError):
-                    logger.warning(f"Student not found with ID: {student_id_input}")
-                    return Response(
-                        {"error": "Student not found."},
-                        status=status.HTTP_404_NOT_FOUND
-                    )
+                    student = Student.objects.get(id=int(sid_str))
+                except Student.DoesNotExist:
+                    student = None
+
+            if student is None:
+                try:
+                    _uuid.UUID(sid_str)
+                except ValueError:
+                    pass
+                else:
+                    try:
+                        student = Student.objects.get(student_id=sid_str)
+                    except Student.DoesNotExist:
+                        student = None
+
+            if student is None:
+                logger.warning(f"Student not found with ID: {student_id_input}")
+                return Response(
+                    {"error": "Student not found."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
             
             # Check permission
             if not request.user.is_superuser and student.school_id != request.user.school_id:

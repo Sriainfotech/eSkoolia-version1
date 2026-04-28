@@ -5,6 +5,7 @@ import { Manrope, Playfair_Display } from "next/font/google";
 import { useEffect, useMemo, useState } from "react";
 import { Spinner } from "@/components/common/Spinner";
 import { PaginationControls } from "@/components/common/PaginationControls";
+import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
 import { usePersistentPagination } from "@/hooks/usePersistentPagination";
@@ -180,6 +181,30 @@ export function StudentListPanel() {
   const [viewError, setViewError] = useState("");
   const [viewTogglingStatus, setViewTogglingStatus] = useState(false);
 
+  // Confirmation modal — gates destructive actions (Activate / Deactivate)
+  // behind a clear "are you sure?" prompt.
+  type PendingConfirm = {
+    title: string;
+    message: string;
+    details?: string;
+    confirmLabel: string;
+    variant: "danger" | "primary";
+    execute: () => Promise<void>;
+  };
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const runPendingConfirm = async () => {
+    if (!pendingConfirm) return;
+    try {
+      setConfirming(true);
+      await pendingConfirm.execute();
+    } finally {
+      setConfirming(false);
+      setPendingConfirm(null);
+    }
+  };
+
   const filteredSections = useMemo(
     () => sections.filter((item) => !classFilter || String(item.school_class) === classFilter),
     [sections, classFilter],
@@ -354,7 +379,6 @@ export function StudentListPanel() {
         is_disabled: false,
         status: nextActive ? "active" : "inactive",
       });
-      setViewStudent((prev) => (prev ? { ...prev, is_active: nextActive, is_disabled: false } : prev));
       setStudents((prev) =>
         prev.map((row) =>
           row.id === viewStudentId
@@ -367,6 +391,14 @@ export function StudentListPanel() {
         ),
       );
       setSuccess(nextActive ? "Student activated successfully." : "Student deactivated successfully.");
+      setError("");
+      // Close the profile drawer + clear selected student so the now-stale
+      // profile isn't left sitting on the right. Also drops the stuck backdrop.
+      setViewDrawerOpen(false);
+      setViewStudentId(null);
+      setViewStudent(null);
+      setViewError("");
+      // Trigger a re-fetch (updates Active/Inactive/All counts and filter tabs).
       refreshList();
     } catch {
       setViewError("Unable to change student status.");
@@ -781,8 +813,42 @@ export function StudentListPanel() {
                 <button type="button" className="bulk-btn" title="Unarchive selected students" onClick={() => void handleBulkUnarchive()} disabled={selectedIds.length === 0 || bulkBusy}>Unarchive</button>
               ) : (
                 <>
-                  <button type="button" className="bulk-btn" title="Activate selected students" onClick={() => void handleBulkActiveState(true)} disabled={selectedIds.length === 0 || bulkBusy}>Activate</button>
-                  <button type="button" className="bulk-btn" title="Deactivate selected students" onClick={() => void handleBulkActiveState(false)} disabled={selectedIds.length === 0 || bulkBusy}>Deactivate</button>
+                  <button
+                    type="button"
+                    className="bulk-btn"
+                    title="Activate selected students"
+                    onClick={() => {
+                      if (selectedIds.length === 0 || bulkBusy) return;
+                      const n = selectedIds.length;
+                      setPendingConfirm({
+                        title: "Confirm Activation",
+                        message: `Are you sure you want to activate ${n} selected student${n > 1 ? "s" : ""}?`,
+                        details: "Activated students will appear in default lists.",
+                        confirmLabel: "Activate",
+                        variant: "primary",
+                        execute: async () => { await handleBulkActiveState(true); },
+                      });
+                    }}
+                    disabled={selectedIds.length === 0 || bulkBusy}
+                  >Activate</button>
+                  <button
+                    type="button"
+                    className="bulk-btn"
+                    title="Deactivate selected students"
+                    onClick={() => {
+                      if (selectedIds.length === 0 || bulkBusy) return;
+                      const n = selectedIds.length;
+                      setPendingConfirm({
+                        title: "Confirm Deactivation",
+                        message: `Are you sure you want to deactivate ${n} selected student${n > 1 ? "s" : ""}?`,
+                        details: "This action can be reversed later by activating again.",
+                        confirmLabel: "Deactivate",
+                        variant: "danger",
+                        execute: async () => { await handleBulkActiveState(false); },
+                      });
+                    }}
+                    disabled={selectedIds.length === 0 || bulkBusy}
+                  >Deactivate</button>
                 </>
               )}
               <button type="button" className="bulk-btn" title="Message selected guardians (coming soon)" disabled>Message parents</button>
@@ -968,7 +1034,24 @@ export function StudentListPanel() {
               <button
                 type="button"
                 className={viewStudent?.is_active ? "outline-btn" : "solid-btn"}
-                onClick={() => void toggleStudentStatus()}
+                onClick={() => {
+                  if (!viewStudent) return;
+                  const willDeactivate = viewStudent.is_active;
+                  setPendingConfirm({
+                    title: willDeactivate ? "Confirm Deactivation" : "Confirm Activation",
+                    message: willDeactivate
+                      ? "Are you sure you want to deactivate this student?"
+                      : "Are you sure you want to activate this student?",
+                    details: willDeactivate
+                      ? "This action can be reversed later by activating again."
+                      : "The student will be marked active and visible in default lists.",
+                    confirmLabel: willDeactivate ? "Deactivate" : "Activate",
+                    variant: willDeactivate ? "danger" : "primary",
+                    execute: async () => {
+                      await toggleStudentStatus();
+                    },
+                  });
+                }}
                 disabled={viewTogglingStatus}
                 title={viewStudent?.is_active ? "Deactivate this student" : "Activate this student"}
               >
@@ -982,6 +1065,18 @@ export function StudentListPanel() {
           </aside>
         </div>
       ) : null}
+
+      <ConfirmationModal
+        isOpen={pendingConfirm !== null}
+        title={pendingConfirm?.title ?? ""}
+        message={pendingConfirm?.message ?? ""}
+        details={pendingConfirm?.details}
+        confirmLabel={pendingConfirm?.confirmLabel ?? "Confirm"}
+        variant={pendingConfirm?.variant ?? "danger"}
+        isConfirming={confirming}
+        onConfirm={() => void runPendingConfirm()}
+        onCancel={() => { if (!confirming) setPendingConfirm(null); }}
+      />
 
       <style jsx>{`
         .student-list-panel {

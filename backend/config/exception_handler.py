@@ -55,7 +55,15 @@ def custom_exception_handler(exc, context):
     if isinstance(exc, DRFValidationError):
         message = _first_error_message(exc.detail) or "Validation failed"
         field_errors = exc.detail if isinstance(exc.detail, dict) else {"non_field_errors": exc.detail}
-        return Response({"error": message, "field_errors": field_errors}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "success": False,
+            "status": status.HTTP_400_BAD_REQUEST,
+            "error": {
+                "code": "validation_error",
+                "message": message,
+            },
+            "field_errors": field_errors,
+        }, status=status.HTTP_400_BAD_REQUEST)
 
     # Handle our custom API exceptions
     if isinstance(exc, APIException):
@@ -67,6 +75,7 @@ def custom_exception_handler(exc, context):
             return Response(
                 {
                     "success": False,
+                    "status": exc.status_code,
                     "error": {
                         "code": getattr(exc, 'default_code', 'error'),
                         "message": str(exc.detail),
@@ -80,6 +89,7 @@ def custom_exception_handler(exc, context):
         return Response(
             {
                 "success": False,
+                "status": status.HTTP_400_BAD_REQUEST,
                 "error": {
                     "code": "validation_error",
                     "message": "Validation failed",
@@ -95,6 +105,7 @@ def custom_exception_handler(exc, context):
         return Response(
             {
                 "success": False,
+                "status": status.HTTP_500_INTERNAL_SERVER_ERROR,
                 "error": {
                     "code": "internal_server_error",
                     "message": "An unexpected error occurred",

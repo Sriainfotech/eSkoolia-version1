@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { API_BASE_URL } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { ChevronDown, ChevronLeft, ChevronRight, Clock3, Edit3, Plus, Search, Trash2, X } from "lucide-react";
+import { useToast } from "@/components/common/Toast";
 
 type SchoolClass = { id: number; class_name?: string; name?: string };
 type Section = { id: number; section_name?: string; name?: string; class_id?: number };
@@ -220,6 +221,7 @@ export default function ExamSchedulePanel() {
   const [popover, setPopover] = useState<PopoverState>(null);
   const [modal, setModal] = useState<ModalState>({ open: false, roomId: null, roomName: "", slotKey: "", timeLabel: "", date: today, editingSchedule: null });
   const [toastStack, setToastStack] = useState<ToastItem[]>([]);
+  const toast = useToast();
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [modalSaving, setModalSaving] = useState(false);
@@ -265,6 +267,16 @@ export default function ExamSchedulePanel() {
   }, [classes]);
 
   const addToast = (type: ToastItem["type"], message: string) => {
+    // Map legacy custom toast types to the new toast hook
+    if (type === "success") {
+      toast.success(message);
+      return;
+    }
+    if (type === "delete") {
+      toast.success(message);
+      return;
+    }
+    // preserve small in-page toast stack for special types
     const id = Date.now() + Math.floor(Math.random() * 1000);
     setToastStack((prev) => [...prev, { id, type, message }]);
     window.setTimeout(() => {
@@ -404,16 +416,20 @@ export default function ExamSchedulePanel() {
       };
       if (modal.editingSchedule) {
         await apiRequest<ScheduleItem>(`/api/v1/exams/exam-command-center/${modal.editingSchedule.id}/`, "PUT", body);
-        addToast("success", `Scheduled: updated ${modal.editingSchedule.class_name} ${modal.editingSchedule.subject}`);
+        toast.success(`Scheduled: updated ${modal.editingSchedule.class_name} ${modal.editingSchedule.subject}`);
       } else {
         await apiRequest<ScheduleItem>("/api/v1/exams/exam-command-center/", "POST", body);
-        addToast("success", `Scheduled: ${body.class_id} ${body.subject_id} in ${body.room_id} at ${body.start_time}`);
+        toast.success(`Scheduled: ${body.class_id} ${body.subject_id} in ${body.room_id} at ${body.start_time}`);
       }
       setModal((current) => ({ ...current, open: false }));
       await loadSchedules();
     } catch (e) {
       const message = e instanceof Error ? e.message : "Operation failed";
-      addToast(message.toLowerCase().includes("holiday") ? "holiday" : "conflict", message);
+      if (e instanceof Error && e.message.toLowerCase().includes("holiday")) {
+        toast.warning(message);
+      } else {
+        toast.showApiError(e, message);
+      }
     } finally {
       setModalSaving(false);
     }
@@ -422,11 +438,11 @@ export default function ExamSchedulePanel() {
   const deleteSchedule = async (schedule: ScheduleItem) => {
     try {
       await apiRequest(`/api/v1/exams/exam-command-center/${schedule.id}/`, "DELETE");
-      addToast("delete", `Deleted: ${schedule.class_name} ${schedule.subject}`);
+      toast.success(`Deleted: ${schedule.class_name} ${schedule.subject}`);
       setPopover(null);
       await loadSchedules();
     } catch (e) {
-      addToast("conflict", e instanceof Error ? e.message : "Delete failed");
+      toast.showApiError(e, "Delete failed");
     }
   };
 

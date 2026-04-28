@@ -32,9 +32,11 @@ body {
   font-family: var(--font-dm-sans), "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
 }
 
+/* Layout geometry (height, overflow, flex) lives on the layout component
+   via Tailwind. This class remains only as a selector hook for the many
+   content-targeting rules below (.dashboard-main input {…} etc.).       */
 .dashboard-main {
   padding: 18px;
-  min-height: calc(100vh - 68px);
 }
 
 .dashboard-main h1,
@@ -61,15 +63,23 @@ a {
   text-decoration: none;
 }
 
-.erp-shell {
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: 250px 1fr;
-}
+/* .erp-shell: layout geometry owned by the layout component (Tailwind).
+   Keeping the class name lets future overrides hook here without churn. */
 
 @media (max-width: 900px) {
+  /* Mobile: let the shell breathe with natural page scroll instead of
+     viewport-lock so the sidebar can stack above the content.          */
   .erp-shell {
-    grid-template-columns: 1fr;
+    flex-direction: column !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .erp-shell > div:last-child {
+    height: auto !important;
+    overflow: visible !important;
+  }
+  .dashboard-main {
+    overflow: visible !important;
   }
 }
 
