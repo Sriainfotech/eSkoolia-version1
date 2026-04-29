@@ -1381,6 +1381,53 @@
   text-decoration: underline;
 }
 
+/* ─── Pagination (small buttons inside accordion footer) ──────── */
+.pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.pagerBtn {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ink-2, #3A3A4A);
+  background: #fff;
+  border: 1px solid var(--line-soft, #E6E6EC);
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.pagerBtn:hover:not(:disabled) {
+  background: #F5F3FE;
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.pagerBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pagerBtnActive {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.pagerBtnActive:hover {
+  background: var(--primary);
+  color: #fff;
+}
+.pagerEllipsis {
+  font-size: 11px;
+  color: var(--ink-ghost);
+  padding: 0 2px;
+}
+
 /* ─── Edit Modal ──────────────────────────── */
 .backdrop {
   position: fixed;

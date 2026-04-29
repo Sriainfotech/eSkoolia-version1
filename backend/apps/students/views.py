@@ -1903,7 +1903,6 @@ class StudentDocumentViewSet(TenantScopedModelViewSet):
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
 
-<<<<<<< HEAD
     @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def upload_document(self, request):
         """

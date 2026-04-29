@@ -112,6 +112,20 @@ function fullName(row: StudentRow) {
   return `${row.first_name || ""} ${row.last_name || ""}`.trim() || "-";
 }
 
+// Compact page list with ellipsis. e.g. (3,8) -> [1,2,3,4,"…",8]
+function buildSectionPageList(current: number, total: number): (number | "…")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const pages: (number | "…")[] = [];
+  pages.push(1);
+  const left = Math.max(2, current - 1);
+  const right = Math.min(total - 1, current + 1);
+  if (left > 2) pages.push("…");
+  for (let p = left; p <= right; p++) pages.push(p);
+  if (right < total - 1) pages.push("…");
+  pages.push(total);
+  return pages;
+}
+
 function formatDate(value?: string | null) {
   if (!value) return "-";
   const date = new Date(value);
@@ -205,6 +219,9 @@ export function StudentListPanel() {
   const [activeSectionMap, setActiveSectionMap] = useState<Map<number, number>>(new Map());
   const [classSectionStudents, setClassSectionStudents] = useState<Map<string, StudentRow[]>>(new Map());
   const [classSectionLoading, setClassSectionLoading] = useState<Set<string>>(new Set());
+  // Per-section client-side pagination (after filtering). Key = `${classId}-${sectionId}`.
+  const [sectionPage, setSectionPage] = useState<Map<string, number>>(new Map());
+  const SECTION_PAGE_SIZE = 10;
   const [showWholeSchool, setShowWholeSchool] = useState(false);
   const [drawerTab, setDrawerTab] = useState<"profile" | "academic" | "attendance" | "fees">("profile");
   const [drawerAttendance, setDrawerAttendance] = useState<Array<{ id: number; attendance_date: string; status?: string; remarks?: string }>>([]);
@@ -282,8 +299,11 @@ export function StudentListPanel() {
     }
   };
 
+  // Sections are only meaningful in the context of a selected class.
+  // Without a class, multiple classes may share section names (e.g. "Section A"),
+  // so we return [] to keep the Section filter disabled and avoid duplicate-looking options.
   const filteredSections = useMemo(
-    () => sections.filter((item) => !classFilter || String(item.school_class) === classFilter),
+    () => (classFilter ? sections.filter((item) => String(item.school_class) === classFilter) : []),
     [sections, classFilter],
   );
 
@@ -1142,9 +1162,10 @@ export function StudentListPanel() {
                         className="sl-fsel"
                         value={sectionFilter}
                         onChange={(e) => { setSectionFilter(e.target.value); setPage(1); }}
-                        disabled={filteredSections.length === 0}
+                        disabled={!classFilter || filteredSections.length === 0}
+                        title={!classFilter ? "Select a class first" : undefined}
                       >
-                        <option value="">All sections</option>
+                        <option value="">{classFilter ? "All sections" : "Select a class first"}</option>
                         {filteredSections.map((row) => (
                           <option key={row.id} value={row.id}>
                             {formatSectionLabel(String(row.name || row.section_name || ""), row.id)}
@@ -1416,7 +1437,17 @@ export function StudentListPanel() {
                                       ) : secStudents.length === 0 ? (
                                         <div className="sl-sec-empty">No matching students in {clsLabel} — {secLabel}</div>
                                       ) : (
-                                        <>
+                                        (() => {
+                                          const secTotal = secStudents.length;
+                                          const secTotalPages = Math.max(1, Math.ceil(secTotal / SECTION_PAGE_SIZE));
+                                          const secCurPage = Math.min(secTotalPages, Math.max(1, sectionPage.get(secKey) || 1));
+                                          const secStart = (secCurPage - 1) * SECTION_PAGE_SIZE;
+                                          const visibleSecStudents = secStudents.slice(secStart, secStart + SECTION_PAGE_SIZE);
+                                          const setSecPage = (p: number) => {
+                                            setSectionPage((prev) => new Map(prev).set(secKey, p));
+                                          };
+                                          return (
+                                          <>
                                           {/* Mini bulk bar */}
                                           <div className="sl-sec-bar">
                                             <span className="sl-sec-count"><strong>{secStudents.length}</strong> student{secStudents.length !== 1 ? "s" : ""} in {clsLabel} · {secLabel}</span>
@@ -1445,7 +1476,7 @@ export function StudentListPanel() {
                                                 </tr>
                                               </thead>
                                               <tbody>
-                                                {secStudents.map((row) => (
+                                                {visibleSecStudents.map((row) => (
                                                   <tr key={row.id} onClick={() => openViewDrawer(row)} style={{ cursor: "pointer" }}>
                                                     <td>
                                                       <div className="student-cell">
@@ -1501,10 +1532,47 @@ export function StudentListPanel() {
 
                                           {/* Table footer */}
                                           <div className="sl-tbl-foot">
-                                            <span>{secStudents.length} students in {secLabel}</span>
+                                            <span>
+                                              {secTotal === 0
+                                                ? `0 students in ${secLabel}`
+                                                : `${secStart + 1}–${Math.min(secStart + SECTION_PAGE_SIZE, secTotal)} of ${secTotal} students in ${secLabel}`}
+                                            </span>
+                                            {secTotalPages > 1 && (
+                                              <div className="sl-pager" onClick={(e) => e.stopPropagation()}>
+                                                <button
+                                                  type="button"
+                                                  className="sl-pager-btn"
+                                                  disabled={secCurPage <= 1}
+                                                  onClick={() => setSecPage(Math.max(1, secCurPage - 1))}
+                                                  aria-label="Previous page"
+                                                >‹</button>
+                                                {buildSectionPageList(secCurPage, secTotalPages).map((p, i) =>
+                                                  p === "…" ? (
+                                                    <span key={`e${i}`} className="sl-pager-ellipsis">…</span>
+                                                  ) : (
+                                                    <button
+                                                      key={p}
+                                                      type="button"
+                                                      className={`sl-pager-btn${p === secCurPage ? " sl-pager-btn-active" : ""}`}
+                                                      onClick={() => setSecPage(p as number)}
+                                                      aria-current={p === secCurPage ? "page" : undefined}
+                                                    >{p}</button>
+                                                  ),
+                                                )}
+                                                <button
+                                                  type="button"
+                                                  className="sl-pager-btn"
+                                                  disabled={secCurPage >= secTotalPages}
+                                                  onClick={() => setSecPage(Math.min(secTotalPages, secCurPage + 1))}
+                                                  aria-label="Next page"
+                                                >›</button>
+                                              </div>
+                                            )}
                                             <Link href="/students/add" className="sl-add-link">+ Add student</Link>
                                           </div>
                                         </>
+                                          );
+                                        })()
                                       )}
                                     </div>
                                   );
@@ -3692,6 +3760,53 @@ export function StudentListPanel() {
 
         .sl-add-link:hover {
           color: #3d2ed6;
+        }
+
+        /* Compact pager (per-section) */
+        .sl-pager {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+        }
+        .sl-pager-btn {
+          min-width: 24px;
+          height: 24px;
+          padding: 0 7px;
+          font-size: 11px;
+          font-weight: 600;
+          line-height: 1;
+          color: #3a3a4a;
+          background: #fff;
+          border: 1px solid #e6e6ec;
+          border-radius: 6px;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+        .sl-pager-btn:hover:not(:disabled) {
+          background: #f5f3fe;
+          border-color: #4f39f6;
+          color: #4f39f6;
+        }
+        .sl-pager-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
+        .sl-pager-btn-active {
+          background: #4f39f6;
+          border-color: #4f39f6;
+          color: #fff;
+        }
+        .sl-pager-btn-active:hover {
+          background: #4f39f6;
+          color: #fff;
+        }
+        .sl-pager-ellipsis {
+          font-size: 11px;
+          color: #9a9db4;
+          padding: 0 2px;
         }
 
         @media (max-width: 860px) {

@@ -278,9 +278,25 @@ const CLASS_SUB_LABELS:Record<string,string>={
   "Class 9":"Secondary","Class 10":"Secondary","Class 11":"Senior Secondary","Class 12":"Senior Secondary",
 };
 
+// Compact page list with ellipsis. e.g. (3,8) -> [1,2,3,4,"…",8]
+function buildPageList(current:number,total:number):(number|"…")[] {
+  if(total<=7) return Array.from({length:total},(_,i)=>i+1);
+  const pages:(number|"…")[]=[];
+  pages.push(1);
+  const left=Math.max(2,current-1);
+  const right=Math.min(total-1,current+1);
+  if(left>2) pages.push("…");
+  for(let p=left;p<=right;p++) pages.push(p);
+  if(right<total-1) pages.push("…");
+  pages.push(total);
+  return pages;
+}
+
 function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;defaultOpen?:boolean;onEdit:(cl:MockClass,st:MockStudent)=>void;}) {
   const [open,setOpen]=useState(!!defaultOpen);
   const [activeSecIdx,setActiveSecIdx]=useState(0);
+  const [page,setPage]=useState(1);
+  const PAGE_SIZE=10;
   const all=cls.sections.flatMap(sc=>sc.students);
   const done=all.filter(x=>x.status==="done").length;
   const pct=all.length>0?Math.round((done/all.length)*100):0;
@@ -288,6 +304,14 @@ function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;def
   void index;
 
   const activeSec=cls.sections[activeSecIdx]??cls.sections[0];
+  const totalRows=activeSec?activeSec.students.length:0;
+  const totalPages=Math.max(1,Math.ceil(totalRows/PAGE_SIZE));
+  const safePage=Math.min(page,totalPages);
+  const startIdx=(safePage-1)*PAGE_SIZE;
+  const visibleStudents=activeSec?activeSec.students.slice(startIdx,startIdx+PAGE_SIZE):[];
+
+  // Reset page when the active section changes or when the dataset shrinks.
+  useEffect(()=>{setPage(1);},[activeSecIdx,cls.sections]);
 
   return (
     <div className={`${s.classAcc} ${open?s.classAccOpen:""}`}>
@@ -342,13 +366,45 @@ function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;def
               {activeSec&&(
                 <div className={s.tblWrap}>
                   <div className={s.tblHead}><span/><span>Student</span><span>Admission</span><span>Roll</span><span>Optional subjects</span><span/></div>
-                  {activeSec.students.map(st=><StudentRow key={st.id} student={st} classLabel={cls.label} onEdit={()=>onEdit(cls,st)}/>)}
+                  {visibleStudents.map(st=><StudentRow key={st.id} student={st} classLabel={cls.label} onEdit={()=>onEdit(cls,st)}/>)}
                   {activeSec.students.length===0&&(
                     <div style={{padding:"16px 14px",fontSize:12,color:"var(--ink-ghost)",textAlign:"center"}}>No students in this section.</div>
                   )}
                   <div className={s.tblFooter}>
-                    <span className={s.tblFooterTxt}>{activeSec.students.length} students in Section {activeSec.letter}</span>
-                    {activeSec.students.length>5&&<span className={s.tblFooterLink}>Load all {activeSec.students.length} &#8594;</span>}
+                    <span className={s.tblFooterTxt}>
+                      {totalRows===0
+                        ?`0 students in Section ${activeSec.letter}`
+                        :`${startIdx+1}\u2013${Math.min(startIdx+PAGE_SIZE,totalRows)} of ${totalRows} students in Section ${activeSec.letter}`}
+                    </span>
+                    {totalPages>1&&(
+                      <div className={s.pager} onClick={e=>e.stopPropagation()}>
+                        <button
+                          type="button"
+                          className={s.pagerBtn}
+                          disabled={safePage<=1}
+                          onClick={()=>setPage(p=>Math.max(1,p-1))}
+                          aria-label="Previous page"
+                        >‹</button>
+                        {buildPageList(safePage,totalPages).map((p,i)=>(
+                          p==="…"
+                            ?<span key={`e${i}`} className={s.pagerEllipsis}>…</span>
+                            :<button
+                                key={p}
+                                type="button"
+                                className={`${s.pagerBtn} ${p===safePage?s.pagerBtnActive:""}`}
+                                onClick={()=>setPage(p as number)}
+                                aria-current={p===safePage?"page":undefined}
+                              >{p}</button>
+                        ))}
+                        <button
+                          type="button"
+                          className={s.pagerBtn}
+                          disabled={safePage>=totalPages}
+                          onClick={()=>setPage(p=>Math.min(totalPages,p+1))}
+                          aria-label="Next page"
+                        >›</button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

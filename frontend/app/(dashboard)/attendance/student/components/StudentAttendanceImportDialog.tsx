@@ -86,9 +86,20 @@ export default function StudentAttendanceImportDialog({ open, onClose, onImporte
 
   // Compact one-line summary used inside toast notifications. Strips long
   // remediation text and collapses whitespace so the toast stays single-line.
-  const toToastLine = (text: string, max = 110): string => {
+  const toToastLine = (text: string, max = 220): string => {
     const compact = text.replace(/\s+/g, ' ').trim();
-    return compact.length > max ? `${compact.slice(0, max - 1)}\u2026` : compact;
+    if (compact.length <= max) return compact;
+    // Preserve any trailing "(+N more)" hint when we have to truncate.
+    const tailMatch = compact.match(/\s*\(\+\d+ more\)\s*$/);
+    if (tailMatch) {
+      const tail = tailMatch[0].trim();
+      const head = compact.slice(0, compact.length - tailMatch[0].length);
+      const room = max - tail.length - 2; // 2 chars: space + ellipsis
+      if (room > 20) {
+        return `${head.slice(0, room)}\u2026 ${tail}`;
+      }
+    }
+    return `${compact.slice(0, max - 1)}\u2026`;
   };
 
   const summarizeFirstErrorShort = (errs: ImportError[]): string => {
@@ -100,6 +111,55 @@ export default function StudentAttendanceImportDialog({ open, onClose, onImporte
     const shortMsg = String(first.message).split('.')[0].trim();
     const more = errs.length > 1 ? ` (+${errs.length - 1} more)` : '';
     return `${rowPart}${fieldPart}: ${shortMsg}${more}`;
+  };
+
+  // Build a domain-specific toast that groups errors by their root cause.
+  // Returns an empty string when no specialised grouping applies, so the
+  // caller can fall back to the generic per-row summary.
+  const buildGroupedToast = (errs: ImportError[]): string => {
+    if (!errs || errs.length === 0) return '';
+    const extractAdmission = (msg: string): string | null => {
+      const m = msg.match(/'([^']+)'/);
+      return m ? m[1] : null;
+    };
+    const formatAdmissions = (list: string[]): string => {
+      const unique = Array.from(new Set(list));
+      if (unique.length <= 3) return unique.join(', ');
+      return `${unique.slice(0, 3).join(', ')} +${unique.length - 3} more`;
+    };
+
+    // Class/section mismatch — same admission number does not belong to the
+    // selected class/section.
+    const mismatchAdmissions = errs
+      .filter((e) => /class\/?section/i.test(e.message))
+      .map((e) => extractAdmission(e.message))
+      .filter((v): v is string => Boolean(v));
+    if (mismatchAdmissions.length > 0 && mismatchAdmissions.length === errs.length) {
+      return `Selected admission ${mismatchAdmissions.length === 1 ? 'number' : 'numbers'} ${formatAdmissions(
+        mismatchAdmissions,
+      )} does not belong to the selected class/section.`;
+    }
+
+    // Admission not found in school.
+    const notFoundAdmissions = errs
+      .filter((e) => /not\s+found/i.test(e.message))
+      .map((e) => extractAdmission(e.message))
+      .filter((v): v is string => Boolean(v));
+    if (notFoundAdmissions.length > 0 && notFoundAdmissions.length === errs.length) {
+      return `Admission ${notFoundAdmissions.length === 1 ? 'number' : 'numbers'} ${formatAdmissions(
+        notFoundAdmissions,
+      )} ${notFoundAdmissions.length === 1 ? 'was' : 'were'} not found in this school.`;
+    }
+
+    // Cross-field rule: time / pickup / lunch fields not allowed for Absent / Holiday rows.
+    const absentConflicts = errs.filter((e) => /not allowed when attendance type is/i.test(e.message));
+    if (absentConflicts.length > 0 && absentConflicts.length === errs.length) {
+      const fields = Array.from(new Set(absentConflicts.map((e) => e.field || '').filter(Boolean)));
+      const fieldText = fields.length > 0 ? fields.join(', ') : 'time/lunch fields';
+      return `${absentConflicts.length} row${absentConflicts.length === 1 ? '' : 's'} have ${fieldText} set while marked Absent/Holiday — clear those columns or change the attendance type.`;
+    }
+
+    return '';
   };
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
@@ -352,6 +412,7 @@ export default function StudentAttendanceImportDialog({ open, onClose, onImporte
 
       const firstErrorSummary = summarizeFirstError(errs);
       const firstErrorShort = summarizeFirstErrorShort(errs);
+      const groupedToast = buildGroupedToast(errs);
       if (resp.success === false || failed > 0) {
         setImportResult({ imported, failed });
         setDetailedErrors(errs);
@@ -361,7 +422,9 @@ export default function StudentAttendanceImportDialog({ open, onClose, onImporte
           const fullMsg = firstErrorSummary ? `${baseMsg} — ${firstErrorSummary}` : baseMsg;
           setApiError(fullMsg);
           setSuccessMessage('');
-          const toastMsg = firstErrorShort
+          const toastMsg = groupedToast
+            ? groupedToast
+            : firstErrorShort
             ? `Import failed (${failed}) — ${firstErrorShort}`
             : baseMsg;
           notify(toToastLine(toastMsg), 'error');
@@ -369,7 +432,9 @@ export default function StudentAttendanceImportDialog({ open, onClose, onImporte
           setApiError('');
           const partialMsg = `${imported} record${imported === 1 ? '' : 's'} imported, ${failed} failed`;
           setSuccessMessage(partialMsg);
-          const toastMsg = firstErrorShort
+          const toastMsg = groupedToast
+            ? `${partialMsg}. ${groupedToast}`
+            : firstErrorShort
             ? `${partialMsg} — ${firstErrorShort}`
             : partialMsg;
           notify(toToastLine(toastMsg), 'error');
@@ -406,9 +471,12 @@ export default function StudentAttendanceImportDialog({ open, onClose, onImporte
         const baseMsg = details.message || details.detail || msg;
         const firstErrorSummary = summarizeFirstError(errs);
         const firstErrorShort = summarizeFirstErrorShort(errs);
+        const groupedToast = buildGroupedToast(errs);
         const fullMsg = firstErrorSummary ? `${baseMsg} — ${firstErrorSummary}` : baseMsg;
         setApiError(fullMsg);
-        const toastMsg = firstErrorShort
+        const toastMsg = groupedToast
+          ? groupedToast
+          : firstErrorShort
           ? `Import failed — ${firstErrorShort}`
           : baseMsg;
         notify(toToastLine(toastMsg), 'error');
