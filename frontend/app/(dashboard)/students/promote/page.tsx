@@ -1,5 +1,5 @@
-import { StudentPromotePanel } from "@/components/students/StudentPromotePanel";
+import PromotePageContainer from "./PromotePageContainer";
 
 export default function StudentPromotePage() {
-  return <StudentPromotePanel />;
+  return <PromotePageContainer />;
 }

@@ -875,6 +875,33 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
                 if value == "invalid":
                     row_errors.append({"field": field_name, "message": "Invalid time format. Use HH:MM"})
 
+            # Cross-field validation: time / pickup / lunch fields are not allowed
+            # when the student is marked Absent (A) or Holiday (H).
+            absent_like = attendance_type in {"A", "H"}
+            if absent_like:
+                type_label = "Absent" if attendance_type == "A" else "Holiday"
+                disallowed_fields = [
+                    ("sign_in_time", sign_in_time, sign_in_time not in (None, "invalid")),
+                    ("sign_out_time", sign_out_time, sign_out_time not in (None, "invalid")),
+                    ("arrival_time", arrival_time, arrival_time not in (None, "invalid")),
+                    ("pickup_time", pickup_time, pickup_time not in (None, "invalid")),
+                    ("pickup_by", pickup_by, bool(pickup_by)),
+                    ("lunch", lunch_text, lunch_value),
+                ]
+                for field_name, _value, has_value in disallowed_fields:
+                    if has_value:
+                        row_errors.append({
+                            "field": field_name,
+                            "message": (
+                                f"'{field_name}' is not allowed when attendance type is "
+                                f"{type_label} ({attendance_type}). Clear this column or change "
+                                f"the attendance type to P / L / F."
+                            ),
+                        })
+                        # Report only the first conflicting field so the user can fix
+                        # one issue at a time before re-uploading.
+                        break
+
             if row_errors:
                 for err in row_errors:
                     errors.append({

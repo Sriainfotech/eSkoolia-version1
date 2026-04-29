@@ -21,6 +21,7 @@ import NotesModal from './components/NotesModal';
 import ViewNotesModal from './components/ViewNotesModal';
 
 import UnlockEditDialog from './components/UnlockEditDialog';
+import StudentAttendanceImportDialog from './components/StudentAttendanceImportDialog';
 import ConfirmDialogHost, { confirmDialog } from './components/ConfirmDialog';
 import ExportOptionsDialogHost, { exportOptionsDialog } from './components/ExportOptionsDialog';
 
@@ -49,6 +50,7 @@ export default function StudentAttendancePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [sectionFilter, setSectionFilter] = useState('all');
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   // -- Date mode ------------------------------------------------
   const dateMode: 'today' | 'past' | 'future' = useMemo(() => {
@@ -879,7 +881,7 @@ export default function StudentAttendancePage() {
       ) : null}
 
       <AttendancePageHeader
-        onImport={() => router.push('/attendance/student/import')}
+        onImport={() => setImportDialogOpen(true)}
         onExport={handleExportCsv}
         onDownloadSample={() => {
           downloadSampleTemplate(
@@ -1092,6 +1094,22 @@ export default function StudentAttendancePage() {
         />
       )}
 
+      <StudentAttendanceImportDialog
+        open={importDialogOpen}
+        onClose={() => setImportDialogOpen(false)}
+        onNotify={(message, tone) => pushToast(message, tone)}
+        onImported={({ classId, sectionId, date, imported }) => {
+          setSelectedDate(date);
+          setActiveSections((prev) => ({ ...prev, [classId]: sectionId }));
+          setOpenClasses(new Set([classId]));
+          // Force a refresh of that section's roster for the imported date.
+          loadSection(classId, sectionId, date);
+          pushToast(
+            `Imported ${imported} attendance record${imported === 1 ? '' : 's'}. Refreshed view.`,
+            'success',
+          );
+        }}
+      />
       <ConfirmDialogHost />
       <ExportOptionsDialogHost />
     </div>
