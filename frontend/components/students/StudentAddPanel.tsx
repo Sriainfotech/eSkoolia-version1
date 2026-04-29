@@ -1895,6 +1895,27 @@ export function StudentAddPanel() {
       cardErrors[idx] = err;
     });
 
+    // Cross-card check: each Relation (Father / Mother / Guardian / etc.) may
+    // only be used by ONE guardian card. Bank the first occurrence and flag
+    // any later card that re-uses the same relation.
+    const seenRelations = new Map<string, number>();
+    guardianDrafts.forEach((draft, idx) => {
+      const fullName = sanitizeText(draft.fullName);
+      const phone = (draft.phone || "").replace(/\D/g, "").slice(0, 10);
+      const email = (draft.email || "").trim();
+      const isEmpty = !fullName && !phone && !email && !(draft.occupation || "").trim();
+      if (!draft.isPrimary && isEmpty && draft.linkedExistingId == null) return;
+
+      const rel = sanitizeText(draft.relation || "").toLowerCase();
+      if (!rel) return;
+      if (seenRelations.has(rel)) {
+        const dupMsg = `Relation "${draft.relation}" is already assigned to Guardian ${seenRelations.get(rel)! + 1}. Pick a different relation.`;
+        cardErrors[idx] = { ...(cardErrors[idx] || {}), relation: dupMsg };
+      } else {
+        seenRelations.set(rel, idx);
+      }
+    });
+
     const hasErrors = cardErrors.some((e) => Object.keys(e).length > 0);
     if (hasErrors) {
       return { ok: false, cardErrors };
@@ -2306,9 +2327,21 @@ export function StudentAddPanel() {
         console.log("✅ Identity fields complete, attempting auto-save...");
         try {
           effectiveStudentId = await autoSaveStudentDraft();
-          
+
           if (!effectiveStudentId) {
-            throw new Error("Auto-save returned no student ID");
+            // autoSaveStudentDraft has already surfaced the precise reason
+            // (missing field, duplicate admission no, server error, etc.)
+            // via showToast. Bail out silently so we don't overwrite that
+            // helpful message with a generic "no student ID" warning.
+            setDocuments((prev) => ({
+              ...prev,
+              [documentType]: {
+                ...prev[documentType as keyof typeof prev],
+                status: "idle" as DocumentStatus,
+                error: null,
+              },
+            }));
+            return;
           }
 
           console.log("✅ Auto-save successful, student ID:", effectiveStudentId);
@@ -2855,14 +2888,15 @@ export function StudentAddPanel() {
                     value={admissionNo}
                     title="Admission number"
                     placeholder="ADM20260342"
+                    maxLength={10}
                     onChange={(e) => {
-                      setAdmissionNo(e.target.value);
+                      setAdmissionNo(e.target.value.slice(0, 10));
                       setIsManualEdit(true);
                       setAdmissionChecked(false);
                       setSingleFieldError("admission_no", "");
                     }}
                     onBlur={() => {
-                      const normalized = sanitizeText(admissionNo).replace(/[\s-]/g, "");
+                      const normalized = sanitizeText(admissionNo).replace(/[\s-]/g, "").slice(0, 10);
                       setAdmissionNo(normalized);
                       setIsManualEdit(true);
                       void runAdmissionAvailabilityCheck(normalized);

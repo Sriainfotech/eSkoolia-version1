@@ -647,6 +647,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         "update": "student_info.add_student.view",
         "partial_update": "student_info.add_student.view",
         "check_admission_no": "student_info.add_student.view",
+        "next_admission_no": "student_info.add_student.view",
         "upload_photo": "student_info.add_student.view",
         "pincode_details": "student_info.add_student.view",
         "destroy": "student_info.delete_student_record.view",
@@ -815,7 +816,11 @@ class StudentViewSet(TenantScopedModelViewSet):
 
     def _fetch_pincode_details(self, pincode):
         cache_key = f"student_pincode_details:v2:{pincode}"
-        cached = cache.get(cache_key)
+        try:
+            cached = cache.get(cache_key)
+        except Exception as cache_err:  # Redis down / auth / allowlist — degrade gracefully
+            logger.warning("Pincode cache read failed (%s); continuing without cache.", cache_err)
+            cached = None
         if cached:
             return cached
 
@@ -871,7 +876,10 @@ class StudentViewSet(TenantScopedModelViewSet):
             "post_offices": normalized_offices,
             "multiple_post_offices": len(normalized_offices) > 1,
         }
-        cache.set(cache_key, result, 24 * 60 * 60)
+        try:
+            cache.set(cache_key, result, 24 * 60 * 60)
+        except Exception as cache_err:  # Redis down / auth / allowlist — skip caching
+            logger.warning("Pincode cache write failed (%s); response still returned.", cache_err)
         return result
 
     def _normalize_field_errors(self, serializer_errors):
@@ -1159,6 +1167,43 @@ class StudentViewSet(TenantScopedModelViewSet):
                     "docs_pending_count": docs_pending,
                 },
             },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["get"], url_path="next-admission-no")
+    def next_admission_no(self, request):
+        """Suggest the next admission number for the current school.
+
+        Strategy: take the maximum trailing-numeric portion of existing
+        ``admission_no`` values and increment by 1. If no numeric portion
+        is found, fall back to ``1``. Pads to at least 4 digits.
+        """
+        qs = self.get_queryset().values_list("admission_no", flat=True)
+        max_num = 0
+        prefix = ""
+        for value in qs:
+            if not value:
+                continue
+            text = str(value).strip()
+            match = re.search(r"(\D*)(\d+)$", text)
+            if not match:
+                continue
+            try:
+                num = int(match.group(2))
+            except (TypeError, ValueError):
+                continue
+            if num > max_num:
+                max_num = num
+                prefix = match.group(1) or ""
+
+        next_num = max_num + 1 if max_num >= 0 else 1
+        width = max(4, len(str(next_num)))
+        admission_no = f"{prefix}{str(next_num).zfill(width)}"
+        # Hard cap at 10 characters to match the UI input restriction.
+        if len(admission_no) > 10:
+            admission_no = admission_no[-10:]
+        return Response(
+            {"success": True, "admission_no": admission_no},
             status=status.HTTP_200_OK,
         )
 
