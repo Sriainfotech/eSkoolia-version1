@@ -2,13 +2,8 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import * as XLSX from "xlsx";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
-
-let _xlsxCache: typeof import("xlsx") | null = null;
-async function getXLSX() {
-  if (!_xlsxCache) _xlsxCache = await import("xlsx");
-  return _xlsxCache;
-}
 
 type ApiList<T> = T[] | { count?: number; next?: string | null; previous?: string | null; results?: T[]; data?: T[] };
 
@@ -80,8 +75,7 @@ function downloadBlobFile(filename: string, blob: Blob) {
   URL.revokeObjectURL(url);
 }
 
-async function buildStaffTemplateWorkbook() {
-  const XLSX = await getXLSX();
+function buildStaffTemplateWorkbook() {
   const blankRow = Array.from({ length: STAFF_IMPORT_HEADERS.length }, () => "");
   const sheet = XLSX.utils.aoa_to_sheet([Array.from(STAFF_IMPORT_HEADERS), blankRow]);
   const workbook = XLSX.utils.book_new();
@@ -89,9 +83,8 @@ async function buildStaffTemplateWorkbook() {
   return workbook;
 }
 
-async function createStaffImportTemplateBlob() {
-  const XLSX = await getXLSX();
-  const workbook = await buildStaffTemplateWorkbook();
+function createStaffImportTemplateBlob() {
+  const workbook = buildStaffTemplateWorkbook();
   const buffer = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
   return new Blob([buffer], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -99,7 +92,6 @@ async function createStaffImportTemplateBlob() {
 }
 
 async function parseSpreadsheetRows(file: File): Promise<ImportLookupRow[]> {
-  const XLSX = await getXLSX();
   const workbook = file.name.toLowerCase().endsWith(".csv")
     ? XLSX.read(await file.text(), { type: "string" })
     : XLSX.read(await file.arrayBuffer(), { type: "array" });
@@ -1969,8 +1961,8 @@ export function HrStaffPanel() {
     setOtherDocuments([]);
   };
 
-  const handleDownloadStaffTemplate = async () => {
-    const blob = await createStaffImportTemplateBlob();
+  const handleDownloadStaffTemplate = () => {
+    const blob = createStaffImportTemplateBlob();
     downloadBlobFile("staff-import-template.xlsx", blob);
     setError("");
     setSuccess("Sample Excel template downloaded.");
@@ -6408,7 +6400,7 @@ export function HrPayrollPanel() {
     setError("");
   };
 
-  const exportBulkPreviewCsv = async () => {
+  const exportBulkPreviewCsv = () => {
     if (bulkPreviewRows.length === 0) {
       setError("No preview rows available to export.");
       return;
@@ -6426,7 +6418,6 @@ export function HrPayrollPanel() {
       Validity: row.isInvalid ? "Invalid (negative net)" : "Valid",
     }));
 
-    const XLSX = await getXLSX();
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Bulk Payroll Preview");
@@ -6436,7 +6427,7 @@ export function HrPayrollPanel() {
     downloadBlobFile(filename, blob);
   };
 
-  const exportBulkInvalidRowsCsv = async () => {
+  const exportBulkInvalidRowsCsv = () => {
     const invalidRows = bulkPreviewRows.filter((row) => row.isInvalid);
     if (invalidRows.length === 0) {
       setError("No invalid preview rows available to export.");
@@ -6455,7 +6446,6 @@ export function HrPayrollPanel() {
       Issue: "Negative net salary",
     }));
 
-    const XLSX = await getXLSX();
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Invalid Payroll Rows");
@@ -6469,7 +6459,7 @@ export function HrPayrollPanel() {
     setPayrollPreview(row);
   };
 
-  const downloadPayrollTemplate = async (row: PayrollRecord) => {
+  const downloadPayrollTemplate = (row: PayrollRecord) => {
     const staff = staffRows.find((item) => item.id === row.staff);
     const staffName = row.staff_name || (staff ? `${staff.first_name} ${staff.last_name}` : `Staff ${row.staff}`);
     const staffNo = row.staff_no || staff?.staff_no || "";
@@ -6487,7 +6477,6 @@ export function HrPayrollPanel() {
       { Field: "Paid At", Value: row.paid_at || "-" },
     ];
 
-    const XLSX = await getXLSX();
     const worksheet = XLSX.utils.json_to_sheet(exportRows);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Payroll Template");

@@ -4,6 +4,9 @@ from datetime import date
 from rest_framework import serializers
 from .models import (
     Guardian,
+    PromotionAuditLog,
+    PromotionBatch,
+    PromotionRecord,
     Student,
     StudentCategory,
     StudentDocument,
@@ -104,7 +107,14 @@ class StudentCategorySerializer(serializers.ModelSerializer):
 
 
 class StudentGroupSerializer(serializers.ModelSerializer):
-    students_count = serializers.IntegerField(read_only=True)
+    students_count = serializers.IntegerField(read_only=True, default=0)
+
+    # Club color palettes (cycled by existing club count mod 4)
+    CLUB_COLORS = ["#2980b9", "#27ae60", "#f39c12", "#8e44ad"]
+    CLUB_BG_COLORS = ["#e8f4fd", "#eafaf1", "#fef9e7", "#f5eefb"]
+    # House color palettes (cycled by existing house count mod 4)
+    HOUSE_COLORS = ["#00b894", "#6c5ce7", "#e67e22", "#2980b9"]
+    HOUSE_BG_COLORS = ["#e6f9f5", "#f0eeff", "#fef3e8", "#e8f4fd"]
 
     def _clean_text(self, value):
         return strip_tags(str(value or "")).strip()
@@ -130,14 +140,36 @@ class StudentGroupSerializer(serializers.ModelSerializer):
 
     def validate_description(self, value):
         description = self._clean_text(value)
-        if len(description) > 255:
-            raise serializers.ValidationError("Description must not exceed 255 characters.")
+        if len(description) > 500:
+            raise serializers.ValidationError("Description must not exceed 500 characters.")
         return description
+
+    def create(self, validated_data):
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        group_type = validated_data.get("type", "CUSTOM")
+
+        # Auto-assign colors if not provided
+        if "color" not in validated_data or not validated_data.get("color"):
+            if group_type == "CLUB" and school_id:
+                idx = StudentGroup.objects.filter(school_id=school_id, type="CLUB").count() % 4
+                validated_data["color"] = self.CLUB_COLORS[idx]
+                validated_data["bg_color"] = self.CLUB_BG_COLORS[idx]
+            elif group_type == "HOUSE" and school_id:
+                idx = StudentGroup.objects.filter(school_id=school_id, type="HOUSE").count() % 4
+                validated_data["color"] = self.HOUSE_COLORS[idx]
+                validated_data["bg_color"] = self.HOUSE_BG_COLORS[idx]
+
+        return super().create(validated_data)
 
     class Meta:
         model = StudentGroup
-        fields = ["id", "school", "name", "description", "students_count", "created_at"]
-        read_only_fields = ["id", "school", "students_count", "created_at"]
+        fields = [
+            "id", "school", "name", "type", "emoji", "description",
+            "color", "bg_color", "capacity", "students_count",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "school", "students_count", "created_at", "updated_at"]
 
 
 class GuardianSerializer(serializers.ModelSerializer):
@@ -283,6 +315,182 @@ class StudentPromotionHistorySerializer(serializers.ModelSerializer):
             "promoted_at",
         ]
         read_only_fields = ["id", "promoted_by", "promoted_at"]
+
+
+class PromotionRecordSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    admission_no = serializers.CharField(source="student.admission_no", read_only=True)
+    from_class_name = serializers.CharField(source="from_class.name", read_only=True)
+    from_section_name = serializers.CharField(source="from_section.name", read_only=True)
+    to_class_name = serializers.CharField(source="to_class.name", read_only=True)
+    to_section_name = serializers.CharField(source="to_section.name", read_only=True)
+    failed_subject_ids = serializers.PrimaryKeyRelatedField(
+        source="failed_subjects",
+        many=True,
+        read_only=True,
+    )
+
+    class Meta:
+        model = PromotionRecord
+        fields = [
+            "id",
+            "student",
+            "student_name",
+            "admission_no",
+            "from_class",
+            "from_class_name",
+            "from_section",
+            "from_section_name",
+            "to_class",
+            "to_class_name",
+            "to_section",
+            "to_section_name",
+            "status",
+            "retention_reason",
+            "failed_subject_ids",
+            "notes",
+            "ai_recommendation",
+            "decision_made_at",
+        ]
+        read_only_fields = ["id", "decision_made_at"]
+
+    def get_student_name(self, obj):
+        return f"{obj.student.first_name} {obj.student.last_name}".strip()
+
+
+class PromotionBatchSerializer(serializers.ModelSerializer):
+    academic_year_name = serializers.CharField(source="academic_year.name", read_only=True)
+    target_year_name = serializers.CharField(source="target_year.name", read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    kpi = serializers.SerializerMethodField()
+    records = PromotionRecordSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PromotionBatch
+        fields = [
+            "id",
+            "academic_year",
+            "academic_year_name",
+            "target_year",
+            "target_year_name",
+            "status",
+            "created_by_name",
+            "created_at",
+            "confirmed_at",
+            "total_students",
+            "promoted_count",
+            "retained_count",
+            "kpi",
+            "records",
+        ]
+
+    def get_created_by_name(self, obj):
+        if not obj.created_by:
+            return "-"
+        return obj.created_by.get_full_name() or obj.created_by.email
+
+    def get_kpi(self, obj):
+        total = max(0, obj.total_students)
+        promoted = max(0, obj.promoted_count)
+        retained = max(0, obj.retained_count)
+        pending = max(0, total - (promoted + retained))
+        completion = round(((promoted + retained) / total) * 100, 1) if total else 0
+        return {
+            "total": total,
+            "promoted": promoted,
+            "not_promoted": retained,
+            "pending": pending,
+            "completion_percentage": completion,
+        }
+
+
+class PromotionBatchCreateSerializer(serializers.Serializer):
+    academic_year = serializers.IntegerField(min_value=1)
+    target_year = serializers.IntegerField(min_value=1)
+
+    def validate(self, attrs):
+        from apps.core.models import AcademicYear
+
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        school_id = getattr(user, "school_id", None)
+
+        academic_year_id = attrs.get("academic_year")
+        target_year_id = attrs.get("target_year")
+        if academic_year_id == target_year_id:
+            raise serializers.ValidationError({"target_year": "Target year must be different from current academic year."})
+
+        year_qs = AcademicYear.objects.filter(id=academic_year_id)
+        target_qs = AcademicYear.objects.filter(id=target_year_id)
+        if user and not user.is_superuser and school_id:
+            year_qs = year_qs.filter(school_id=school_id)
+            target_qs = target_qs.filter(school_id=school_id)
+
+        year = year_qs.first()
+        target = target_qs.first()
+        if not year:
+            raise serializers.ValidationError({"academic_year": "Invalid academic year."})
+        if not target:
+            raise serializers.ValidationError({"target_year": "Invalid target academic year."})
+
+        attrs["academic_year_obj"] = year
+        attrs["target_year_obj"] = target
+        return attrs
+
+
+class PromotionRecordUpdateSerializer(serializers.Serializer):
+    record_id = serializers.IntegerField(min_value=1)
+    status = serializers.ChoiceField(choices=[value for value, _ in PromotionRecord.STATUS_CHOICES])
+    retention_reason = serializers.ChoiceField(
+        choices=[value for value, _ in PromotionRecord.REASON_CHOICES],
+        required=False,
+        allow_blank=True,
+    )
+    failed_subject_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    to_class = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    to_section = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+
+
+class PromotionBulkUpdateSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=["promote", "skip", "reset"])
+    scope = serializers.ChoiceField(choices=["class", "section", "selection"])
+    class_id = serializers.IntegerField(min_value=1, required=False)
+    section_id = serializers.IntegerField(min_value=1, required=False)
+    record_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
+
+    def validate(self, attrs):
+        scope = attrs.get("scope")
+        if scope == "class" and not attrs.get("class_id"):
+            raise serializers.ValidationError({"class_id": "class_id is required when scope is class."})
+        if scope == "section" and not attrs.get("section_id"):
+            raise serializers.ValidationError({"section_id": "section_id is required when scope is section."})
+        if scope == "selection" and not attrs.get("record_ids"):
+            raise serializers.ValidationError({"record_ids": "record_ids is required when scope is selection."})
+        return attrs
+
+
+class PromotionAiRequestSerializer(serializers.Serializer):
+    record_id = serializers.IntegerField(min_value=1)
+    reason = serializers.ChoiceField(
+        choices=[value for value, _ in PromotionRecord.REASON_CHOICES],
+        required=False,
+        allow_blank=True,
+    )
+
+
+class PromotionAuditLogSerializer(serializers.ModelSerializer):
+    performed_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PromotionAuditLog
+        fields = ["id", "batch", "action", "performed_by", "performed_by_name", "record", "details", "ip_address", "created_at"]
+        read_only_fields = fields
+
+    def get_performed_by_name(self, obj):
+        if not obj.performed_by:
+            return "-"
+        return obj.performed_by.get_full_name() or obj.performed_by.email
 
 
 class StudentPromoteRequestSerializer(serializers.Serializer):

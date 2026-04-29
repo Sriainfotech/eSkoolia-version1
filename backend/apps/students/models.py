@@ -34,10 +34,22 @@ class StudentCategory(models.Model):
 
 
 class StudentGroup(models.Model):
+    GROUP_TYPE_CHOICES = [
+        ("HOUSE", "House"),
+        ("CLUB", "Club"),
+        ("CUSTOM", "Custom"),
+    ]
+
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="student_groups")
     name = models.CharField(max_length=80)
+    type = models.CharField(max_length=10, choices=GROUP_TYPE_CHOICES, default="CUSTOM")
+    emoji = models.CharField(max_length=10, default="📚")
     description = models.TextField(blank=True)
+    color = models.CharField(max_length=20, default="#00b894")
+    bg_color = models.CharField(max_length=20, default="#e6f9f5")
+    capacity = models.PositiveIntegerField(default=40)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "student_groups"
@@ -403,3 +415,168 @@ class StudentPromotionHistory(models.Model):
     class Meta:
         db_table = "student_promotion_history"
         ordering = ["-promoted_at"]
+
+
+class PromotionBatch(models.Model):
+    STATUS_DRAFT = "draft"
+    STATUS_IN_PROGRESS = "in_progress"
+    STATUS_CONFIRMED = "confirmed"
+    STATUS_FINALIZED = "finalized"
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_IN_PROGRESS, "In Progress"),
+        (STATUS_CONFIRMED, "Confirmed"),
+        (STATUS_FINALIZED, "Finalized"),
+    ]
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="promotion_batches")
+    academic_year = models.ForeignKey("core.AcademicYear", on_delete=models.CASCADE, related_name="promotion_batches")
+    target_year = models.ForeignKey(
+        "core.AcademicYear",
+        on_delete=models.CASCADE,
+        related_name="incoming_promotion_batches",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    created_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="promotion_batches_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    confirmed_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="promotion_batches_confirmed",
+    )
+    total_students = models.PositiveIntegerField(default=0)
+    promoted_count = models.PositiveIntegerField(default=0)
+    retained_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "promotion_batches"
+        ordering = ["-created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["school", "academic_year"], name="uq_promotion_batch_school_year"),
+        ]
+
+    def __str__(self):
+        return f"Promotion {self.academic_year} -> {self.target_year}"
+
+
+class PromotionRecord(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_PROMOTE = "promote"
+    STATUS_NOT_PROMOTED = "not_promoted"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_PROMOTE, "Promote"),
+        (STATUS_NOT_PROMOTED, "Not Promoted"),
+    ]
+
+    REASON_ACADEMIC = "academic"
+    REASON_ATTENDANCE = "attendance"
+    REASON_MEDICAL = "medical"
+    REASON_BEHAVIORAL = "behavioral"
+    REASON_PARENT_REQUEST = "parent_request"
+    REASON_OTHER = "other"
+    REASON_CHOICES = [
+        (REASON_ACADEMIC, "Academic Performance"),
+        (REASON_ATTENDANCE, "Attendance"),
+        (REASON_MEDICAL, "Medical Leave"),
+        (REASON_BEHAVIORAL, "Behavioral"),
+        (REASON_PARENT_REQUEST, "Parent Request"),
+        (REASON_OTHER, "Other"),
+    ]
+
+    batch = models.ForeignKey(PromotionBatch, on_delete=models.CASCADE, related_name="records")
+    student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="promotion_records")
+    from_class = models.ForeignKey(
+        "core.Class",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="promotion_records_from_class",
+    )
+    from_section = models.ForeignKey(
+        "core.Section",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="promotion_records_from_section",
+    )
+    to_class = models.ForeignKey(
+        "core.Class",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="promotion_records_to_class",
+    )
+    to_section = models.ForeignKey(
+        "core.Section",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="promotion_records_to_section",
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    retention_reason = models.CharField(max_length=30, choices=REASON_CHOICES, blank=True)
+    failed_subjects = models.ManyToManyField("core.Subject", blank=True, related_name="failed_promotion_records")
+    notes = models.TextField(blank=True)
+    ai_recommendation = models.TextField(blank=True)
+    decision_made_at = models.DateTimeField(null=True, blank=True)
+    decision_made_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="promotion_record_decisions",
+    )
+    last_modified_at = models.DateTimeField(auto_now=True)
+    last_modified_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="promotion_record_modifications",
+    )
+
+    class Meta:
+        db_table = "promotion_records"
+        ordering = ["from_class__numeric_order", "from_section__name", "student__roll_no", "student__id"]
+        constraints = [
+            models.UniqueConstraint(fields=["batch", "student"], name="uq_promotion_record_batch_student"),
+        ]
+
+    def __str__(self):
+        return f"{self.student} - {self.get_status_display()}"
+
+
+class PromotionAuditLog(models.Model):
+    batch = models.ForeignKey(PromotionBatch, on_delete=models.CASCADE, related_name="audit_logs")
+    action = models.CharField(max_length=40)
+    performed_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="promotion_audit_actions",
+    )
+    record = models.ForeignKey(
+        PromotionRecord,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="audit_logs",
+    )
+    details = models.TextField(blank=True)
+    ip_address = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "promotion_audit_logs"
+        ordering = ["-created_at", "id"]

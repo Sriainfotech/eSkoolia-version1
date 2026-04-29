@@ -1,5 +1,5 @@
-import { StudentGroupPanel } from "@/components/students/StudentGroupPanel";
+import { redirect } from "next/navigation";
 
 export default function StudentGroupPage() {
-  return <StudentGroupPanel />;
+  redirect("/student-groups");
 }

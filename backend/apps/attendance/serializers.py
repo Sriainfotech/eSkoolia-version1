@@ -65,6 +65,12 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
             "attendance_date",
             "attendance_type",
             "notes",
+            "arrival_time",
+            "sign_in_time",
+            "sign_out_time",
+            "pickup_time",
+            "pickup_by",
+            "lunch",
             "is_locked",
             "marked_by",
             "marked_at",
@@ -113,11 +119,21 @@ class StudentSearchRequestSerializer(serializers.Serializer):
 
 class StudentAttendanceStoreRequestSerializer(serializers.Serializer):
     date = serializers.DateField()
+    class_id = serializers.IntegerField(required=False)
+    section_id = serializers.IntegerField(required=False)
+    academic_year_id = serializers.IntegerField(required=False, allow_null=True)
     id = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False)
     attendance = serializers.DictField(required=False)
     attendance_type = serializers.DictField(required=False)
     note = serializers.DictField(required=False)
     attendance_note = serializers.DictField(required=False)
+    arrival_time = serializers.DictField(required=False)
+    sign_in_time = serializers.DictField(required=False)
+    sign_out_time = serializers.DictField(required=False)
+    pickup_time = serializers.DictField(required=False)
+    pickup_by = serializers.DictField(required=False)
+    lunch = serializers.DictField(required=False)
+    lock_attendance = serializers.BooleanField(required=False, default=False)
     mark_holiday = serializers.BooleanField(required=False, default=False)
 
 

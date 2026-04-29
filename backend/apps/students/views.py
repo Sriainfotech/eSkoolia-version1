@@ -7,7 +7,6 @@ import re
 from uuid import uuid4
 from datetime import datetime
 from django.conf import settings
-from django.http import HttpResponse
 from django.core.cache import cache
 from django.core.files.storage import default_storage
 from django.utils import timezone
@@ -23,6 +22,9 @@ from rest_framework.response import Response
 from .forms import StudentValidationModelForm
 from .models import (
     Guardian,
+    PromotionAuditLog,
+    PromotionBatch,
+    PromotionRecord,
     Student,
     StudentCategory,
     StudentDocument,
@@ -35,6 +37,13 @@ from .models import (
 )
 from .serializers import (
     GuardianSerializer,
+    PromotionAiRequestSerializer,
+    PromotionAuditLogSerializer,
+    PromotionBatchCreateSerializer,
+    PromotionBatchSerializer,
+    PromotionBulkUpdateSerializer,
+    PromotionRecordSerializer,
+    PromotionRecordUpdateSerializer,
     StudentCategorySerializer,
     StudentDocumentSerializer,
     StudentGroupSerializer,
@@ -122,48 +131,6 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
     pagination_class = ApiPageNumberPagination
     permission_codes = {"*": "student_info.student_category.view"}
 
-    def _restore_soft_deleted_category(self, request, validated_data):
-        school_id = getattr(getattr(request, "user", None), "school_id", None)
-        if not school_id:
-            school = getattr(request, "school", None)
-            school_id = getattr(school, "id", None)
-        if not school_id:
-            return None
-
-        name = str(validated_data.get("name") or "").strip()
-        code = str(validated_data.get("code") or "").strip()
-        deleted_qs = StudentCategory.objects.filter(school_id=school_id, is_deleted=True)
-
-        name_match = deleted_qs.filter(name__iexact=name).order_by("-id").first() if name else None
-        code_match = deleted_qs.filter(code__iexact=code).order_by("-id").first() if code else None
-
-        if name_match and code_match and name_match.id != code_match.id:
-            raise ValidationError({"detail": "A deleted category with matching name/code conflict exists."})
-
-        target = name_match or code_match
-        if not target:
-            return None
-
-        target.name = name
-        target.code = validated_data.get("code")
-        target.description = validated_data.get("description") or ""
-        target.status = validated_data.get("status") or "active"
-        target.is_deleted = False
-        target.deleted_at = None
-        target.deleted_by = None
-        target.save(
-            update_fields=[
-                "name",
-                "code",
-                "description",
-                "status",
-                "is_deleted",
-                "deleted_at",
-                "deleted_by",
-            ]
-        )
-        return target
-
     def _build_validation_error_response(self, field_errors=None, message="Validation failed"):
         return Response(
             {
@@ -190,100 +157,12 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
                 return str(errors[0])
         return "Validation failed"
 
-    def _fallback_category_description(self, name, code=None, students_count=0):
-        safe_name = str(name or "").strip() or "this category"
-        safe_code = str(code or "").strip()
-        count = max(0, int(students_count or 0))
-
-        usage_line = (
-            f"This category currently covers {count} enrolled student{'s' if count != 1 else ''}."
-            if count
-            else "Use this category to group students consistently across admissions, fees, and reporting."
-        )
-        code_line = f" Category code: {safe_code}." if safe_code else ""
-        return (
-            f"Category for {safe_name.lower()} used in admissions, fees, and academic reports."
-            f"{code_line} {usage_line}"
-        ).strip()
-
-    def _generate_category_description_with_ai(self, name, code=None, students_count=0):
-        fallback = self._fallback_category_description(name, code, students_count)
-        if not getattr(settings, "CATEGORY_AI_SUGGESTION_ENABLED", False):
-            return fallback, "fallback"
-
-        api_key = getattr(settings, "CATEGORY_AI_OPENAI_API_KEY", "")
-        endpoint = getattr(settings, "CATEGORY_AI_OPENAI_ENDPOINT", "")
-        model = getattr(settings, "CATEGORY_AI_OPENAI_MODEL", "gpt-4o-mini")
-
-        if not api_key or not endpoint:
-            return fallback, "fallback"
-
-        prompt = (
-            "Write one concise admin-ready category description (max 220 characters). "
-            "Use neutral professional language for school ERP. "
-            "Return only the description text without quotes or markdown.\n"
-            f"Category: {name}\n"
-            f"Code: {code or 'N/A'}\n"
-            f"Students Count: {students_count or 0}"
-        )
-
-        try:
-            response = requests.post(
-                endpoint,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "You create short and practical school ERP descriptions.",
-                        },
-                        {
-                            "role": "user",
-                            "content": prompt,
-                        },
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 120,
-                },
-                timeout=8,
-            )
-            if not response.ok:
-                logger.warning("AI suggestion request failed: %s", response.text[:300])
-                return fallback, "fallback"
-
-            data = response.json() if response.content else {}
-            choices = data.get("choices") if isinstance(data, dict) else []
-            message = (
-                ((choices or [])[0] or {}).get("message", {}).get("content", "")
-                if isinstance(choices, list)
-                else ""
-            )
-            suggestion = str(message or "").strip().replace("\n", " ")
-            if not suggestion:
-                return fallback, "fallback"
-
-            return suggestion[:500], "ai"
-        except Exception as exc:
-            logger.warning("AI suggestion error: %s", exc)
-            return fallback, "fallback"
-
     def get_queryset(self):
-        qs = super().get_queryset().filter(is_deleted=False).annotate(
-            students_count=Count(
-                "students",
-                filter=Q(students__is_deleted=False),
-                distinct=True,
-            )
-        ).order_by("name")
+        qs = super().get_queryset().order_by("name")
         params = self.request.query_params
         search = str(params.get("search") or params.get("q") or "").strip()
         status_filter = str(params.get("status") or "").strip().lower()
         name_filter = str(params.get("name") or "").strip()
-        attention_filter = str(params.get("attention") or "").strip().lower() in {"1", "true", "yes"}
 
         if search:
             qs = qs.filter(
@@ -295,83 +174,7 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
             qs = qs.filter(name__icontains=name_filter)
         if status_filter in {"active", "inactive"}:
             qs = qs.filter(status=status_filter)
-        if attention_filter:
-            qs = qs.filter(
-                Q(code__isnull=True)
-                | Q(code="")
-                | Q(description__isnull=True)
-                | Q(description="")
-            )
         return qs
-
-    @action(detail=False, methods=["get"], url_path="summary")
-    def summary(self, request):
-        qs = self.get_queryset()
-        total_count = qs.count()
-        active_count = qs.filter(status="active").count()
-        inactive_count = qs.filter(status="inactive").count()
-        attention_count = qs.filter(
-            Q(code__isnull=True)
-            | Q(code="")
-            | Q(description__isnull=True)
-            | Q(description="")
-        ).count()
-
-        top_categories = list(
-            qs.order_by("-students_count", "name").values("id", "name", "students_count")[:7]
-        )
-        total_students = sum(int(item.get("students_count") or 0) for item in top_categories)
-
-        recent_activity = []
-        for category in qs.order_by("-created_at")[:5]:
-            recent_activity.append(
-                {
-                    "id": category.id,
-                    "name": category.name,
-                    "action": "created",
-                    "status": category.status,
-                    "created_at": category.created_at,
-                }
-            )
-
-        return Response(
-            {
-                "success": True,
-                "total_count": total_count,
-                "active_count": active_count,
-                "inactive_count": inactive_count,
-                "attention_count": attention_count,
-                "top_categories": top_categories,
-                "top_total_students": total_students,
-                "recent_activity": recent_activity,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    @action(detail=False, methods=["get"], url_path="export")
-    def export(self, request):
-        qs = self.get_queryset().order_by("name")
-
-        buffer = io.StringIO()
-        writer = csv.writer(buffer)
-        writer.writerow(["Category", "Code", "Students", "Status", "Description", "Created At"])
-
-        for category in qs:
-            writer.writerow(
-                [
-                    category.name,
-                    category.code or "",
-                    category.students_count or 0,
-                    category.status,
-                    category.description or "",
-                    timezone.localtime(category.created_at).strftime("%Y-%m-%d %H:%M:%S") if category.created_at else "",
-                ]
-            )
-
-        filename = f"student_categories_{timezone.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        response = HttpResponse(buffer.getvalue(), content_type="text/csv")
-        response["Content-Disposition"] = f'attachment; filename="{filename}"'
-        return response
 
     @action(detail=False, methods=["get"], url_path="check-name")
     def check_name(self, request):
@@ -385,79 +188,11 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
         exists = queryset.exists()
         return Response({"success": True, "exists": exists, "message": "Category exists." if exists else "Category available."})
 
-    @action(detail=False, methods=["get"], url_path="check-code")
-    def check_code(self, request):
-        code = str(request.query_params.get("code") or "").strip()
-        if not code:
-            return Response({"success": True, "exists": False, "message": "Code is optional."})
-
-        queryset = self.get_queryset().filter(code__iexact=code)
-        if request.query_params.get("exclude_id"):
-            queryset = queryset.exclude(id=request.query_params.get("exclude_id"))
-        exists = queryset.exists()
-        return Response({"success": True, "exists": exists, "message": "Code exists." if exists else "Code available."})
-
-    @action(detail=False, methods=["post"], url_path="ai-description-suggestion")
-    def ai_description_suggestion(self, request):
-        name = str(request.data.get("name") or "").strip()
-        code = str(request.data.get("code") or "").strip()
-        students_count = request.data.get("students_count") or 0
-
-        if not name:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Category name is required to generate description.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        suggestion, source = self._generate_category_description_with_ai(
-            name=name,
-            code=code,
-            students_count=students_count,
-        )
-
-        return Response(
-            {
-                "success": True,
-                "suggestion": suggestion,
-                "source": source,
-                "message": "Suggestion generated successfully.",
-            },
-            status=status.HTTP_200_OK,
-        )
-
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         if not serializer.is_valid():
             field_errors = self._normalize_field_errors(serializer.errors)
             return self._build_validation_error_response(field_errors, self._first_error_message(field_errors))
-
-        try:
-            restored = self._restore_soft_deleted_category(request, serializer.validated_data)
-        except ValidationError as exc:
-            details = exc.detail if isinstance(exc.detail, dict) else {"detail": [str(exc.detail)]}
-            field_errors = self._normalize_field_errors(details)
-            return self._build_validation_error_response(field_errors, self._first_error_message(field_errors))
-        except IntegrityError:
-            return self._build_validation_error_response(
-                {"name": ["Category name already exists."]},
-                "Category name already exists.",
-            )
-
-        if restored:
-            response_serializer = self.get_serializer(restored)
-            headers = self.get_success_headers(response_serializer.data)
-            return Response(
-                {
-                    "success": True,
-                    "message": "Student category restored successfully.",
-                    "data": response_serializer.data,
-                },
-                status=status.HTTP_201_CREATED,
-                headers=headers,
-            )
 
         try:
             self.perform_create(serializer)
@@ -536,60 +271,6 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
 
         return Response({"success": True, "message": message})
 
-    @action(detail=True, methods=["patch"], url_path="deactivate")
-    def deactivate(self, request, pk=None):
-        """
-        Production-grade deactivate endpoint.
-        Sets is_active=False while preserving historical data.
-        
-        Returns:
-        - 200 OK on success
-        - 404 Not Found if category doesn't exist
-        - 400 Bad Request if category is already inactive
-        """
-        try:
-            instance = self.get_object()
-        except Exception:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Category not found.",
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if not instance.is_active and str(instance.status).lower() == "inactive":
-            return Response(
-                {
-                    "success": False,
-                    "message": "Category is already deactivated.",
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            instance.is_active = False
-            instance.status = "inactive"
-            instance.save(update_fields=["is_active", "status"])
-
-            return Response(
-                {
-                    "success": True,
-                    "message": "Category deactivated successfully.",
-                    "data": StudentCategorySerializer(instance, context={"request": request}).data,
-                },
-                status=status.HTTP_200_OK,
-            )
-        except Exception as e:
-            logger.error(f"Error deactivating category {instance.id}: {str(e)}")
-            return Response(
-                {
-                    "success": False,
-                    "message": "Something went wrong. Please try again later.",
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
     @action(detail=False, methods=["delete"], url_path="bulk-delete")
     def bulk_delete(self, request):
         ids = request.data.get("ids") or []
@@ -599,70 +280,28 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
         queryset = self.get_queryset().filter(id__in=ids)
         blocked = queryset.filter(students__isnull=False).distinct()
         if blocked.exists():
-            return self._build_validation_error_response({}, "Students are assigned to one or more selected categories.")
+            return self._build_validation_error_response({}, "One or more selected categories are assigned to students and cannot be deleted.")
 
         count = queryset.count()
         queryset.delete()
         return Response({"success": True, "message": f"{count} categories deleted successfully."}, status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
-        """
-        Production-grade delete endpoint with conflict handling.
-        
-        Returns:
-        - 409 Conflict if students are assigned to the category
-        - 404 Not Found if category doesn't exist
-        - 200 OK if deletion is successful
-        """
-        try:
-            instance = self.get_object()
-        except Exception:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Category not found.",
-                },
-                status=status.HTTP_404_NOT_FOUND,
+        instance = self.get_object()
+        if instance.students.exists():
+            return self._build_validation_error_response(
+                {},
+                "Cannot delete category as it is assigned to students",
             )
 
-        # Check if students are assigned to this category
-        student_count = instance.students.filter(is_deleted=False).count()
-        if student_count > 0:
-            return Response(
-                {
-                    "success": False,
-                    "code": "CATEGORY_IN_USE",
-                    "message": "This category is assigned to students and cannot be deleted.",
-                    "details": "Please reassign students or deactivate the category instead.",
-                    "student_count": student_count,
-                    "suggested_action": "deactivate",
-                },
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        try:
-            # Perform soft delete instead of hard delete for audit trail
-            instance.is_deleted = True
-            instance.deleted_at = timezone.now()
-            instance.deleted_by = request.user
-            instance.save(update_fields=["is_deleted", "deleted_at", "deleted_by"])
-
-            return Response(
-                {
-                    "success": True,
-                    "message": "Category deleted successfully.",
-                },
-                status=status.HTTP_200_OK,
-            )
-        except Exception as e:
-            logger.error(f"Error deleting category {instance.id}: {str(e)}")
-            return Response(
-                {
-                    "success": False,
-                    "message": "Something went wrong. Please try again later.",
-                },
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        self.perform_destroy(instance)
+        return Response(
+            {
+                "success": True,
+                "message": "Student category deleted successfully.",
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class StudentGroupViewSet(TenantScopedModelViewSet):
@@ -670,6 +309,10 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
     serializer_class = StudentGroupSerializer
     pagination_class = ApiPageNumberPagination
     permission_codes = {"*": "student_info.student_group.view"}
+
+    def _school_id(self):
+        user = self.request.user
+        return None if user.is_superuser else getattr(user, "school_id", None)
 
     def get_queryset(self):
         user = self.request.user
@@ -690,37 +333,263 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
         if sort_by == "count":
             return qs.order_by("-students_count", "name")
 
+        if sort_by == "name":
+            return qs.order_by("name")
+
         return qs.order_by("name")
 
+    def perform_create(self, serializer):
+        user = self.request.user
+        school_id = getattr(user, "school_id", None)
+        if not school_id:
+            raw_school_id = self.request.data.get("school")
+            if raw_school_id not in (None, ""):
+                try:
+                    school_id = int(raw_school_id)
+                except (TypeError, ValueError):
+                    raise ValidationError({"school": "School must be a valid numeric id."})
+
+        if not school_id:
+            raise ValidationError({"school": "School is required to create a student group."})
+
+        serializer.save(school_id=school_id)
+
     def destroy(self, request, *args, **kwargs):
-        """
-        Delete a student group.
-        
-        Returns 400 error if the group has assigned students.
-        """
         instance = self.get_object()
-        
-        # Check if group has assigned students
-        if instance.students.exists():
-            return Response(
-                {
-                    "success": False,
-                    "message": f"Cannot delete group with assigned students. This group has {instance.students.count()} students assigned.",
-                    "field_errors": {},
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        
-        # Proceed with deletion
+        # Unassign all students from this group (SET_NULL via FK cascade is automatic,
+        # but we do it explicitly to be safe and return meaningful data)
+        instance.students.update(student_group=None)
         self.perform_destroy(instance)
-        
-        return Response(
-            {
-                "success": True,
-                "message": "Student group deleted successfully.",
-            },
-            status=status.HTTP_200_OK,
+        return Response({"success": True, "message": "Group deleted successfully."}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="stats")
+    def stats(self, request):
+        school_id = self._school_id()
+        qs = Student.objects.filter(is_deleted=False, is_active=True)
+        if school_id:
+            qs = qs.filter(school_id=school_id)
+        groups_qs = StudentGroup.objects.all()
+        if school_id:
+            groups_qs = groups_qs.filter(school_id=school_id)
+
+        total = qs.count()
+        assigned = qs.filter(student_group__isnull=False).count()
+        unassigned = total - assigned
+        house_count = groups_qs.filter(type="HOUSE").count()
+        club_count = groups_qs.filter(type="CLUB").count()
+        return Response({
+            "totalStudents": total,
+            "assigned": assigned,
+            "unassigned": unassigned,
+            "houseCount": house_count,
+            "clubCount": club_count,
+        })
+
+    @action(detail=False, methods=["get"], url_path="students")
+    def list_students(self, request):
+        school_id = self._school_id()
+        qs = Student.objects.filter(is_deleted=False, is_active=True)
+        if school_id:
+            qs = qs.filter(school_id=school_id)
+        qs = qs.select_related("current_class", "current_section", "student_group")
+
+        # Filters
+        class_name = request.query_params.get("class")
+        section_name = request.query_params.get("section")
+        group_id = request.query_params.get("groupId")
+        query_status = request.query_params.get("status")
+
+        if class_name:
+            qs = qs.filter(current_class__name=class_name)
+        if section_name:
+            qs = qs.filter(current_section__name=section_name)
+        if group_id:
+            ids = [gid.strip() for gid in group_id.split(",") if gid.strip().isdigit()]
+            if ids:
+                qs = qs.filter(student_group_id__in=ids)
+        if query_status == "unassigned":
+            qs = qs.filter(student_group__isnull=True)
+
+        qs = qs.order_by(
+            "current_class__numeric_order", "current_section__name",
+            "first_name", "last_name"
         )
+
+        result = []
+        for st in qs:
+            result.append({
+                "id": st.id,
+                "name": f"{st.first_name} {st.last_name}".strip(),
+                "admissionNo": st.admission_no,
+                "class": st.current_class.name if st.current_class else "",
+                "section": st.current_section.name if st.current_section else "",
+                "classIndex": st.current_class.numeric_order if st.current_class else 999,
+                "currentGroupId": st.student_group_id,
+                "gender": st.gender,
+            })
+        return Response(result)
+
+    @action(detail=False, methods=["post"], url_path="assign")
+    def assign(self, request):
+        school_id = self._school_id()
+        student_id = request.data.get("studentId")
+        group_id = request.data.get("groupId")
+
+        if not student_id:
+            return Response({"error": "studentId is required"}, status=400)
+
+        qs = Student.objects.filter(id=student_id)
+        if school_id:
+            qs = qs.filter(school_id=school_id)
+        student = qs.first()
+        if not student:
+            return Response({"error": "Student not found"}, status=404)
+
+        if group_id is None:
+            student.student_group = None
+        else:
+            group_qs = StudentGroup.objects.filter(id=group_id)
+            if school_id:
+                group_qs = group_qs.filter(school_id=school_id)
+            group = group_qs.first()
+            if not group:
+                return Response({"error": "Group not found"}, status=404)
+            student.student_group = group
+
+        student.save(update_fields=["student_group"])
+        return Response({"studentId": student.id, "groupId": student.student_group_id})
+
+    @action(detail=False, methods=["post"], url_path="bulk-assign")
+    def bulk_assign(self, request):
+        school_id = self._school_id()
+        student_ids = request.data.get("studentIds", [])
+        group_id = request.data.get("groupId")
+
+        if not isinstance(student_ids, list) or not student_ids:
+            return Response({"error": "studentIds must be a non-empty list"}, status=400)
+
+        qs = Student.objects.filter(id__in=student_ids)
+        if school_id:
+            qs = qs.filter(school_id=school_id)
+
+        if group_id is None:
+            assigned = qs.update(student_group=None)
+        else:
+            group_qs = StudentGroup.objects.filter(id=group_id)
+            if school_id:
+                group_qs = group_qs.filter(school_id=school_id)
+            group = group_qs.first()
+            if not group:
+                return Response({"error": "Group not found"}, status=404)
+            assigned = qs.update(student_group=group)
+
+        return Response({"assigned": assigned})
+
+    @action(detail=False, methods=["get"], url_path="sortwell-preview")
+    def sortwell_preview(self, request):
+        school_id = self._school_id()
+        scope = request.query_params.get("scope", "unassigned")
+
+        houses = list(StudentGroup.objects.filter(
+            **{"school_id": school_id} if school_id else {},
+            type="HOUSE"
+        ).order_by("id"))
+
+        if not houses:
+            return Response({"houses": [], "total": 0})
+
+        qs = Student.objects.filter(is_deleted=False, is_active=True)
+        if school_id:
+            qs = qs.filter(school_id=school_id)
+        if scope == "unassigned":
+            qs = qs.filter(student_group__isnull=True)
+
+        total = qs.count()
+        n = len(houses)
+        base = total // n
+        remainder = total % n
+
+        preview = []
+        for i, house in enumerate(houses):
+            count = base + (1 if i < remainder else 0)
+            preview.append({
+                "groupId": house.id,
+                "groupName": house.name,
+                "emoji": house.emoji,
+                "color": house.color,
+                "bgColor": house.bg_color,
+                "count": count,
+            })
+
+        return Response({"houses": preview, "total": total, "houseCount": n})
+
+    @action(detail=False, methods=["post"], url_path="sortwell")
+    def sortwell(self, request):
+        import random as rnd
+        school_id = self._school_id()
+        method = request.data.get("method", "random")
+        scope = request.data.get("scope", "unassigned")
+
+        houses = list(StudentGroup.objects.filter(
+            **{"school_id": school_id} if school_id else {},
+            type="HOUSE"
+        ).order_by("id"))
+
+        if not houses:
+            return Response({"error": "No house-type groups found"}, status=400)
+
+        with transaction.atomic():
+            if scope == "all":
+                # Clear all house-type assignments
+                qs_clear = Student.objects.filter(student_group__type="HOUSE")
+                if school_id:
+                    qs_clear = qs_clear.filter(school_id=school_id)
+                qs_clear.update(student_group=None)
+
+            qs = Student.objects.filter(is_deleted=False, is_active=True)
+            if school_id:
+                qs = qs.filter(school_id=school_id)
+            if scope == "unassigned":
+                qs = qs.filter(student_group__isnull=True)
+
+            students = list(qs.select_related("current_class"))
+
+            if method == "random":
+                rnd.shuffle(students)
+            elif method == "alpha":
+                students.sort(key=lambda s: f"{s.first_name} {s.last_name}".strip().lower())
+            elif method == "classwise":
+                students.sort(key=lambda s: (
+                    s.current_class.numeric_order if s.current_class else 999,
+                    f"{s.first_name} {s.last_name}".strip().lower()
+                ))
+            elif method == "gender":
+                males = [s for s in students if s.gender == "male"]
+                females = [s for s in students if s.gender != "male"]
+                interleaved = []
+                for idx in range(max(len(males), len(females))):
+                    if idx < len(males):
+                        interleaved.append(males[idx])
+                    if idx < len(females):
+                        interleaved.append(females[idx])
+                students = interleaved
+
+            distribution = {h.id: [] for h in houses}
+            for idx, student in enumerate(students):
+                house = houses[idx % len(houses)]
+                distribution[house.id].append(student.id)
+
+            total = 0
+            for house_id, sids in distribution.items():
+                if sids:
+                    Student.objects.filter(id__in=sids).update(student_group_id=house_id)
+                    total += len(sids)
+
+        dist_result = [
+            {"groupId": h.id, "groupName": h.name, "count": len(distribution[h.id])}
+            for h in houses
+        ]
+        return Response({"assigned": total, "distribution": dist_result})
 
     @action(detail=True, methods=["post"], url_path="assign-students")
     def assign_students(self, request, *args, **kwargs):
@@ -777,7 +646,6 @@ class StudentViewSet(TenantScopedModelViewSet):
         "create": "student_info.add_student.view",
         "update": "student_info.add_student.view",
         "partial_update": "student_info.add_student.view",
-        "next_admission_no": "student_info.add_student.view",
         "check_admission_no": "student_info.add_student.view",
         "upload_photo": "student_info.add_student.view",
         "pincode_details": "student_info.add_student.view",
@@ -786,6 +654,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         "restore": "student_info.delete_student_record.view",
         "permanent_delete": "student_info.delete_student_record.view",
         "promote": "student_info.student_promote.view",
+        "auto_assign_classes": "student_info.student_list.view",
     }
 
     def get_serializer_class(self):
@@ -909,120 +778,6 @@ class StudentViewSet(TenantScopedModelViewSet):
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
-
-    def _summary_queryset(self):
-        user = self.request.user
-        qs = Student.objects.all()
-
-        if user.is_superuser:
-            qs = qs
-        elif user.school_id:
-            qs = qs.filter(school_id=user.school_id)
-        else:
-            return qs.none()
-
-        search = (self.request.query_params.get("search") or "").strip()
-        class_id = self.request.query_params.get("class") or self.request.query_params.get("current_class")
-        section_id = self.request.query_params.get("section") or self.request.query_params.get("current_section")
-        academic_year_id = self.request.query_params.get("academic_year")
-        is_active_param = (self.request.query_params.get("is_active") or "").strip().lower()
-        include_deleted = (self.request.query_params.get("include_deleted") or "").strip().lower() in {"1", "true", "yes"}
-        deleted_only = (self.request.query_params.get("deleted_only") or "").strip().lower() in {"1", "true", "yes"}
-        unassigned_only = (self.request.query_params.get("unassigned") or "").strip().lower() in {"1", "true", "yes"}
-
-        if search and not re.fullmatch(r"[A-Za-z0-9 _\-./]+", search):
-            raise ValidationError({"search": "Please enter valid search text"})
-
-        if deleted_only:
-            qs = qs.filter(is_deleted=True)
-        elif not include_deleted:
-            qs = qs.filter(is_deleted=False)
-
-        if class_id and not str(class_id).isdigit():
-            raise ValidationError({"current_class": "Please select a valid class."})
-        if section_id and not str(section_id).isdigit():
-            raise ValidationError({"current_section": "Please select a valid section."})
-        if academic_year_id and not str(academic_year_id).isdigit():
-            raise ValidationError({"academic_year": "Please select a valid academic year."})
-
-        from apps.core.models import AcademicYear, Class, Section
-
-        if class_id:
-            class_qs = Class.objects.filter(id=int(class_id))
-            if not user.is_superuser:
-                class_qs = class_qs.filter(school_id=user.school_id)
-            if not class_qs.exists():
-                raise ValidationError({"current_class": "Selected class is not available."})
-
-        if section_id:
-            section_qs = Section.objects.filter(id=int(section_id))
-            if class_id:
-                section_qs = section_qs.filter(school_class_id=int(class_id))
-            if not user.is_superuser:
-                section_qs = section_qs.filter(school_class__school_id=user.school_id)
-            if not section_qs.exists():
-                raise ValidationError({"current_section": "Selected section is not available."})
-
-        if academic_year_id:
-            year_qs = AcademicYear.objects.filter(id=int(academic_year_id))
-            if not user.is_superuser:
-                year_qs = year_qs.filter(school_id=user.school_id)
-            if not year_qs.exists():
-                raise ValidationError({"academic_year": "Selected academic year is not available."})
-
-        if class_id:
-            qs = qs.filter(current_class_id=class_id)
-        if section_id:
-            qs = qs.filter(current_section_id=section_id)
-        if unassigned_only:
-            qs = qs.filter(current_class_id__isnull=True, current_section_id__isnull=True)
-        if academic_year_id:
-            qs = qs.filter(academic_year_id=academic_year_id)
-        if is_active_param in {"1", "true", "yes"}:
-            qs = qs.filter(is_active=True)
-        elif is_active_param in {"0", "false", "no"}:
-            qs = qs.filter(is_active=False)
-        if search:
-            qs = qs.filter(
-                Q(first_name__icontains=search)
-                | Q(last_name__icontains=search)
-                | Q(admission_no__icontains=search)
-                | Q(roll_no__icontains=search)
-            )
-
-        return qs
-
-    @action(detail=False, methods=["get"], url_path="summary")
-    def summary(self, request, *args, **kwargs):
-        base_qs = self._summary_queryset()
-        non_deleted_qs = base_qs.filter(is_deleted=False)
-        archived_qs = base_qs.filter(is_deleted=True)
-
-        now = timezone.now()
-        first_day_of_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-        total_count = non_deleted_qs.count()
-        active_count = non_deleted_qs.filter(is_active=True).count()
-        inactive_count = non_deleted_qs.filter(is_active=False).count()
-        archived_count = archived_qs.count()
-        new_count = non_deleted_qs.filter(created_at__gte=first_day_of_month).count()
-        docs_pending_count = non_deleted_qs.filter(Q(phone__isnull=True) | Q(phone="") | Q(date_of_birth__isnull=True) | Q(is_disabled=True)).count()
-
-        return Response(
-            {
-                "success": True,
-                "message": "Student summary retrieved successfully",
-                "data": {
-                    "total_count": total_count,
-                    "active_count": active_count,
-                    "inactive_count": inactive_count,
-                    "archived_count": archived_count,
-                    "new_count": new_count,
-                    "docs_pending_count": docs_pending_count,
-                },
-            },
-            status=status.HTTP_200_OK,
-        )
 
     def _field_alias(self, field):
         aliases = {
@@ -1330,46 +1085,79 @@ class StudentViewSet(TenantScopedModelViewSet):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
 
-    @action(detail=False, methods=["get"], url_path="next-admission-no")
-    def next_admission_no(self, request):
-        current_year = timezone.now().year
-        prefix = f"ADM{current_year}"
-        pattern = re.compile(rf"^{re.escape(prefix)}(\d+)$", re.IGNORECASE)
+    @action(detail=False, methods=["get"], url_path="summary", permission_classes=[permissions.IsAuthenticated])
+    def summary(self, request):
+        """KPI summary for the Student List page.
 
-        max_sequence = 0
-        queryset = Student.objects.all()
+        Honours search/current_class/current_section/academic_year filters.
+        Always returns totals across is_active and deleted statuses so each
+        KPI card reflects an absolute number (not limited by the currently
+        selected status pill).
+        """
+        from datetime import timedelta
+        from django.utils import timezone
+
         user = request.user
+        qs = Student.objects.all()
         if not user.is_superuser:
             if not user.school_id:
                 return Response(
                     {
-                        "success": False,
-                        "message": "Unable to determine school for admission number generation.",
+                        "success": True,
+                        "message": "Summary retrieved successfully",
+                        "data": {
+                            "total_count": 0,
+                            "active_count": 0,
+                            "inactive_count": 0,
+                            "archived_count": 0,
+                            "new_count": 0,
+                            "docs_pending_count": 0,
+                        },
                     },
-                    status=status.HTTP_400_BAD_REQUEST,
+                    status=status.HTTP_200_OK,
                 )
-            queryset = queryset.filter(school_id=user.school_id)
-        elif user.school_id:
-            queryset = queryset.filter(school_id=user.school_id)
+            qs = qs.filter(school_id=user.school_id)
 
-        queryset = queryset.filter(admission_no__istartswith=prefix).values_list("admission_no", flat=True)
-        for value in queryset.iterator():
-            match = pattern.match(str(value or "").strip())
-            if not match:
-                continue
-            sequence = int(match.group(1))
-            if sequence > max_sequence:
-                max_sequence = sequence
+        search = (request.query_params.get("search") or "").strip()
+        class_id = request.query_params.get("class") or request.query_params.get("current_class")
+        section_id = request.query_params.get("section") or request.query_params.get("current_section")
+        academic_year_id = request.query_params.get("academic_year")
 
-        next_sequence = max_sequence + 1
-        admission_no = f"{prefix}{next_sequence:04d}"
+        if class_id and str(class_id).isdigit():
+            qs = qs.filter(current_class_id=int(class_id))
+        if section_id and str(section_id).isdigit():
+            qs = qs.filter(current_section_id=int(section_id))
+        if academic_year_id and str(academic_year_id).isdigit():
+            qs = qs.filter(academic_year_id=int(academic_year_id))
+        if search and re.fullmatch(r"[A-Za-z0-9 _\-./]+", search):
+            qs = qs.filter(
+                Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+                | Q(admission_no__icontains=search)
+                | Q(roll_no__icontains=search)
+            )
+
+        total = qs.count()
+        archived = qs.filter(is_deleted=True).count()
+        live = qs.filter(is_deleted=False)
+        active = live.filter(is_active=True, is_disabled=False).count()
+        inactive = live.filter(is_active=False).count()
+        docs_pending = live.filter(is_disabled=True).count()
+        cutoff = timezone.now() - timedelta(days=30)
+        new_count = live.filter(created_at__gte=cutoff).count()
 
         return Response(
             {
                 "success": True,
-                "admission_no": admission_no,
-                "sequence": next_sequence,
-                "message": "Next admission number generated successfully.",
+                "message": "Summary retrieved successfully",
+                "data": {
+                    "total_count": total,
+                    "active_count": active,
+                    "inactive_count": inactive,
+                    "archived_count": archived,
+                    "new_count": new_count,
+                    "docs_pending_count": docs_pending,
+                },
             },
             status=status.HTTP_200_OK,
         )
@@ -1635,6 +1423,123 @@ class StudentViewSet(TenantScopedModelViewSet):
             # Complete success
             return Response(response_data, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=["post"], url_path="auto-assign-classes")
+    def auto_assign_classes(self, request):
+        """
+        Auto-assign current_class and current_section to students who are missing either.
+        Uses date_of_birth to pick the appropriate grade where available, otherwise
+        distributes round-robin across classes.
+        Pass ?dry_run=true to preview without saving.
+        """
+        from datetime import date as date_type
+        import re as _re
+        from django.db import models as db_models
+        from apps.core.models import Class, Section
+
+        school_id = request.user.school_id
+        if not school_id and not request.user.is_superuser:
+            return Response({"error": "School context required."}, status=status.HTTP_403_FORBIDDEN)
+
+        dry_run = str(request.data.get("dry_run", "false")).lower() in ("1", "true", "yes")
+        ref_year = int(request.data.get("year", date_type.today().year))
+
+        unassigned_qs = Student.objects.filter(
+            is_deleted=False,
+            **self.school_filter(request),
+        ).filter(
+            db_models.Q(current_class__isnull=True) | db_models.Q(current_section__isnull=True)
+        )
+        students = list(unassigned_qs.select_related("current_class").order_by("id"))
+
+        if not students:
+            return Response({"assigned": 0, "message": "All students already have class and section assigned."})
+
+        # Load classes with their first section, ordered correctly
+        cls_qs = (
+            Class.objects.filter(**self.school_filter(request))
+            .prefetch_related("sections")
+            .order_by("numeric_order", "name")
+        )
+        school_classes = []
+        for c in cls_qs:
+            secs = list(c.sections.order_by("name"))
+            if secs:
+                m = _re.search(r"\d+", c.name)
+                school_classes.append({
+                    "cls": c,
+                    "sections": secs,
+                    "grade": int(m.group()) if m else 0,
+                })
+
+        if not school_classes:
+            return Response({"error": "No classes with sections found."}, status=status.HTTP_400_BAD_REQUEST)
+
+        def grade_from_dob(dob):
+            age = ref_year - dob.year - (1 if (dob.month, dob.day) > (4, 1) else 0)
+            return max(0, min(age - 4, 12))
+
+        results = []
+        to_update = []
+
+        for idx, student in enumerate(students):
+            chosen = None
+
+            if student.date_of_birth and not student.current_class_id:
+                grade = grade_from_dob(student.date_of_birth)
+                if grade <= 0:
+                    for entry in school_classes:
+                        if entry["cls"].name.upper() in ("LKG", "UKG", "NURSERY"):
+                            chosen = entry
+                            break
+                if not chosen:
+                    best, best_diff = None, 9999
+                    for entry in school_classes:
+                        diff = abs(entry["grade"] - grade)
+                        if diff < best_diff:
+                            best_diff = diff
+                            best = entry
+                    chosen = best
+
+            if not chosen:
+                chosen = school_classes[idx % len(school_classes)]
+
+            # Determine section: if student already has a class, use a section from it
+            if student.current_class_id:
+                existing_secs = list(Section.objects.filter(school_class_id=student.current_class_id).order_by("name"))
+                target_section = existing_secs[0] if existing_secs else chosen["sections"][0]
+                target_class = student.current_class
+            else:
+                target_class = chosen["cls"]
+                target_section = chosen["sections"][0]
+
+            results.append({
+                "student_id": student.id,
+                "admission_no": student.admission_no,
+                "name": f"{student.first_name} {student.last_name}".strip(),
+                "assigned_class": target_class.name,
+                "assigned_section": target_section.name,
+            })
+
+            if not dry_run:
+                update_fields = {}
+                if not student.current_class_id:
+                    update_fields["current_class_id"] = target_class.id
+                if not student.current_section_id:
+                    update_fields["current_section_id"] = target_section.id
+                if update_fields:
+                    to_update.append((student.pk, update_fields))
+
+        if not dry_run:
+            with transaction.atomic():
+                for pk, fields in to_update:
+                    Student.objects.filter(pk=pk).update(**fields)
+
+        return Response({
+            "assigned": len(results),
+            "dry_run": dry_run,
+            "students": results[:100],  # cap response at 100 rows
+        })
+
     def destroy(self, request, *args, **kwargs):
         return self.soft_delete(request, *args, **kwargs)
 
@@ -1687,8 +1592,8 @@ class StudentViewSet(TenantScopedModelViewSet):
             )
         if student.is_deleted:
             return Response(
-                {"success": True, "message": "Student is already in archived status", "field_errors": {}},
-                status=status.HTTP_200_OK,
+                {"success": False, "message": "Student record already deleted", "field_errors": {}},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         if self._linked_record_exists(student):
@@ -1725,8 +1630,8 @@ class StudentViewSet(TenantScopedModelViewSet):
             )
         if not student.is_deleted:
             return Response(
-                {"success": True, "message": "Student is already active (not archived)", "field_errors": {}},
-                status=status.HTTP_200_OK,
+                {"success": False, "message": "Student is not deleted", "field_errors": {}},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
@@ -1824,6 +1729,111 @@ class StudentViewSet(TenantScopedModelViewSet):
 
         return Response({"success": True, "message": "Student permanently deleted successfully"}, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=["get"], url_path="subject-assignment-stats")
+    def subject_assignment_stats(self, request):
+        """Return KPI counts for the Multi Subject Assignment page."""
+        user = request.user
+        base_qs = Student.objects.filter(is_deleted=False)
+        if not user.is_superuser:
+            base_qs = base_qs.filter(school_id=user.school_id)
+
+        enrolled = base_qs.count()
+        # Each student gets annotated with how many *optional* subject
+        # assignments they have.  4 = at least one per category (L2, L3,
+        # sport, art) → "Assigned".  1-3 → "Partial".  0 → "Pending".
+        annotated = base_qs.annotate(
+            opt_count=Count(
+                "subject_assignments",
+                filter=Q(subject_assignments__is_optional=True),
+                distinct=True,
+            )
+        )
+        pending = annotated.filter(opt_count=0).count()
+        assigned = annotated.filter(opt_count__gte=4).count()
+        partial = max(0, enrolled - pending - assigned)
+
+        return Response(
+            {
+                "enrolled": enrolled,
+                "assigned": assigned,
+                "partial": partial,
+                "pending": pending,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["get"], url_path="class-section-tree")
+    def class_section_tree(self, request):
+        """Return classes → sections → students tree with subject assignment data."""
+        from apps.core.models import Class, Section
+
+        user = request.user
+        school_id = None if user.is_superuser else user.school_id
+
+        # Fetch all classes for this school
+        cls_qs = Class.objects.all()
+        if school_id:
+            cls_qs = cls_qs.filter(school_id=school_id)
+        cls_qs = cls_qs.prefetch_related("sections")
+
+        # Prefetch all students with their optional subject assignments
+        student_qs = Student.objects.filter(
+            is_deleted=False,
+            current_class__isnull=False,
+        ).select_related("current_class", "current_section").prefetch_related(
+            "subject_assignments__subject"
+        )
+        if school_id:
+            student_qs = student_qs.filter(school_id=school_id)
+
+        # Build a lookup: {(class_id, section_id): [student, ...]}
+        from collections import defaultdict
+        section_map = defaultdict(list)
+        for st in student_qs:
+            key = (st.current_class_id, st.current_section_id)
+            section_map[key].append(st)
+
+        result = []
+        for cls in cls_qs:
+            sections_out = []
+            for sec in cls.sections.all():
+                students_here = section_map.get((cls.id, sec.id), [])
+                students_out = []
+                for st in students_here:
+                    opt_subs = [
+                        a.subject.name
+                        for a in st.subject_assignments.all()
+                        if a.is_optional
+                    ]
+                    count = len(opt_subs)
+                    sstatus = "done" if count >= 4 else ("partial" if count > 0 else "empty")
+                    # Positionally map to L2/L3/SP/AR for display
+                    students_out.append({
+                        "id": st.id,
+                        "name": f"{st.first_name} {st.last_name}".strip(),
+                        "admNo": st.admission_no,
+                        "rollNo": st.roll_no or "",
+                        "lang2": opt_subs[0] if len(opt_subs) > 0 else "",
+                        "lang3": opt_subs[1] if len(opt_subs) > 1 else "",
+                        "sport": opt_subs[2] if len(opt_subs) > 2 else "",
+                        "art":   opt_subs[3] if len(opt_subs) > 3 else "",
+                        "optionalSubjects": opt_subs,
+                        "status": sstatus,
+                    })
+                sections_out.append({
+                    "id": sec.id,
+                    "letter": sec.name,
+                    "teacher": "",
+                    "students": students_out,
+                })
+            result.append({
+                "id": cls.id,
+                "label": cls.name,
+                "sections": sections_out,
+            })
+
+        return Response(result, status=status.HTTP_200_OK)
+
     @action(detail=False, methods=["post"], url_path="bulk-import")
     def bulk_import(self, request):
         upload = request.FILES.get("file")
@@ -1882,18 +1892,18 @@ class StudentViewSet(TenantScopedModelViewSet):
 class StudentDocumentViewSet(TenantScopedModelViewSet):
     serializer_class = StudentDocumentSerializer
     model = StudentDocument
-    parser_classes = (MultiPartParser, FormParser)
     permission_codes = {"*": "student_info.student_list.view"}
 
     def get_queryset(self):
         user = self.request.user
-        qs = StudentDocument.objects.select_related("student__school", "uploaded_by")
+        qs = StudentDocument.objects.select_related("student__school")
         if user.is_superuser:
             return qs
         if user.school_id:
-            return qs.filter(school_id=user.school_id)
+            return qs.filter(student__school_id=user.school_id)
         return qs.none()
 
+<<<<<<< HEAD
     @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def upload_document(self, request):
         """
@@ -2007,7 +2017,6 @@ class StudentDocumentViewSet(TenantScopedModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-
 class StudentTransferHistoryViewSet(TenantScopedModelViewSet):
     serializer_class = StudentTransferHistorySerializer
     model = StudentTransferHistory
@@ -2020,6 +2029,359 @@ class StudentTransferHistoryViewSet(TenantScopedModelViewSet):
             return qs
         if user.school_id:
             return qs.filter(student__school_id=user.school_id)
+        return qs.none()
+
+
+class PromotionBatchViewSet(TenantScopedModelViewSet):
+    serializer_class = PromotionBatchSerializer
+    model = PromotionBatch
+    permission_codes = {"*": "student_info.student_promote.view"}
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = PromotionBatch.objects.select_related("school", "academic_year", "target_year", "created_by", "confirmed_by").prefetch_related(
+            "records",
+            "records__student",
+            "records__from_class",
+            "records__from_section",
+            "records__to_class",
+            "records__to_section",
+            "records__failed_subjects",
+        )
+        if user.is_superuser:
+            return qs
+        if user.school_id:
+            return qs.filter(school_id=user.school_id)
+        return qs.none()
+
+    def _recompute_counts(self, batch: PromotionBatch):
+        total = batch.records.count()
+        promoted = batch.records.filter(status=PromotionRecord.STATUS_PROMOTE).count()
+        retained = batch.records.filter(status=PromotionRecord.STATUS_NOT_PROMOTED).count()
+        batch.total_students = total
+        batch.promoted_count = promoted
+        batch.retained_count = retained
+        batch.save(update_fields=["total_students", "promoted_count", "retained_count"])
+
+    def _get_client_ip(self, request):
+        forwarded = request.META.get("HTTP_X_FORWARDED_FOR")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.META.get("REMOTE_ADDR", "")
+
+    def _initialize_records(self, batch: PromotionBatch):
+        from apps.core.models import Class
+
+        if batch.records.exists():
+            self._recompute_counts(batch)
+            return
+
+        classes = list(Class.objects.filter(school_id=batch.school_id).order_by("numeric_order", "id"))
+        next_map = {}
+        for idx, row in enumerate(classes):
+            next_map[row.id] = classes[idx + 1].id if idx + 1 < len(classes) else None
+
+        students = Student.objects.filter(
+            school_id=batch.school_id,
+            academic_year_id=batch.academic_year_id,
+            is_active=True,
+            is_deleted=False,
+        ).select_related("current_class", "current_section")
+
+        to_create = []
+        for student in students:
+            to_create.append(
+                PromotionRecord(
+                    batch=batch,
+                    student=student,
+                    from_class=student.current_class,
+                    from_section=student.current_section,
+                    to_class_id=next_map.get(student.current_class_id),
+                    status=PromotionRecord.STATUS_PENDING,
+                )
+            )
+
+        PromotionRecord.objects.bulk_create(to_create, ignore_conflicts=True)
+        if to_create:
+            batch.status = PromotionBatch.STATUS_IN_PROGRESS
+            batch.save(update_fields=["status"])
+        self._recompute_counts(batch)
+
+    @action(detail=False, methods=["post"], url_path="create-or-get")
+    def create_or_get(self, request):
+        serializer = PromotionBatchCreateSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        school = request.user.school
+        year = data["academic_year_obj"]
+        target = data["target_year_obj"]
+
+        batch, created = PromotionBatch.objects.get_or_create(
+            school=school,
+            academic_year=year,
+            defaults={
+                "target_year": target,
+                "created_by": request.user,
+                "status": PromotionBatch.STATUS_DRAFT,
+            },
+        )
+
+        if not created and batch.status == PromotionBatch.STATUS_DRAFT and batch.target_year_id != target.id:
+            batch.target_year = target
+            batch.save(update_fields=["target_year"])
+
+        self._initialize_records(batch)
+        return Response(self.get_serializer(batch).data)
+
+    @action(detail=False, methods=["get"], url_path=r"by-year/(?P<year_name>[^/.]+)")
+    def by_year(self, request, year_name=None):
+        from apps.core.models import AcademicYear
+
+        school_id = request.user.school_id
+        year_qs = AcademicYear.objects.filter(name=year_name)
+        if not request.user.is_superuser:
+            year_qs = year_qs.filter(school_id=school_id)
+        year = year_qs.first()
+        if not year:
+            return Response({"error": "Academic year not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        batch_qs = self.get_queryset().filter(academic_year=year)
+        batch = batch_qs.first()
+        if not batch:
+            return Response({"error": "No promotion batch for this year"}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(self.get_serializer(batch).data)
+
+    @action(detail=True, methods=["post"], url_path="update-record")
+    def update_record(self, request, pk=None):
+        from apps.core.models import Section, Subject
+
+        batch = self.get_object()
+        serializer = PromotionRecordUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            record = batch.records.get(id=data["record_id"])
+        except PromotionRecord.DoesNotExist:
+            return Response({"error": "Record not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if "to_class" in data:
+            record.to_class_id = data.get("to_class")
+        if "to_section" in data:
+            section_id = data.get("to_section")
+            if section_id:
+                section = Section.objects.filter(id=section_id).first()
+                if not section:
+                    raise ValidationError({"to_section": "Invalid section."})
+                if record.to_class_id and section.school_class_id != record.to_class_id:
+                    raise ValidationError({"to_section": "Section must belong to selected class."})
+            record.to_section_id = section_id
+
+        record.status = data["status"]
+        if record.status == PromotionRecord.STATUS_NOT_PROMOTED:
+            record.retention_reason = data.get("retention_reason", "")
+            if not record.retention_reason:
+                raise ValidationError({"retention_reason": "Retention reason is required for not promoted status."})
+        else:
+            record.retention_reason = ""
+
+        if "notes" in data:
+            record.notes = data.get("notes", "")
+
+        record.decision_made_at = timezone.now()
+        record.decision_made_by = request.user
+        record.last_modified_by = request.user
+        record.save()
+
+        if "failed_subject_ids" in data:
+            subjects = Subject.objects.filter(id__in=data.get("failed_subject_ids", []), school_id=batch.school_id)
+            record.failed_subjects.set(subjects)
+
+        PromotionAuditLog.objects.create(
+            batch=batch,
+            action="record_updated",
+            performed_by=request.user,
+            record=record,
+            details=f"Record updated for {record.student.admission_no}",
+            ip_address=self._get_client_ip(request),
+        )
+
+        self._recompute_counts(batch)
+        return Response(PromotionRecordSerializer(record).data)
+
+    @action(detail=True, methods=["post"], url_path="bulk-update")
+    def bulk_update(self, request, pk=None):
+        batch = self.get_object()
+        serializer = PromotionBulkUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        records = batch.records.all()
+        scope = data["scope"]
+        if scope == "class":
+            records = records.filter(from_class_id=data["class_id"])
+        elif scope == "section":
+            records = records.filter(from_section_id=data["section_id"])
+        else:
+            records = records.filter(id__in=data["record_ids"])
+
+        now = timezone.now()
+        action_name = data["action"]
+        changed = 0
+        for record in records:
+            if action_name == "promote":
+                if not record.to_class_id:
+                    continue
+                record.status = PromotionRecord.STATUS_PROMOTE
+                record.retention_reason = ""
+            elif action_name == "skip":
+                record.status = PromotionRecord.STATUS_NOT_PROMOTED
+                record.retention_reason = record.retention_reason or PromotionRecord.REASON_OTHER
+            else:
+                record.status = PromotionRecord.STATUS_PENDING
+                record.retention_reason = ""
+                record.notes = ""
+                record.failed_subjects.clear()
+
+            record.decision_made_at = now
+            record.decision_made_by = request.user
+            record.last_modified_by = request.user
+            record.save()
+            changed += 1
+
+        PromotionAuditLog.objects.create(
+            batch=batch,
+            action=f"bulk_{action_name}",
+            performed_by=request.user,
+            details=f"Bulk action {action_name} applied to {changed} record(s)",
+            ip_address=self._get_client_ip(request),
+        )
+
+        self._recompute_counts(batch)
+        return Response({"updated": changed, "batch": self.get_serializer(batch).data})
+
+    @action(detail=True, methods=["post"], url_path="ai-recommendation")
+    def ai_recommendation(self, request, pk=None):
+        batch = self.get_object()
+        serializer = PromotionAiRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            record = batch.records.select_related("student", "from_class").get(id=data["record_id"])
+        except PromotionRecord.DoesNotExist:
+            return Response({"error": "Record not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        reason = data.get("reason") or record.retention_reason or "other"
+        failed_subject_names = list(record.failed_subjects.values_list("name", flat=True))
+        parts = [
+            f"Student {record.student.first_name} {record.student.last_name} requires review.",
+            f"Primary reason: {reason.replace('_', ' ')}.",
+        ]
+        if failed_subject_names:
+            parts.append(f"Focus subjects: {', '.join(failed_subject_names)}.")
+        parts.append("Recommendation: schedule parent meeting, assign remedial plan, and re-evaluate within 6-8 weeks.")
+        recommendation = " ".join(parts)
+
+        record.ai_recommendation = recommendation
+        record.last_modified_by = request.user
+        record.save(update_fields=["ai_recommendation", "last_modified_by", "last_modified_at"])
+
+        PromotionAuditLog.objects.create(
+            batch=batch,
+            action="ai_generated",
+            performed_by=request.user,
+            record=record,
+            details=f"AI recommendation generated for {record.student.admission_no}",
+            ip_address=self._get_client_ip(request),
+        )
+
+        return Response({"recommendation": recommendation})
+
+    @action(detail=True, methods=["post"], url_path="confirm")
+    def confirm(self, request, pk=None):
+        batch = self.get_object()
+        if batch.status == PromotionBatch.STATUS_FINALIZED:
+            return Response({"error": "Finalized batch cannot be modified."}, status=status.HTTP_400_BAD_REQUEST)
+
+        promote_records = batch.records.filter(status=PromotionRecord.STATUS_PROMOTE).select_related(
+            "student",
+            "to_class",
+            "to_section",
+        )
+
+        promoted = 0
+        with transaction.atomic():
+            for record in promote_records:
+                if not record.to_class_id:
+                    continue
+
+                student = record.student
+                StudentPromotionHistory.objects.create(
+                    student=student,
+                    from_class=student.current_class,
+                    from_section=student.current_section,
+                    to_class=record.to_class,
+                    to_section=record.to_section,
+                    from_academic_year=batch.academic_year,
+                    to_academic_year=batch.target_year,
+                    note="Promoted from Promotion Batch",
+                    promoted_by=request.user,
+                )
+                student.current_class = record.to_class
+                student.current_section = record.to_section
+                student.academic_year = batch.target_year
+                student.save(update_fields=["current_class", "current_section", "academic_year", "updated_at"])
+                promoted += 1
+
+            batch.status = PromotionBatch.STATUS_CONFIRMED
+            batch.confirmed_at = timezone.now()
+            batch.confirmed_by = request.user
+            batch.save(update_fields=["status", "confirmed_at", "confirmed_by"])
+
+        PromotionAuditLog.objects.create(
+            batch=batch,
+            action="confirmed",
+            performed_by=request.user,
+            details=f"Batch confirmed. Promoted {promoted} students.",
+            ip_address=self._get_client_ip(request),
+        )
+
+        self._recompute_counts(batch)
+        return Response({"message": f"Promotion batch confirmed. Promoted {promoted} students.", "batch": self.get_serializer(batch).data})
+
+    @action(detail=True, methods=["post"], url_path="finalize")
+    def finalize(self, request, pk=None):
+        batch = self.get_object()
+        if batch.status != PromotionBatch.STATUS_CONFIRMED:
+            return Response({"error": "Only confirmed batches can be finalized."}, status=status.HTTP_400_BAD_REQUEST)
+
+        batch.status = PromotionBatch.STATUS_FINALIZED
+        batch.save(update_fields=["status"])
+        PromotionAuditLog.objects.create(
+            batch=batch,
+            action="finalized",
+            performed_by=request.user,
+            details="Batch finalized",
+            ip_address=self._get_client_ip(request),
+        )
+        return Response(self.get_serializer(batch).data)
+
+
+class PromotionAuditLogViewSet(TenantScopedModelViewSet):
+    serializer_class = PromotionAuditLogSerializer
+    model = PromotionAuditLog
+    permission_codes = {"*": "student_info.student_promote.view"}
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = PromotionAuditLog.objects.select_related("batch", "performed_by", "record", "batch__school")
+        if user.is_superuser:
+            return qs
+        if user.school_id:
+            return qs.filter(batch__school_id=user.school_id)
         return qs.none()
 
 
@@ -2166,6 +2528,7 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
         "*": "student_info.multi_class_student.view",
         "assign_individual": "student_info.multi_class_student.view",
         "assign_bulk": "student_info.multi_class_student.view",
+        "upsert_optional": "student_info.multi_class_student.view",
     }
 
     def get_queryset(self):
@@ -2317,6 +2680,114 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
                 return error
 
         return Response({"success": True, "message": "Subjects assigned successfully"}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="upsert-optional")
+    def upsert_optional(self, request):
+        """
+        Upsert optional subjects for one student by subject name.
+        Replaces all existing optional assignments.
+        Payload: { student_id, subject_names: [...] }
+        """
+        import traceback
+        from apps.core.models import AcademicYear, Subject
+
+        try:
+            student_id = request.data.get("student_id")
+            subject_names = request.data.get("subject_names", [])
+
+            if not student_id:
+                return Response({"success": False, "message": "student_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+            user = request.user
+            student_qs = Student.objects.filter(id=student_id)
+            if not user.is_superuser and getattr(user, "school_id", None):
+                student_qs = student_qs.filter(school_id=user.school_id)
+            student = student_qs.select_related("current_class", "current_section").first()
+            if not student:
+                return Response({"success": False, "message": "Student not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            # Determine active academic year for this school
+            school_id = student.school_id
+            year_qs = AcademicYear.objects.filter(is_current=True, school_id=school_id)
+            year = year_qs.first()
+            if not year:
+                # Fallback: any current academic year
+                year = AcademicYear.objects.filter(is_current=True).first()
+            if not year:
+                # Last fallback: most recent year for this school
+                year = AcademicYear.objects.filter(school_id=school_id).order_by("-start_date").first()
+            if not year:
+                return Response({"success": False, "message": "No active academic year found"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Resolve subjects by name (bulk lookup + get-or-create for missing)
+            names_clean = [n.strip() for n in subject_names if n.strip()]
+            subjects = []
+            if names_clean:
+                existing = {
+                    s.name.lower(): s
+                    for s in Subject.objects.filter(school_id=school_id, name__in=names_clean)
+                }
+                # Case-insensitive fallback for names not matched exactly
+                lower_map = {k.lower(): v for k, v in existing.items()}
+                for name in names_clean:
+                    subj = lower_map.get(name.lower())
+                    if not subj:
+                        try:
+                            subj, _ = Subject.objects.get_or_create(
+                                school_id=school_id,
+                                name=name,
+                                defaults={"subject_type": "optional"},
+                            )
+                        except Exception:
+                            subj = Subject.objects.filter(school_id=school_id, name__iexact=name).first()
+                        if subj:
+                            lower_map[name.lower()] = subj
+                    if subj:
+                        subjects.append(subj)
+
+            with transaction.atomic():
+                # Remove previous optional assignments for this student + academic year
+                StudentSubjectAssignment.objects.filter(
+                    student=student,
+                    academic_year=year,
+                    is_optional=True,
+                ).delete()
+
+                if subjects and student.current_class and student.current_section:
+                    # Exclude subjects already assigned as non-optional (unique constraint guard)
+                    non_optional_ids = set(
+                        StudentSubjectAssignment.objects.filter(
+                            student=student,
+                            academic_year=year,
+                            is_optional=False,
+                        ).values_list("subject_id", flat=True)
+                    )
+                    new_assignments = [
+                        StudentSubjectAssignment(
+                            student=student,
+                            subject=subj,
+                            academic_year=year,
+                            school_class=student.current_class,
+                            section=student.current_section,
+                            is_optional=True,
+                            assigned_by=user,
+                        )
+                        for subj in subjects if subj.id not in non_optional_ids
+                    ]
+                    if new_assignments:
+                        StudentSubjectAssignment.objects.bulk_create(new_assignments, ignore_conflicts=True)
+
+            return Response(
+                {"success": True, "message": "Optional subjects updated", "assigned_count": len(subjects)},
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as exc:
+            logger.error("upsert_optional failed: %s\n%s", exc, traceback.format_exc())
+            return Response(
+                {"success": False, "message": f"Server error: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 
 class StudentRecordAuditViewSet(TenantScopedModelViewSet):

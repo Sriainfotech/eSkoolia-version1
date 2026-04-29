@@ -2,12 +2,16 @@ from django.urls import path
 
 from .views import (
 	StudentAttendanceBulkStoreAPIView,
+	ClassAttendanceSummaryAPIView,
+	StudentAttendanceDailySummaryAPIView,
+	StudentAttendanceExportAPIView,
 	StudentAttendanceDownloadSampleAPIView,
 	StudentAttendanceImportAPIView,
 	StudentAttendanceHolidayAPIView,
 	StudentAttendanceIndexAPIView,
 	StudentAttendanceListCreateAPIView,
 	StudentAttendanceMonthlyReportAPIView,
+	StudentAttendanceReportInsightsAPIView,
 	StudentAttendanceRetrieveUpdateDeleteAPIView,
 	StudentAttendanceStoreAPIView,
 	StudentSearchAPIView,
@@ -38,6 +42,10 @@ urlpatterns = [
 	path("student-attendance/store/", StudentAttendanceStoreAPIView.as_view(), name="student-attendance-store"),
 	path("student-attendance/holiday/", StudentAttendanceHolidayAPIView.as_view(), name="student-attendance-holiday"),
 	path("student-attendance/report/", StudentAttendanceMonthlyReportAPIView.as_view(), name="student-attendance-report"),
+	path("student-attendance/report-insights/", StudentAttendanceReportInsightsAPIView.as_view(), name="student-attendance-report-insights"),
+	path("student-attendance/export/", StudentAttendanceExportAPIView.as_view(), name="student-attendance-export"),
+	path("student-attendance/daily-summary/", StudentAttendanceDailySummaryAPIView.as_view(), name="student-attendance-daily-summary"),
+	path("student-attendance/class-summary/", ClassAttendanceSummaryAPIView.as_view(), name="student-attendance-class-summary"),
 
 	path("subject-attendance/index/", SubjectAttendanceIndexAPIView.as_view(), name="subject-attendance-index"),
 	path("subject-attendance/search/", SubjectAttendanceSearchAPIView.as_view(), name="subject-attendance-search"),
