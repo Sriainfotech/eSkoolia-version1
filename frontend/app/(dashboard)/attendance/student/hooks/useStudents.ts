@@ -45,7 +45,49 @@ interface DjangoStudent {
   student_group?: { name: string } | null;
   attendance_type?: string | null;
   attendance_note?: string | null;
+  arrival_time?: string | null;
+  sign_in_time?: string | null;
+  sign_out_time?: string | null;
+  pickup_time?: string | null;
+  pickup_by?: string | null;
   lunch?: boolean;
+}
+
+interface RuntimeAttendanceMeta {
+  sign_in_time?: string | null;
+  sign_out_time?: string | null;
+  arrival_time?: string | null;
+  pickup_time?: string | null;
+}
+
+function runtimeMetaKey(date: string): string {
+  return `attendance-runtime-meta:${date}`;
+}
+
+function readRuntimeMeta(date: string): Record<number, RuntimeAttendanceMeta> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(runtimeMetaKey(date));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, RuntimeAttendanceMeta>;
+    return Object.entries(parsed).reduce<Record<number, RuntimeAttendanceMeta>>((acc, [k, v]) => {
+      const id = Number(k);
+      if (!Number.isNaN(id) && v) acc[id] = v;
+      return acc;
+    }, {});
+  } catch {
+    return {};
+  }
+}
+
+function writeRuntimeMeta(date: string, studentId: number, meta: RuntimeAttendanceMeta): void {
+  if (typeof window === 'undefined') return;
+  const current = readRuntimeMeta(date);
+  current[studentId] = {
+    ...current[studentId],
+    ...meta,
+  };
+  localStorage.setItem(runtimeMetaKey(date), JSON.stringify(current));
 }
 
 function mapDjangoStudentToStudent(raw: DjangoStudent): Student {
@@ -64,13 +106,13 @@ function mapDjangoStudentToStudent(raw: DjangoStudent): Student {
     rte_pct: null,
     status: attendanceTypeToStatus(raw.attendance_type ?? null),
     absent_reason: raw.attendance_note ?? null,
-    arrival_time: null,
+    arrival_time: raw.arrival_time ?? null,
     is_late: raw.attendance_type === 'L',
     late_minutes: 0,
-    sign_in_time: (raw.attendance_type === 'P' || raw.attendance_type === 'L') ? '—' : null,
-    sign_out_time: null,
-    pickup_time: null,
-    pickup_by: null,
+    sign_in_time: raw.sign_in_time ?? null,
+    sign_out_time: raw.sign_out_time ?? null,
+    pickup_time: raw.pickup_time ?? null,
+    pickup_by: raw.pickup_by ?? null,
     lunch: raw.lunch ?? false,
     notes_count: raw.attendance_note ? 1 : 0,
     notes: raw.attendance_note
@@ -111,7 +153,20 @@ export function useStudents() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: { students?: DjangoStudent[] } = await res.json();
       const list: DjangoStudent[] = data.students ?? [];
-      setStudents((p) => ({ ...p, [key]: list.map(mapDjangoStudentToStudent) }));
+      const metaMap = readRuntimeMeta(date);
+      const mapped = list.map((raw) => {
+        const student = mapDjangoStudentToStudent(raw);
+        const meta = metaMap[student.id];
+        if (!meta) return student;
+        return {
+          ...student,
+          sign_in_time: meta.sign_in_time ?? student.sign_in_time,
+          sign_out_time: meta.sign_out_time ?? student.sign_out_time,
+          arrival_time: meta.arrival_time ?? student.arrival_time,
+          pickup_time: meta.pickup_time ?? student.pickup_time,
+        };
+      });
+      setStudents((p) => ({ ...p, [key]: mapped }));
     };
 
     try {
@@ -124,12 +179,20 @@ export function useStudents() {
     }
   }, [router]);
 
-  const updateStudent = useCallback((classId: number, sectionId: number, updated: Student) => {
+  const updateStudent = useCallback((classId: number, sectionId: number, updated: Student, date?: string) => {
     const key = `${classId}-${sectionId}`;
     setStudents((p) => ({
       ...p,
       [key]: (p[key] ?? []).map((s) => s.id === updated.id ? updated : s),
     }));
+    if (date) {
+      writeRuntimeMeta(date, updated.id, {
+        sign_in_time: updated.sign_in_time,
+        sign_out_time: updated.sign_out_time,
+        arrival_time: updated.arrival_time,
+        pickup_time: updated.pickup_time,
+      });
+    }
   }, []);
 
   // Clear all cached student data (called on date change so stale data is never shown)

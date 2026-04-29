@@ -1,5 +1,5 @@
 ﻿'use client';
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Student, StudentNote, LevelFilter, AttendanceStatus } from './types';
 import { formatDate } from './utils/attendanceHelpers';
@@ -22,9 +22,23 @@ import ViewNotesModal from './components/ViewNotesModal';
 
 import UnlockEditDialog from './components/UnlockEditDialog';
 
+const LATE_RATIO_THRESHOLD = 0.7;
+const LATE_MINUTES_BUFFER = 20;
+
+function toMinutes(time: string): number | null {
+  if (!/^\d{2}:\d{2}$/.test(time)) return null;
+  const [h, m] = time.split(':').map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+function currentTimeHHMM(): string {
+  return new Date().toTimeString().slice(0, 5);
+}
+
 export default function StudentAttendancePage() {
   const router = useRouter();
-  const today = formatDate(new Date());
+  const [currentDay, setCurrentDay] = useState<string>(() => formatDate(new Date()));
 
   // -- Date & filters -------------------------------------------
   const [selectedDate, setSelectedDate] = useState<string>(() => formatDate(new Date()));
@@ -36,10 +50,10 @@ export default function StudentAttendancePage() {
 
   // -- Date mode ------------------------------------------------
   const dateMode: 'today' | 'past' | 'future' = useMemo(() => {
-    if (selectedDate === today) return 'today';
-    if (selectedDate < today) return 'past';
+    if (selectedDate === currentDay) return 'today';
+    if (selectedDate < currentDay) return 'past';
     return 'future';
-  }, [selectedDate, today]);
+  }, [selectedDate, currentDay]);
 
   // -- Past-date unlock state -----------------------------------
   const [isEditUnlocked, setIsEditUnlocked] = useState(false);
@@ -60,14 +74,24 @@ export default function StudentAttendancePage() {
   const [activeSections, setActiveSections] = useState<Record<number, number>>({});
   const [selectedRows, setSelectedRows] = useState<Record<string, Set<number>>>({});
   const [toast, setToast] = useState<{ message: string; tone: 'success' | 'error' } | null>(null);
-  const [absentDialogState, setAbsentDialogState] = useState<{ classId: number; sectionId: number; student: Student } | null>(null);
-  const [lateDialogState, setLateDialogState] = useState<{ classId: number; sectionId: number; student: Student } | null>(null);
+  const [absentDialogState, setAbsentDialogState] = useState<{ classId: number; sectionId: number; student: Student; mode: 'mark' | 'edit' } | null>(null);
+  const [lateDialogState, setLateDialogState] = useState<{ classId: number; sectionId: number; student: Student; signInTime: string; minutesLate: number } | null>(null);
   const [notesDialogState, setNotesDialogState] = useState<{ classId: number; sectionId: number; studentId: number; mode: 'add' | 'view' } | null>(null);
 
   // -- Data hooks -----------------------------------------------
   const { classes, loading: classesLoading } = useClasses(selectedDate);
   const { students, loading: studentsLoading, loadSection, updateStudent, clearStudents } = useStudents();
   const { kpis: backendKpis, exportAttendance, patchMark, saveBulk, downloadSampleTemplate } = useAttendance(selectedDate);
+  const selectedDateRef = useRef(selectedDate);
+  const studentsRef = useRef(students);
+
+  useEffect(() => {
+    selectedDateRef.current = selectedDate;
+  }, [selectedDate]);
+
+  useEffect(() => {
+    studentsRef.current = students;
+  }, [students]);
 
   const pushToast = useCallback((message: string, tone: 'success' | 'error') => {
     setToast({ message, tone });
@@ -150,6 +174,7 @@ export default function StudentAttendancePage() {
               sign_in_time: s.sign_in_time ?? undefined,
               sign_out_time: s.sign_out_time ?? undefined,
               pickup_time: s.pickup_time ?? undefined,
+              pickup_by: s.pickup_by ?? undefined,
               lunch: s.lunch,
             }));
             saveBulk(marks, () => {}, () => {});
@@ -180,17 +205,76 @@ export default function StudentAttendancePage() {
     clearStudents();            // clear cached data so new date's data is fetched fresh
   }, [clearStudents]);
 
-  const handleExportCsv = useCallback(() => {
-    const allStudents = Object.values(students).flat();
+  const handleMidnightReset = useCallback(async (previousDate: string, nextDate: string) => {
+    setCurrentDay(nextDate);
 
-    if (allStudents.length === 0) {
-      pushToast('No loaded student data to export. Open a class section first.', 'error');
+    if (selectedDateRef.current !== previousDate) {
       return;
     }
 
-    const backendExportSupported = exportAttendance('all');
-    if (backendExportSupported) {
-      pushToast('Export started.', 'success');
+    const pendingBySection: Record<string, { student_id: number; date: string; class_id: number; section_id: number; status?: AttendanceStatus; sign_out_time: string }[]> = {};
+
+    Object.entries(studentsRef.current).forEach(([key, sectionStudents]) => {
+      const [classIdRaw, sectionIdRaw] = key.split('-');
+      const classId = Number(classIdRaw);
+      const sectionId = Number(sectionIdRaw);
+      if (Number.isNaN(classId) || Number.isNaN(sectionId)) return;
+
+      const pendingMarks = sectionStudents
+        .filter((student) => student.sign_in_time && !student.sign_out_time)
+        .map((student) => ({
+          student_id: student.id,
+          date: previousDate,
+          class_id: classId,
+          section_id: sectionId,
+          status: student.status !== 'unmarked' ? student.status : undefined,
+          sign_out_time: '23:59',
+        }));
+
+      if (pendingMarks.length > 0) {
+        pendingBySection[key] = pendingMarks;
+      }
+    });
+
+    await Promise.all(
+      Object.values(pendingBySection).map(async (marks) => {
+        await saveBulk(marks, () => {}, () => {});
+      }),
+    );
+
+    setSelectedDate(nextDate);
+    setSelectedRows({});
+    setIsEditUnlocked(false);
+    clearStudents();
+    pushToast('Attendance rolled over to the new day.', 'success');
+  }, [clearStudents, pushToast, saveBulk]);
+
+  useEffect(() => {
+    const now = new Date();
+    const nextMidnight = new Date(now);
+    nextMidnight.setHours(24, 0, 1, 0);
+    const timeout = window.setTimeout(() => {
+      const nextDate = formatDate(new Date());
+      void handleMidnightReset(currentDay, nextDate);
+    }, Math.max(nextMidnight.getTime() - now.getTime(), 1000));
+
+    return () => window.clearTimeout(timeout);
+  }, [currentDay, handleMidnightReset]);
+
+  const handleExportCsv = useCallback(async () => {
+    const allStudents = Object.values(students).flat();
+
+    const exported = await exportAttendance(
+      'all',
+      () => pushToast('Attendance export downloaded.', 'success'),
+      () => {
+        // Fallback to local export only if backend export fails.
+      },
+    );
+    if (exported) return;
+
+    if (allStudents.length === 0) {
+      pushToast('No loaded student data to export. Open a class section first.', 'error');
       return;
     }
 
@@ -227,13 +311,19 @@ export default function StudentAttendancePage() {
       student: Student,
       newStatus: AttendanceStatus,
       absentReason?: string,
+      options?: { signInTime?: string | null; signOutTime?: string | null; successMessage?: string },
     ) => {
+      const autoSignInTime = newStatus === 'present' && !student.sign_in_time
+        ? currentTimeHHMM()
+        : student.sign_in_time;
       const nextStudent = {
         ...student,
         status: newStatus,
         absent_reason: absentReason ?? null,
+        sign_in_time: options?.signInTime ?? autoSignInTime,
+        sign_out_time: options?.signOutTime ?? student.sign_out_time,
       };
-      updateStudent(classId, sectionId, nextStudent);
+      updateStudent(classId, sectionId, nextStudent, selectedDate);
       patchMark(
         student.id,
         {
@@ -244,57 +334,113 @@ export default function StudentAttendancePage() {
           status: newStatus,
           absent_reason: absentReason,
         },
-        () => pushToast('Attendance updated.', 'success'),
-        () => {
-          updateStudent(classId, sectionId, student);
-          pushToast('Failed to update attendance.', 'error');
+        () => pushToast(options?.successMessage ?? 'Attendance updated.', 'success'),
+        (msg) => {
+          updateStudent(classId, sectionId, student, selectedDate);
+          pushToast(msg || 'Failed to update attendance.', 'error');
         },
       );
     },
     [selectedDate, patchMark, updateStudent, pushToast],
   );
 
+  const getLateThresholdInfo = useCallback((classId: number, sectionId: number, student: Student, signInTime: string) => {
+    const key = `${classId}-${sectionId}`;
+    const sectionStudents = students[key] ?? [];
+    const eligible = sectionStudents.filter((s) => s.status !== 'absent');
+    if (eligible.length === 0) return { shouldPrompt: false, minutesLate: 0 };
+
+    const candidateMinutes = toMinutes(signInTime);
+    if (candidateMinutes === null) return { shouldPrompt: false, minutesLate: 0 };
+
+    let signedInCount = 0;
+    const signedTimes: number[] = [];
+
+    eligible.forEach((s) => {
+      const isCurrent = s.id === student.id;
+      const time = isCurrent ? signInTime : s.sign_in_time;
+      const mins = time ? toMinutes(time) : null;
+      if (mins !== null) {
+        signedInCount += 1;
+        signedTimes.push(mins);
+      }
+    });
+
+    if (signedInCount === 0) return { shouldPrompt: false, minutesLate: 0 };
+    const signedRatio = signedInCount / eligible.length;
+    if (signedRatio < LATE_RATIO_THRESHOLD) return { shouldPrompt: false, minutesLate: 0 };
+
+    const earliest = Math.min(...signedTimes);
+    const minutesLate = Math.max(0, candidateMinutes - earliest);
+    if (minutesLate < LATE_MINUTES_BUFFER) return { shouldPrompt: false, minutesLate: 0 };
+
+    return { shouldPrompt: true, minutesLate };
+  }, [students]);
+
+  const handleEditStatusPrompt = useCallback((classId: number, sectionId: number, student: Student) => {
+    if (isReadOnly) return;
+    if (student.status === 'absent') {
+      setAbsentDialogState({ classId, sectionId, student, mode: 'edit' });
+      return;
+    }
+    if (student.status === 'late') {
+      setLateDialogState({
+        classId,
+        sectionId,
+        student,
+        signInTime: student.sign_in_time ?? currentTimeHHMM(),
+        minutesLate: student.late_minutes || 1,
+      });
+    }
+  }, [isReadOnly]);
+
   const handleToggleAbsent = useCallback((classId: number, sectionId: number, student: Student) => {
     if (isReadOnly) return;
+    if (student.sign_in_time && !student.sign_out_time) {
+      pushToast('Sign out the student before marking absent.', 'error');
+      return;
+    }
     if (student.status === 'absent') {
       commitStudentStatus(classId, sectionId, student, 'present');
       return;
     }
-    setAbsentDialogState({ classId, sectionId, student });
-  }, [isReadOnly, commitStudentStatus]);
+    setAbsentDialogState({ classId, sectionId, student, mode: 'mark' });
+  }, [isReadOnly, commitStudentStatus, pushToast]);
 
   const handleToggleLunch = useCallback((classId: number, sectionId: number, student: Student) => {
     const newLunch = !student.lunch;
-    updateStudent(classId, sectionId, { ...student, lunch: newLunch });
+    updateStudent(classId, sectionId, { ...student, lunch: newLunch }, selectedDate);
     patchMark(
       student.id,
       { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, lunch: newLunch },
       () => pushToast('Lunch status updated.', 'success'),
-      () => {
-        updateStudent(classId, sectionId, student);
-        pushToast('Failed to update lunch status.', 'error');
+      (msg) => {
+        updateStudent(classId, sectionId, student, selectedDate);
+        pushToast(msg || 'Failed to update lunch status.', 'error');
       },
     );
   }, [selectedDate, patchMark, updateStudent, pushToast]);
 
   const handleSignIn = useCallback((classId: number, sectionId: number, student: Student) => {
-    const now = new Date().toTimeString().slice(0, 5);
-    // Optimistic update ΓÇö sign_in_time is frontend-only (not a Django model field)
-    updateStudent(classId, sectionId, { ...student, sign_in_time: now, status: 'present' });
-    // Only save attendance status to backend (no sign_in_time ΓÇö field doesn't exist on model)
-    patchMark(
-      student.id,
-      { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, status: 'present' },
-      () => pushToast('Sign-in saved.', 'success'),
-      () => pushToast('Failed to save sign-in.', 'error'),
-    );
-  }, [selectedDate, patchMark, updateStudent, pushToast]);
+    if (isReadOnly || student.status === 'absent' || student.sign_in_time) return;
+    const now = currentTimeHHMM();
+    const lateInfo = getLateThresholdInfo(classId, sectionId, student, now);
+    if (lateInfo.shouldPrompt) {
+      setLateDialogState({ classId, sectionId, student, signInTime: now, minutesLate: lateInfo.minutesLate });
+      return;
+    }
+    commitStudentStatus(classId, sectionId, student, 'present', undefined, {
+      signInTime: now,
+      successMessage: 'Sign-in saved.',
+    });
+  }, [isReadOnly, getLateThresholdInfo, commitStudentStatus]);
 
   const handleSignOut = useCallback((classId: number, sectionId: number, student: Student) => {
-    const now = new Date().toTimeString().slice(0, 5);
-    // Optimistic update ΓÇö sign_out_time is frontend-only (not a Django model field)
-    updateStudent(classId, sectionId, { ...student, sign_out_time: now });
-  }, [updateStudent]);
+    if (isReadOnly || !student.sign_in_time || student.sign_out_time) return;
+    const now = currentTimeHHMM();
+    updateStudent(classId, sectionId, { ...student, sign_out_time: now }, selectedDate);
+    pushToast('Sign-out saved.', 'success');
+  }, [isReadOnly, updateStudent, selectedDate, pushToast]);
 
   const handleBulkMark = useCallback((classId: number, sectionId: number, status: AttendanceStatus) => {
     const key = `${classId}-${sectionId}`;
@@ -310,7 +456,7 @@ export default function StudentAttendancePage() {
     targets.forEach((s) => {
       const update: Student = { ...s, status };
       if (status === 'present' && !s.sign_in_time) update.sign_in_time = now;
-      updateStudent(classId, sectionId, update);
+      updateStudent(classId, sectionId, update, selectedDate);
     });
     const marks = targets.map((s) => ({ student_id: s.id, date: selectedDate, class_id: classId, section_id: sectionId, status }));
     saveBulk(
@@ -324,16 +470,18 @@ export default function StudentAttendancePage() {
   const handleBulkSignIn = useCallback((classId: number, sectionId: number) => {
     const key = `${classId}-${sectionId}`;
     const ids = selectedRows[key] ?? new Set<number>();
-    const now = new Date().toTimeString().slice(0, 5);
-    const marks = (students[key] ?? [])
-      .filter((s) => ids.has(s.id))
-      .map((s) => ({ student_id: s.id, date: selectedDate, class_id: classId, section_id: sectionId, sign_in_time: now }));
+    const now = currentTimeHHMM();
+    const targets = (students[key] ?? []).filter((s) => ids.has(s.id) && s.status !== 'absent');
+    targets.forEach((s) => {
+      updateStudent(classId, sectionId, { ...s, status: 'present', sign_in_time: s.sign_in_time ?? now }, selectedDate);
+    });
+    const marks = targets.map((s) => ({ student_id: s.id, date: selectedDate, class_id: classId, section_id: sectionId, status: 'present' as const }));
     saveBulk(
       marks,
       (saved) => pushToast(`${saved} sign-in record(s) saved.`, 'success'),
       () => pushToast('Failed to save bulk sign-in.', 'error'),
     );
-  }, [selectedRows, students, selectedDate, saveBulk, pushToast]);
+  }, [selectedRows, students, selectedDate, saveBulk, pushToast, updateStudent]);
 
   const handleSave = useCallback((classId: number, sectionId: number) => {
     const key = `${classId}-${sectionId}`;
@@ -348,6 +496,7 @@ export default function StudentAttendancePage() {
       sign_in_time: s.sign_in_time ?? undefined,
       sign_out_time: s.sign_out_time ?? undefined,
       pickup_time: s.pickup_time ?? undefined,
+      pickup_by: s.pickup_by ?? undefined,
       lunch: s.lunch,
     }));
     saveBulk(
@@ -379,12 +528,12 @@ export default function StudentAttendancePage() {
     if (!student) return;
     const newNote: StudentNote = { id: `note-${Date.now()}`, text: noteText, created_at: new Date().toISOString() };
     const updatedNotes = [...student.notes, newNote];
-    updateStudent(classId, sectionId, { ...student, notes: updatedNotes, notes_count: updatedNotes.length });
+    updateStudent(classId, sectionId, { ...student, notes: updatedNotes, notes_count: updatedNotes.length }, selectedDate);
     patchMark(
       student.id,
       { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: noteText },
       () => pushToast('Note saved.', 'success'),
-      () => pushToast('Failed to save note.', 'error'),
+      (msg) => pushToast(msg || 'Failed to save note.', 'error'),
     );
     setNotesDialogState(null);
   }, [students, selectedDate, patchMark, updateStudent, pushToast]);
@@ -394,16 +543,14 @@ export default function StudentAttendancePage() {
     const student = students[key]?.find((s) => s.id === studentId);
     if (!student) return;
     const updatedNotes = student.notes.map((n) => n.id === noteId ? { ...n, text: newText } : n);
-    updateStudent(classId, sectionId, { ...student, notes: updatedNotes });
+    updateStudent(classId, sectionId, { ...student, notes: updatedNotes }, selectedDate);
     const latest = updatedNotes[updatedNotes.length - 1];
-    if (latest) {
-      patchMark(
-        student.id,
-        { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: latest.text },
-        () => pushToast('Note updated.', 'success'),
-        () => pushToast('Failed to update note.', 'error'),
-      );
-    }
+    patchMark(
+      student.id,
+      { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: latest?.text ?? '' },
+      () => pushToast('Note updated.', 'success'),
+      (msg) => pushToast(msg || 'Failed to update note.', 'error'),
+    );
   }, [students, selectedDate, patchMark, updateStudent, pushToast]);
 
   const handleDeleteNote = useCallback((classId: number, sectionId: number, studentId: number, noteId: string) => {
@@ -411,15 +558,14 @@ export default function StudentAttendancePage() {
     const student = students[key]?.find((s) => s.id === studentId);
     if (!student) return;
     const updatedNotes = student.notes.filter((n) => n.id !== noteId);
-    updateStudent(classId, sectionId, { ...student, notes: updatedNotes, notes_count: updatedNotes.length });
-    if (updatedNotes.length === 0) {
-      patchMark(
-        student.id,
-        { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: '' },
-        () => pushToast('Note deleted.', 'success'),
-        () => pushToast('Failed to delete note.', 'error'),
-      );
-    }
+    updateStudent(classId, sectionId, { ...student, notes: updatedNotes, notes_count: updatedNotes.length }, selectedDate);
+    const latest = updatedNotes[updatedNotes.length - 1];
+    patchMark(
+      student.id,
+      { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: latest?.text ?? '' },
+      () => pushToast('Note deleted.', 'success'),
+      (msg) => pushToast(msg || 'Failed to delete note.', 'error'),
+    );
   }, [students, selectedDate, patchMark, updateStudent, pushToast]);
 
   const handleReset = useCallback((classId: number, sectionId: number) => {
@@ -438,22 +584,27 @@ export default function StudentAttendancePage() {
   const handleMarkAllPresentForClass = useCallback((classId: number) => {
     const cls = classes.find((c) => c.id === classId);
     if (!cls) return;
-    const now = new Date().toTimeString().slice(0, 5);
+    const now = currentTimeHHMM();
+    let touched = 0;
     cls.sections.forEach((sec) => {
       const key = `${classId}-${sec.id}`;
       const sectionStudents = students[key];
       if (!sectionStudents || sectionStudents.length === 0) return;
-      sectionStudents.forEach((s) => {
+      const targets = sectionStudents.filter((s) => s.status !== 'absent');
+      targets.forEach((s) => {
         const update: Student = { ...s, status: 'present', sign_in_time: s.sign_in_time ?? now };
-        updateStudent(classId, sec.id, update);
+        updateStudent(classId, sec.id, update, selectedDate);
+        touched += 1;
       });
-      const marks = sectionStudents.map((s) => ({
+      const marks = targets.map((s) => ({
         student_id: s.id, date: selectedDate, class_id: classId, section_id: sec.id,
-        status: 'present' as const, sign_in_time: s.sign_in_time ?? now,
+        status: 'present' as const,
       }));
       saveBulk(marks, () => {}, () => {});
     });
-    pushToast(`All students in ${cls.display_label} marked present.`, 'success');
+    if (touched > 0) {
+      pushToast(`Marked ${touched} student(s) present in ${cls.display_label}.`, 'success');
+    }
   }, [classes, students, selectedDate, updateStudent, saveBulk, pushToast]);
 
   return (
@@ -482,7 +633,7 @@ export default function StudentAttendancePage() {
         <AttendanceAlert count={kpis.rte_at_risk} />
       )}
 
-      <AttendanceKPIs data={kpis} selectedDate={selectedDate} today={today} />
+      <AttendanceKPIs data={kpis} selectedDate={selectedDate} today={currentDay} />
 
       <AttendanceFilterBar
         academicYear={academicYear}
@@ -525,6 +676,7 @@ export default function StudentAttendancePage() {
           selectedRows={selectedRows}
           onSelectionChange={handleSelectionChange}
           onToggleAbsent={handleToggleAbsent}
+          onEditStatusPrompt={handleEditStatusPrompt}
           onToggleLunch={handleToggleLunch}
           onSignIn={handleSignIn}
           onSignOut={handleSignOut}
@@ -539,6 +691,11 @@ export default function StudentAttendancePage() {
           onRequestUnlock={() => setShowUnlockDialog(true)}
           isSundayLocked={isSundaySelected && !isEditUnlocked && dateMode === 'today'}
           onMarkAllPresentForClass={handleMarkAllPresentForClass}
+          isEditUnlocked={isEditUnlocked}
+          onLogoutPastEdit={() => {
+            setIsEditUnlocked(false);
+            pushToast('Past-date edit mode closed.', 'success');
+          }}
         />
       )}
 
@@ -562,12 +719,14 @@ export default function StudentAttendancePage() {
             setAbsentDialogState(null);
           }}
           onSkip={() => {
-            commitStudentStatus(
-              absentDialogState.classId,
-              absentDialogState.sectionId,
-              absentDialogState.student,
-              'absent',
-            );
+            if (absentDialogState.mode === 'mark') {
+              commitStudentStatus(
+                absentDialogState.classId,
+                absentDialogState.sectionId,
+                absentDialogState.student,
+                'absent',
+              );
+            }
             setAbsentDialogState(null);
           }}
         />
@@ -600,7 +759,7 @@ export default function StudentAttendancePage() {
       {lateDialogState ? (
         <LateCommerDialog
           student={lateDialogState.student}
-          minutesLate={lateDialogState.student.late_minutes || 1}
+          minutesLate={lateDialogState.minutesLate}
           initialMessage={lateDialogState.student.absent_reason ?? ''}
           onMarkLate={(message) => {
             commitStudentStatus(
@@ -609,6 +768,7 @@ export default function StudentAttendancePage() {
               lateDialogState.student,
               'late',
               message || undefined,
+              { signInTime: lateDialogState.signInTime },
             );
             setLateDialogState(null);
           }}
@@ -619,6 +779,7 @@ export default function StudentAttendancePage() {
               lateDialogState.student,
               'present',
               reason ? `School approved: ${reason}` : undefined,
+              { signInTime: lateDialogState.signInTime },
             );
             setLateDialogState(null);
           }}
@@ -627,7 +788,9 @@ export default function StudentAttendancePage() {
               lateDialogState.classId,
               lateDialogState.sectionId,
               lateDialogState.student,
-              'late',
+              'present',
+              undefined,
+              { signInTime: lateDialogState.signInTime },
             );
             setLateDialogState(null);
           }}

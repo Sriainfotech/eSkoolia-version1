@@ -23,6 +23,25 @@ interface StudentTotal {
   late?: number;
 }
 
+interface ReasonInsight {
+  reason: string;
+  count: number;
+}
+
+interface WeeklyInsight {
+  week: number;
+  present: number;
+  absent: number;
+  late: number;
+  present_pct: number;
+}
+
+interface ReportInsights {
+  weekly: WeeklyInsight[];
+  top_absent_reasons: ReasonInsight[];
+  top_late_reasons: ReasonInsight[];
+}
+
 interface WeekCard {
   week: number;
   label: string;
@@ -154,6 +173,7 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
   // ── Data state ─────────────────────────────────────────────────
   const [dailyRecords, setDailyRecords] = useState<DailyRecord[]>([]);
   const [reportRows, setReportRows] = useState<StudentTotal[]>([]);
+  const [insights, setInsights] = useState<ReportInsights>({ weekly: [], top_absent_reasons: [], top_late_reasons: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
@@ -195,6 +215,7 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
 
       // Student-level report only when class+section selected
       let rows: StudentTotal[] = [];
+      let nextInsights: ReportInsights = { weekly: [], top_absent_reasons: [], top_late_reasons: [] };
       if (filters.classId && filters.sectionId) {
         const reportRes = await fetch(
           `${API_BASE_URL}/api/v1/attendance/student-attendance/report/?${base}`,
@@ -206,8 +227,22 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
         }
       }
 
+      const insightsRes = await fetch(
+        `${API_BASE_URL}/api/v1/attendance/student-attendance/report-insights/?${base}`,
+        { headers },
+      );
+      if (insightsRes.ok) {
+        const insightData = await insightsRes.json();
+        nextInsights = {
+          weekly: Array.isArray(insightData?.weekly) ? insightData.weekly : [],
+          top_absent_reasons: Array.isArray(insightData?.top_absent_reasons) ? insightData.top_absent_reasons : [],
+          top_late_reasons: Array.isArray(insightData?.top_late_reasons) ? insightData.top_late_reasons : [],
+        };
+      }
+
       setDailyRecords(records);
       setReportRows(rows);
+      setInsights(nextInsights);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load report');
     } finally {
@@ -241,6 +276,23 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
       const classParam = active.classId ? `&class_id=${active.classId}` : '';
       const sectionParam = active.classId && active.sectionId ? `&section_id=${active.sectionId}` : '';
       const base = `month=${active.month}&year=${active.year}${classParam}${sectionParam}`;
+
+      // Prefer backend-native export (CSV) with current filters.
+      const exportRes = await fetch(
+        `${API_BASE_URL}/api/v1/attendance/student-attendance/export/?${base}&format=csv`,
+        { headers },
+      );
+      if (exportRes.ok) {
+        const blob = await exportRes.blob();
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        link.download = `Attendance_Report_${active.month}_${active.year}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+        return;
+      }
 
       const monthName = MONTHS.find((m) => m.value === active.month)?.label ?? String(active.month);
       const selectedClass = classes.find((c) => c.id === active.classId);
@@ -292,6 +344,14 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
 
   const weekCards: WeekCard[] = useMemo(() => {
     return weekRanges.map(({ week, label, dateRange, start, end }) => {
+      const apiWeek = insights.weekly.find((item) => item.week === week);
+      if (apiWeek) {
+        const present = (apiWeek.present ?? 0) + (apiWeek.late ?? 0);
+        const absent = apiWeek.absent ?? 0;
+        const total = present + absent;
+        return { week, label, dateRange, present, absent, total, presentPct: total > 0 ? Math.round((present / total) * 100) : 0 };
+      }
+
       const weekRecs = dailyRecords.filter((r) => {
         const day = new Date(`${r.attendance_date}T00:00:00`).getDate();
         return day >= start && day <= end;
@@ -301,7 +361,7 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
       const total = weekRecs.length;
       return { week, label, dateRange, present, absent, total, presentPct: total > 0 ? Math.round((present / total) * 100) : 0 };
     });
-  }, [dailyRecords, weekRanges]);
+  }, [dailyRecords, insights.weekly, weekRanges]);
 
   const weeksWithData = weekCards.filter((w) => w.total > 0);
   const overallPresent = dailyRecords.filter((r) => r.attendance_type === 'P' || r.attendance_type === 'L').length;
@@ -494,6 +554,62 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
                     </svg>
                     <p className="text-[9px] text-[#C8C8D4]">No data yet</p>
                   </div>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
+              <div className="rounded-2xl border border-[#E6E6EC] bg-white p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-[12px] font-semibold text-[#0B0B14]">Top Absent Reasons</p>
+                    <p className="text-[10px] text-[#9CA0AE]">Ranked from attendance notes for the selected period.</p>
+                  </div>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#FFF0F3] text-[#C2264E]">
+                    {insights.top_absent_reasons.length}
+                  </span>
+                </div>
+                {insights.top_absent_reasons.length > 0 ? (
+                  <div className="space-y-2">
+                    {insights.top_absent_reasons.slice(0, 5).map((item, index) => (
+                      <div key={`${item.reason}-${index}`} className="flex items-start justify-between gap-3 rounded-xl bg-[#FFF7F9] px-3 py-2">
+                        <div>
+                          <p className="text-[11px] font-medium text-[#3A3A4A]">{item.reason}</p>
+                          <p className="text-[9px] text-[#9CA0AE]">Absent note pattern #{index + 1}</p>
+                        </div>
+                        <span className="text-[11px] font-bold text-[#C2264E]">{item.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-[#9CA0AE]">No absent-note insights for the selected filters.</p>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-[#E6E6EC] bg-white p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <p className="text-[12px] font-semibold text-[#0B0B14]">Top Late Reasons</p>
+                    <p className="text-[10px] text-[#9CA0AE]">Frequent late-arrival reasons captured during attendance.</p>
+                  </div>
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#FFF8ED] text-[#B4721B]">
+                    {insights.top_late_reasons.length}
+                  </span>
+                </div>
+                {insights.top_late_reasons.length > 0 ? (
+                  <div className="space-y-2">
+                    {insights.top_late_reasons.slice(0, 5).map((item, index) => (
+                      <div key={`${item.reason}-${index}`} className="flex items-start justify-between gap-3 rounded-xl bg-[#FFF9F1] px-3 py-2">
+                        <div>
+                          <p className="text-[11px] font-medium text-[#3A3A4A]">{item.reason}</p>
+                          <p className="text-[9px] text-[#9CA0AE]">Late note pattern #{index + 1}</p>
+                        </div>
+                        <span className="text-[11px] font-bold text-[#B4721B]">{item.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-[#9CA0AE]">No late-note insights for the selected filters.</p>
                 )}
               </div>
             </div>

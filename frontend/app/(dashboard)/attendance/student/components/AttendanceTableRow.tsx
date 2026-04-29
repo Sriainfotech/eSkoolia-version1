@@ -37,6 +37,7 @@ export default function AttendanceTableRow({
 }: Props) {
   const isAbsent = student.status === 'absent';
   const hasActiveSignIn = Boolean(student.sign_in_time && !student.sign_out_time && !isAbsent);
+  const absentToggleLocked = Boolean(student.sign_in_time && !student.sign_out_time);
   const canSignIn = !readOnly && !isAbsent && !student.sign_in_time;
   const canToggleLunch = !readOnly && hasActiveSignIn && (student.status === 'present' || student.status === 'late');
   const statusDotClass = showLiveStatus && hasActiveSignIn ? 'bg-[#0A8C5A]' : 'bg-[#9CA0AE]';
@@ -116,7 +117,7 @@ export default function AttendanceTableRow({
       <td className="px-3 py-2.5 whitespace-nowrap w-[80px] text-center">
         <button
           onClick={() => onToggleAbsent(student)}
-          disabled={readOnly}
+          disabled={readOnly || absentToggleLocked}
           className="relative w-8 h-[18px] rounded-full border-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed enabled:cursor-pointer"
           style={{ backgroundColor: isAbsent ? '#C2264E' : '#E6E6EC' }}
           aria-label={isAbsent ? 'Mark present' : 'Mark absent'}
@@ -258,16 +259,18 @@ export default function AttendanceTableRow({
             </button>
           )}
           {/* View notes */}
-          <button
-            onClick={() => onViewNotes(student)}
-            title="View notes"
-            className="w-6 h-6 rounded-md border-none cursor-pointer bg-[#E6E6EC] text-[#6B6B7B] flex items-center justify-center hover:bg-[#EEEBFF] hover:text-[#4729F4] transition-colors"
-          >
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-              <circle cx={12} cy={12} r={3} />
-            </svg>
-          </button>
+          {student.notes_count > 0 && (
+            <button
+              onClick={() => onViewNotes(student)}
+              title="View notes"
+              className="w-6 h-6 rounded-md border-none cursor-pointer bg-[#E6E6EC] text-[#6B6B7B] flex items-center justify-center hover:bg-[#EEEBFF] hover:text-[#4729F4] transition-colors"
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx={12} cy={12} r={3} />
+              </svg>
+            </button>
+          )}
           {/* Add / edit note */}
           {!readOnly && (
           <button

@@ -108,6 +108,25 @@ const TYPE_PRESETS: Record<GroupType, { color: string; bg_color: string; emoji: 
   CUSTOM: { color: "#2980b9", bg_color: "#e8f4fd", emoji: "📚" },
 };
 
+const DEFAULT_GROUPS: Array<{
+  name: string;
+  type: GroupType;
+  emoji: string;
+  color: string;
+  bg_color: string;
+  capacity: number;
+  description: string;
+}> = [
+  { name: "Tagore House", type: "HOUSE", emoji: "🎨", color: "#00b894", bg_color: "#e6f9f5", capacity: 200, description: "Arts, literature & cultural leadership" },
+  { name: "Kalam House", type: "HOUSE", emoji: "🚀", color: "#6c5ce7", bg_color: "#f0eeff", capacity: 200, description: "Science, technology & innovation" },
+  { name: "Gandhi House", type: "HOUSE", emoji: "☮️", color: "#e67e22", bg_color: "#fef3e8", capacity: 200, description: "Values, community & social leadership" },
+  { name: "Bose House", type: "HOUSE", emoji: "⚡", color: "#e74c3c", bg_color: "#fdeaea", capacity: 200, description: "Courage, discipline & resilience" },
+  { name: "Science Club", type: "CLUB", emoji: "🔬", color: "#2980b9", bg_color: "#e8f4fd", capacity: 80, description: "Hands-on science exploration" },
+  { name: "Drama Club", type: "CLUB", emoji: "🎭", color: "#8e44ad", bg_color: "#f5eefb", capacity: 80, description: "Stagecraft and performance" },
+  { name: "Eco Club", type: "CLUB", emoji: "🌿", color: "#27ae60", bg_color: "#eafaf1", capacity: 80, description: "Environment and sustainability" },
+  { name: "Math Circle", type: "CLUB", emoji: "➗", color: "#f39c12", bg_color: "#fef9e7", capacity: 80, description: "Problem solving and olympiad prep" },
+];
+
 /* ─── Helpers ─────────────────────────────────────────────────── */
 function unwrapList<T>(data: ApiList<T>): T[] {
   if (Array.isArray(data)) return data;
@@ -134,6 +153,7 @@ export function StudentGroupPanel() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState<{ message: string; type: "success" | "error"; duration?: number } | null>(null);
   const [aiBannerDismissed, setAiBannerDismissed] = useState(false);
+  const autoDefaultsSeededRef = useRef(false);
 
   // ── Selection State for Bulk Actions ─────────────────────────────────────────
   const [selectedStudentIds, setSelectedStudentIds] = useState<number[]>([]);
@@ -362,6 +382,46 @@ export function StudentGroupPanel() {
   }, [toast]);
 
   useEffect(() => { setCurrentPage(1); }, [pageSize]);
+
+  useEffect(() => {
+    if (loading || autoDefaultsSeededRef.current) return;
+    autoDefaultsSeededRef.current = true;
+
+    const seedDefaults = async () => {
+      try {
+        const allGroups = await apiGet<ApiList<StudentGroup>>("/api/v1/students/groups/?page=1&page_size=1000");
+        const existingNames = new Set(
+          listData(allGroups).map((g) => String(g.name || "").trim().toLowerCase()).filter(Boolean),
+        );
+        const missing = DEFAULT_GROUPS.filter((g) => !existingNames.has(g.name.toLowerCase()));
+        if (!missing.length) return;
+
+        let created = 0;
+        for (const group of missing) {
+          try {
+            await apiPost("/api/v1/students/groups/", group);
+            created += 1;
+          } catch (err) {
+            const msg = (err as ApiError)?.details?.message || (err as Error)?.message || "";
+            const dup = msg.toLowerCase().includes("already") || msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("unique");
+            if (!dup) {
+              // Ignore non-blocking errors for default seeding to avoid breaking page usage.
+            }
+          }
+        }
+
+        if (created > 0) {
+          await Promise.all([load(1, pageSize, debouncedSearch, sortBy), loadStats()]);
+          setCurrentPage(1);
+          setToast({ message: `✓ Added ${created} default groups`, type: "success" });
+        }
+      } catch {
+        // Silent fail: page still remains fully usable without blocking the user.
+      }
+    };
+
+    void seedDefaults();
+  }, [loading, pageSize, debouncedSearch, sortBy, loadStats, load]);
 
   // ── Filtered rows by tab ─────────────────────────────────────────────────────
   const filteredRows = useMemo(() => {
@@ -658,35 +718,6 @@ export function StudentGroupPanel() {
       setToast({ message: "✗ Sortwell failed. Please try again.", type: "error" });
     } finally {
       setSortwellRunning(false);
-    }
-  };
-
-  // ── Quick Setup default groups ────────────────────────────────────────────────
-  const [quickSetupRunning, setQuickSetupRunning] = useState(false);
-
-  const runQuickSetup = async () => {
-    const defaultGroups = [
-      { name: "Kalam House", type: "HOUSE" as GroupType, emoji: "🔬", color: "#e17055", bg_color: "#fff3f0", capacity: 40, description: "APJ Abdul Kalam House" },
-      { name: "Tagore House", type: "HOUSE" as GroupType, emoji: "🎨", color: "#6c5ce7", bg_color: "#f0edff", capacity: 40, description: "Rabindranath Tagore House" },
-      { name: "Gandhi House", type: "HOUSE" as GroupType, emoji: "🕊️", color: "#00b894", bg_color: "#e6f9f5", capacity: 40, description: "Mahatma Gandhi House" },
-      { name: "Bose House", type: "HOUSE" as GroupType, emoji: "⚡", color: "#0984e3", bg_color: "#ebf5ff", capacity: 40, description: "Subhas Chandra Bose House" },
-      { name: "Science Club", type: "CLUB" as GroupType, emoji: "🧪", color: "#00b894", bg_color: "#e6f9f5", capacity: 50, description: "Science & Technology Club" },
-      { name: "Eco Club", type: "CLUB" as GroupType, emoji: "🌱", color: "#27ae60", bg_color: "#eafaf1", capacity: 50, description: "Environmental & Eco Club" },
-      { name: "Math Wizard", type: "CLUB" as GroupType, emoji: "🔢", color: "#8e44ad", bg_color: "#f5eef8", capacity: 50, description: "Mathematics Club" },
-    ];
-    setQuickSetupRunning(true);
-    try {
-      for (const g of defaultGroups) {
-        await apiPost("/api/v1/students/groups/", g);
-      }
-      setToast({ message: "✓ Default groups created successfully!", type: "success" });
-      await Promise.all([load(1, pageSize, debouncedSearch, sortBy), loadStats()]);
-      setCurrentPage(1);
-    } catch {
-      setToast({ message: "✗ Some groups may already exist or could not be created.", type: "error" });
-      await Promise.all([load(1, pageSize, debouncedSearch, sortBy), loadStats()]);
-    } finally {
-      setQuickSetupRunning(false);
     }
   };
 
@@ -1067,11 +1098,8 @@ export function StudentGroupPanel() {
         <div style={{ textAlign: "center", padding: "48px 20px", background: "var(--white)", border: "1px solid var(--border)", borderRadius: 14, marginBottom: 18 }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>📭</div>
           <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 6 }}>No groups yet</div>
-          <div style={{ fontSize: 13, color: "var(--light)", marginBottom: 16 }}>Create houses and clubs to start organizing students.</div>
+          <div style={{ fontSize: 13, color: "var(--light)", marginBottom: 16 }}>Default groups are added automatically. You can create your own groups too.</div>
           <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
-            <button disabled={quickSetupRunning} onClick={() => void runQuickSetup()} style={{ background: "var(--orange)", border: "none", color: "#fff", borderRadius: 10, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-              {quickSetupRunning ? "Setting up…" : "⚡ Quick Setup (4 Houses)"}
-            </button>
             <button onClick={() => { resetForm(); setShowForm(true); }} style={{ background: "var(--teal)", border: "none", color: "#fff", borderRadius: 10, padding: "10px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>+ Add Group</button>
           </div>
         </div>

@@ -72,6 +72,7 @@ export interface AttendanceMark {
   sign_in_time?: string;
   sign_out_time?: string;
   pickup_time?: string;
+  pickup_by?: string;
   lunch?: boolean;
   note?: string;
 }
