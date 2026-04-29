@@ -105,14 +105,28 @@ export const ToastContainer: React.FC<ToastContainerProps> = ({
 export const useToast = () => {
   const [toasts, setToasts] = React.useState<Toast[]>([]);
 
+  const DEFAULT_DURATIONS: Record<ToastType, number> = {
+    success: 3000,
+    info: 4000,
+    warning: 6000,
+    error: 6000,
+  };
+
+  const MAX_TOASTS = 3;
+
   const addToast = (
     message: string,
     type: ToastType = 'info',
-    duration: number = 4000
+    duration?: number
   ) => {
     const id = Math.random().toString(36).substr(2, 9);
-    const newToast: Toast = { id, message, type, duration };
-    setToasts((prev) => [...prev, newToast]);
+    const resolvedDuration = typeof duration === 'number' ? duration : DEFAULT_DURATIONS[type];
+    const newToast: Toast = { id, message, type, duration: resolvedDuration };
+    setToasts((prev) => {
+      const next = [...prev, newToast];
+      // Trim oldest to keep UI tidy
+      return next.slice(-MAX_TOASTS);
+    });
     return id;
   };
 
@@ -123,11 +137,53 @@ export const useToast = () => {
   const success = (message: string, duration?: number) =>
     addToast(message, 'success', duration);
   const error = (message: string, duration?: number) =>
-    addToast(message, 'error', duration ?? 5000);
+    addToast(message, 'error', duration);
   const warning = (message: string, duration?: number) =>
     addToast(message, 'warning', duration);
   const info = (message: string, duration?: number) =>
     addToast(message, 'info', duration);
+
+  // Helper to show API errors given a response.payload or Error
+  const showApiError = (payload: any, fallback = 'An unexpected error occurred') => {
+    // Expected backend shape: { status: 500, error: { code: 'internal_server_error', message: 'An unexpected error occurred' } }
+    if (!payload) {
+      error(fallback);
+      return;
+    }
+
+    if (payload.error && typeof payload.error === 'object') {
+      const code = payload.error.code;
+      const message = payload.error.message || fallback;
+      const statusVal = payload.status || payload.statusCode || null;
+
+      // Map internal codes to user-friendly messages
+      if (code === 'internal_server_error') {
+        error(`${message}${statusVal ? ` (${statusVal})` : ''}`);
+      } else if (code === 'validation_error') {
+        error(message);
+      } else {
+        // Generic
+        error(`${message}${statusVal ? ` (${statusVal})` : ''}`);
+      }
+      // Also log details for developers
+      // eslint-disable-next-line no-console
+      console.debug('API error payload:', payload);
+      return;
+    }
+
+    // If it's an Error or string
+    if (payload instanceof Error) {
+      error(payload.message || fallback);
+      return;
+    }
+
+    if (typeof payload === 'string') {
+      error(payload);
+      return;
+    }
+
+    error(fallback);
+  };
 
   return {
     toasts,
@@ -137,5 +193,6 @@ export const useToast = () => {
     error,
     warning,
     info,
+    showApiError,
   };
 };

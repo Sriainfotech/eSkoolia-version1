@@ -9,7 +9,7 @@ type TopToastProps = {
   autoCloseMs?: number;
 };
 
-export function TopToast({ message, tone = "success", onClose, autoCloseMs = 3500 }: TopToastProps) {
+export function TopToast({ message, tone = "success", onClose, autoCloseMs = 3000 }: TopToastProps) {
   useEffect(() => {
     if (!message || !onClose) return;
     const timer = window.setTimeout(() => onClose(), autoCloseMs);

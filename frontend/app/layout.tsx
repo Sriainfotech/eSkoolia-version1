@@ -15,9 +15,13 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className={`${outfit.variable} ${inter.variable}`}>
-       
+    <html
+      lang="en"
+      className={`${dmSans.variable} ${playfairDisplay.variable} h-full`}
+    >
+      {/* h-full + overflow-hidden on <body> prevents any page-level scroll;
+          each route segment owns its own internal scroll area. */}
+      <body className="h-full overflow-hidden">
         {children}
       </body>
     </html>

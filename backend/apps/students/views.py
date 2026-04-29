@@ -1903,6 +1903,119 @@ class StudentDocumentViewSet(TenantScopedModelViewSet):
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
 
+<<<<<<< HEAD
+    @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser])
+    def upload_document(self, request):
+        """
+        Upload a student document.
+        
+        Expects:
+        - student_id (required): Student ID (database ID or UUID)
+        - document_type (required): Document type (birth_certificate, aadhaar_card, medical_information)
+        - file (required): File to upload
+        """
+        try:
+            student_id_input = request.data.get("student_id")
+            document_type = request.data.get("document_type")
+            file_obj = request.FILES.get("file")
+            
+            logger.info(f"Document upload attempt: student_id={student_id_input}, document_type={document_type}, file={file_obj.name if file_obj else None}")
+            
+            # Validations
+            if not student_id_input:
+                return Response(
+                    {"error": "Student ID is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not document_type:
+                return Response(
+                    {"error": "Document type is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not file_obj:
+                return Response(
+                    {"error": "No file selected."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check student exists and user has access.
+            # The frontend may send either the numeric DB id or the UUID student_id.
+            # We detect which one it is up front — querying a UUIDField with a
+            # non-UUID string raises django.core.exceptions.ValidationError, not
+            # Student.DoesNotExist, so we must validate the format ourselves.
+            import uuid as _uuid
+            student = None
+            sid_str = str(student_id_input).strip()
+
+            if sid_str.isdigit():
+                try:
+                    student = Student.objects.get(id=int(sid_str))
+                except Student.DoesNotExist:
+                    student = None
+
+            if student is None:
+                try:
+                    _uuid.UUID(sid_str)
+                except ValueError:
+                    pass
+                else:
+                    try:
+                        student = Student.objects.get(student_id=sid_str)
+                    except Student.DoesNotExist:
+                        student = None
+
+            if student is None:
+                logger.warning(f"Student not found with ID: {student_id_input}")
+                return Response(
+                    {"error": "Student not found."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Check permission
+            if not request.user.is_superuser and student.school_id != request.user.school_id:
+                logger.warning(f"Permission denied: user school {request.user.school_id} != student school {student.school_id}")
+                raise PermissionDenied("You don't have permission to upload documents for this student.")
+            
+            # Validate file type
+            allowed_extensions = [".pdf", ".jpg", ".jpeg", ".png"]
+            file_name_lower = file_obj.name.lower()
+            if not any(file_name_lower.endswith(ext) for ext in allowed_extensions):
+                return Response(
+                    {"error": "Only PDF, JPG, JPEG, and PNG files are allowed."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validate file size (5MB)
+            if file_obj.size > 5242880:
+                return Response(
+                    {"error": "File size must be less than 5MB."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create document record
+            document = StudentDocument.objects.create(
+                student=student,
+                school=student.school,
+                document_type=document_type,
+                title=document_type.replace("_", " ").title(),
+                file=file_obj,
+                original_name=file_obj.name,
+                file_size=file_obj.size,
+                uploaded_by=request.user,
+            )
+            
+            # Serialize and return
+            serializer = self.get_serializer(document)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        except Exception as e:
+            logger.error(f"Document upload error: {str(e)}", exc_info=True)
+            return Response(
+                {"error": "An error occurred during file upload. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class StudentTransferHistoryViewSet(TenantScopedModelViewSet):
     serializer_class = StudentTransferHistorySerializer

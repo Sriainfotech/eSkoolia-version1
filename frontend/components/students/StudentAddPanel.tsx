@@ -4,6 +4,13 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { StudentDocumentsUpload, type DocumentType as DocumentTypeKey } from "./StudentDocumentsUpload";
+import {
+  StudentGuardiansStep,
+  makeEmptyGuardianDraft,
+  type GuardianDraft,
+  type GuardianFieldErrors,
+} from "./StudentGuardiansStep";
 
 type ApiList<T> = T[] | { results?: T[]; count?: number };
 
@@ -614,10 +621,11 @@ export function StudentAddPanel() {
   const [sectionId, setSectionId] = useState("");
   const [isDisabled, setIsDisabled] = useState(false);
 
-  const [newGuardianName, setNewGuardianName] = useState("");
-  const [newGuardianRelation, setNewGuardianRelation] = useState("Father");
-  const [newGuardianPhone, setNewGuardianPhone] = useState("");
-  const [newGuardianEmail, setNewGuardianEmail] = useState("");
+  const [guardianDrafts, setGuardianDrafts] = useState<GuardianDraft[]>(() => [
+    makeEmptyGuardianDraft(true),
+  ]);
+  const [guardianCardErrors, setGuardianCardErrors] = useState<GuardianFieldErrors[]>([{}]);
+  const [guardianSubmitError, setGuardianSubmitError] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -628,7 +636,6 @@ export function StudentAddPanel() {
   const [toastMessage, setToastMessage] = useState("");
   const [toastType, setToastType] = useState<"success" | "error">("success");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [guardianValidationError, setGuardianValidationError] = useState("");
   const [checkingAdmission, setCheckingAdmission] = useState(false);
   const [admissionChecked, setAdmissionChecked] = useState(false);
   const [pinLookupLoading, setPinLookupLoading] = useState(false);
@@ -662,9 +669,6 @@ export function StudentAddPanel() {
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
-  const birthCertInputRef = useRef<HTMLInputElement | null>(null);
-  const aadhaarInputRef = useRef<HTMLInputElement | null>(null);
-  const medicalInputRef = useRef<HTMLInputElement | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraError, setCameraError] = useState("");
   const toastTimerRef = useRef<number | null>(null);
@@ -747,6 +751,11 @@ export function StudentAddPanel() {
     [orderedClasses, classId],
   );
 
+  const selectedSection = useMemo(
+    () => sections.find((item) => String(item.id) === sectionId) || null,
+    [sections, sectionId],
+  );
+
   const studentForm = useMemo(
     () => ({
       admission_no: admissionNo.trim(),
@@ -775,6 +784,45 @@ export function StudentAddPanel() {
   useEffect(() => {
     admissionNoRef.current = admissionNo;
   }, [admissionNo]);
+
+  // Keep guardianId (the FK the student payload uses) in sync with the primary
+  // draft's resolved ID. This matters for the auto-save path, which reads
+  // guardianId directly, and keeps edit mode coherent after a picker link.
+  useEffect(() => {
+    const primary = guardianDrafts[0];
+    const linked = primary?.linkedExistingId ?? null;
+    const desired = linked ? String(linked) : "";
+    if (desired !== guardianId) setGuardianId(desired);
+  }, [guardianDrafts, guardianId]);
+
+  // Hydrate the primary guardian card when the form loads an existing student (edit
+  // mode) or a saved draft. Runs when guardianId is set AND the school's guardian
+  // pool has arrived AND the primary card is still untouched (to avoid stomping
+  // user edits after hydration).
+  useEffect(() => {
+    if (!guardianId) return;
+    const numeric = Number(guardianId);
+    if (!Number.isFinite(numeric)) return;
+    const primary = guardianDrafts[0];
+    if (!primary) return;
+    if (primary.linkedExistingId === numeric) return;
+    if (primary.fullName.trim() || primary.phone.trim()) return;
+    const match = guardians.find((g) => g.id === numeric);
+    if (!match) return;
+    setGuardianDrafts((prev) => {
+      if (prev.length === 0) return prev;
+      const next = [...prev];
+      next[0] = {
+        ...next[0],
+        isPrimary: true,
+        linkedExistingId: match.id,
+        fullName: match.full_name || "",
+        relation: match.relation || "Father",
+        phone: match.phone || "",
+      };
+      return next;
+    });
+  }, [guardianId, guardians, guardianDrafts]);
 
   const stateOptions = useMemo(() => Object.keys(stateCityMap).sort((a, b) => a.localeCompare(b)), [stateCityMap]);
 
@@ -1186,20 +1234,41 @@ export function StudentAddPanel() {
   }, []);
 
   useEffect(() => {
+    // The scroll happens on .enroll-scroll (the form's inner scrollable area)
+    // rather than the window or <main>, since the footer lives outside the scroll.
+    // Fall back to window if the element hasn't mounted yet or at the mobile
+    // breakpoint where overflow is visible.
+    const scrollEl =
+      (typeof document !== "undefined" &&
+        (document.querySelector(".enroll-scroll") as HTMLElement | null)) || null;
+
+    const getScrollTop = () =>
+      scrollEl ? scrollEl.scrollTop : window.scrollY;
+    const getViewportHeight = () =>
+      scrollEl ? scrollEl.clientHeight : window.innerHeight;
+    const getScrollHeight = () =>
+      scrollEl ? scrollEl.scrollHeight : document.documentElement.scrollHeight;
+
     const updateActiveSection = () => {
       const stickyOffset = 120;
-      const scanLine = window.scrollY + stickyOffset;
+      const scrollTop = getScrollTop();
+      const scanLine = scrollTop + stickyOffset;
       let nextActive: NavItemId = NAV_ITEMS[0]?.id || "identity";
 
       for (const item of NAV_ITEMS) {
         const section = document.getElementById(item.id);
         if (!section) continue;
-        if (section.offsetTop <= scanLine) {
+        // offsetTop is relative to the offsetParent; use getBoundingClientRect
+        // so it works consistently whether the scroll container is window or an element.
+        const rect = section.getBoundingClientRect();
+        const containerTop = scrollEl ? scrollEl.getBoundingClientRect().top : 0;
+        const sectionTopWithinScroll = rect.top - containerTop + scrollTop;
+        if (sectionTopWithinScroll <= scanLine) {
           nextActive = item.id;
         }
       }
 
-      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) {
+      if (getViewportHeight() + scrollTop >= getScrollHeight() - 4) {
         nextActive = NAV_ITEMS[NAV_ITEMS.length - 1]?.id || nextActive;
       }
 
@@ -1207,10 +1276,11 @@ export function StudentAddPanel() {
     };
 
     updateActiveSection();
-    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    const scrollTarget: Window | HTMLElement = scrollEl ?? window;
+    scrollTarget.addEventListener("scroll", updateActiveSection, { passive: true });
     window.addEventListener("resize", updateActiveSection);
     return () => {
-      window.removeEventListener("scroll", updateActiveSection);
+      scrollTarget.removeEventListener("scroll", updateActiveSection);
       window.removeEventListener("resize", updateActiveSection);
     };
   }, [loading]);
@@ -1419,6 +1489,9 @@ export function StudentAddPanel() {
     setStatusValue("active");
     setCategoryId("");
     setGuardianId("");
+    setGuardianDrafts([makeEmptyGuardianDraft(true)]);
+    setGuardianCardErrors([{}]);
+    setGuardianSubmitError(null);
     setClassId("");
     setSectionId("");
     setSections([]);
@@ -1724,7 +1797,17 @@ export function StudentAddPanel() {
       nextErrors.consent = "Guardian consent confirmation is required.";
     }
 
-    if (!guardianId) {
+    // Guardian check: validate the DRAFT state in the UI, not `guardianId`.
+    // `guardianId` is a FK to a persisted Guardian record and only gets set
+    // inside persistGuardianDrafts() during submit — so at validation time a
+    // freshly-typed primary card would always fail this gate. A guardian card
+    // counts as valid if it's already linked to an existing guardian OR if all
+    // three required fields (name, relation, phone) have content.
+    const hasValidGuardian = guardianDrafts.some((d) => {
+      if (d.linkedExistingId != null) return true;
+      return !!(d.fullName?.trim() && d.relation?.trim() && d.phone?.trim());
+    });
+    if (!hasValidGuardian) {
       nextErrors.guardian = "At least one guardian is required before enrollment.";
     }
 
@@ -1756,47 +1839,113 @@ export function StudentAddPanel() {
     return mapped;
   };
 
-  const addGuardianInline = async () => {
-    setGuardianValidationError("");
-    const guardianName = sanitizeText(newGuardianName);
-    const guardianPhone = newGuardianPhone.replace(/\D/g, "").slice(0, 10);
+  /**
+   * Persist all guardian draft cards. For each draft:
+   *   - If `linkedExistingId` is set, it's already in the backend → reuse the ID.
+   *   - If fully empty and non-primary, skip.
+   *   - Otherwise validate and POST to create the Guardian record.
+   *
+   * Returns:
+   *   { primaryId }     — the ID that should be linked to the student's guardian FK, or
+   *   { cardErrors }    — per-card field-level errors when validation fails.
+   *
+   * Mutates state: updates draft cards with resolved `linkedExistingId` after a successful POST.
+   */
+  const persistGuardianDrafts = async (): Promise<
+    { ok: true; primaryId: number | null; updatedDrafts: GuardianDraft[] }
+    | { ok: false; cardErrors: GuardianFieldErrors[] }
+  > => {
+    const cardErrors: GuardianFieldErrors[] = guardianDrafts.map(() => ({}));
+    const resolvedIds: (number | null)[] = guardianDrafts.map(() => null);
 
-    if (!guardianName) {
-      setGuardianValidationError("Guardian name is required");
-      return;
-    }
-    if (!isAlphabetsOnly(guardianName)) {
-      setGuardianValidationError("Guardian name can only contain letters and spaces");
-      return;
-    }
-    if (!guardianPhone || !isValidPhone(guardianPhone)) {
-      setGuardianValidationError("Guardian phone must be exactly 10 digits");
-      return;
-    }
-    if (newGuardianEmail.trim() && !isValidEmail(newGuardianEmail.trim())) {
-      setGuardianValidationError("Guardian email format is invalid");
-      return;
+    // Validate synchronously first so we can short-circuit before any POST
+    guardianDrafts.forEach((draft, idx) => {
+      const fullName = sanitizeText(draft.fullName);
+      const phone = (draft.phone || "").replace(/\D/g, "").slice(0, 10);
+      const email = (draft.email || "").trim();
+      const isEmpty = !fullName && !phone && !email && !(draft.occupation || "").trim();
+
+      if (!draft.isPrimary && isEmpty && draft.linkedExistingId == null) {
+        // Empty non-primary cards are silently skipped.
+        return;
+      }
+
+      if (draft.linkedExistingId != null) {
+        resolvedIds[idx] = draft.linkedExistingId;
+        return;
+      }
+
+      const err: GuardianFieldErrors = {};
+      if (!fullName) {
+        err.fullName = "Full name is required";
+      } else if (!isAlphabetsOnly(fullName)) {
+        err.fullName = "Full name can only contain letters and spaces";
+      }
+      if (!draft.relation) {
+        err.relation = "Relation is required";
+      }
+      if (!phone) {
+        err.phone = "Phone is required";
+      } else if (!isValidPhone(phone)) {
+        err.phone = "Phone must be exactly 10 digits";
+      }
+      if (email && !isValidEmail(email)) {
+        err.email = "Email format is invalid";
+      }
+      cardErrors[idx] = err;
+    });
+
+    const hasErrors = cardErrors.some((e) => Object.keys(e).length > 0);
+    if (hasErrors) {
+      return { ok: false, cardErrors };
     }
 
-    try {
-      setError("");
-      const created = await apiPostJson<Guardian>("/api/v1/students/guardians/", {
-        full_name: guardianName,
-        relation: sanitizeText(newGuardianRelation) || "Father",
-        phone: guardianPhone,
-        email: sanitizeText(newGuardianEmail),
-      });
-      setGuardians((prev) => [...prev, created]);
-      setGuardianId(String(created.id));
-      setNewGuardianName("");
-      setNewGuardianRelation("Father");
-      setNewGuardianPhone("");
-      setNewGuardianEmail("");
-      setSuccess("Guardian added and selected successfully.");
-    } catch (createError) {
-      setGuardianValidationError(parseError(createError));
+    // POST any draft that still needs creating
+    const updatedDrafts: GuardianDraft[] = [...guardianDrafts];
+    for (let idx = 0; idx < guardianDrafts.length; idx++) {
+      const draft = guardianDrafts[idx];
+      if (resolvedIds[idx] != null) continue; // already resolved (linked or skipped)
+
+      const fullName = sanitizeText(draft.fullName);
+      const phone = (draft.phone || "").replace(/\D/g, "").slice(0, 10);
+      const isEmpty = !fullName && !phone;
+      if (!draft.isPrimary && isEmpty) continue; // empty non-primary → skip
+
+      try {
+        const created = await apiPostJson<Guardian & { email?: string; occupation?: string }>(
+          "/api/v1/students/guardians/",
+          {
+            full_name: fullName,
+            relation: sanitizeText(draft.relation) || "Father",
+            phone,
+            email: sanitizeText(draft.email) || "",
+            occupation: sanitizeText(draft.occupation) || "",
+          },
+        );
+        resolvedIds[idx] = created.id;
+        updatedDrafts[idx] = {
+          ...draft,
+          linkedExistingId: created.id,
+          fullName,
+          phone,
+        };
+        // Add to the school's guardian pool so the picker can see it next time
+        setGuardians((prev) =>
+          prev.some((g) => g.id === created.id) ? prev : [...prev, created],
+        );
+      } catch (createError) {
+        const msg = parseError(createError) || "Failed to save this guardian";
+        cardErrors[idx] = { ...cardErrors[idx], fullName: msg };
+        return { ok: false, cardErrors };
+      }
     }
+
+    setGuardianDrafts(updatedDrafts);
+
+    const primaryId = resolvedIds[0];
+    return { ok: true, primaryId: primaryId ?? null, updatedDrafts };
   };
+
 
   const uploadStudentPhoto = async (file: File): Promise<boolean> => {
     if (!["image/jpeg", "image/png"].includes(file.type)) {
@@ -2198,10 +2347,10 @@ export function StudentAddPanel() {
         studentId: effectiveStudentId,
         documentType,
         fileName: file.name,
-        endpoint: "/api/students/documents/upload_document/",
+        endpoint: "/api/v1/students/documents/upload_document/",
       });
 
-      const response = await apiRequestWithRefresh("/api/students/documents/upload_document/", {
+      const response = await apiRequestWithRefresh("/api/v1/students/documents/upload_document/", {
         method: "POST",
         body: formData,
       }) as { id?: unknown; file?: string; file_url?: string; original_name?: string; uploaded_at?: string } | null;
@@ -2287,42 +2436,18 @@ export function StudentAddPanel() {
     }
   };
 
-  const handleBirthCertUpload = () => {
-    console.log("🖱️ Birth certificate upload button clicked");
-    birthCertInputRef.current?.click();
-  };
-
-  const handleAadhaarUpload = () => {
-    console.log("🖱️ Aadhaar upload button clicked");
-    aadhaarInputRef.current?.click();
-  };
-
-  const handleMedicalUpload = () => {
-    console.log("🖱️ Medical information upload button clicked");
-    medicalInputRef.current?.click();
-  };
-
-  const handleDocumentFileChange = async (
-    e: React.ChangeEvent<HTMLInputElement>,
-    documentType: string
-  ) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      console.log("📂 File selected for upload:", {
-        documentType,
-        fileName: file.name,
-        fileSize: file.size,
-        fileType: file.type,
-      });
-      
-      try {
-        await uploadDocumentFile(file, documentType);
-      } catch (err) {
-        console.error("❌ Unexpected error in handleDocumentFileChange:", err);
-      }
+  const handleDocumentPick = async (documentType: DocumentTypeKey, file: File) => {
+    console.log("📂 File selected for upload:", {
+      documentType,
+      fileName: file.name,
+      fileSize: file.size,
+      fileType: file.type,
+    });
+    try {
+      await uploadDocumentFile(file, documentType);
+    } catch (err) {
+      console.error("❌ Unexpected error in handleDocumentPick:", err);
     }
-    // Reset input to allow re-selection of same file
-    e.target.value = "";
   };
 
   useEffect(() => {
@@ -2436,7 +2561,8 @@ export function StudentAddPanel() {
     if (isViewMode) return;
     setSuccess("");
     setError("");
-    setGuardianValidationError("");
+    setGuardianSubmitError(null);
+    setGuardianCardErrors(guardianDrafts.map(() => ({})));
 
     const nextErrors = validateClient();
     setFieldErrors(nextErrors);
@@ -2454,6 +2580,25 @@ export function StudentAddPanel() {
         jumpToSection("identity");
         return;
       }
+    }
+
+    // Persist any un-linked guardian drafts to the backend; use the primary's
+    // resolved ID as the student's guardian FK.
+    const persistResult = await persistGuardianDrafts();
+    if (!persistResult.ok) {
+      setGuardianCardErrors(persistResult.cardErrors);
+      setGuardianSubmitError("Please fix the highlighted guardian fields.");
+      jumpToSection("guardians");
+      return;
+    }
+    const resolvedPrimaryGuardianId = persistResult.primaryId;
+    if (!resolvedPrimaryGuardianId) {
+      setGuardianSubmitError("Please add at least one guardian (Guardian 1 is required).");
+      jumpToSection("guardians");
+      return;
+    }
+    if (guardianId !== String(resolvedPrimaryGuardianId)) {
+      setGuardianId(String(resolvedPrimaryGuardianId));
     }
 
     try {
@@ -2479,11 +2624,42 @@ export function StudentAddPanel() {
         photo: photo ? photo : (isEditMode && photoCleared ? "" : undefined),
         status: statusValue,
         category: categoryId ? Number(categoryId) : undefined,
-        guardian: guardianId ? Number(guardianId) : undefined,
+        guardian: resolvedPrimaryGuardianId,
         current_class: Number(classId),
         current_section: Number(sectionId),
         is_disabled: isDisabled,
         is_active: isStudentActive,
+      };
+
+      // Success handler — stay on /students/add, reset the form, fetch a
+      // fresh admission number, toast, and scroll the form back to the top.
+      // Edit mode keeps its redirect since the user came FROM the list.
+      const finishSuccessAsEnrollment = (toastMessage: string) => {
+        invalidateGeneratedAdmissionNoCache();
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(STUDENT_DRAFT_STORAGE_KEY);
+        }
+        // Clear everything the next enrollment shouldn't inherit.
+        resetStudentForm();
+        setDocuments({
+          birth_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+          aadhaar_card: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+          medical_information: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+        });
+        setNewlyCreatedStudentId(null);
+        setError("");
+        showToast(toastMessage, "success", 5000);
+        // Scroll the form's internal scroll container (not window — body is
+        // overflow:hidden in this layout).
+        if (typeof document !== "undefined") {
+          const scrollEl = document.querySelector(".enroll-scroll") as HTMLElement | null;
+          scrollEl?.scrollTo({ top: 0, behavior: "smooth" });
+        }
+        // Trigger a new admission number fetch on the next tick so the reset
+        // has applied before initializeAdmissionNo() gates on the ref.
+        setTimeout(() => {
+          void initializeAdmissionNo(true);
+        }, 0);
       };
 
       if (isEditMode && studentId) {
@@ -2497,23 +2673,33 @@ export function StudentAddPanel() {
             window.location.href = "/students/list";
           }
         }, 800);
+      } else if (newlyCreatedStudentId) {
+        // Auto-save (triggered by document upload) already created a DRAFT
+        // student row with this admission_no. POSTing again would collide on
+        // the uniqueness check. Finalize that draft via PUT and flip
+        // is_draft → false so it becomes a real enrolled student.
+        const finalizePayload: StudentCreatePayload = { ...payload, is_draft: false };
+        await apiPutJson<{ message?: string }>(
+          `/api/v1/students/students/${newlyCreatedStudentId}/`,
+          finalizePayload,
+        );
+        finishSuccessAsEnrollment("Student enrolled successfully");
       } else {
+        // Fresh POST — no auto-save happened (user submitted without
+        // uploading any documents first). Create the student, then reset
+        // the form for the next enrollment.
         const response = await apiPostJson<StudentCreateResponse>("/api/v1/students/students/", payload);
         const createdStudentId = Number(response?.id ?? response?.data?.id);
-        
-        // Capture the newly created student ID so documents can be uploaded
         if (Number.isFinite(createdStudentId) && createdStudentId > 0) {
-          setNewlyCreatedStudentId(createdStudentId);
-          invalidateGeneratedAdmissionNoCache();
           console.log("✅ New student created with ID:", createdStudentId);
         }
+        const toastMsg = response?.warning
+          ? `Student enrolled successfully. ${response.warning}`
+          : "Student enrolled successfully";
+        finishSuccessAsEnrollment(toastMsg);
         
-        const successMessage = response?.warning ? `Student added successfully. ${response.warning}` : "Student added successfully.";
-        setSuccess(successMessage);
-
         // Write enrollment data so multi-subject page can auto-populate
         if (typeof window !== "undefined") {
-          window.localStorage.removeItem(STUDENT_DRAFT_STORAGE_KEY);
           const enrolledClass = orderedClasses.find((item) => String(item.id) === classId);
           const enrolledSection = sections.find((item) => String(item.id) === sectionId);
           const enrolledAcYear = academicYears.find((item) => String(item.id) === academicYearId);
@@ -2547,6 +2733,7 @@ export function StudentAddPanel() {
   return (
     <div className="enroll-page student-add-panel-wrap">
       <form onSubmit={submit} noValidate>
+        <div className="enroll-scroll">
         <div className="top-row">
           <p className="crumbs">
             <a href="/dashboard">Dashboard</a> / <a href="/students/list">Students</a> / <strong>Enroll</strong>
@@ -2758,187 +2945,43 @@ export function StudentAddPanel() {
               {renderSectionNavButtons("contact")}
             </section>
 
-            <section className="section-card" id="guardians">
-              <div className="section-card-header"><div><h2 className="section-title">Family & <span className="title-accent">guardians</span></h2><p className="section-subtitle">Add at least one guardian. You can add more later from the student profile.</p></div><span className="section-counter">04 / 06</span></div>
-              <div className="grid-3">
-                <div className="field-wrapper"><label className="field-label">Select existing guardian</label><select className="field-select" title="Select existing guardian" value={guardianId} onChange={(e) => setGuardianId(e.target.value)}><option value="">Select Guardian</option>{guardians.map((g) => <option key={g.id} value={g.id}>{g.full_name} ({g.phone})</option>)}</select></div>
-                <div className="field-wrapper"><label className="field-label">Guardian name</label><input className="field-input" title="Guardian name" value={newGuardianName} onChange={(e) => setNewGuardianName(e.target.value)} /></div>
-                <div className="field-wrapper"><label className="field-label">Relation</label><select className="field-select" title="Relation" value={newGuardianRelation} onChange={(e) => setNewGuardianRelation(e.target.value)}><option value="Father">Father</option><option value="Mother">Mother</option><option value="Others">Others</option></select></div>
-                <div className="field-wrapper"><label className="field-label">Phone</label><input className="field-input" title="Guardian phone" value={newGuardianPhone} onChange={(e) => setNewGuardianPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} maxLength={10} /></div>
-                <div className="field-wrapper"><label className="field-label">Email</label><input className="field-input" title="Guardian email" value={newGuardianEmail} onChange={(e) => setNewGuardianEmail(e.target.value)} /></div>
-              </div>
-              <div className="mt-20"><button type="button" onClick={() => void addGuardianInline()} className="btn-green">Add Guardian</button>{guardianValidationError ? <p className="error-msg">{guardianValidationError}</p> : null}{fieldErrors.guardian ? <p className="error-msg">{fieldErrors.guardian}</p> : null}</div>
-              {renderSectionNavButtons("guardians")}
-            </section>
+            <StudentGuardiansStep
+              drafts={guardianDrafts}
+              onDraftsChange={(next) => {
+                setGuardianDrafts(next);
+                setGuardianCardErrors(next.map(() => ({})));
+                setGuardianSubmitError(null);
+                // Live-clear the "at least one guardian required" error as soon
+                // as any draft has its 3 required fields filled (or is linked
+                // to an existing guardian).
+                const hasValidGuardian = next.some((d) => {
+                  if (d.linkedExistingId != null) return true;
+                  return !!(d.fullName?.trim() && d.relation?.trim() && d.phone?.trim());
+                });
+                if (hasValidGuardian) {
+                  setFieldErrors((prev) => {
+                    if (!prev.guardian) return prev;
+                    const { guardian: _removed, ...rest } = prev;
+                    return rest;
+                  });
+                }
+              }}
+              existingGuardians={guardians}
+              sectionCounter="04 / 06"
+              errorsByCard={guardianCardErrors}
+              submitError={guardianSubmitError ?? fieldErrors.guardian ?? null}
+              navButtonsSlot={renderSectionNavButtons("guardians")}
+            />
 
-            <section className="section-card" id="documents">
-              <div className="section-card-header">
-                <div>
-                  <h2 className="section-title">Know your <span className="title-accent">student</span></h2>
-                  <p className="section-subtitle">Upload the documents your school needs on file. Some appear only when relevant — for example, caste certificate shows up if you picked a reserved category.</p>
-                </div>
-                <span className="section-counter">05 / 06</span>
-              </div>
-
-              {/* Hidden File Inputs */}
-              <input 
-                type="file" 
-                ref={birthCertInputRef} 
-                className="hidden-file-input"
-                title="Birth certificate file input"
-                accept=".pdf,.jpg,.jpeg,.png"
-                onChange={(e) => handleDocumentFileChange(e, "birth_certificate")}
-              />
-              <input 
-                type="file" 
-                ref={aadhaarInputRef} 
-                className="hidden-file-input"
-                title="Aadhaar card file input"
-                accept=".pdf,.jpg,.jpeg,.png"
-                onChange={(e) => handleDocumentFileChange(e, "aadhaar_card")}
-              />
-              <input 
-                type="file" 
-                ref={medicalInputRef} 
-                className="hidden-file-input"
-                title="Medical information file input"
-                accept=".pdf,.jpg,.jpeg,.png"
-                onChange={(e) => handleDocumentFileChange(e, "medical_information")}
-              />
-
-              {/* Document Cards Grid */}
-              <div className="doc-upload-grid">
-                {/* Birth Certificate Card */}
-                <div className={`doc-card ${documents.birth_certificate.status === "success" ? "doc-card-success" : documents.birth_certificate.status === "error" ? "doc-card-error" : documents.birth_certificate.status === "uploading" ? "doc-card-uploading" : ""}`}>
-                  <div className="doc-card-header">
-                    <div className="doc-icon-box">
-                      {documents.birth_certificate.status === "success" ? "✓" : documents.birth_certificate.status === "error" ? "✗" : "📋"}
-                    </div>
-                    <span className="doc-badge doc-badge-required">REQUIRED</span>
-                  </div>
-                  <h3 className="doc-card-title">Birth certificate</h3>
-                  {documents.birth_certificate.status === "success" ? (
-                    <>
-                      <p className="doc-success-msg">✓ Uploaded</p>
-                      <p className="doc-success-filename">{documents.birth_certificate.fileName}</p>
-                    </>
-                  ) : documents.birth_certificate.status === "error" ? (
-                    <>
-                      <p className="doc-error-msg">✗ Upload failed</p>
-                      <p className="doc-error-detail">{documents.birth_certificate.error}</p>
-                    </>
-                  ) : documents.birth_certificate.status === "uploading" ? (
-                    <p className="doc-uploading-msg">⏳ Uploading...</p>
-                  ) : (
-                    <p className="doc-card-desc">Government-issued proof of date of birth. PDF, JPG, or PNG up to 5 MB.</p>
-                  )}
-                  <button 
-                    type="button" 
-                    className="doc-upload-btn"
-                    onClick={handleBirthCertUpload}
-                    disabled={documents.birth_certificate.status === "uploading"}
-                  >
-                    {documents.birth_certificate.status === "uploading" ? "⏳ Uploading..." : documents.birth_certificate.status === "success" ? "↻ Replace" : "↑ Upload file"}
-                  </button>
-                </div>
-
-                {/* Aadhaar Card */}
-                <div className={`doc-card ${documents.aadhaar_card.status === "success" ? "doc-card-success" : documents.aadhaar_card.status === "error" ? "doc-card-error" : documents.aadhaar_card.status === "uploading" ? "doc-card-uploading" : ""}`}>
-                  <div className="doc-card-header">
-                    <div className="doc-icon-box">
-                      {documents.aadhaar_card.status === "success" ? "✓" : documents.aadhaar_card.status === "error" ? "✗" : "🆔"}
-                    </div>
-                    <span className="doc-badge doc-badge-masked">MASKED</span>
-                  </div>
-                  <h3 className="doc-card-title">Aadhaar card</h3>
-                  {documents.aadhaar_card.status === "success" ? (
-                    <>
-                      <p className="doc-success-msg">✓ Uploaded</p>
-                      <p className="doc-success-filename">{documents.aadhaar_card.fileName}</p>
-                    </>
-                  ) : documents.aadhaar_card.status === "error" ? (
-                    <>
-                      <p className="doc-error-msg">✗ Upload failed</p>
-                      <p className="doc-error-detail">{documents.aadhaar_card.error}</p>
-                    </>
-                  ) : documents.aadhaar_card.status === "uploading" ? (
-                    <p className="doc-uploading-msg">⏳ Uploading...</p>
-                  ) : (
-                    <p className="doc-card-desc">We store only the last 4 digits. The full number is never saved to disk or shared.</p>
-                  )}
-                  <button 
-                    type="button" 
-                    className="doc-upload-btn"
-                    onClick={handleAadhaarUpload}
-                    disabled={documents.aadhaar_card.status === "uploading"}
-                  >
-                    {documents.aadhaar_card.status === "uploading" ? "⏳ Uploading..." : documents.aadhaar_card.status === "success" ? "↻ Replace" : "↑ Upload file"}
-                  </button>
-                </div>
-
-                {/* Medical Information */}
-                <div className={`doc-card doc-card-medical ${documents.medical_information.status === "success" ? "doc-card-success" : documents.medical_information.status === "error" ? "doc-card-error" : documents.medical_information.status === "uploading" ? "doc-card-uploading" : ""}`}>
-                  <div className="doc-card-header">
-                    <div className="doc-icon-box">
-                      {documents.medical_information.status === "success" ? "✓" : documents.medical_information.status === "error" ? "✗" : "💊"}
-                    </div>
-                    <span className="doc-badge doc-badge-optional">OPTIONAL</span>
-                  </div>
-                  <h3 className="doc-card-title">Medical information</h3>
-                  {documents.medical_information.status === "success" ? (
-                    <>
-                      <p className="doc-success-msg">✓ Uploaded</p>
-                      <p className="doc-success-filename">{documents.medical_information.fileName}</p>
-                    </>
-                  ) : documents.medical_information.status === "error" ? (
-                    <>
-                      <p className="doc-error-msg">✗ Upload failed</p>
-                      <p className="doc-error-detail">{documents.medical_information.error}</p>
-                    </>
-                  ) : documents.medical_information.status === "uploading" ? (
-                    <p className="doc-uploading-msg">⏳ Uploading...</p>
-                  ) : (
-                    <p className="doc-card-desc">Allergies, ongoing conditions, emergency contact for medical decisions. Stored encrypted.</p>
-                  )}
-                  <button 
-                    type="button" 
-                    className="doc-upload-btn"
-                    onClick={handleMedicalUpload}
-                    disabled={documents.medical_information.status === "uploading"}
-                  >
-                    {documents.medical_information.status === "uploading" ? "⏳ Uploading..." : documents.medical_information.status === "success" ? "↻ Replace" : "↑ Upload file"}
-                  </button>
-                </div>
-
-                {/* RTE Act 2009 Compliance Box */}
-                <div className="doc-rte-box doc-rte-full-width">
-                  <span className="doc-rte-icon">🛡️</span>
-                  <div>
-                    <h4 className="doc-rte-title">RTE Act 2009 compliance</h4>
-                    <p className="doc-rte-text">Students admitted under the 25% EWS/DG quota must have their income or caste certificate verified within 30 days. All personal data is stored per the Digital Personal Data Protection Act, 2023 and is never shared with third parties without parental consent. <a href="#" className="doc-rte-link">Read our data policy →</a></p>
-                  </div>
-                </div>
-
-                {/* Parent/Guardian Consent Box */}
-                <div className="doc-consent-box doc-consent-full-width">
-                  <label className="doc-consent-label">
-                    <input 
-                      type="checkbox" 
-                      className="doc-consent-checkbox" 
-                      checked={consentChecked} 
-                      onChange={(e) => setConsentChecked(e.target.checked)} 
-                    />
-                    <div>
-                      <div className="doc-consent-title">Parent / Guardian consent</div>
-                      <p className="doc-consent-text">I confirm that the student's parent or legal guardian has authorized me to submit these documents and has consented to their storage for school records, admissions, fee management, and legally required reporting. I understand that withdrawing consent requires a written request.</p>
-                    </div>
-                  </label>
-                  {fieldErrors.consent ? <p className="error-msg">{fieldErrors.consent}</p> : null}
-                </div>
-              </div>
-
-              {renderSectionNavButtons("documents")}
-            </section>
+            <StudentDocumentsUpload
+              documents={documents}
+              onPickFile={handleDocumentPick}
+              consentChecked={consentChecked}
+              onConsentChange={setConsentChecked}
+              consentError={fieldErrors.consent}
+              sectionCounter="05 / 06"
+              navButtonsSlot={renderSectionNavButtons("documents")}
+            />
 
             {/* REVIEW SECTION */}
             <section className="section-card" id="review">
@@ -2961,7 +3004,11 @@ export function StudentAddPanel() {
                 </div>
                 <div className="review-item">
                   <div className="review-label">CLASS / SECTION</div>
-                  <div className="review-value">{classId && sectionId ? `${classId} / ${sectionId}` : "Not yet entered"}</div>
+                  <div className="review-value">
+                    {selectedClass || selectedSection
+                      ? `${selectedClass?.name || classId} / ${selectedSection?.name || sectionId}`
+                      : "Not yet entered"}
+                  </div>
                 </div>
                 <div className="review-item">
                   <div className="review-label">CONTACT</div>
@@ -2974,29 +3021,29 @@ export function StudentAddPanel() {
           </div>
         </div>
 
-        <div className="sticky-footer">
-          <div className="sticky-footer-inner">
-            <div className="footer-progress-wrap" aria-label="Enrollment progress">
-              <span className="footer-progress-label">Progress</span>
-              <div className="footer-progress-track" title="Enrollment progress">
-                <span className={`footer-progress-fill ${footerProgressClass}`} />
-              </div>
-              <span className="footer-progress-value">{footerProgressPercent}% complete</span>
-            </div>
+        </div>{/* /.enroll-scroll */}
 
-            {error ? <p className="footer-status footer-status-error">{error}</p> : null}
-
-            <div className="footer-actions">
-              <button type="button" className="btn-discard" onClick={clearDraftNow}>Discard</button>
-              <button type="button" className="btn-draft" onClick={saveDraftNow}>Save draft</button>
-              {isViewMode && studentId ? (
-                <Link href={`/students/add?mode=edit&id=${studentId}`} className="btn-save btn-save-cta">Edit student →</Link>
-              ) : (
-                <button type="submit" disabled={!canSubmit} className="btn-save btn-save-cta">{saving ? "Saving..." : isEditMode ? "Update student →" : "Enroll student →"}</button>
-              )}
+        <footer className="enroll-footer">
+          <div className="footer-progress-wrap" aria-label="Enrollment progress">
+            <span className="footer-progress-label">Progress</span>
+            <div className="footer-progress-track" title="Enrollment progress">
+              <span className={`footer-progress-fill ${footerProgressClass}`} />
             </div>
+            <span className="footer-progress-value">{footerProgressPercent}% complete</span>
           </div>
-        </div>
+
+          {error ? <p className="footer-status footer-status-error">{error}</p> : null}
+
+          <div className="footer-actions">
+            <button type="button" className="btn-discard" onClick={clearDraftNow}>Discard</button>
+            <button type="button" className="btn-draft" onClick={saveDraftNow}>Save draft</button>
+            {isViewMode && studentId ? (
+              <Link href={`/students/add?mode=edit&id=${studentId}`} className="btn-save btn-save-cta">Edit student →</Link>
+            ) : (
+              <button type="submit" disabled={!canSubmit} className="btn-save btn-save-cta">{saving ? "Saving..." : isEditMode ? "Update student →" : "Enroll student →"}</button>
+            )}
+          </div>
+        </footer>
       </form>
 
       {photoPreviewOpen && photo ? (
@@ -3052,34 +3099,68 @@ export function StudentAddPanel() {
       ) : null}
 
       <style jsx>{`
+        /* Root fills the available <main> area AND bleeds through
+           .dashboard-main's 18px padding so the footer can span full width. */
         .enroll-page {
           --brand: #6c3ce1;
           --ink: #111827;
           --muted: #6b7280;
           --line: #e5e7eb;
           --bg: #fafafb;
-          overflow: visible;
           color: var(--ink);
-          width: 100%;
-          min-height: 100vh;
-          padding: 8px;
+          height: 100%;
+          margin: -18px;
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+          min-height: 0;
         }
 
-        .student-add-panel-wrap,
         .student-add-panel-wrap form {
+          flex: 1;
+          min-width: 0;
+          min-height: 0;
+          display: flex;
+          flex-direction: column;
           overflow: visible;
         }
 
-        .student-add-panel-wrap form {
-          padding-bottom: 112px;
+        /* The only scrollable region on this page. Internal padding restores
+           gutters that .enroll-page's negative margin bled out.
+           overflow-x: hidden + min-width: 0 prevent children (wide grids,
+           long labels) from forcing the container to grow sideways at
+           narrow widths. */
+        .enroll-scroll {
+          flex: 1;
+          min-width: 0;
+          min-height: 0;
+          overflow-y: auto;
+          overflow-x: hidden;
+          padding: 18px;
+        }
+
+        /* Action bar — lives OUTSIDE .enroll-scroll so it's always visible.
+           flex-shrink: 0 keeps it at its natural height; the scroll sibling
+           (flex: 1) takes all remaining vertical space. */
+        .enroll-footer {
+          flex-shrink: 0;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+          min-height: 72px;
+          background: #ffffff;
+          border-top: 1px solid #ececf2;
+          padding: 14px 24px;
+          box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.05);
+          z-index: 40;
         }
 
         .top-row,
         .page-title-row,
         .scan-banner,
         .banner-error,
-        .enroll-body,
-        .sticky-footer {
+        .enroll-body {
           width: 100%;
           max-width: none;
           margin-left: 0;
@@ -3145,12 +3226,15 @@ export function StudentAddPanel() {
           margin: 0;
           font-size: 40px;
           font-weight: 700;
+          font-family: var(--font-playfair-display), Georgia, "Times New Roman", serif;
+          letter-spacing: -0.02em;
+          line-height: 1.1;
         }
 
         .title-accent {
           color: var(--brand);
           font-style: italic;
-          font-family: Georgia, "Times New Roman", serif;
+          font-family: var(--font-playfair-display), Georgia, "Times New Roman", serif;
           font-weight: 400;
         }
 
@@ -3487,6 +3571,10 @@ export function StudentAddPanel() {
         .section-title {
           font-size: 28px;
           margin: 0;
+          font-weight: 700;
+          font-family: var(--font-playfair-display), Georgia, "Times New Roman", serif;
+          letter-spacing: -0.015em;
+          line-height: 1.15;
         }
 
         .section-subtitle {
@@ -3537,6 +3625,8 @@ export function StudentAddPanel() {
         .field-select,
         .field-textarea {
           width: 100%;
+          min-width: 0;              /* critical: lets inputs shrink inside narrow grid cells */
+          max-width: 100%;
           padding: 10px 12px;
           border: 1px solid #d1d5db;
           border-radius: 8px;
@@ -3752,30 +3842,8 @@ export function StudentAddPanel() {
           font-size: 12px;
         }
 
-        .sticky-footer {
-          width: 100%;
-          margin: 0;
-          padding-bottom: 0;
-        }
-
-        .sticky-footer-inner {
-          position: sticky;
-          bottom: 0;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 16px;
-          background: #ffffff;
-          border-top: 1px solid #e5e7eb;
-          border-left: none;
-          border-right: none;
-          border-bottom: none;
-          border-radius: 0;
-          padding: 14px 12px;
-          z-index: 120;
-          box-shadow: none;
-          backdrop-filter: none;
-        }
+        /* .sticky-footer / .sticky-footer-inner rules removed — the action bar
+           is now .enroll-footer, a flex sibling of .enroll-scroll (not sticky). */
 
         .footer-progress-wrap {
           display: flex;
@@ -4100,334 +4168,6 @@ export function StudentAddPanel() {
           margin-top: 8px;
         }
 
-        /* ==== DOCUMENTS SECTION ==== */
-        .doc-upload-grid {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 16px 18px;
-          margin-bottom: 24px;
-        }
-
-        .doc-card {
-          padding: 22px;
-          background: #ffffff;
-          border: 1px solid #E7EAF1;
-          border-radius: 20px;
-          height: 160px;
-          display: flex;
-          flex-direction: column;
-          transition: all 220ms ease;
-          cursor: pointer;
-        }
-
-        .doc-card-medical {
-          height: 150px;
-          margin-top: 8px;
-        }
-
-        .doc-card:hover {
-          border-color: #5B3DF5;
-          box-shadow: 0 0 0 4px rgba(91, 61, 245, 0.08), 0 4px 12px rgba(0, 0, 0, 0.06);
-          transform: translateY(-2px);
-        }
-
-        .doc-card:focus {
-          outline: 2px solid #5B3DF5;
-          outline-offset: 2px;
-        }
-
-        .doc-card-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: flex-start;
-          margin-bottom: 10px;
-        }
-
-        .doc-icon-box {
-          width: 40px;
-          height: 40px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          background: #F3EEFF;
-          border-radius: 10px;
-          font-size: 20px;
-          flex-shrink: 0;
-        }
-
-        .doc-badge {
-          display: inline-block;
-          padding: 4px 10px;
-          border-radius: 6px;
-          font-size: 10px;
-          font-weight: 600;
-          letter-spacing: 0.5px;
-          text-transform: uppercase;
-        }
-
-        .doc-badge-required {
-          background: #FEE2E2;
-          color: #991B1B;
-        }
-
-        .doc-badge-masked {
-          background: #FED7AA;
-          color: #92400E;
-        }
-
-        .doc-badge-optional {
-          background: #F3F4F6;
-          color: #6B7280;
-        }
-
-        .doc-card-title {
-          margin: 0 0 6px;
-          font-size: 15px;
-          font-weight: 600;
-          color: #111827;
-        }
-
-        .doc-card-desc {
-          margin: 0 0 10px;
-          font-size: 13px;
-          color: #64748B;
-          line-height: 1.4;
-          flex: 1;
-        }
-
-        .doc-upload-btn {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          padding: 0;
-          border: none;
-          background: none;
-          color: #5B3DF5;
-          cursor: pointer;
-          font-size: 13px;
-          font-weight: 500;
-          text-decoration: none;
-          transition: all 0.15s ease;
-          margin-top: auto;
-        }
-
-        .doc-upload-btn:hover {
-          color: #4C33E6;
-          text-decoration: underline;
-        }
-
-        /* RTE Box */
-        .doc-rte-box {
-          display: flex;
-          gap: 14px;
-          padding: 20px 24px;
-          background: #FEF3C7;
-          border: 1px solid #FCD34D;
-          border-radius: 18px;
-          margin-top: 4px;
-        }
-
-        .doc-rte-full-width {
-          grid-column: 1 / -1;
-          margin-top: 4px;
-        }
-
-        .doc-rte-icon {
-          font-size: 24px;
-          flex-shrink: 0;
-        }
-
-        .doc-rte-title {
-          margin: 0 0 6px;
-          font-size: 14px;
-          font-weight: 600;
-          color: #92400E;
-        }
-
-        .doc-rte-text {
-          margin: 0;
-          font-size: 13px;
-          color: #78350F;
-          line-height: 1.6;
-        }
-
-        .doc-rte-link {
-          color: #B45309;
-          text-decoration: underline;
-          font-weight: 500;
-        }
-
-        .doc-rte-link:hover {
-          color: #92400E;
-        }
-
-        /* Consent Box */
-        .doc-consent-box {
-          padding: 20px 24px;
-          background: #F8F7FF;
-          border: 1px solid #C4B5FD;
-          border-radius: 18px;
-        }
-
-        .doc-consent-full-width {
-          grid-column: 1 / -1;
-          margin-top: 4px;
-        }
-
-        .doc-consent-label {
-          display: flex;
-          gap: 12px;
-          align-items: flex-start;
-          cursor: pointer;
-        }
-
-        .doc-consent-checkbox {
-          width: 18px;
-          height: 18px;
-          margin-top: 4px;
-          cursor: pointer;
-          flex-shrink: 0;
-          accent-color: #5B3DF5;
-        }
-
-        .doc-consent-title {
-          margin: 0 0 6px;
-          font-size: 14px;
-          font-weight: 600;
-          color: #111827;
-        }
-
-        .doc-consent-text {
-          margin: 0;
-          font-size: 13px;
-          color: #4B5563;
-          line-height: 1.6;
-        }
-
-        /* Document Success State */
-        .doc-card.doc-card-success {
-          background: #D1FAE5;
-          border-color: #6EE7B7;
-        }
-
-        .doc-card-success .doc-card-header {
-          margin-bottom: 8px;
-        }
-
-        .doc-card-success .doc-icon-box {
-          background: #10B981;
-          color: #ffffff;
-          font-size: 24px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .doc-success-msg {
-          margin: 0;
-          font-size: 13px;
-          color: #059669;
-          font-weight: 600;
-        }
-
-        .doc-success-filename {
-          margin: 4px 0 0;
-          font-size: 12px;
-          color: #047857;
-          font-weight: 500;
-          word-break: break-all;
-        }
-
-        .doc-card-success .doc-upload-btn {
-          color: #10B981;
-        }
-
-        .doc-card-success .doc-upload-btn:hover {
-          color: #059669;
-        }
-
-        /* Document Error State */
-        .doc-card.doc-card-error {
-          background: #FEE2E2;
-          border-color: #FCA5A5;
-        }
-
-        .doc-card-error .doc-icon-box {
-          background: #DC2626;
-          color: #ffffff;
-          font-size: 24px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .doc-error-msg {
-          margin: 0;
-          font-size: 13px;
-          color: #991B1B;
-          font-weight: 600;
-        }
-
-        .doc-error-detail {
-          margin: 4px 0 0;
-          font-size: 12px;
-          color: #7F1D1D;
-          font-weight: 400;
-          word-break: break-all;
-          line-height: 1.3;
-        }
-
-        .doc-card-error .doc-upload-btn {
-          color: #DC2626;
-        }
-
-        .doc-card-error .doc-upload-btn:hover {
-          color: #991B1B;
-        }
-
-        /* Document Uploading State */
-        .doc-card.doc-card-uploading {
-          background: #EFF6FF;
-          border-color: #93C5FD;
-        }
-
-        .doc-card-uploading .doc-icon-box {
-          background: #3B82F6;
-          color: #ffffff;
-          font-size: 24px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-          from {
-            transform: rotate(0deg);
-          }
-          to {
-            transform: rotate(360deg);
-          }
-        }
-
-        .doc-uploading-msg {
-          margin: 0;
-          font-size: 13px;
-          color: #1E40AF;
-          font-weight: 600;
-        }
-
-        .doc-card-uploading .doc-upload-btn {
-          color: #3B82F6;
-          cursor: not-allowed;
-          opacity: 0.6;
-        }
-
-        /* Hidden file inputs */
-        .hidden-file-input {
-          display: none;
-        }
-
         /* Review Section */
         .review-summary-grid {
           display: grid;
@@ -4457,21 +4197,125 @@ export function StudentAddPanel() {
           line-height: 1.5;
         }
 
+        /* ============================================================
+           MEDIUM BREAKPOINT (≤1280px): keep Claude-style two-column
+           layout — stepper on the left (vertical, readable labels),
+           form on the right. Just narrow the stepper column so the
+           form has room to breathe.
+           ============================================================ */
+        @media (max-width: 1280px) {
+          .hero-title {
+            font-size: 32px;
+          }
+          .section-title {
+            font-size: 24px;
+          }
+          .section-card {
+            padding: 20px;
+          }
+          .grid-3 {
+            grid-template-columns: repeat(2, 1fr);
+          }
+
+          /* Narrow stepper column but keep it vertical with full labels. */
+          .section-nav-wrap {
+            width: 220px;
+            min-width: 220px;
+            flex-shrink: 0;
+          }
+
+          /* Defensive: never clip, ellipsize, or hide step text. */
+          .nav-label,
+          .nav-copy {
+            white-space: normal;
+            overflow: visible;
+            text-overflow: unset;
+          }
+          .nav-text {
+            min-width: 0;
+            white-space: normal;
+          }
+        }
+
         @media (max-width: 1024px) {
+          /* Wrap footer onto 2 rows so Progress bar + 3 buttons don't collide. */
+          .enroll-footer {
+            flex-wrap: wrap;
+            padding: 12px 16px;
+          }
+          .footer-progress-wrap {
+            min-width: 0;
+            max-width: 100%;
+            flex: 1 1 100%;
+          }
+          .footer-actions {
+            flex: 0 0 auto;
+            margin-left: auto;
+          }
+        }
+
+        /* ============================================================
+           MOBILE (≤900px): at this width the global sidebar also
+           stacks on top (Sidebar.module.css) — the stepper column
+           can't fit alongside the form anymore, so flatten it to a
+           horizontal pill strip above the form.
+           ============================================================ */
+        @media (max-width: 900px) {
           .enroll-body {
             flex-direction: column;
           }
 
           .section-nav-wrap {
-            position: sticky;
-            top: 10px;
+            position: relative;
+            top: auto;
             width: 100%;
+            min-width: 0;
             max-height: none;
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 10px 12px;
+            z-index: 5;
           }
 
           .section-nav {
-            overflow: visible;
+            max-height: none;
+            overflow-x: auto;
+            overflow-y: visible;
             padding-right: 0;
+            scrollbar-width: thin;
+          }
+
+          .section-nav-list {
+            display: flex;
+            flex-direction: row;
+            gap: 6px;
+            align-items: stretch;
+          }
+
+          .nav-item {
+            margin-bottom: 0;
+            flex-shrink: 0;
+          }
+
+          .nav-item-inner {
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px 6px 8px;
+            white-space: nowrap;
+            border-radius: 999px;
+          }
+
+          /* Compact mode only — sub-copy dropped on mobile to fit in a row. */
+          .nav-copy {
+            display: none;
+          }
+
+          .nav-item.active::before {
+            display: none;
+          }
+          .nav-item.active .nav-item-inner {
+            background: #ede9fe;
           }
         }
 
@@ -4479,10 +4323,6 @@ export function StudentAddPanel() {
           .grid-3,
           .grid-2,
           .review-grid {
-            grid-template-columns: 1fr;
-          }
-
-          .doc-upload-grid {
             grid-template-columns: 1fr;
           }
 
@@ -4505,14 +4345,11 @@ export function StudentAddPanel() {
             width: 100%;
           }
 
-          .sticky-footer {
+          .enroll-footer {
             width: 100%;
-          }
-
-          .sticky-footer-inner {
-            position: static;
             flex-direction: column;
             align-items: stretch;
+            padding: 14px 16px;
           }
 
           .footer-progress-wrap,

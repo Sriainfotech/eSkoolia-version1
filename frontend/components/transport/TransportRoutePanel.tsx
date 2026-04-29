@@ -6,6 +6,7 @@ import type { Map as LeafletMap } from "leaflet";
 import { MapPin, MoveUp, MoveDown, Plus, Route, Save, Trash2 } from "lucide-react";
 
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { useToast } from "@/components/common/Toast";
 import { extractListData, type ListApiResponse } from "@/lib/pagination";
 
 const MapContainer = dynamic(() => import("react-leaflet").then((module) => module.MapContainer), { ssr: false });
@@ -131,6 +132,7 @@ export function TransportRoutePanel() {
   const [isLoadingStops, setIsLoadingStops] = useState(false);
   const [isSavingStop, setIsSavingStop] = useState(false);
   const [error, setError] = useState<string>("");
+  const toast = useToast();
   const [mapInstance, setMapInstance] = useState<LeafletMap | null>(null);
   const [routePath, setRoutePath] = useState<[number, number][]>([]);
   const [useDashedPath, setUseDashedPath] = useState(false);
@@ -251,7 +253,8 @@ export function TransportRoutePanel() {
           stop_type: form.stop_type,
           scheduled_time: form.scheduled_time || null,
           geofence_radius: Number(form.geofence_radius || 100),
-          arrival_time_window: form.scheduled_time || "",
+      toast.showApiError(loadError, "Failed to load route builder data");
+      setError(loadError instanceof Error ? loadError.message : "Failed to load route builder data");
         }),
       });
 
@@ -292,7 +295,8 @@ export function TransportRoutePanel() {
     const currentIndex = sortedStops.findIndex((stop) => stop.id === stopId);
     if (currentIndex < 0) {
       return;
-    }
+      toast.showApiError(saveError, "Failed to save stop");
+      setError(saveError instanceof Error ? saveError.message : "Failed to save stop");
 
     const swapIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
     if (swapIndex < 0 || swapIndex >= sortedStops.length) {

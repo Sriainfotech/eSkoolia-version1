@@ -117,14 +117,16 @@ export function Topbar() {
 
   return (
     <header
+      className="shrink-0"
       style={{
         height: 64,
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
         padding: "0 18px",
-        borderBottom: "1px solid var(--line)",
-        background: "var(--surface)",
+        borderBottom: "1px solid #ececf2",
+        background: "#ffffff",
+        zIndex: 40,
       }}
     >
       <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>

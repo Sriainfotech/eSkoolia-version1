@@ -6,6 +6,7 @@ import { buildPaginationQuery, extractListData, extractPaginationMeta, type List
 import { PaginationControls } from "@/components/common/PaginationControls";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { usePersistentPagination } from "@/hooks/usePersistentPagination";
+import { useToast } from "@/components/common/Toast";
 
 type AcademicYear = {
   id: number;
@@ -60,6 +61,7 @@ function buttonStyle(color = "var(--primary)") {
 
 export function FeesGroupPanel() {
   const { page, pageSize, setPage, setPageSize } = usePersistentPagination("fees-groups.list", 1, 10);
+  const toast = useToast();
   const [feesGroups, setFeesGroups] = useState<FeesGroup[]>([]);
   const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -86,7 +88,8 @@ export function FeesGroupPanel() {
       if (items.length > 0 && !formAcademicYear) {
         setFormAcademicYear(String(items[0].id));
       }
-    } catch {
+    } catch (err) {
+      toast.showApiError(err, "Unable to load academic years");
       console.error("Unable to load academic years");
     }
   };
@@ -101,7 +104,8 @@ export function FeesGroupPanel() {
       const meta = extractPaginationMeta(data);
       setFeesGroups(items);
       setTotalCount(meta?.count ?? items.length);
-    } catch {
+    } catch (err) {
+      toast.showApiError(err, "Unable to load fees groups.");
       setError("Unable to load fees groups.");
     } finally {
       setLoading(false);
@@ -187,8 +191,8 @@ export function FeesGroupPanel() {
       setSuccess(isUpdate ? "Fees group updated successfully." : "Fees group created successfully.");
       await loadFeesGroups(page, pageSize);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to save fees group.";
-      setError(message);
+      toast.showApiError(err, "Unable to save fees group.");
+      setError("Unable to save fees group.");
       setSuccess("");
     } finally {
       setSaving(false);
@@ -219,6 +223,7 @@ export function FeesGroupPanel() {
       }
       await loadFeesGroups(nextRows.length === 0 && page > 1 ? page - 1 : page, pageSize);
     } catch (err) {
+      toast.showApiError(err, "Unable to delete fees group.");
       setError("Unable to delete fees group.");
     } finally {
       setDeletingId(null);
