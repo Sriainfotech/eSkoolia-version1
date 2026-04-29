@@ -129,7 +129,7 @@ export default function PromoteSmartFilter({
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') onSearchSubmit(); }}
-            placeholder="Search student name, admission no, class or section…"
+            placeholder="Search student, admission no, class or section"
           />
           {search && (
             <button className="sg-search-clear" onClick={() => { onSearchChange(''); onSearchSubmit(); }} aria-label="Clear search">

@@ -3,10 +3,9 @@ import { DM_Sans, Playfair_Display } from "next/font/google";
 import "./globals.css";
 import "leaflet/dist/leaflet.css";
 import "react-toastify/dist/ReactToastify.css";
-import { RequiredFieldMarker } from "@/components/layout/RequiredFieldMarker";
 
-const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-inter" });
-const playfairDisplay = Playfair_Display({ subsets: ["latin"], variable: "--font-playfair-display" });
+const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-dm-sans", display: "swap" });
+const playfairDisplay = Playfair_Display({ subsets: ["latin"], variable: "--font-playfair", display: "swap" });
 
 export const metadata: Metadata = {
   title: "School ERP",

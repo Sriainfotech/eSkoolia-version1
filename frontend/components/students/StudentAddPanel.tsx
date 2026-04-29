@@ -891,26 +891,37 @@ export function StudentAddPanel() {
     try {
       setLoading(true);
       setError("");
-      const [yearData, classData, categoryRows, guardianRows] = await Promise.all([
-        apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/?page_size=200"),
-        fetchAllPages<SchoolClass>("/api/v1/core/classes/"),
-        fetchAllPages<StudentCategory>("/api/v1/students/categories/?status=active"),
-        fetchAllPages<Guardian>("/api/v1/students/guardians/"),
-      ]);
-      setAcademicYears(listData(yearData));
-      setCategories(categoryRows);
-      setGuardians(guardianRows);
-      setClasses(classData);
 
-      try {
-        const me = await apiGet<MePayload>("/api/v1/auth/me/");
-        setCurrentUser(me);
-      } catch {
-        setCurrentUser(null);
-      }
+      // Kick off all lookup requests in parallel and apply each as it arrives,
+      // so dropdowns light up progressively instead of waiting for the slowest
+      // (guardian pagination) to finish.
+      const yearPromise = apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/?page_size=200")
+        .then((data) => setAcademicYears(listData(data)))
+        .catch(() => {});
+      const classPromise = fetchAllPages<SchoolClass>("/api/v1/core/classes/", 500)
+        .then((rows) => setClasses(rows))
+        .catch(() => {});
+      const categoryPromise = fetchAllPages<StudentCategory>("/api/v1/students/categories/?status=active", 500)
+        .then((rows) => setCategories(rows))
+        .catch(() => {});
+      const guardianPromise = fetchAllPages<Guardian>("/api/v1/students/guardians/", 500)
+        .then((rows) => setGuardians(rows))
+        .catch(() => {});
+      const mePromise = apiGet<MePayload>("/api/v1/auth/me/")
+        .then((me) => setCurrentUser(me))
+        .catch(() => setCurrentUser(null));
+
+      // Unblock the form as soon as the small/critical lookups are in.
+      // Heavy paged fetches (categories/guardians) continue in the background.
+      await Promise.all([yearPromise, classPromise, mePromise]);
+      setLoading(false);
+
+      // Still await the heavy ones so any caller awaiting loadBaseLookups
+      // (e.g. the existing flow) sees a fully-resolved promise, but the UI
+      // is already interactive at this point.
+      await Promise.all([categoryPromise, guardianPromise]);
     } catch (loadError) {
       setError(parseError(loadError));
-    } finally {
       setLoading(false);
     }
   };
@@ -1186,12 +1197,38 @@ export function StudentAddPanel() {
     }
   };
 
+  // Track which student id (or "new"/"draft") we've already hydrated for, so the
+  // effect can safely re-run when useSearchParams() updates after hydration in
+  // App Router (the first render can briefly read empty params, which would
+  // otherwise leave the edit form blank with stale "new student" defaults).
+  const hydratedKeyRef = useRef<string | null>(null);
+  const baseLookupsLoadedRef = useRef(false);
+
   useEffect(() => {
+    const targetKey = isExistingStudentMode && studentId ? `student:${studentId}` : "new";
+    if (hydratedKeyRef.current === targetKey) return;
+    hydratedKeyRef.current = targetKey;
+
     const loadAll = async () => {
       try {
-        await loadBaseLookups();
-        if (isExistingStudentMode && studentId) {
-          await loadStudentForMode(studentId);
+        // Edit-mode fast-path: kick off the student detail fetch in PARALLEL
+        // with the heavier base-lookup paging (classes/categories/guardians).
+        // The form fields are bound to the student data, so applying it the
+        // moment it arrives lets the user see populated values within ~150 ms
+        // instead of waiting 3-5 s for guardian pagination to finish.
+        const studentPromise = isExistingStudentMode && studentId
+          ? loadStudentForMode(studentId).catch((studentError) => {
+              setError(parseError(studentError));
+            })
+          : null;
+
+        if (!baseLookupsLoadedRef.current) {
+          baseLookupsLoadedRef.current = true;
+          await loadBaseLookups();
+        }
+
+        if (studentPromise) {
+          await studentPromise;
         } else {
           const restored = restoreDraftSnapshot();
           if (!restored) {
@@ -1203,7 +1240,7 @@ export function StudentAddPanel() {
       }
     };
     void loadAll();
-  }, []);
+  }, [isExistingStudentMode, studentId]);
 
   useEffect(() => {
     const flag = window.localStorage.getItem("eskoolia_scan_banner_dismissed") === "true";

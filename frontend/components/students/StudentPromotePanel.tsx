@@ -5,8 +5,8 @@ import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TopToast } from "@/components/common/TopToast";
 import { studentThemeClassName } from "./studentTheme";
 import { promotionApi, type PromotionBatch, type PromotionRecord } from "@/lib/promotion-api";
-import { SmartFilter } from "@/app/(dashboard)/students/promote/components/SmartFilter";
-import { ClassAccordion } from "@/app/(dashboard)/students/promote/components/ClassAccordion";
+import SmartFilter from "@/app/(dashboard)/students/promote/components/PromoteSmartFilter";
+import ClassAccordion from "@/app/(dashboard)/students/promote/components/ClassAccordionCard";
 
 // ---- Types ----
 
