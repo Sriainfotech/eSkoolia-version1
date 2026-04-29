@@ -97,6 +97,7 @@ interface SectionBodyProps {
   selectedRows: Set<number>;
   onSelectionChange: (key: string, ids: Set<number>) => void;
   onToggleAbsent: (classId: number, sectionId: number, student: Student) => void;
+  onEditStatusPrompt: (classId: number, sectionId: number, student: Student) => void;
   onToggleLunch: (classId: number, sectionId: number, student: Student) => void;
   onSignIn: (classId: number, sectionId: number, student: Student) => void;
   onSignOut: (classId: number, sectionId: number, student: Student) => void;
@@ -110,7 +111,7 @@ interface SectionBodyProps {
 
 function nowTime(): string { return new Date().toTimeString().slice(0, 5); }
 
-function SectionBody({ classId, sectionId, sectionSummary, students, loading, searchQuery, statusFilter, selectedRows, onSelectionChange, onToggleAbsent, onToggleLunch, onSignIn, onSignOut, onBulkMark, onBulkSignIn, onSave, onReset, onOpenNote, readOnly = false }: SectionBodyProps) {
+function SectionBody({ classId, sectionId, sectionSummary, students, loading, searchQuery, statusFilter, selectedRows, onSelectionChange, onToggleAbsent, onEditStatusPrompt, onToggleLunch, onSignIn, onSignOut, onBulkMark, onBulkSignIn, onSave, onReset, onOpenNote, readOnly = false }: SectionBodyProps) {
   const key = `${classId}-${sectionId}`;
   const q = searchQuery.trim().toLowerCase();
   const visible = students.filter((s) => {
@@ -133,7 +134,7 @@ function SectionBody({ classId, sectionId, sectionSummary, students, loading, se
     <div>
       <SectionInnerBar present={present} absent={absent} late={late} total={students.length} pct={pct} />
       {!readOnly && selectedRows.size > 0 && <BulkActionBar count={selectedRows.size} onClear={() => onSelectionChange(key, new Set())} onMarkAll={(status) => onBulkMark(classId, sectionId, status)} onSignInAll={() => onBulkSignIn(classId, sectionId)} />}
-      <AttendanceTable students={visible} loading={false} selectedIds={readOnly ? new Set<number>() : selectedRows} onSelect={readOnly ? () => {} : toggleOne} onSelectAll={readOnly ? () => {} : toggleAll} onToggleAbsent={readOnly ? () => {} : (s) => onToggleAbsent(classId, sectionId, s)} onToggleLunch={readOnly ? () => {} : (s) => onToggleLunch(classId, sectionId, s)} onSignIn={readOnly ? () => {} : (s) => onSignIn(classId, sectionId, s)} onSignOut={readOnly ? () => {} : (s) => onSignOut(classId, sectionId, s)} onViewNotes={(s) => onOpenNote(classId, sectionId, s)} onEditStatusPrompt={readOnly ? () => {} : (s) => onToggleAbsent(classId, sectionId, s)} onEditNote={(s) => onOpenNote(classId, sectionId, s)} onDeleteNote={(s) => onOpenNote(classId, sectionId, s)} />
+      <AttendanceTable students={visible} loading={false} selectedIds={readOnly ? new Set<number>() : selectedRows} onSelect={readOnly ? () => {} : toggleOne} onSelectAll={readOnly ? () => {} : toggleAll} onToggleAbsent={readOnly ? () => {} : (s) => onToggleAbsent(classId, sectionId, s)} onToggleLunch={readOnly ? () => {} : (s) => onToggleLunch(classId, sectionId, s)} onSignIn={readOnly ? () => {} : (s) => onSignIn(classId, sectionId, s)} onSignOut={readOnly ? () => {} : (s) => onSignOut(classId, sectionId, s)} onViewNotes={(s) => onOpenNote(classId, sectionId, s)} onEditStatusPrompt={readOnly ? () => {} : (s) => onEditStatusPrompt(classId, sectionId, s)} onEditNote={(s) => onOpenNote(classId, sectionId, s)} onDeleteNote={(s) => onOpenNote(classId, sectionId, s)} />
       {readOnly ? (
         <div className="px-5 py-2.5 border-t border-[#F1F1F5] bg-[#FAFAFD] flex items-center gap-2">
           <span className="flex items-center gap-1 text-[11px] font-medium text-[#3A3A4A]"><span className="w-1.5 h-1.5 rounded-full bg-[#0A8C5A] inline-block" />{present} present</span>
@@ -163,6 +164,7 @@ interface ClassCardProps {
   sectionFilter: string;
   onSelectionChange: (key: string, ids: Set<number>) => void;
   onToggleAbsent: (classId: number, sectionId: number, student: Student) => void;
+  onEditStatusPrompt: (classId: number, sectionId: number, student: Student) => void;
   onToggleLunch: (classId: number, sectionId: number, student: Student) => void;
   onSignIn: (classId: number, sectionId: number, student: Student) => void;
   onSignOut: (classId: number, sectionId: number, student: Student) => void;
@@ -176,8 +178,9 @@ interface ClassCardProps {
   onMarkAllPresentForClass?: (classId: number) => void;
 }
 
-function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, students, loadingStudents, selectedRows, searchQuery, statusFilter, sectionFilter, onSelectionChange, onToggleAbsent, onToggleLunch, onSignIn, onSignOut, onBulkMark, onBulkSignIn, onSave, onReset, onOpenNote, readOnly = false, dateMode, onMarkAllPresentForClass }: ClassCardProps) {
+function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, students, loadingStudents, selectedRows, searchQuery, statusFilter, sectionFilter, onSelectionChange, onToggleAbsent, onEditStatusPrompt, onToggleLunch, onSignIn, onSignOut, onBulkMark, onBulkSignIn, onSave, onReset, onOpenNote, readOnly = false, dateMode, onMarkAllPresentForClass }: ClassCardProps) {
   const [showMarkAll, setShowMarkAll] = useState(false);
+  const [markAllCooldown, setMarkAllCooldown] = useState(false);
   const filteredSections = sectionFilter === 'all' ? cls.sections : cls.sections.filter((sec) => { const name = (sec.name || '').trim().toUpperCase(); const target = sectionFilter.toUpperCase(); return name === target || name.endsWith(` ${target}`) || name.replace(/^SECTION\s+/i, '') === target; });
   const activeSec = activeSectionId ?? filteredSections[0]?.id;
   const sectionKey = activeSec !== undefined ? `${cls.id}-${activeSec}` : null;
@@ -226,21 +229,28 @@ function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, st
           {totalAbsent > 0 && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FCE8EE] text-[#C2264E] whitespace-nowrap">{totalAbsent} absent</span>}
           {totalLate > 0 && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FDF1DC] text-[#B4721B] whitespace-nowrap">{totalLate} late</span>}
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#F1F1F5] text-[#6B6B7B] whitespace-nowrap">{filteredSections.length} sections</span>
-          {attendanceStatus === 'needed' && (
+          {dateMode !== 'future' && attendanceStatus === 'needed' && (
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FCE8EE] text-[#C2264E] whitespace-nowrap">Attendance Needed</span>
           )}
-          {attendanceStatus === 'in_progress' && (
+          {dateMode !== 'future' && attendanceStatus === 'in_progress' && (
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FDF1DC] text-[#B4721B] whitespace-nowrap">In Progress</span>
           )}
-          {attendanceStatus === 'complete' && (
+          {dateMode !== 'future' && attendanceStatus === 'complete' && (
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#E4F6ED] text-[#0A8C5A] whitespace-nowrap">✓ Complete</span>
           )}
         </div>
         <div className="flex-1" />
         {!isOpen && dateMode === 'today' && !readOnly && showMarkAll && onMarkAllPresentForClass && (
           <button
-            onClick={(e) => { e.stopPropagation(); onMarkAllPresentForClass(cls.id); }}
-            className="flex-shrink-0 h-7 px-3 text-[10px] font-bold bg-[#E4F6ED] text-[#0A8C5A] rounded-lg border border-[#0A8C5A]/20 hover:bg-[#c8edd8] transition-colors"
+            disabled={markAllCooldown}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (markAllCooldown) return;
+              onMarkAllPresentForClass(cls.id);
+              setMarkAllCooldown(true);
+              setTimeout(() => setMarkAllCooldown(false), 1500);
+            }}
+            className="flex-shrink-0 h-7 px-3 text-[10px] font-bold bg-[#E4F6ED] text-[#0A8C5A] rounded-lg border border-[#0A8C5A]/20 hover:bg-[#c8edd8] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             ✓ Mark All Present
           </button>
@@ -259,7 +269,7 @@ function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, st
             <>
               {filteredSections.length > 1 && <SectionTabs sections={filteredSections} activeSection={activeSec ?? filteredSections[0].id} onChange={(id) => onSectionChange(cls.id, id)} students={students} classId={cls.id} />}
               {activeSec !== undefined && activeSectionSummary && (
-                <SectionBody classId={cls.id} sectionId={activeSec} sectionSummary={activeSectionSummary} students={sectionStudents} loading={isLoading} searchQuery={searchQuery} statusFilter={statusFilter} selectedRows={sectionSelected} onSelectionChange={onSelectionChange} onToggleAbsent={onToggleAbsent} onToggleLunch={onToggleLunch} onSignIn={onSignIn} onSignOut={onSignOut} onBulkMark={onBulkMark} onBulkSignIn={onBulkSignIn} onSave={onSave} onReset={onReset} onOpenNote={onOpenNote} readOnly={readOnly} />
+                <SectionBody classId={cls.id} sectionId={activeSec} sectionSummary={activeSectionSummary} students={sectionStudents} loading={isLoading} searchQuery={searchQuery} statusFilter={statusFilter} selectedRows={sectionSelected} onSelectionChange={onSelectionChange} onToggleAbsent={onToggleAbsent} onEditStatusPrompt={onEditStatusPrompt} onToggleLunch={onToggleLunch} onSignIn={onSignIn} onSignOut={onSignOut} onBulkMark={onBulkMark} onBulkSignIn={onBulkSignIn} onSave={onSave} onReset={onReset} onOpenNote={onOpenNote} readOnly={readOnly} />
               )}
             </>
           )}
@@ -284,6 +294,7 @@ export interface ClassAccordionGridProps {
   selectedRows: Record<string, Set<number>>;
   onSelectionChange: (key: string, ids: Set<number>) => void;
   onToggleAbsent: (classId: number, sectionId: number, student: Student) => void;
+  onEditStatusPrompt: (classId: number, sectionId: number, student: Student) => void;
   onToggleLunch: (classId: number, sectionId: number, student: Student) => void;
   onSignIn: (classId: number, sectionId: number, student: Student) => void;
   onSignOut: (classId: number, sectionId: number, student: Student) => void;
@@ -298,9 +309,11 @@ export interface ClassAccordionGridProps {
   onRequestUnlock?: () => void;
   isSundayLocked?: boolean;
   onMarkAllPresentForClass?: (classId: number) => void;
+  isEditUnlocked?: boolean;
+  onLogoutPastEdit?: () => void;
 }
 
-export default function ClassAccordionGrid({ classes, levelFilter, searchQuery, statusFilter, sectionFilter, openClasses, onToggleClass, activeSections, onSectionChange, students, loadingStudents, selectedRows, onSelectionChange, onToggleAbsent, onToggleLunch, onSignIn, onSignOut, onBulkMark, onBulkSignIn, onSave, onReset, onOpenNote, readOnly = false, dateMode = 'today', selectedDate, onRequestUnlock, isSundayLocked = false, onMarkAllPresentForClass }: ClassAccordionGridProps) {
+export default function ClassAccordionGrid({ classes, levelFilter, searchQuery, statusFilter, sectionFilter, openClasses, onToggleClass, activeSections, onSectionChange, students, loadingStudents, selectedRows, onSelectionChange, onToggleAbsent, onEditStatusPrompt, onToggleLunch, onSignIn, onSignOut, onBulkMark, onBulkSignIn, onSave, onReset, onOpenNote, readOnly = false, dateMode = 'today', selectedDate, onRequestUnlock, isSundayLocked = false, onMarkAllPresentForClass, isEditUnlocked = false, onLogoutPastEdit }: ClassAccordionGridProps) {
   const q = searchQuery.trim().toLowerCase();
   const visible = classes.filter((cls) => {
     if (levelFilter !== 'all' && cls.level !== levelFilter) return false;
@@ -350,6 +363,30 @@ export default function ClassAccordionGrid({ classes, levelFilter, searchQuery, 
           )}
         </div>
       )}
+      {!readOnly && dateMode === 'past' && isEditUnlocked && (
+        <div className="flex items-center justify-between gap-3 mb-3 px-4 py-3 rounded-xl border border-[#FBCFE8] bg-[#FFF1F2]">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="w-7 h-7 flex-shrink-0 rounded-lg bg-[#FCE7F3] flex items-center justify-center">
+              <svg className="w-3.5 h-3.5 text-[#BE185D]" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
+                <path d="M12 9v4m0 4h.01" />
+                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+              </svg>
+            </span>
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold text-[#9D174D] leading-tight">Past-date edit mode is active</p>
+              <p className="text-[11px] text-[#BE185D] leading-tight mt-0.5">Please log out after finishing changes for this past date.</p>
+            </div>
+          </div>
+          {onLogoutPastEdit && (
+            <button
+              onClick={onLogoutPastEdit}
+              className="flex-shrink-0 h-8 px-3.5 text-[11px] font-bold bg-[#FCE7F3] text-[#9D174D] rounded-lg border border-[#F9A8D4] hover:bg-[#FBCFE8] transition-colors"
+            >
+              Logout
+            </button>
+          )}
+        </div>
+      )}
       {readOnly && dateMode === 'future' && (
         <div className="flex items-center gap-2.5 mb-3 px-4 py-3 rounded-xl border border-[#C5BEFF] bg-[#F5F3FF]">
           <span className="w-7 h-7 flex-shrink-0 rounded-lg bg-[#EDE9FE] flex items-center justify-center">
@@ -388,7 +425,7 @@ export default function ClassAccordionGrid({ classes, levelFilter, searchQuery, 
         </div>
       )}
       {visible.map((cls) => (
-        <ClassCard key={cls.id} cls={cls} isOpen={openClasses.has(cls.id)} onToggle={onToggleClass} activeSectionId={activeSections[cls.id]} onSectionChange={onSectionChange} students={students} loadingStudents={loadingStudents} selectedRows={selectedRows} searchQuery={searchQuery} statusFilter={statusFilter} sectionFilter={sectionFilter} onSelectionChange={onSelectionChange} onToggleAbsent={onToggleAbsent} onToggleLunch={onToggleLunch} onSignIn={onSignIn} onSignOut={onSignOut} onBulkMark={onBulkMark} onBulkSignIn={onBulkSignIn} onSave={onSave} onReset={onReset} onOpenNote={onOpenNote} readOnly={readOnly} dateMode={dateMode} onMarkAllPresentForClass={onMarkAllPresentForClass} />
+        <ClassCard key={cls.id} cls={cls} isOpen={openClasses.has(cls.id)} onToggle={onToggleClass} activeSectionId={activeSections[cls.id]} onSectionChange={onSectionChange} students={students} loadingStudents={loadingStudents} selectedRows={selectedRows} searchQuery={searchQuery} statusFilter={statusFilter} sectionFilter={sectionFilter} onSelectionChange={onSelectionChange} onToggleAbsent={onToggleAbsent} onEditStatusPrompt={onEditStatusPrompt} onToggleLunch={onToggleLunch} onSignIn={onSignIn} onSignOut={onSignOut} onBulkMark={onBulkMark} onBulkSignIn={onBulkSignIn} onSave={onSave} onReset={onReset} onOpenNote={onOpenNote} readOnly={readOnly} dateMode={dateMode} onMarkAllPresentForClass={onMarkAllPresentForClass} />
       ))}
     </div>
   );

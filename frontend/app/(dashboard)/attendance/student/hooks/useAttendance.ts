@@ -34,6 +34,17 @@ function statusToAttendanceType(status: string): string {
   return 'P';
 }
 
+async function extractErrorMessage(res: Response): Promise<string> {
+  try {
+    const data = await res.json();
+    if (typeof data?.message === 'string' && data.message.trim()) return data.message;
+    if (typeof data?.detail === 'string' && data.detail.trim()) return data.detail;
+  } catch {
+    // Fall through to default message below.
+  }
+  return `HTTP ${res.status}`;
+}
+
 async function downloadSampleTemplateWithToken(token: string, router: ReturnType<typeof useRouter>): Promise<void> {
   const res = await fetch(`${API_BASE_URL}/api/v1/attendance/student-attendance/download-sample/`, {
     method: 'GET',
@@ -62,8 +73,10 @@ function mapSummaryToKpis(data: {
   total_students: number;
   present: number;
   absent: number;
+  absent_with_reason?: number;
   late: number;
   unmarked: number;
+  rte_at_risk?: number;
 }) {
   const total = data.total_students || 0;
   const present = data.present || 0;
@@ -79,8 +92,8 @@ function mapSummaryToKpis(data: {
     present_pct: total > 0 ? Math.round((present / total) * 100) : 0,
     weekly_avg_pct: total > 0 ? Math.round((present / total) * 100) : 0,
     chronic_absentees: 0,
-    rte_at_risk: 0,
-    absent_with_reason: 0,
+    rte_at_risk: data.rte_at_risk ?? 0,
+    absent_with_reason: data.absent_with_reason ?? 0,
     late_student_name: null,
     late_minutes: null,
     delta_pct: 0,
@@ -98,11 +111,21 @@ async function storeAttendance(
   const attendance: Record<number, string> = {};
   const note: Record<number, string> = {};
   const lunch: Record<number, boolean> = {};
+  const arrival_time: Record<number, string> = {};
+  const sign_in_time: Record<number, string> = {};
+  const sign_out_time: Record<number, string> = {};
+  const pickup_time: Record<number, string> = {};
+  const pickup_by: Record<number, string> = {};
   for (const m of marks) {
     if (m.status) attendance[m.student_id] = statusToAttendanceType(m.status);
-    if (m.note) note[m.student_id] = m.note;
-    if (m.absent_reason && !m.note) note[m.student_id] = m.absent_reason;
+    if (m.note !== undefined) note[m.student_id] = m.note;
+    if (m.absent_reason !== undefined && m.note === undefined) note[m.student_id] = m.absent_reason;
     if (m.lunch !== undefined) lunch[m.student_id] = m.lunch;
+    if (m.arrival_time) arrival_time[m.student_id] = m.arrival_time;
+    if (m.sign_in_time) sign_in_time[m.student_id] = m.sign_in_time;
+    if (m.sign_out_time) sign_out_time[m.student_id] = m.sign_out_time;
+    if (m.pickup_time) pickup_time[m.student_id] = m.pickup_time;
+    if (m.pickup_by) pickup_by[m.student_id] = m.pickup_by;
   }
 
   const body = {
@@ -113,6 +136,11 @@ async function storeAttendance(
     attendance,
     note,
     lunch,
+    arrival_time,
+    sign_in_time,
+    sign_out_time,
+    pickup_time,
+    pickup_by,
     lock_attendance: false,
   };
 
@@ -128,7 +156,10 @@ async function storeAttendance(
     return storeAttendance(newToken, date, marks, router);
   }
 
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    const msg = await extractErrorMessage(res);
+    throw new Error(msg);
+  }
   return { saved: marks.length };
 }
 
@@ -138,33 +169,42 @@ export function useAttendance(date: string) {
   const [kpisLoading, setKpisLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  const refreshSummary = useCallback(async () => {
+    const token = getToken();
+    const res = await fetch(
+      `${API_BASE_URL}/api/v1/attendance/student-attendance/daily-summary/?date=${date}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (res.status === 401) {
+      const newToken = await refreshAccessToken();
+      if (!newToken) {
+        router.push('/login');
+        return;
+      }
+      const retry = await fetch(
+        `${API_BASE_URL}/api/v1/attendance/student-attendance/daily-summary/?date=${date}`,
+        { headers: { Authorization: `Bearer ${newToken}` } },
+      );
+      if (retry.ok) {
+        const data = await retry.json();
+        setKpis(mapSummaryToKpis(data));
+      }
+      return;
+    }
+    if (res.ok) {
+      const data = await res.json();
+      setKpis(mapSummaryToKpis(data));
+    }
+  }, [date, router]);
+
   // Fetch school-wide daily summary whenever the date changes
   useEffect(() => {
     let cancelled = false;
     async function fetchSummary() {
       setKpisLoading(true);
       try {
-        const token = getToken();
-        const res = await fetch(
-          `${API_BASE_URL}/api/v1/attendance/student-attendance/daily-summary/?date=${date}`,
-          { headers: { Authorization: `Bearer ${token}` } },
-        );
-        if (res.status === 401) {
-          const newToken = await refreshAccessToken();
-          if (!newToken) { router.push('/login'); return; }
-          const res2 = await fetch(
-            `${API_BASE_URL}/api/v1/attendance/student-attendance/daily-summary/?date=${date}`,
-            { headers: { Authorization: `Bearer ${newToken}` } },
-          );
-          if (!cancelled && res2.ok) {
-            const data = await res2.json();
-            setKpis(mapSummaryToKpis(data));
-          }
-          return;
-        }
-        if (!cancelled && res.ok) {
-          const data = await res.json();
-          setKpis(mapSummaryToKpis(data));
+        if (!cancelled) {
+          await refreshSummary();
         }
       } catch {
         // silently fail — KPI cards will show skeleton
@@ -174,22 +214,23 @@ export function useAttendance(date: string) {
     }
     fetchSummary();
     return () => { cancelled = true; };
-  }, [date, router]);
+  }, [refreshSummary]);
 
   const patchMark = useCallback(async (
     studentId: number,
     payload: Partial<AttendanceMark>,
     onSuccess?: () => void,
-    onError?: () => void,
+    onError?: (msg: string) => void,
   ) => {
     setSaving(true);
     try {
       const token = getToken();
       const mark: AttendanceMark = { student_id: studentId, date, ...payload };
       await storeAttendance(token, date, [mark], router);
+      await refreshSummary();
       onSuccess?.();
-    } catch {
-      onError?.();
+    } catch (e: unknown) {
+      onError?.(e instanceof Error ? e.message : 'Unknown error');
     } finally {
       setSaving(false);
     }
@@ -205,16 +246,64 @@ export function useAttendance(date: string) {
     try {
       const token = getToken();
       const result = await storeAttendance(token, date, marks, router);
+      await refreshSummary();
       onSuccess?.(result.saved);
     } catch (e: unknown) {
       onError?.(e instanceof Error ? e.message : 'Unknown error');
     } finally {
       setSaving(false);
     }
-  }, [date, router]);
+  }, [date, refreshSummary, router]);
 
-  // Export endpoint does not exist in the backend
-  const exportAttendance = useCallback((_classId: string) => false, []);
+  const exportAttendance = useCallback(async (
+    classId: string,
+    onSuccess?: () => void,
+    onError?: (msg: string) => void,
+  ) => {
+    try {
+      const token = getToken();
+      const query = new URLSearchParams({ date, format: 'csv' });
+      if (classId && classId !== 'all') query.set('class_id', classId);
+      const res = await fetch(`${API_BASE_URL}/api/v1/attendance/student-attendance/export/?${query.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (res.status === 401) {
+        const newToken = await refreshAccessToken();
+        if (!newToken) { router.push('/login'); return; }
+        const retry = await fetch(`${API_BASE_URL}/api/v1/attendance/student-attendance/export/?${query.toString()}`, {
+          headers: { Authorization: `Bearer ${newToken}` },
+        });
+        if (!retry.ok) throw new Error(await extractErrorMessage(retry));
+        const retryBlob = await retry.blob();
+        const retryLink = document.createElement('a');
+        retryLink.href = URL.createObjectURL(retryBlob);
+        retryLink.download = `student_attendance_${date}.csv`;
+        document.body.appendChild(retryLink);
+        retryLink.click();
+        document.body.removeChild(retryLink);
+        URL.revokeObjectURL(retryLink.href);
+        onSuccess?.();
+        return true;
+      }
+
+      if (!res.ok) throw new Error(await extractErrorMessage(res));
+
+      const blob = await res.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `student_attendance_${date}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+      onSuccess?.();
+      return true;
+    } catch (e: unknown) {
+      onError?.(e instanceof Error ? e.message : 'Failed to export attendance');
+      return false;
+    }
+  }, [date, router]);
 
   const downloadSampleTemplate = useCallback(async (
     onSuccess?: () => void,

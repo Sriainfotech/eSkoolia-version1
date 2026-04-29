@@ -10,6 +10,28 @@ const SCHOOL_APPROVED_REASONS = [
   'Other school-approved reason',
 ] as const;
 
+function generateLateNote(studentName: string, minutesLate: number): string {
+  const templates = [
+    `${studentName} arrived ${minutesLate} minutes late due to transport delay.`,
+    `${studentName} reached late after heavy traffic conditions this morning.`,
+    `${studentName} was delayed by weather conditions and joined class shortly after arrival.`,
+    `${studentName} reported a late bus pickup and has now joined the class routine.`,
+  ];
+  const idx = Math.floor(Date.now() / 1000) % templates.length;
+  return templates[idx];
+}
+
+function generateSchoolApprovedReason(): string {
+  const options = [
+    'Transport disruption reported by school bus coordinator',
+    'School-approved participation in off-campus activity',
+    'Verified medical appointment communicated by guardian',
+    'Severe weather travel delay verified by administration',
+  ];
+  const idx = Math.floor(Date.now() / 1000) % options.length;
+  return options[idx];
+}
+
 interface Props {
   student: Student;
   minutesLate: number;
@@ -46,6 +68,13 @@ export default function LateCommerDialog({ student, minutesLate, initialMessage,
             </p>
           </div>
           <div className="px-5 pt-4 pb-3 flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => setApprovedReason(generateSchoolApprovedReason())}
+              className="h-8 px-3 text-[11px] font-semibold text-[#4C1D95] bg-[#F5F3FF] border border-[#DDD6FE] rounded-lg cursor-pointer hover:bg-[#EDE9FE] transition-colors"
+            >
+              AI Suggest Approved Reason
+            </button>
             {SCHOOL_APPROVED_REASONS.map((r) => (
               <button
                 key={r}
@@ -122,6 +151,13 @@ export default function LateCommerDialog({ student, minutesLate, initialMessage,
             onChange={(e) => setCustomMessage(e.target.value)}
             className="w-full px-3 py-2 rounded-lg border border-[#E6E6EC] text-[12px] text-[#0B0B14] placeholder:text-[#9CA0AE] outline-none focus:border-[#4729F4] transition-colors"
           />
+          <button
+            type="button"
+            onClick={() => setCustomMessage(generateLateNote(student.full_name, minutesLate))}
+            className="self-start h-7 px-3 text-[10px] font-semibold text-[#4C1D95] bg-[#F5F3FF] border border-[#DDD6FE] rounded-lg cursor-pointer hover:bg-[#EDE9FE] transition-colors"
+          >
+            AI Suggest Note
+          </button>
         </div>
 
         {/* Footer */}

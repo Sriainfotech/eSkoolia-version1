@@ -340,11 +340,19 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
 
     def perform_create(self, serializer):
         user = self.request.user
-        school_id = None if user.is_superuser else getattr(user, "school_id", None)
-        if school_id:
-            serializer.save(school_id=school_id)
-        else:
-            serializer.save()
+        school_id = getattr(user, "school_id", None)
+        if not school_id:
+            raw_school_id = self.request.data.get("school")
+            if raw_school_id not in (None, ""):
+                try:
+                    school_id = int(raw_school_id)
+                except (TypeError, ValueError):
+                    raise ValidationError({"school": "School must be a valid numeric id."})
+
+        if not school_id:
+            raise ValidationError({"school": "School is required to create a student group."})
+
+        serializer.save(school_id=school_id)
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -1076,6 +1084,83 @@ class StudentViewSet(TenantScopedModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
+
+    @action(detail=False, methods=["get"], url_path="summary", permission_classes=[permissions.IsAuthenticated])
+    def summary(self, request):
+        """KPI summary for the Student List page.
+
+        Honours search/current_class/current_section/academic_year filters.
+        Always returns totals across is_active and deleted statuses so each
+        KPI card reflects an absolute number (not limited by the currently
+        selected status pill).
+        """
+        from datetime import timedelta
+        from django.utils import timezone
+
+        user = request.user
+        qs = Student.objects.all()
+        if not user.is_superuser:
+            if not user.school_id:
+                return Response(
+                    {
+                        "success": True,
+                        "message": "Summary retrieved successfully",
+                        "data": {
+                            "total_count": 0,
+                            "active_count": 0,
+                            "inactive_count": 0,
+                            "archived_count": 0,
+                            "new_count": 0,
+                            "docs_pending_count": 0,
+                        },
+                    },
+                    status=status.HTTP_200_OK,
+                )
+            qs = qs.filter(school_id=user.school_id)
+
+        search = (request.query_params.get("search") or "").strip()
+        class_id = request.query_params.get("class") or request.query_params.get("current_class")
+        section_id = request.query_params.get("section") or request.query_params.get("current_section")
+        academic_year_id = request.query_params.get("academic_year")
+
+        if class_id and str(class_id).isdigit():
+            qs = qs.filter(current_class_id=int(class_id))
+        if section_id and str(section_id).isdigit():
+            qs = qs.filter(current_section_id=int(section_id))
+        if academic_year_id and str(academic_year_id).isdigit():
+            qs = qs.filter(academic_year_id=int(academic_year_id))
+        if search and re.fullmatch(r"[A-Za-z0-9 _\-./]+", search):
+            qs = qs.filter(
+                Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+                | Q(admission_no__icontains=search)
+                | Q(roll_no__icontains=search)
+            )
+
+        total = qs.count()
+        archived = qs.filter(is_deleted=True).count()
+        live = qs.filter(is_deleted=False)
+        active = live.filter(is_active=True, is_disabled=False).count()
+        inactive = live.filter(is_active=False).count()
+        docs_pending = live.filter(is_disabled=True).count()
+        cutoff = timezone.now() - timedelta(days=30)
+        new_count = live.filter(created_at__gte=cutoff).count()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Summary retrieved successfully",
+                "data": {
+                    "total_count": total,
+                    "active_count": active,
+                    "inactive_count": inactive,
+                    "archived_count": archived,
+                    "new_count": new_count,
+                    "docs_pending_count": docs_pending,
+                },
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=False, methods=["get"], url_path="check-admission-no")
     def check_admission_no(self, request):

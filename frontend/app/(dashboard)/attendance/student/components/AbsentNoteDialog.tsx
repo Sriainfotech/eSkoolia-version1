@@ -10,6 +10,17 @@ const QUICK_REASONS = [
 
 const NO_INTIMATION_REASON = 'No intimation';
 
+function generateAbsentReason(studentName: string): string {
+  const templates = [
+    `${studentName} is on approved family leave today.`,
+    `${studentName} is unwell and has informed the class teacher in advance.`,
+    `${studentName} has a medical appointment and is expected to rejoin by tomorrow.`,
+    `${studentName} reported a transport issue and could not attend school today.`,
+  ];
+  const idx = Math.floor(Date.now() / 1000) % templates.length;
+  return templates[idx];
+}
+
 interface Props {
   student: Student;
   initialReason?: string;
@@ -58,6 +69,18 @@ export default function AbsentNoteDialog({ student, initialReason, onConfirm, on
           <p className="text-[12px] text-[#6B6B7B] m-0 ml-7">
             Select a reason to track this absence.
           </p>
+          <div className="ml-7 mt-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSelected(null);
+                setCustom(generateAbsentReason(student.full_name));
+              }}
+              className="h-7 px-3 text-[10px] font-semibold text-[#4C1D95] bg-[#F5F3FF] border border-[#DDD6FE] rounded-lg cursor-pointer hover:bg-[#EDE9FE] transition-colors"
+            >
+              AI Suggest Reason
+            </button>
+          </div>
         </div>
 
         {/* Quick reasons */}

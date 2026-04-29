@@ -23,7 +23,7 @@ export default function AttendancePageHeader({ onImport, onExport, onDownloadSam
           <svg width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
             <path d="M7.5 1v7m0 0L4.5 5m3 3L10.5 5M2 12h11" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          Download Sample CSV
+          Download Sample
         </button>
         <button
           onClick={onImport}

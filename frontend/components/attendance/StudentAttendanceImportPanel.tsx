@@ -123,9 +123,9 @@ function formatFileSize(bytes: number) {
 
 function getFileValidationError(file: File | null) {
   if (!file) return "Please upload a file";
-  const isValidType = ["text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"].includes(file.type)
-    || /\.(csv|xlsx)$/i.test(file.name);
-  if (!isValidType) return "Upload a valid CSV or Excel file (.csv, .xlsx)";
+  const isValidType = ["text/csv", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel"].includes(file.type)
+    || /\.(csv|xlsx|xls)$/i.test(file.name);
+  if (!isValidType) return "Upload a valid CSV or Excel file (.csv, .xlsx, .xls)";
   const maxSizeBytes = 5 * 1024 * 1024;
   if (file.size > maxSizeBytes) return "File size exceeds 5MB limit";
   return "";
@@ -662,7 +662,7 @@ export default function StudentAttendanceImportPanel() {
                   Upload File <span style={{ color: "#dc2626" }}>*</span>
                   </label>
                   <button type="button" style={secondaryButtonStyle()} onClick={downloadSampleFile} aria-label="Download sample file">
-                    ⬇ Download Sample File
+                    ⬇ Download Sample (XLSX)
                   </button>
                 </div>
                 <div
@@ -698,13 +698,13 @@ export default function StudentAttendanceImportPanel() {
                     {file ? file.name : "Drag & drop your file here"}
                   </p>
                   <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>
-                    {file ? `${formatFileSize(file.size)} • CSV or Excel file` : "or click to select (.csv, .xlsx, max 5MB)"}
+                    {file ? `${formatFileSize(file.size)} • CSV or Excel file` : "or click to select (.csv, .xlsx, .xls, max 5MB)"}
                   </p>
                 </div>
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".csv,.xlsx"
+                  accept=".csv,.xlsx,.xls"
                   onChange={handleFileChange}
                   style={{ display: "none" }}
                   disabled={loading || saving}
@@ -718,7 +718,7 @@ export default function StudentAttendanceImportPanel() {
                       </button>
                     ) : null}
                   </div>
-                  <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>Allowed: CSV or XLSX only. Max size: 5MB.</p>
+                  <p style={{ margin: 0, fontSize: 12, color: "var(--text-muted)" }}>Allowed: CSV/XLSX/XLS. Max size: 5MB.</p>
                 </div>
                 {errors.file && <p style={{ color: "#dc2626", fontSize: 12, marginTop: 4 }}>📌 {errors.file}</p>}
               </div>

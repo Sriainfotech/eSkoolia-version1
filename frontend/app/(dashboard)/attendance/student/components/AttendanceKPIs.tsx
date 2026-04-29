@@ -12,7 +12,7 @@ interface AttendanceKPIsProps {
 interface KPICardProps {
   label: string;
   value: string | number;
-  sub?: string;
+  sub?: React.ReactNode;
   badgeText: string;
   badgeBg: string;
   badgeColor: string;
@@ -79,6 +79,12 @@ export default function AttendanceKPIs({ data, selectedDate, today }: Attendance
         ? `-${Math.abs(data.delta_pct)}%`
         : `+${data.present_pct}%`;
 
+  const absentReasonSub = data.absent_today === 0
+    ? 'No absences marked.'
+    : data.absent_with_reason > 0
+      ? `${data.absent_with_reason} of ${data.absent_today} absent entr${data.absent_today === 1 ? 'y has' : 'ies have'} a recorded reason.`
+      : 'Reasons are pending for absent entries.';
+
   return (
     <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
       <KPICard
@@ -95,7 +101,7 @@ export default function AttendanceKPIs({ data, selectedDate, today }: Attendance
       <KPICard
         label={`Absent ${onText}`}
         value={data.absent_today}
-        sub={data.absent_with_reason > 0 ? `${data.absent_with_reason} child${data.absent_with_reason === 1 ? '' : 'ren'} with reason` : 'No reason provided'}
+        sub={absentReasonSub}
         badgeText="AB"
         badgeBg="#FFF1F2"
         badgeColor="#E11D48"
@@ -119,7 +125,7 @@ export default function AttendanceKPIs({ data, selectedDate, today }: Attendance
       <KPICard
         label="RTE Compliance Risk"
         value={data.rte_at_risk}
-        sub="below 75%"
+        sub="Shows students below 75% cumulative attendance. Calculated as present days / working days."
         badgeText="RT"
         badgeBg="#F5F3FF"
         badgeColor="#7C3AED"
