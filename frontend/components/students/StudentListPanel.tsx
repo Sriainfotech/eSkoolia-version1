@@ -923,7 +923,7 @@ export function StudentListPanel() {
         <div className="page-head">
           <div>
             <h1>
-              All <em>students</em>
+              Student <em>List</em>
             </h1>
             <p>Browse, search, and manage every enrolled student · Click any row to see full profile.</p>
           </div>
@@ -1632,17 +1632,19 @@ export function StudentListPanel() {
 
         h1 {
           margin: 0;
-          font-size: 20px;
+          font-size: 50px;
           font-weight: 500;
+          line-height: 0.95;
           letter-spacing: -0.02em;
           color: #181817;
-          font-family: 'DM Sans', var(--font-playfair-display), sans-serif;
+          font-family: "Playfair Display", Georgia, serif;
         }
 
         h1 em {
-          color: #5b4fcf;
+          color: #5b3df5;
+          font-family: "Playfair Display", Georgia, serif;
           font-style: italic;
-          font-weight: 500;
+          font-weight: 600;
         }
 
         .page-head > div:first-child p {

@@ -74,6 +74,9 @@ export default function AttendanceTable({
             <th className="px-3 py-2.5 text-left text-[10px] font-bold uppercase tracking-wide text-[#9CA0AE] whitespace-nowrap min-w-[180px]">
               Pupil
             </th>
+            <th className="px-3 py-2.5 text-center text-[10px] font-bold uppercase tracking-wide text-[#9CA0AE] whitespace-nowrap w-[70px]">
+              Roll No
+            </th>
             <th className="px-3 py-2.5 text-center text-[10px] font-bold uppercase tracking-wide text-[#9CA0AE] whitespace-nowrap w-[80px]">
               Absent
             </th>
@@ -103,13 +106,13 @@ export default function AttendanceTable({
         <tbody>
           {loading ? (
             <tr>
-              <td colSpan={10} className="px-3 py-8 text-center text-[12px] text-[#9CA0AE]">
+              <td colSpan={11} className="px-3 py-8 text-center text-[12px] text-[#9CA0AE]">
                 Loading students…
               </td>
             </tr>
           ) : students.length === 0 ? (
             <tr>
-              <td colSpan={10} className="px-3 py-8 text-center text-[12px] text-[#9CA0AE]">
+              <td colSpan={11} className="px-3 py-8 text-center text-[12px] text-[#9CA0AE]">
                 No students found
               </td>
             </tr>

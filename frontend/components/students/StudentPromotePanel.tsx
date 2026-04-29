@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TopToast } from "@/components/common/TopToast";
 import { promotionApi, type PromotionBatch, type PromotionRecord } from "@/lib/promotion-api";
@@ -103,8 +103,11 @@ export function StudentPromotePanel() {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
 
-  const [npDialog, setNpDialog] = useState<{ record: PromotionRecord } | null>(null);
+  const [npDialog, setNpDialog] = useState<{ record: PromotionRecord; isEdit?: boolean } | null>(null);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
+
+  // NEW: gate auto-load to once per session
+  const autoLoadedRef = useRef(false);
 
   const showToast = useCallback(
     (message: string, tone: "success" | "error") => setToast({ message, tone }),
@@ -225,6 +228,16 @@ export function StudentPromotePanel() {
       // ignore
     }
   };
+
+  // NEW (Fix 1): auto-load batch once both years resolved on initial mount
+  useEffect(() => {
+    if (autoLoadedRef.current) return;
+    if (!fromYearId || !toYearId) return;
+    if (loadingCriteria) return;
+    autoLoadedRef.current = true;
+    void loadBatch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromYearId, toYearId, loadingCriteria]);
 
   // ── Filter options ──────────────────────────────────────────────────────────
 
@@ -394,8 +407,18 @@ export function StudentPromotePanel() {
           ai_recommendation: data.ai_recommendation,
         },
       }));
+      // CHANGED (perf): patch local batch in-place; skip full refetch
+      setBatch((prev) => prev ? {
+        ...prev,
+        records: prev.records.map((r) => r.id === data.record_id ? {
+          ...r,
+          status: "not_promoted",
+          retention_reason: data.reason,
+          notes: data.notes,
+          ai_recommendation: data.ai_recommendation,
+        } : r),
+      } : prev);
       setNpDialog(null);
-      await refreshBatch();
       showToast("Student marked as Not Promoted.", "success");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Failed to save retention.", "error");
@@ -413,7 +436,7 @@ export function StudentPromotePanel() {
         record_ids: records.map((r) => r.id),
       });
       records.forEach((r) => handleStatusChange(r.id, "promote"));
-      await refreshBatch();
+      // CHANGED (perf): skip refreshBatch — local decisions already reflect state
       showToast(`${records.length} student${records.length === 1 ? "" : "s"} marked Promote.`, "success");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Bulk promote failed.", "error");
@@ -429,7 +452,7 @@ export function StudentPromotePanel() {
         record_ids: records.map((r) => r.id),
       });
       records.forEach((r) => handleStatusChange(r.id, "not_promoted"));
-      await refreshBatch();
+      // CHANGED (perf): skip refreshBatch
       showToast(`${records.length} student${records.length === 1 ? "" : "s"} marked Not Promoted.`, "success");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Bulk action failed.", "error");
@@ -445,7 +468,7 @@ export function StudentPromotePanel() {
         record_ids: records.map((r) => r.id),
       });
       records.forEach((r) => handleStatusChange(r.id, "pending"));
-      await refreshBatch();
+      // CHANGED (perf): skip refreshBatch
       showToast(`${records.length} decision${records.length === 1 ? "" : "s"} reset.`, "success");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Reset failed.", "error");
@@ -476,7 +499,20 @@ export function StudentPromotePanel() {
           notes: d.notes,
         });
       }
-      await refreshBatch();
+      // CHANGED (perf): patch local batch records in place rather than refetching the whole thing
+      setBatch((prev) => prev ? {
+        ...prev,
+        records: prev.records.map((r) => {
+          const d = decisions[r.id];
+          if (!d) return r;
+          return {
+            ...r,
+            status: d.status,
+            retention_reason: d.retention_reason,
+            notes: d.notes,
+          };
+        }),
+      } : prev);
       showToast(`Saved ${dirty.length} change${dirty.length === 1 ? "" : "s"}.`, "success");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Save failed.", "error");
@@ -502,6 +538,35 @@ export function StudentPromotePanel() {
 
   const isReadOnly = batch?.status === "confirmed" || batch?.status === "finalized";
 
+  // NEW (Fix 9): live KPI computed from current decisions (no API roundtrip)
+  const liveKpi = useMemo(() => {
+    if (!batch) return null;
+    let promoted = 0;
+    let notPromoted = 0;
+    let pending = 0;
+    for (const r of batch.records) {
+      const s = decisions[r.id]?.status ?? r.status;
+      if (s === "promote") promoted++;
+      else if (s === "not_promoted") notPromoted++;
+      else pending++;
+    }
+    const total = batch.records.length;
+    const decided = promoted + notPromoted;
+    return {
+      total,
+      promoted,
+      not_promoted: notPromoted,
+      pending,
+      completion_percentage: total ? Math.round((decided / total) * 100) : 0,
+    };
+  }, [batch, decisions]);
+
+  // NEW (Fix 2b): records currently checked across all sections
+  const selectedRecords = useMemo(() => {
+    if (!batch) return [] as PromotionRecord[];
+    return batch.records.filter((r) => selectedIds.has(r.id));
+  }, [batch, selectedIds]);
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -521,7 +586,7 @@ export function StudentPromotePanel() {
           totalStudents={batch?.kpi.total}
         />
 
-        <PromoteKPICards kpi={batch?.kpi ?? null} />
+        <PromoteKPICards kpi={liveKpi ?? batch?.kpi ?? null} />
 
         <PromoteSmartFilter
           classOptions={classOptions}
@@ -562,6 +627,63 @@ export function StudentPromotePanel() {
           </div>
         )}
 
+        {/* NEW (Fix 2b): Floating bulk action bar — shown when rows are selected */}
+        {!isReadOnly && selectedRecords.length > 0 && (
+          <div className="sticky top-2 z-30 mb-3">
+            <div className="bg-[#4729F4] text-white rounded-xl px-4 py-2.5 flex items-center gap-3 shadow-lg flex-wrap">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex w-6 h-6 items-center justify-center bg-white/20 rounded">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                    <polyline points="1,6 4,9 11,2" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                </span>
+                <span className="text-sm font-semibold">
+                  {selectedRecords.length} student{selectedRecords.length === 1 ? "" : "s"} selected
+                </span>
+              </div>
+              <div className="h-5 w-px bg-white/30" />
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => {
+                    void handleBulkPromote(selectedRecords.filter((r) => (decisions[r.id]?.status ?? r.status) !== "not_promoted"));
+                    setSelectedIds(new Set());
+                  }}
+                  className="px-3 py-1.5 bg-[#16A34A] hover:bg-[#15803D] rounded-lg text-xs font-bold transition-colors"
+                >
+                  ✓ Promote selected
+                </button>
+                <button
+                  onClick={() => {
+                    if (selectedRecords.length === 1) {
+                      setNpDialog({ record: selectedRecords[0], isEdit: false });
+                    } else {
+                      showToast("Mark students as Not Promoted individually to add a reason.", "error");
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-white/15 hover:bg-white/25 rounded-lg text-xs font-bold transition-colors"
+                >
+                  ✗ Not promoted
+                </button>
+                <button
+                  onClick={() => {
+                    void handleBulkReset(selectedRecords);
+                    setSelectedIds(new Set());
+                  }}
+                  className="px-3 py-1.5 bg-white/15 hover:bg-white/25 rounded-lg text-xs font-bold transition-colors"
+                >
+                  ↺ Reset
+                </button>
+              </div>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                className="ml-auto text-white/70 hover:text-white text-xs underline"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="space-y-3">
           {classGroups.map((group) => (
             <ClassAccordionCard
@@ -577,11 +699,11 @@ export function StudentPromotePanel() {
               onSelect={handleSelect}
               onSelectMany={handleSelectMany}
               onStatusChange={handleStatusChange}
-              onOpenNotPromoted={(record) => setNpDialog({ record })}
+              onOpenNotPromoted={(record) => setNpDialog({ record, isEdit: (decisions[record.id]?.status ?? record.status) === "not_promoted" })}
               onPromoteAll={handleBulkPromote}
               onNotPromotedAll={(records) => {
                 if (records.length === 1) {
-                  setNpDialog({ record: records[0] });
+                  setNpDialog({ record: records[0], isEdit: (decisions[records[0].id]?.status ?? records[0].status) === "not_promoted" });
                 } else {
                   void handleBulkNotPromoted(records);
                 }
@@ -598,7 +720,7 @@ export function StudentPromotePanel() {
           <div className="text-xs text-[#6B6B7B]">
             Status: <strong className="text-[#0B0B14] uppercase">{batch.status}</strong>
             {" · "}
-            {batch.kpi.completion_percentage}% decided
+            {(liveKpi ?? batch.kpi).completion_percentage}% decided
           </div>
           <div className="flex gap-2">
             <button
@@ -610,7 +732,7 @@ export function StudentPromotePanel() {
             </button>
             <button
               onClick={() => setShowConfirmModal(true)}
-              disabled={isReadOnly || batch.kpi.pending > 0}
+              disabled={isReadOnly || (liveKpi ?? batch.kpi).pending > 0}
               className="h-9 px-5 text-sm font-bold text-white bg-[#4729F4] rounded-lg hover:bg-[#3a21d4] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
               ✓ Confirm &amp; Promote
@@ -623,6 +745,7 @@ export function StudentPromotePanel() {
         <NotPromotedDialog
           batchId={batch.id}
           record={npDialog.record}
+          isEditMode={!!npDialog.isEdit}
           initialReason={decisions[npDialog.record.id]?.retention_reason}
           initialNotes={decisions[npDialog.record.id]?.notes}
           initialAi={decisions[npDialog.record.id]?.ai_recommendation}

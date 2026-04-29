@@ -6,9 +6,10 @@ interface Props {
   onClear: () => void;
   onMarkAll: (status: 'present' | 'absent' | 'late') => void;
   onSignInAll: () => void;
+  onSignOutAll?: () => void;
 }
 
-export default function BulkActionBar({ count, onClear, onMarkAll, onSignInAll }: Props) {
+export default function BulkActionBar({ count, onClear, onMarkAll, onSignInAll, onSignOutAll }: Props) {
   if (count === 0) return null;
 
   return (
@@ -20,10 +21,11 @@ export default function BulkActionBar({ count, onClear, onMarkAll, onSignInAll }
 
       <div className="flex gap-1.5 ml-2.5">
         <button
-          onClick={() => onMarkAll('present')}
-          className="h-[28px] px-3 text-[11px] font-bold rounded-lg bg-transparent border border-white/20 text-white hover:bg-white/10 transition-colors cursor-pointer"
+          onClick={onSignInAll}
+          className="h-[28px] px-3 text-[11px] font-bold rounded-lg bg-[#0A8C5A] border border-[#0A8C5A] text-white hover:opacity-90 transition-opacity cursor-pointer"
+          title="Sign in selected students and mark them present"
         >
-          Mark present
+          Sign in & mark present
         </button>
         <button
           onClick={() => onMarkAll('absent')}
@@ -33,16 +35,19 @@ export default function BulkActionBar({ count, onClear, onMarkAll, onSignInAll }
         </button>
         <button
           onClick={() => onMarkAll('late')}
-          className="h-[28px] px-3 text-[11px] font-bold rounded-lg bg-transparent border border-white/20 text-white hover:bg-white/10 transition-colors cursor-pointer"
+          className="h-[28px] px-3 text-[11px] font-bold rounded-lg bg-[#B4721B] border border-[#B4721B] text-white hover:opacity-90 transition-opacity cursor-pointer"
         >
           Mark late
         </button>
-        <button
-          onClick={onSignInAll}
-          className="h-[28px] px-3 text-[11px] font-bold rounded-lg bg-[#0A8C5A] border border-[#0A8C5A] text-white hover:opacity-90 transition-opacity cursor-pointer"
-        >
-          Sign in all
-        </button>
+        {onSignOutAll && (
+          <button
+            onClick={onSignOutAll}
+            className="h-[28px] px-3 text-[11px] font-bold rounded-lg bg-transparent border border-white/30 text-white hover:bg-white/10 transition-colors cursor-pointer"
+            title="Sign out selected students"
+          >
+            Sign out
+          </button>
+        )}
       </div>
 
       <button

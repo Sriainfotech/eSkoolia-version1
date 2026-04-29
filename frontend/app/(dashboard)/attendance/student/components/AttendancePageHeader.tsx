@@ -12,7 +12,29 @@ export default function AttendancePageHeader({ onImport, onExport, onDownloadSam
   return (
     <div className="flex items-center justify-between mb-5">
       <div>
-        <h1 className="text-2xl font-bold text-[#1A1A2E]">Student Attendance</h1>
+        <h1
+          style={{
+            margin: 0,
+            fontFamily: '"Playfair Display", Georgia, serif',
+            fontSize: '50px',
+            fontWeight: 500,
+            lineHeight: 0.95,
+            letterSpacing: '-0.02em',
+            color: '#181817',
+          }}
+        >
+          Student{' '}
+          <span
+            style={{
+              color: '#5b3df5',
+              fontFamily: '"Playfair Display", Georgia, serif',
+              fontStyle: 'italic',
+              fontWeight: 600,
+            }}
+          >
+            Attendance
+          </span>
+        </h1>
         <p className="text-sm text-[#6B6B80] mt-0.5">Track and manage daily student attendance</p>
       </div>
       <div className="flex gap-2">

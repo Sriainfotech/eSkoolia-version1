@@ -25,6 +25,7 @@ export interface ClassInfo {
   sections: SectionSummary[];
   total_students: number;
   total_present: number;
+  total_signed_in?: number;
   total_absent: number;
   total_late: number;
   overall_pct: number;

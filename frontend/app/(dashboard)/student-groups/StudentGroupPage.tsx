@@ -718,7 +718,7 @@ export default function StudentGroupPage() {
       <div className="ph">
         <div>
           <div className="ph-pre">Student Information</div>
-          <div className="ph-title">Student Group</div>
+          <div className="ph-title">Student <span>Group</span></div>
           <div className="ph-sub">
             Manage {stats?.totalStudents ?? '-'} students across houses &amp; clubs - assign in bulk, class by class
           </div>

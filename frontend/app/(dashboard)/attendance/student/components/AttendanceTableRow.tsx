@@ -113,6 +113,11 @@ export default function AttendanceTableRow({
         </div>
       </td>
 
+      {/* Roll No */}
+      <td className="px-3 py-2.5 whitespace-nowrap w-[70px] text-center text-[12px] font-medium text-[#5A5E70]">
+        {student.roll_no || '—'}
+      </td>
+
       {/* Absent toggle */}
       <td className="px-3 py-2.5 whitespace-nowrap w-[80px] text-center">
         <button

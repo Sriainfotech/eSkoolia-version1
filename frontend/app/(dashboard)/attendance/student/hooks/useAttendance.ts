@@ -117,20 +117,40 @@ async function storeAttendance(
   const pickup_time: Record<number, string> = {};
   const pickup_by: Record<number, string> = {};
   for (const m of marks) {
-    if (m.status) attendance[m.student_id] = statusToAttendanceType(m.status);
+    // Treat 'unmarked' (and any falsy/empty status) as "no opinion": don't include
+    // it in the attendance map. Otherwise unmarked students would silently be
+    // saved as Present, and the backend's "must mark all students" check would
+    // sometimes also reject the payload.
+    if (m.status && m.status !== 'unmarked') attendance[m.student_id] = statusToAttendanceType(m.status);
     if (m.note !== undefined) note[m.student_id] = m.note;
     if (m.absent_reason !== undefined && m.note === undefined) note[m.student_id] = m.absent_reason;
     if (m.lunch !== undefined) lunch[m.student_id] = m.lunch;
-    if (m.arrival_time) arrival_time[m.student_id] = m.arrival_time;
-    if (m.sign_in_time) sign_in_time[m.student_id] = m.sign_in_time;
-    if (m.sign_out_time) sign_out_time[m.student_id] = m.sign_out_time;
-    if (m.pickup_time) pickup_time[m.student_id] = m.pickup_time;
-    if (m.pickup_by) pickup_by[m.student_id] = m.pickup_by;
+    // Allow explicit empty strings to CLEAR a time field (used by Reset).
+    if (m.arrival_time !== undefined) arrival_time[m.student_id] = m.arrival_time;
+    if (m.sign_in_time !== undefined) sign_in_time[m.student_id] = m.sign_in_time;
+    if (m.sign_out_time !== undefined) sign_out_time[m.student_id] = m.sign_out_time;
+    if (m.pickup_time !== undefined) pickup_time[m.student_id] = m.pickup_time;
+    if (m.pickup_by !== undefined) pickup_by[m.student_id] = m.pickup_by;
   }
+
+  // Only send the IDs of students we actually have something to say about,
+  // so the backend's "status_count == len(id)" coverage check passes.
+  const touchedIds = Array.from(new Set([
+    ...Object.keys(attendance),
+    ...Object.keys(note),
+    ...Object.keys(lunch),
+    ...Object.keys(arrival_time),
+    ...Object.keys(sign_in_time),
+    ...Object.keys(sign_out_time),
+    ...Object.keys(pickup_time),
+    ...Object.keys(pickup_by),
+  ])).map((k) => Number(k));
+  const ids = touchedIds.length > 0 ? touchedIds : marks.map((m) => m.student_id);
+  if (ids.length === 0) return { saved: 0 };
 
   const body = {
     date,
-    id: marks.map((m) => m.student_id),
+    id: ids,
     class_id: marks[0]?.class_id,
     section_id: marks[0]?.section_id,
     attendance,
@@ -160,7 +180,7 @@ async function storeAttendance(
     const msg = await extractErrorMessage(res);
     throw new Error(msg);
   }
-  return { saved: marks.length };
+  return { saved: ids.length };
 }
 
 export function useAttendance(date: string) {
@@ -259,40 +279,45 @@ export function useAttendance(date: string) {
     classId: string,
     onSuccess?: () => void,
     onError?: (msg: string) => void,
+    opts?: { sectionId?: string; dateFrom?: string; dateTo?: string; singleDate?: boolean; format?: 'xlsx' | 'csv' },
   ) => {
     try {
       const token = getToken();
-      const query = new URLSearchParams({ date, format: 'csv' });
+      const fmt = opts?.format ?? 'xlsx';
+      const query = new URLSearchParams({ format: fmt });
+      if (opts?.singleDate) {
+        query.set('date', date);
+      } else if (opts?.dateFrom && opts?.dateTo) {
+        query.set('date_from', opts.dateFrom);
+        query.set('date_to', opts.dateTo);
+      } else {
+        query.set('date', date);
+      }
       if (classId && classId !== 'all') query.set('class_id', classId);
-      const res = await fetch(`${API_BASE_URL}/api/v1/attendance/student-attendance/export/?${query.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      if (opts?.sectionId && opts.sectionId !== 'all') query.set('section_id', opts.sectionId);
 
+      const url = `${API_BASE_URL}/api/v1/attendance/student-attendance/export/?${query.toString()}`;
+      const fetchOnce = async (tok: string) => fetch(url, { headers: { Authorization: `Bearer ${tok}` } });
+
+      let res = await fetchOnce(token || '');
       if (res.status === 401) {
         const newToken = await refreshAccessToken();
-        if (!newToken) { router.push('/login'); return; }
-        const retry = await fetch(`${API_BASE_URL}/api/v1/attendance/student-attendance/export/?${query.toString()}`, {
-          headers: { Authorization: `Bearer ${newToken}` },
-        });
-        if (!retry.ok) throw new Error(await extractErrorMessage(retry));
-        const retryBlob = await retry.blob();
-        const retryLink = document.createElement('a');
-        retryLink.href = URL.createObjectURL(retryBlob);
-        retryLink.download = `student_attendance_${date}.csv`;
-        document.body.appendChild(retryLink);
-        retryLink.click();
-        document.body.removeChild(retryLink);
-        URL.revokeObjectURL(retryLink.href);
-        onSuccess?.();
-        return true;
+        if (!newToken) { router.push('/login'); return false; }
+        res = await fetchOnce(newToken);
       }
-
       if (!res.ok) throw new Error(await extractErrorMessage(res));
+
+      // Try to read filename from Content-Disposition.
+      const cd = res.headers.get('Content-Disposition') || '';
+      const match = /filename\*?=(?:UTF-8'')?\"?([^\";]+)\"?/i.exec(cd);
+      const filename = match
+        ? decodeURIComponent(match[1])
+        : `student_attendance_${date}.${fmt}`;
 
       const blob = await res.blob();
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = `student_attendance_${date}.csv`;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
