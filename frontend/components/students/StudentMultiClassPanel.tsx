@@ -515,6 +515,13 @@ export function StudentMultiClassPanel() {
 
   const [activeTab,setActiveTab]=useState<Tab>("assign");
   const [filterOpen,setFilterOpen]=useState(false);
+  const assignSecRef=useRef<HTMLDivElement|null>(null);
+  const filterSecRef=useRef<HTMLDivElement|null>(null);
+  const browseSecRef=useRef<HTMLDivElement|null>(null);
+  const scrollToTab=(id:Tab)=>{
+    const el=id==="assign"?assignSecRef.current:id==="filter"?filterSecRef.current:browseSecRef.current;
+    if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
+  };
   const [filterChips,setFilterChips]=useState<string[]>([]);
   const [lang2,setLang2]=useState("");const[lang3,setLang3]=useState("");
   const [sports,setSports]=useState<string[]>([]);const[arts,setArts]=useState<string[]>([]);
@@ -656,14 +663,14 @@ export function StudentMultiClassPanel() {
         <div className={s.actionNav}>
           {([{id:"assign" as Tab,step:"01",label:"Assign subjects",icon:<PlusIcon/>},{id:"filter" as Tab,step:"02",label:"Smart filter",icon:<FunnelIcon/>},{id:"browse" as Tab,step:"03",label:"Browse & edit",icon:<DocIcon/>}]).map(t=>(
             <button key={t.id} className={`${s.navTab} ${activeTab===t.id?s.navTabActive:""}`}
-              onClick={()=>{setActiveTab(t.id);if(t.id==="filter")setFilterOpen(true);}}>
+              onClick={()=>{setActiveTab(t.id);if(t.id==="filter")setFilterOpen(true);scrollToTab(t.id);}}>
               <span className={s.navTabStep}>{t.step}</span>{t.icon} {t.label}
             </button>
           ))}
         </div>
 
         {/* Section 01 */}
-        <div className={s.assignCard}>
+        <div className={s.assignCard} ref={assignSecRef}>
           <div className={s.assignCardTop}>
             <div>
               <div className={s.assignCardTitle}>Assign subjects to enrolled student</div>
@@ -720,7 +727,7 @@ export function StudentMultiClassPanel() {
         </div>
 
         {/* Section 02 Smart Filter */}
-        <div className={s.filterCard}>
+        <div className={s.filterCard} ref={filterSecRef}>
           <div className={`${s.filterTrigger} ${filterOpen?s.filterTriggerOpen:""}`} onClick={()=>setFilterOpen(v=>!v)}>
             <span className={s.stepBadge}>02</span>
             <span className={s.filterIconBox}><FunnelIcon/></span>
@@ -734,14 +741,13 @@ export function StudentMultiClassPanel() {
           {filterOpen&&(
             <div className={s.filterBody}>
               <div className={s.filterGrid8}>
-                <input className={s.filterInput} placeholder="Search students..."/>
-                <select className={s.filterInput}>{["Nursery","LKG","UKG",...Array.from({length:10},(_,i)=>`Grade ${i+1}`)].map(o=><option key={o}>{o}</option>)}</select>
-                <select className={s.filterInput}>{["Nursery","LKG","UKG",...Array.from({length:10},(_,i)=>`Grade ${i+1}`)].map(o=><option key={o}>{o}</option>)}</select>
-                <select className={s.filterInput}><option>All sections</option><option>A</option><option>B</option><option>C</option></select>
-                <select className={s.filterInput}><option>Any 2nd lang</option><option>Hindi</option><option>Telugu</option></select>
-                <select className={s.filterInput}><option>Any 3rd lang</option><option>Hindi</option><option>Telugu</option><option>French</option></select>
-                <select className={s.filterInput}><option>Any sport</option><option>Football</option><option>Cricket</option><option>Basketball</option><option>Badminton</option></select>
-                <select className={s.filterInput}><option>Any art</option><option>Music</option><option>Dance</option><option>Instruments</option><option>FM Radio</option><option>NGC Club</option></select>
+                <label className={s.fLbl}><span>Search</span><input className={s.filterInput} placeholder="Search students..."/></label>
+                <label className={s.fLbl}><span>Class</span><select className={s.filterInput}>{["Nursery","LKG","UKG",...Array.from({length:10},(_,i)=>`Grade ${i+1}`)].map(o=><option key={o}>{o}</option>)}</select></label>
+                <label className={s.fLbl}><span>Section</span><select className={s.filterInput}><option>All sections</option><option>A</option><option>B</option><option>C</option></select></label>
+                <label className={s.fLbl}><span>2nd Language</span><select className={s.filterInput}><option>Any 2nd lang</option><option>Hindi</option><option>Telugu</option></select></label>
+                <label className={s.fLbl}><span>3rd Language</span><select className={s.filterInput}><option>Any 3rd lang</option><option>Hindi</option><option>Telugu</option><option>French</option></select></label>
+                <label className={s.fLbl}><span>Sport</span><select className={s.filterInput}><option>Any sport</option><option>Football</option><option>Cricket</option><option>Basketball</option><option>Badminton</option></select></label>
+                <label className={s.fLbl}><span>Art</span><select className={s.filterInput}><option>Any art</option><option>Music</option><option>Dance</option><option>Instruments</option><option>FM Radio</option><option>NGC Club</option></select></label>
               </div>
               <div className={s.filterBottom}>
                 <div style={{display:"flex",gap:6}}>{filterChips.map(c=><span key={c} className={s.darkChip}>{c} <span className={s.darkChipX} onClick={()=>setFilterChips(fc=>fc.filter(x=>x!==c))}>&#215;</span></span>)}</div>
@@ -752,7 +758,7 @@ export function StudentMultiClassPanel() {
         </div>
 
         {/* Section 03 Browse */}
-        <div className={s.browseSection}>
+        <div className={s.browseSection} ref={browseSecRef}>
           <div className={s.sectionHeading}>
             <span className={s.stepBadge}>03</span>
             <span className={s.sectionTitle}>Browse &amp; edit by class</span>

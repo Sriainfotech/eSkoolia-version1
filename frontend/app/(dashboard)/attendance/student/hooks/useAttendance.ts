@@ -284,7 +284,7 @@ export function useAttendance(date: string) {
     try {
       const token = getToken();
       const fmt = opts?.format ?? 'xlsx';
-      const query = new URLSearchParams({ format: fmt });
+      const query = new URLSearchParams({ fmt });
       if (opts?.singleDate) {
         query.set('date', date);
       } else if (opts?.dateFrom && opts?.dateTo) {

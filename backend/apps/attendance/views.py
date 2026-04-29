@@ -9,6 +9,7 @@ from django.db.models import Count, Case, When, IntegerField, Max
 from rest_framework import permissions, status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.renderers import BaseRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
@@ -179,14 +180,17 @@ class StudentSearchAPIView(AttendanceTenantMixin, APIView):
         # Query attendance by student_ids (not class/section) so records saved
         # without class_id/section_id are still found (backward-compatible).
         student_ids = [s["id"] for s in students]
-        attendance_rows = {
-            row.student_id: row
-            for row in StudentAttendance.objects.filter(
-                attendance_date=attendance_date,
-                student_id__in=student_ids,
-                **self.school_filter(request),
-            )
-        }
+        # Defensive against historical duplicate rows (academic_year=NULL bypasses
+        # the unique constraint): order by -id so the dict-comprehension keeps
+        # the most recently written row for each student.
+        attendance_rows = {}
+        for row in StudentAttendance.objects.filter(
+            attendance_date=attendance_date,
+            student_id__in=student_ids,
+            **self.school_filter(request),
+        ).order_by("-id"):
+            if row.student_id not in attendance_rows:
+                attendance_rows[row.student_id] = row
 
         table_students = []
         for student in students:
@@ -339,6 +343,24 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
 
             student_map = {s.id: s for s in students}
 
+            # Resolve a default academic_year for the school so the unique
+            # constraint (school, academic_year, student, attendance_date) is
+            # actually enforced. Without this, NULL academic_year sidesteps
+            # SQL's uniqueness check and duplicate rows accumulate.
+            from apps.core.models import AcademicYear as _AcademicYear
+            default_academic_year_id = data.get("academic_year_id")
+            if not default_academic_year_id and request.user.school_id:
+                ay = (
+                    _AcademicYear.objects
+                    .filter(school_id=request.user.school_id, is_current=True)
+                    .first()
+                    or _AcademicYear.objects
+                    .filter(school_id=request.user.school_id)
+                    .order_by("-start_date")
+                    .first()
+                )
+                default_academic_year_id = ay.id if ay else None
+
             note_map = data.get("note") or data.get("attendance_note") or {}
 
             with transaction.atomic():
@@ -354,13 +376,23 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                     existing_pickup_time = None
                     existing_pickup_by = ""
                     existing_note = ""
-                    # Delete existing attendance for same date
-                    existing = StudentAttendance.objects.filter(
+                    # Snapshot the latest existing row's values so per-field
+                    # incremental updates (sign-in only, lunch only, note only)
+                    # preserve previously stored data when the caller omits
+                    # those keys. Order by -id so we pick the newest row even
+                    # if historical duplicates exist.
+                    existing_qs = StudentAttendance.objects.filter(
                         student_id=student_id,
                         attendance_date=data["date"],
                         **school_scope,
-                    ).first()
-                    if existing and not existing.is_locked:
+                    ).order_by("-id")
+                    existing = existing_qs.first()
+                    if existing and existing.is_locked:
+                        return Response(
+                            {"success": False, "message": "Cannot update locked attendance. Only admin can override."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    if existing:
                         existing_lunch = existing.lunch
                         existing_type = existing.attendance_type
                         existing_arrival_time = existing.arrival_time
@@ -369,12 +401,12 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                         existing_pickup_time = existing.pickup_time
                         existing_pickup_by = existing.pickup_by
                         existing_note = existing.notes
-                        existing.delete()
-                    elif existing and existing.is_locked:
-                        return Response(
-                            {"success": False, "message": "Cannot update locked attendance. Only admin can override."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                    # Delete ALL rows for this (student, date, school) — not just
+                    # one. The (school, academic_year, student, attendance_date)
+                    # unique constraint is bypassed when academic_year is NULL
+                    # (NULL != NULL in SQL), so legacy data may contain dupes.
+                    # Deleting them on every write self-heals the table.
+                    existing_qs.delete()
 
                     attendance = StudentAttendance()
                     attendance.student_id = student_id
@@ -434,7 +466,7 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
 
                     attendance.attendance_date = data["date"]
                     attendance.school = request.user.school
-                    attendance.academic_year_id = data.get("academic_year_id")
+                    attendance.academic_year_id = default_academic_year_id
                     attendance.class_id = data.get("class_id")
                     attendance.section_id = data.get("section_id")
                     attendance.marked_by = request.user
@@ -990,9 +1022,19 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
         # so the percentage reflects who really arrived rather than who was
         # only marked Present in advance.
         active_student_ids = Student.objects.filter(is_active=True, **school_filter).values_list("id", flat=True)
-        rows = (
+        # Dedupe to the latest row per student per date — historical duplicate
+        # rows (academic_year=NULL bypasses the unique constraint) would
+        # otherwise inflate present/absent/late counts above class strength.
+        latest_ids = (
             StudentAttendance.objects
             .filter(attendance_date=parsed_date, student_id__in=list(active_student_ids), **school_filter)
+            .values("student_id")
+            .annotate(latest_id=Max("id"))
+            .values("latest_id")
+        )
+        rows = (
+            StudentAttendance.objects
+            .filter(id__in=latest_ids)
             .values("class_id")
             .annotate(
                 present=Count(Case(When(attendance_type="P", then=1), output_field=IntegerField())),
@@ -1103,8 +1145,28 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
     and conditional formatting on the summary sheet.
     """
 
+    # Force a single passthrough renderer + ignore the `format` URL kwarg/query
+    # param so a `?format=xlsx` from old clients does not break content negotiation
+    # (DRF would otherwise 404 looking for an "xlsx" renderer).
+    class _PassthroughRenderer(BaseRenderer):
+        media_type = "*/*"
+        format = "*"
+        charset = None
+        render_style = "binary"
+
+        def render(self, data, accepted_media_type=None, renderer_context=None):
+            return data
+
+    renderer_classes = [_PassthroughRenderer]
+
+    def perform_content_negotiation(self, request, force=False):
+        renderer = self.renderer_classes[0]()
+        return (renderer, renderer.media_type)
+
     def get(self, request):
-        format_type = (request.query_params.get("format") or "csv").lower()
+        # Note: do NOT use `format` as the query-param name — DRF's content
+        # negotiation interprets it and 404s when value is `xlsx`. Use `fmt`.
+        format_type = (request.query_params.get("fmt") or request.query_params.get("format") or "csv").lower()
         class_id = request.query_params.get("class_id")
         section_id = request.query_params.get("section_id")
         month = request.query_params.get("month")
@@ -1164,7 +1226,11 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
         writer = csv.writer(output)
         writer.writerow(headers)
         writer.writerows(rows)
-        response = HttpResponse(output.getvalue(), content_type="text/csv")
+        # Prepend UTF-8 BOM so Excel detects the encoding and displays
+        # non-ASCII names/notes correctly (otherwise they render as mojibake
+        # / "unknown language" characters when opened on Windows).
+        body = "\ufeff" + output.getvalue()
+        response = HttpResponse(body.encode("utf-8"), content_type="text/csv; charset=utf-8")
         response["Content-Disposition"] = 'attachment; filename="student_attendance_export.csv"'
         return response
 
@@ -1472,7 +1538,7 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
         # AutoFilter + freeze panes
         if current_row > header_row_idx + 1:
             ws.auto_filter.ref = f"A{header_row_idx}:{last_col_letter}{current_row - 1}"
-        ws.freeze_panes = ws.cell(row=header_row_idx + 1, column=3)  # freeze header + S.No, Date
+        ws.freeze_panes = f"C{header_row_idx + 1}"  # freeze header + S.No, Date
 
         # ---- Sheet 2: Summary ----
         ws2 = wb.create_sheet("Summary")

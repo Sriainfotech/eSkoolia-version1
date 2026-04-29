@@ -271,6 +271,77 @@ export function StudentListPanel() {
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const [confirming, setConfirming] = useState(false);
 
+  // Reason-required confirmation (Deactivate / Archive). Shared by bulk + drawer.
+  type PendingReason = {
+    title: string;
+    message: string;
+    details?: string;
+    presets: string[];
+    confirmLabel: string;
+    variant: "danger" | "primary";
+    execute: (reason: string) => Promise<void>;
+  };
+  const DEACTIVATE_REASONS = [
+    "Long absence",
+    "Medical leave",
+    "Disciplinary action",
+    "Parent requested",
+    "Documents incomplete",
+    "Fees pending",
+  ];
+  const ARCHIVE_REASONS = [
+    "Withdrawn permanently",
+    "Transferred to another school",
+    "Graduated / completed",
+    "Duplicate record",
+    "Erroneous entry",
+    "Long-term inactive",
+  ];
+  const [pendingReason, setPendingReason] = useState<PendingReason | null>(null);
+  const [reasonPick, setReasonPick] = useState<string>("");
+  const [reasonText, setReasonText] = useState<string>("");
+  const [reasonBusy, setReasonBusy] = useState(false);
+  const openReasonModal = (cfg: PendingReason) => {
+    setReasonPick("");
+    setReasonText("");
+    setPendingReason(cfg);
+  };
+  const finalReason = (reasonPick && reasonText.trim()) ? `${reasonPick} — ${reasonText.trim()}`
+    : (reasonPick || reasonText.trim());
+  const aiHelpReason = () => {
+    if (!reasonPick) {
+      setReasonText("Please select a reason chip first so I can draft a concise note for you.");
+      return;
+    }
+    const templates: Record<string, string> = {
+      "Long absence": "Marking inactive due to extended unexplained absence beyond the school's allowed limit. Status will be revisited once the student returns and parent communication is restored.",
+      "Medical leave": "Inactive on account of medical leave. Documentation has been verified; record will be reactivated upon medical clearance and resumption.",
+      "Disciplinary action": "Status changed pursuant to disciplinary committee review. Reactivation conditional on completion of corrective measures and parent meeting.",
+      "Parent requested": "Status updated at the explicit request of the parent/guardian. Communication on file; can be reactivated on parent confirmation.",
+      "Documents incomplete": "Marking inactive pending submission of mandatory enrollment documents. Account will be reactivated immediately on document verification.",
+      "Fees pending": "Inactive due to unresolved outstanding fees beyond the grace window. Will be reactivated on payment confirmation by the accounts team.",
+      "Withdrawn permanently": "Student has formally withdrawn from the institution. Record archived for compliance and historical reference.",
+      "Transferred to another school": "Student transferred to another institution; transfer certificate issued. Record archived for the academic year.",
+      "Graduated / completed": "Student successfully completed the program. Record archived to alumni status for reference and reporting.",
+      "Duplicate record": "This entry is a duplicate of an existing student record and is being archived to maintain data integrity. Active record retained.",
+      "Erroneous entry": "Record archived as it was created in error. No academic activity recorded against this entry.",
+      "Long-term inactive": "Archived after extended period of inactivity with no parent contact or attendance. Eligible for restoration on family re-engagement.",
+    };
+    setReasonText(templates[reasonPick] ?? `Status update on account of ${reasonPick.toLowerCase()}.`);
+  };
+  const runPendingReason = async () => {
+    if (!pendingReason || !finalReason.trim()) return;
+    try {
+      setReasonBusy(true);
+      await pendingReason.execute(finalReason.trim());
+    } finally {
+      setReasonBusy(false);
+      setPendingReason(null);
+      setReasonPick("");
+      setReasonText("");
+    }
+  };
+
   const runPendingConfirm = async () => {
     if (!pendingConfirm) return;
     try {
@@ -618,16 +689,15 @@ export function StudentListPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewDrawerOpen, drawerTab, viewStudentId]);
 
-  const toggleStudentStatus = async () => {
+  const toggleStudentStatus = async (reason: string = "") => {
     if (!viewStudentId || !viewStudent || viewTogglingStatus) return;
     try {
       setViewTogglingStatus(true);
       setViewError("");
       const nextActive = !viewStudent.is_active;
-      await apiPatch(`/api/v1/students/students/${viewStudentId}/`, {
+      await apiPost(`/api/v1/students/students/${viewStudentId}/set-status/`, {
         is_active: nextActive,
-        is_disabled: false,
-        status: nextActive ? "active" : "inactive",
+        reason,
       });
       setViewStudent((prev) => (prev ? { ...prev, is_active: nextActive, is_disabled: false, status: nextActive ? "active" : "inactive" } : prev));
       setStudents((prev) =>
@@ -677,7 +747,7 @@ export function StudentListPanel() {
     setRefreshTick((prev) => prev + 1);
   };
 
-  const handleBulkActiveState = async (nextActive: boolean) => {
+  const handleBulkActiveState = async (nextActive: boolean, reason: string = "") => {
     if (selectedIds.length === 0 || bulkBusy) return;
 
     const selectedOnPage = students.filter((row) => selectedIds.includes(row.id));
@@ -699,10 +769,9 @@ export function StudentListPanel() {
       setError("");
       setSuccess("");
       for (const row of actionable) {
-        await apiPatch(`/api/v1/students/students/${row.id}/`, {
+        await apiPost(`/api/v1/students/students/${row.id}/set-status/`, {
           is_active: nextActive,
-          is_disabled: false,
-          status: nextActive ? "active" : "inactive",
+          reason,
         });
       }
       setStudents((prev) =>
@@ -737,12 +806,10 @@ export function StudentListPanel() {
     }
   };
 
-  const archiveStudent = async (studentId: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!window.confirm("Archive this student? They can be restored later.")) return;
+  const archiveStudent = async (studentId: number, reason: string) => {
     try {
       setBulkBusy(true);
-      await apiPost(`/api/v1/students/students/${studentId}/soft-delete/`);
+      await apiPost(`/api/v1/students/students/${studentId}/soft-delete/`, { reason });
       setStudents((prev) =>
         prev.map((row) =>
           row.id === studentId
@@ -759,7 +826,7 @@ export function StudentListPanel() {
     }
   };
 
-  const handleBulkArchive = async () => {
+  const handleBulkArchive = async (reason: string = "") => {
     if (selectedIds.length === 0 || bulkBusy) {
       if (selectedIds.length === 0) {
         setError("Select at least one student to archive.");
@@ -781,7 +848,7 @@ export function StudentListPanel() {
       setError("");
       setSuccess("");
       for (const row of actionable) {
-        await apiPost(`/api/v1/students/students/${row.id}/soft-delete/`);
+        await apiPost(`/api/v1/students/students/${row.id}/soft-delete/`, { reason });
       }
       setStudents((prev) =>
         prev.map((row) =>
@@ -996,60 +1063,6 @@ export function StudentListPanel() {
         {error ? <div className="flash error">{error}</div> : null}
 
         <section className="list-shell">
-
-          <div className="bulk-bar">
-            <strong>{selectedIds.length} selected</strong>
-            <div className="bulk-actions">
-              {statusFilter === "archived" ? (
-                <button type="button" className="bulk-btn" title="Unarchive selected students" onClick={() => void handleBulkUnarchive()} disabled={selectedIds.length === 0 || bulkBusy}>Unarchive</button>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="bulk-btn"
-                    title="Activate selected students"
-                    onClick={() => {
-                      if (selectedIds.length === 0 || bulkBusy) return;
-                      const n = selectedIds.length;
-                      setPendingConfirm({
-                        title: "Confirm Activation",
-                        message: `Are you sure you want to activate ${n} selected student${n > 1 ? "s" : ""}?`,
-                        details: "Activated students will appear in default lists.",
-                        confirmLabel: "Activate",
-                        variant: "primary",
-                        execute: async () => { await handleBulkActiveState(true); },
-                      });
-                    }}
-                    disabled={selectedIds.length === 0 || bulkBusy}
-                  >Activate</button>
-                  <button
-                    type="button"
-                    className="bulk-btn"
-                    title="Deactivate selected students"
-                    onClick={() => {
-                      if (selectedIds.length === 0 || bulkBusy) return;
-                      const n = selectedIds.length;
-                      setPendingConfirm({
-                        title: "Confirm Deactivation",
-                        message: `Are you sure you want to deactivate ${n} selected student${n > 1 ? "s" : ""}?`,
-                        details: "This action can be reversed later by activating again.",
-                        confirmLabel: "Deactivate",
-                        variant: "danger",
-                        execute: async () => { await handleBulkActiveState(false); },
-                      });
-                    }}
-                    disabled={selectedIds.length === 0 || bulkBusy}
-                  >Deactivate</button>
-                </>
-              )}
-              <button type="button" className="bulk-btn" title="Message selected guardians (coming soon)" disabled>Message parents</button>
-              <button type="button" className="bulk-btn" title="Export selected students" onClick={handleExportSelected} disabled={selectedIds.length === 0 || bulkBusy}>Export selected</button>
-              {statusFilter !== "archived" ? (
-                <button type="button" className="bulk-btn danger" title="Archive selected students" onClick={() => void handleBulkArchive()} disabled={selectedIds.length === 0 || bulkBusy}>Archive</button>
-              ) : null}
-              <button type="button" className="bulk-btn" onClick={() => setSelectedIds([])} title="Clear selection" disabled={selectedIds.length === 0 || bulkBusy}>Clear</button>
-            </div>
-          </div>
 
           {/* ═══════════════════════════════════════
               Panel 01 — Smart Filters
@@ -1417,24 +1430,143 @@ export function StudentListPanel() {
                                         <div className="sl-sec-empty">No matching students in {clsLabel} — {secLabel}</div>
                                       ) : (
                                         <>
-                                          {/* Mini bulk bar */}
-                                          <div className="sl-sec-bar">
-                                            <span className="sl-sec-count"><strong>{secStudents.length}</strong> student{secStudents.length !== 1 ? "s" : ""} in {clsLabel} · {secLabel}</span>
-                                            <button
-                                              type="button"
-                                              className="sl-sec-export"
-                                              onClick={() => buildCsvAndDownload(secStudents, `${clsLabel}-${secLabel}`)}
-                                            >
-                                              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="12" height="12"><path d="M8 3v7M5 7l3 3 3-3M3 13h10"/></svg>
-                                              Export
-                                            </button>
-                                          </div>
+                                          {(() => {
+                                            const secStudentIds = secStudents.map((r) => r.id);
+                                            const secSelectedIds = secStudentIds.filter((id) => selectedIds.includes(id));
+                                            const allSecSelected = secStudentIds.length > 0 && secSelectedIds.length === secStudentIds.length;
+                                            const someSecSelected = secSelectedIds.length > 0 && !allSecSelected;
+                                            const toggleSecAll = () => {
+                                              setSelectedIds((prev) => {
+                                                if (allSecSelected) return prev.filter((id) => !secStudentIds.includes(id));
+                                                const merged = new Set(prev);
+                                                secStudentIds.forEach((id) => merged.add(id));
+                                                return Array.from(merged);
+                                              });
+                                            };
+                                            return (
+                                              <>
+                                                {/* Mini bulk bar — selection + count + export */}
+                                                <div className="sl-sec-bar">
+                                                  <label className="sl-sec-check">
+                                                    <input
+                                                      type="checkbox"
+                                                      checked={allSecSelected}
+                                                      ref={(el) => { if (el) el.indeterminate = someSecSelected; }}
+                                                      onChange={toggleSecAll}
+                                                      aria-label={`Select all students in ${clsLabel} ${secLabel}`}
+                                                    />
+                                                    <span className="sl-sec-count">
+                                                      {secSelectedIds.length > 0 ? (
+                                                        <><strong>{secSelectedIds.length}</strong> of {secStudents.length} selected</>
+                                                      ) : (
+                                                        <><strong>{secStudents.length}</strong> student{secStudents.length !== 1 ? "s" : ""} in {clsLabel} · {secLabel}</>
+                                                      )}
+                                                    </span>
+                                                  </label>
+                                                  <button
+                                                    type="button"
+                                                    className="sl-sec-export"
+                                                    onClick={() => buildCsvAndDownload(secStudents, `${clsLabel}-${secLabel}`)}
+                                                  >
+                                                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="12" height="12"><path d="M8 3v7M5 7l3 3 3-3M3 13h10"/></svg>
+                                                    Export
+                                                  </button>
+                                                </div>
+
+                                                {/* Bulk actions bar — appears when at least one student in this section is selected */}
+                                                {secSelectedIds.length > 0 ? (() => {
+                                                  const selectedRowsAll = students.filter((r) => selectedIds.includes(r.id));
+                                                  const anyInactive = selectedRowsAll.some((r) => !r.is_active && !(r.is_deleted || r.status === "deleted"));
+                                                  const anyActive = selectedRowsAll.some((r) => r.is_active && !(r.is_deleted || r.status === "deleted"));
+                                                  return (
+                                                  <div className="sl-sec-bulk">
+                                                    <strong>{selectedIds.length} selected</strong>
+                                                    <div className="sl-sec-bulk-actions">
+                                                      {statusFilter === "archived" ? (
+                                                        <button type="button" className="bulk-btn" title="Unarchive selected students" onClick={() => void handleBulkUnarchive()} disabled={bulkBusy}>Unarchive</button>
+                                                      ) : (
+                                                        <>
+                                                          {anyInactive ? (
+                                                            <button
+                                                              type="button"
+                                                              className="bulk-btn"
+                                                              title="Activate selected students"
+                                                              onClick={() => {
+                                                                if (bulkBusy) return;
+                                                                const n = selectedIds.length;
+                                                                setPendingConfirm({
+                                                                  title: "Confirm Activation",
+                                                                  message: `Are you sure you want to activate ${n} selected student${n > 1 ? "s" : ""}?`,
+                                                                  details: "Activated students will appear in default lists.",
+                                                                  confirmLabel: "Activate",
+                                                                  variant: "primary",
+                                                                  execute: async () => { await handleBulkActiveState(true); },
+                                                                });
+                                                              }}
+                                                              disabled={bulkBusy}
+                                                            >Activate</button>
+                                                          ) : null}
+                                                          {anyActive ? (
+                                                            <button
+                                                              type="button"
+                                                              className="bulk-btn"
+                                                              title="Deactivate selected students"
+                                                              onClick={() => {
+                                                                if (bulkBusy) return;
+                                                                const n = selectedIds.length;
+                                                                openReasonModal({
+                                                                  title: "Deactivate students",
+                                                                  message: `You're about to deactivate ${n} selected student${n > 1 ? "s" : ""}. Pick a reason — they can be reactivated later.`,
+                                                                  presets: DEACTIVATE_REASONS,
+                                                                  confirmLabel: "Deactivate",
+                                                                  variant: "danger",
+                                                                  execute: async (reason) => { await handleBulkActiveState(false, reason); },
+                                                                });
+                                                              }}
+                                                              disabled={bulkBusy}
+                                                            >Deactivate</button>
+                                                          ) : null}
+                                                        </>
+                                                      )}
+                                                      <button type="button" className="bulk-btn" title="Message selected guardians (coming soon)" disabled>Message parents</button>
+                                                      <button type="button" className="bulk-btn" title="Export selected students" onClick={handleExportSelected} disabled={bulkBusy}>Export selected</button>
+                                                      {statusFilter !== "archived" ? (
+                                                        <button
+                                                          type="button"
+                                                          className="bulk-btn danger"
+                                                          title="Archive selected students"
+                                                          onClick={() => {
+                                                            if (bulkBusy) return;
+                                                            const n = selectedIds.length;
+                                                            openReasonModal({
+                                                              title: "Archive students",
+                                                              message: `Archiving will remove ${n} student${n > 1 ? "s" : ""} from default lists. Pick a reason for the audit log.`,
+                                                              presets: ARCHIVE_REASONS,
+                                                              confirmLabel: "Archive",
+                                                              variant: "danger",
+                                                              execute: async (reason) => { await handleBulkArchive(reason); },
+                                                            });
+                                                          }}
+                                                          disabled={bulkBusy}
+                                                        >Archive</button>
+                                                      ) : null}
+                                                      <button type="button" className="bulk-btn" onClick={() => setSelectedIds([])} title="Clear selection" disabled={bulkBusy}>Clear</button>
+                                                    </div>
+                                                  </div>
+                                                  );
+                                                })() : null}
+                                              </>
+                                            );
+                                          })()}
 
                                           {/* Table */}
                                           <div className="table-wrap">
                                             <table>
                                               <thead>
                                                 <tr>
+                                                  <th style={{ width: 36 }}>
+                                                    <span className="sr-only">Select</span>
+                                                  </th>
                                                   <th>Student</th>
                                                   <th>Admission No</th>
                                                   <th>Guardian</th>
@@ -1445,8 +1577,22 @@ export function StudentListPanel() {
                                                 </tr>
                                               </thead>
                                               <tbody>
-                                                {secStudents.map((row) => (
-                                                  <tr key={row.id} onClick={() => openViewDrawer(row)} style={{ cursor: "pointer" }}>
+                                                {secStudents.map((row) => {
+                                                  const isRowSelected = selectedIds.includes(row.id);
+                                                  const isArchived = row.is_deleted || row.status === "deleted";
+                                                  const rowCls = [isRowSelected ? "row-selected" : "", isArchived ? "row-archived" : ""].filter(Boolean).join(" ") || undefined;
+                                                  return (
+                                                  <tr key={row.id} onClick={() => openViewDrawer(row)} style={{ cursor: "pointer" }} className={rowCls}>
+                                                    <td onClick={(e) => e.stopPropagation()} style={{ width: 36 }}>
+                                                      <input
+                                                        type="checkbox"
+                                                        checked={isRowSelected}
+                                                        onChange={() => {
+                                                          setSelectedIds((prev) => prev.includes(row.id) ? prev.filter((id) => id !== row.id) : [...prev, row.id]);
+                                                        }}
+                                                        aria-label={`Select ${fullName(row)}`}
+                                                      />
+                                                    </td>
                                                     <td>
                                                       <div className="student-cell">
                                                         <div className="avatar">{fullName(row).slice(0, 2).toUpperCase()}</div>
@@ -1487,14 +1633,25 @@ export function StudentListPanel() {
                                                           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="14" height="14"><path d="M14 3H2a1 1 0 00-1 1v7a1 1 0 001 1h5l2 2 2-2h3a1 1 0 001-1V4a1 1 0 00-1-1z"/></svg>
                                                         </button>
                                                         {!(row.is_deleted || row.status === "deleted") && (
-                                                          <button type="button" className="icon-action icon-archive" title="Archive student" onClick={(e) => void archiveStudent(row.id, e)}>
+                                                          <button type="button" className="icon-action icon-archive" title="Archive student" onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            openReasonModal({
+                                                              title: `Archive ${fullName(row)}`,
+                                                              message: "Archiving removes this student from default lists. Pick a reason for the audit log.",
+                                                              presets: ARCHIVE_REASONS,
+                                                              confirmLabel: "Archive",
+                                                              variant: "danger",
+                                                              execute: async (reason) => { await archiveStudent(row.id, reason); },
+                                                            });
+                                                          }}>
                                                             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="14" height="14"><rect x="1" y="3" width="14" height="3" rx="1"/><path d="M2 6v7a1 1 0 001 1h10a1 1 0 001-1V6M6 9h4"/></svg>
                                                           </button>
                                                         )}
                                                       </div>
                                                     </td>
                                                   </tr>
-                                                ))}
+                                                  );
+                                                })}
                                               </tbody>
                                             </table>
                                           </div>
@@ -1649,20 +1806,25 @@ export function StudentListPanel() {
                 onClick={() => {
                   if (!viewStudent) return;
                   const willDeactivate = viewStudent.is_active;
-                  setPendingConfirm({
-                    title: willDeactivate ? "Confirm Deactivation" : "Confirm Activation",
-                    message: willDeactivate
-                      ? "Are you sure you want to deactivate this student?"
-                      : "Are you sure you want to activate this student?",
-                    details: willDeactivate
-                      ? "This action can be reversed later by activating again."
-                      : "The student will be marked active and visible in default lists.",
-                    confirmLabel: willDeactivate ? "Deactivate" : "Activate",
-                    variant: willDeactivate ? "danger" : "primary",
-                    execute: async () => {
-                      await toggleStudentStatus();
-                    },
-                  });
+                  if (willDeactivate) {
+                    openReasonModal({
+                      title: `Deactivate ${fullName(viewStudent)}`,
+                      message: "Pick a reason for deactivating this student. They can be reactivated later.",
+                      presets: DEACTIVATE_REASONS,
+                      confirmLabel: "Deactivate",
+                      variant: "danger",
+                      execute: async (reason) => { await toggleStudentStatus(reason); },
+                    });
+                  } else {
+                    setPendingConfirm({
+                      title: "Confirm Activation",
+                      message: "Are you sure you want to activate this student?",
+                      details: "The student will be marked active and visible in default lists.",
+                      confirmLabel: "Activate",
+                      variant: "primary",
+                      execute: async () => { await toggleStudentStatus(); },
+                    });
+                  }
                 }}
                 disabled={viewTogglingStatus}
                 title={viewStudent?.is_active ? "Deactivate this student" : "Activate this student"}
@@ -1709,6 +1871,57 @@ export function StudentListPanel() {
         onConfirm={() => void runPendingConfirm()}
         onCancel={() => { if (!confirming) setPendingConfirm(null); }}
       />
+
+      {pendingReason !== null && (
+        <div className="reason-overlay" role="dialog" aria-modal="true" onClick={() => { if (!reasonBusy) setPendingReason(null); }}>
+          <div className="reason-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="reason-head">
+              <h3>{pendingReason.title}</h3>
+              <button type="button" className="reason-x" aria-label="Close" disabled={reasonBusy} onClick={() => setPendingReason(null)}>×</button>
+            </div>
+            <p className="reason-msg">{pendingReason.message}</p>
+            <div className="reason-chips">
+              {pendingReason.presets.map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  className="reason-chip"
+                  data-active={reasonPick === p}
+                  onClick={() => setReasonPick(p)}
+                  disabled={reasonBusy}
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+            <div className="reason-textarea-row">
+              <textarea
+                className="reason-textarea"
+                placeholder="Add an optional note for the audit log…"
+                value={reasonText}
+                onChange={(e) => setReasonText(e.target.value)}
+                rows={3}
+                disabled={reasonBusy}
+              />
+              <button type="button" className="reason-ai-btn" onClick={aiHelpReason} disabled={reasonBusy} title="Draft a suggested note based on the selected reason">
+                ✨ Draft with AI
+              </button>
+            </div>
+            <div className="reason-footer">
+              <button type="button" className="outline-btn" disabled={reasonBusy} onClick={() => setPendingReason(null)}>Cancel</button>
+              <button
+                type="button"
+                className={pendingReason.variant === "danger" ? "danger-btn" : "solid-btn"}
+                disabled={!finalReason.trim() || reasonBusy}
+                onClick={() => void runPendingReason()}
+                title={!finalReason.trim() ? "Pick or type a reason first" : undefined}
+              >
+                {reasonBusy ? "Saving…" : pendingReason.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx>{`
         .student-list-panel {
@@ -1884,10 +2097,11 @@ export function StudentListPanel() {
 
         .list-shell {
           margin-top: 16px;
-          border: 1px solid var(--line);
-          border-radius: 14px;
-          background: #fff;
-          overflow: hidden;
+          background: transparent;
+        }
+
+        .sl-panel + .sl-panel {
+          margin-top: 14px;
         }
 
         .toolbar {
@@ -2821,12 +3035,14 @@ export function StudentListPanel() {
         ═══════════════════════════════════════════ */
 
         .sl-panel {
-          border-bottom: 1px solid var(--line);
+          border: 1px solid var(--line);
+          border-radius: 14px;
           background: #fff;
+          overflow: hidden;
         }
 
         .sl-panel:last-child {
-          border-bottom: none;
+          border-bottom: 1px solid var(--line);
         }
 
         /* Panel header */
@@ -3640,6 +3856,211 @@ export function StudentListPanel() {
           align-items: center;
           gap: 8px;
           padding: 4px 0 10px;
+        }
+
+        .sl-sec-check {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          cursor: pointer;
+        }
+
+        .sl-sec-check input[type="checkbox"] {
+          width: 14px;
+          height: 14px;
+          accent-color: #4f39f6;
+          cursor: pointer;
+        }
+
+        .sl-sec-bulk {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+          padding: 8px 10px;
+          margin: 0 0 10px;
+          background: linear-gradient(180deg, #f4f1ff 0%, #ecebff 100%);
+          border: 1px solid #d6d2ff;
+          border-radius: 10px;
+          color: #2f2a5a;
+          font-size: 12px;
+        }
+
+        .sl-sec-bulk strong {
+          color: #4f39f6;
+          font-weight: 700;
+        }
+
+        .sl-sec-bulk-actions {
+          display: flex;
+          gap: 6px;
+          flex-wrap: wrap;
+        }
+
+        tr.row-selected td {
+          background: #f4f1ff !important;
+        }
+
+        tr.row-archived td {
+          box-shadow: inset 0 2px 0 #f97316, inset 0 -2px 0 #f97316;
+          background: #fff7ed !important;
+        }
+        tr.row-archived td:first-child {
+          box-shadow: inset 2px 2px 0 #f97316, inset 0 -2px 0 #f97316;
+        }
+        tr.row-archived td:last-child {
+          box-shadow: inset -2px 2px 0 #f97316, inset 0 -2px 0 #f97316;
+        }
+
+        /* Reason modal */
+        .reason-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 16, 32, 0.55);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1200;
+          padding: 16px;
+        }
+        .reason-dialog {
+          background: #fff;
+          border-radius: 14px;
+          width: 100%;
+          max-width: 520px;
+          padding: 20px 22px 18px;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+          font-family: var(--font-manrope), -apple-system, "Segoe UI", sans-serif;
+        }
+        .reason-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 6px;
+        }
+        .reason-head h3 {
+          margin: 0;
+          font-size: 17px;
+          color: #0b0b14;
+          font-weight: 700;
+        }
+        .reason-x {
+          background: transparent;
+          border: 0;
+          font-size: 24px;
+          line-height: 1;
+          color: #6f7287;
+          cursor: pointer;
+          padding: 0 4px;
+        }
+        .reason-msg {
+          color: #555874;
+          font-size: 13px;
+          margin: 0 0 12px;
+        }
+        .reason-chips {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          margin-bottom: 12px;
+        }
+        .reason-chip {
+          padding: 6px 12px;
+          border-radius: 20px;
+          border: 1px solid #dfe0eb;
+          background: #f8f8fc;
+          font-size: 12px;
+          color: #42455d;
+          cursor: pointer;
+          transition: all 0.12s;
+        }
+        .reason-chip:hover {
+          border-color: #4f39f6;
+          color: #4f39f6;
+        }
+        .reason-chip[data-active="true"] {
+          background: #4f39f6;
+          color: #fff;
+          border-color: #4f39f6;
+        }
+        .reason-textarea-row {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          margin-bottom: 14px;
+        }
+        .reason-textarea {
+          width: 100%;
+          border: 1px solid #dfe0eb;
+          border-radius: 8px;
+          padding: 8px 10px;
+          font-size: 13px;
+          font-family: inherit;
+          resize: vertical;
+          min-height: 70px;
+          color: #0b0b14;
+        }
+        .reason-textarea:focus {
+          outline: none;
+          border-color: #4f39f6;
+          box-shadow: 0 0 0 3px rgba(79,57,246,0.15);
+        }
+        .reason-ai-btn {
+          align-self: flex-end;
+          padding: 6px 12px;
+          border-radius: 8px;
+          border: 1px dashed #4f39f6;
+          background: #f4f1ff;
+          color: #4f39f6;
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .reason-ai-btn:hover {
+          background: #ebe7ff;
+        }
+        .reason-ai-btn:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+        .reason-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 8px;
+        }
+        .reason-footer .danger-btn {
+          background: #dc2626;
+          color: #fff;
+          border: 0;
+          border-radius: 8px;
+          padding: 8px 16px;
+          font-weight: 600;
+          font-size: 13px;
+          cursor: pointer;
+        }
+        .reason-footer .danger-btn:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+        .reason-footer .solid-btn {
+          background: #4f39f6;
+          color: #fff;
+          border: 0;
+          border-radius: 8px;
+          padding: 8px 16px;
+          font-weight: 600;
+          font-size: 13px;
+          cursor: pointer;
+        }
+        .reason-footer .outline-btn {
+          background: #fff;
+          color: #42455d;
+          border: 1px solid #dfe0eb;
+          border-radius: 8px;
+          padding: 8px 14px;
+          font-size: 13px;
+          cursor: pointer;
         }
 
         .sl-sec-count {

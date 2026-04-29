@@ -934,14 +934,36 @@
 }
 .filterGrid8 {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 9px;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 9px 10px;
   margin-bottom: 12px;
 }
 @media (max-width: 1200px) {
   .filterGrid8 {
     grid-template-columns: repeat(4, 1fr);
   }
+}
+@media (max-width: 720px) {
+  .filterGrid8 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.fLbl {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.fLbl > span {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6f7287;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-left: 2px;
+}
+.fLbl > .filterInput {
+  width: 100%;
 }
 .filterInput {
   border-radius: 10px;

@@ -292,7 +292,7 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
 
       // Use the styled XLSX export (two sheets, color-coded, autofilter, summary).
       const exportRes = await fetch(
-        `${API_BASE_URL}/api/v1/attendance/student-attendance/export/?${base}&format=xlsx`,
+        `${API_BASE_URL}/api/v1/attendance/student-attendance/export/?${base}&fmt=xlsx`,
         { headers },
       );
       if (!exportRes.ok) throw new Error(`Export failed (${exportRes.status})`);

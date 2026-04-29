@@ -174,7 +174,57 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
             qs = qs.filter(name__icontains=name_filter)
         if status_filter in {"active", "inactive"}:
             qs = qs.filter(status=status_filter)
+        # AI flagged / "needs attention" filter — categories with missing
+        # description or zero students assigned.
+        attention = str(params.get("attention") or "").strip()
+        if attention in {"1", "true", "yes"}:
+            qs = qs.annotate(_students_n=Count("students", distinct=True)).filter(
+                Q(description="") | Q(description__isnull=True) | Q(_students_n=0)
+            )
         return qs
+
+    @action(detail=False, methods=["get"], url_path="summary", permission_classes=[permissions.IsAuthenticated])
+    def summary(self, request):
+        # KPI summary for the Student Categories page. Reads live from DB so a
+        # refresh / DB restart always reflects current state. Tenant scope is
+        # applied via super().get_queryset() (TenantScopedModelViewSet).
+        base = super().get_queryset()
+        annotated = base.annotate(students_n=Count("students", distinct=True))
+        total = annotated.count()
+        active = annotated.filter(status="active").count()
+        inactive = annotated.filter(status="inactive").count()
+        attention = annotated.filter(
+            Q(description="") | Q(description__isnull=True) | Q(students_n=0)
+        ).count()
+
+        top_qs = annotated.filter(students_n__gt=0).order_by("-students_n", "name")[:5]
+        top_categories = [
+            {"id": c.id, "name": c.name, "students_count": c.students_n}
+            for c in top_qs
+        ]
+        top_total_students = sum(c["students_count"] for c in top_categories)
+
+        recent_qs = base.order_by("-created_at")[:5]
+        recent_activity = [
+            {
+                "id": c.id,
+                "name": c.name,
+                "action": "Created",
+                "created_at": c.created_at.isoformat() if c.created_at else "",
+            }
+            for c in recent_qs
+        ]
+
+        return Response({
+            "success": True,
+            "total_count": total,
+            "active_count": active,
+            "inactive_count": inactive,
+            "attention_count": attention,
+            "top_total_students": top_total_students,
+            "top_categories": top_categories,
+            "recent_activity": recent_activity,
+        })
 
     @action(detail=False, methods=["get"], url_path="check-name")
     def check_name(self, request):
@@ -651,6 +701,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         "pincode_details": "student_info.add_student.view",
         "destroy": "student_info.delete_student_record.view",
         "soft_delete": "student_info.delete_student_record.view",
+        "set_status": "student_info.add_student.view",
         "restore": "student_info.delete_student_record.view",
         "permanent_delete": "student_info.delete_student_record.view",
         "promote": "student_info.student_promote.view",
@@ -1602,6 +1653,10 @@ class StudentViewSet(TenantScopedModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            reason = "(no reason provided)"
+
         student.is_deleted = True
         student.is_active = False
         student.is_disabled = True
@@ -1614,11 +1669,48 @@ class StudentViewSet(TenantScopedModelViewSet):
             action=StudentRecordAudit.ACTION_SOFT_DELETE,
             student=student,
             request=request,
-            note="Student soft-deleted",
-            metadata={"student_id": student.id, "admission_no": student.admission_no},
+            note=f"Student archived · reason: {reason}",
+            metadata={"student_id": student.id, "admission_no": student.admission_no, "reason": reason},
         )
 
         return Response({"success": True, "message": "Student deleted successfully"}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="set-status")
+    def set_status(self, request, *args, **kwargs):
+        student = self._get_student_for_record_action(request, kwargs.get("pk"))
+        if not student:
+            return Response(
+                {"success": False, "message": "Student record not found", "field_errors": {}},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if student.is_deleted:
+            return Response(
+                {"success": False, "message": "Cannot change status of an archived student. Restore first.", "field_errors": {}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        raw_active = request.data.get("is_active")
+        if isinstance(raw_active, str):
+            next_active = raw_active.strip().lower() in {"1", "true", "yes", "active"}
+        else:
+            next_active = bool(raw_active)
+        reason = (request.data.get("reason") or "").strip()
+        if not next_active and not reason:
+            return Response(
+                {"success": False, "message": "A reason is required to deactivate a student.", "field_errors": {"reason": "Reason is required."}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        student.is_active = next_active
+        student.is_disabled = False
+        student.status = "active" if next_active else "inactive"
+        student.save(update_fields=["is_active", "is_disabled", "status", "updated_at"])
+        self._audit_log(
+            action=StudentRecordAudit.ACTION_UPDATE,
+            student=student,
+            request=request,
+            note=("Student activated" if next_active else f"Student deactivated · reason: {reason}"),
+            metadata={"student_id": student.id, "is_active": next_active, "reason": reason},
+        )
+        return Response({"success": True, "message": "Student activated" if next_active else "Student deactivated"})
 
     @action(detail=True, methods=["post"], url_path="restore")
     def restore(self, request, *args, **kwargs):
@@ -1903,7 +1995,6 @@ class StudentDocumentViewSet(TenantScopedModelViewSet):
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
 
-<<<<<<< HEAD
     @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser])
     def upload_document(self, request):
         """
@@ -2145,6 +2236,9 @@ class PromotionBatchViewSet(TenantScopedModelViewSet):
             batch.save(update_fields=["target_year"])
 
         self._initialize_records(batch)
+        # CHANGED (perf): re-fetch through prefetched queryset so nested record
+        # serialization doesn't trigger N+1 queries on student/class/section.
+        batch = self.get_queryset().get(pk=batch.pk)
         return Response(self.get_serializer(batch).data)
 
     @action(detail=False, methods=["get"], url_path=r"by-year/(?P<year_name>[^/.]+)")
