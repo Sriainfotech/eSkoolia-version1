@@ -30,7 +30,29 @@ export default function PromoteHeader({
   return (
     <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
       <div className="min-w-0">
-        <h1 className="text-2xl font-bold text-[#1A1A2E]">Student Promote</h1>
+        <h1
+          style={{
+            margin: 0,
+            fontFamily: '"Playfair Display", Georgia, serif',
+            fontSize: '50px',
+            fontWeight: 500,
+            lineHeight: 0.95,
+            letterSpacing: '-0.02em',
+            color: '#181817',
+          }}
+        >
+          Student{' '}
+          <span
+            style={{
+              color: '#5b3df5',
+              fontFamily: '"Playfair Display", Georgia, serif',
+              fontStyle: 'italic',
+              fontWeight: 600,
+            }}
+          >
+            Promote
+          </span>
+        </h1>
         <p className="text-sm text-[#6B6B80] mt-0.5">
           Manage year-end promotions
           {typeof totalStudents === 'number' ? ` · ${totalStudents} students` : ''}

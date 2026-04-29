@@ -614,7 +614,7 @@ export function StudentMultiClassPanel() {
         </div>
         <div className={s.titleRow}>
           <div>
-            <h1 className={s.pageTitle}><em>Subject</em> Assignment</h1>
+            <h1 className={s.pageTitle}>Multi Subject <em>Assignment</em></h1>
             <p className={s.pageSubtitle}>One-time setup per student &mdash; locked until a change is requested</p>
           </div>
           <div className={s.kpiBlock}>

@@ -13,6 +13,7 @@ interface Props {
   sectionFilter: string;
   onSectionFilterChange: (v: string) => void;
   onMarkAllVisible: (status: 'present' | 'absent' | 'late') => void;
+  allVisibleMarked?: boolean;
 }
 
 function getWeekDates(centerDate: string): Date[] {
@@ -94,6 +95,7 @@ export default function GlobalControls({
   sectionFilter,
   onSectionFilterChange,
   onMarkAllVisible,
+  allVisibleMarked = false,
 }: Props) {
   const dateStrip = getWeekDates(selectedDate);
   const today = fmt(new Date());
@@ -289,7 +291,9 @@ export default function GlobalControls({
           </span>
           <button
             onClick={() => onMarkAllVisible('present')}
-            className="h-[30px] px-2.5 text-[11px] font-bold bg-[#E4F6ED] text-[#0A8C5A] rounded-lg border-none cursor-pointer hover:bg-[#0A8C5A] hover:text-white transition-colors"
+            disabled={allVisibleMarked}
+            title={allVisibleMarked ? 'All visible students already marked' : 'Mark all visible present'}
+            className="h-[30px] px-2.5 text-[11px] font-bold bg-[#E4F6ED] text-[#0A8C5A] rounded-lg border-none cursor-pointer hover:bg-[#0A8C5A] hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#E4F6ED] disabled:hover:text-[#0A8C5A]"
           >
             P
           </button>

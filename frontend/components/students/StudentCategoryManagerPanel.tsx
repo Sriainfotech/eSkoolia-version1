@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { apiRequestWithRefresh, apiRequestWithRefreshResponse } from "@/lib/api-auth";
 import { DeleteCategoryModal } from "./DeleteCategoryModal";
+import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { ToastContainer, toast } from "react-toastify";
 
 type StudentCategory = {
@@ -257,6 +258,29 @@ export function StudentCategoryManagerPanel() {
   const [deleteConflictMessage, setDeleteConflictMessage] = useState("");
   const [deleteModalLoading, setDeleteModalLoading] = useState(false);
   const [deactivateModalLoading, setDeactivateModalLoading] = useState(false);
+
+  // Confirmation modal for Activate / Deactivate actions.
+  type PendingConfirm = {
+    title: string;
+    message: string;
+    details?: string;
+    confirmLabel: string;
+    variant: "danger" | "primary";
+    execute: () => Promise<void>;
+  };
+  const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const runPendingConfirm = async () => {
+    if (!pendingConfirm) return;
+    try {
+      setConfirming(true);
+      await pendingConfirm.execute();
+    } finally {
+      setConfirming(false);
+      setPendingConfirm(null);
+    }
+  };
 
   const successToast = (message: string) => toast.success(message);
   const errorToast = (message: string) => toast.error(message);
@@ -588,6 +612,8 @@ export function StudentCategoryManagerPanel() {
       const response = await apiPatch<MutationResponse>(`/api/v1/students/categories/${row.id}/`, { status: nextStatus });
       setRows((prev) => prev.map((item) => (item.id === row.id ? { ...item, status: nextStatus } : item)));
       pushFeedback("success", response?.message || (nextStatus === "active" ? "Category activated." : "Category deactivated."));
+      // Close the status drawer so the now-stale profile isn't left visible.
+      setStatusDrawerId(null);
       await loadSummary(search);
     } catch (err) {
       pushFeedback("error", errorMessage(err, "Unable to change status."));
@@ -919,8 +945,38 @@ export function StudentCategoryManagerPanel() {
               <div className="bulk-strip">
                 <span>{selectedIds.length} selected</span>
                 <div>
-                  <button type="button" onClick={() => void bulkStatus("active")} disabled={saving}>Activate</button>
-                  <button type="button" onClick={() => void bulkStatus("inactive")} disabled={saving}>Deactivate</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!selectedIds.length || saving) return;
+                      const n = selectedIds.length;
+                      setPendingConfirm({
+                        title: "Confirm Activation",
+                        message: `Are you sure you want to activate ${n} selected categor${n === 1 ? "y" : "ies"}?`,
+                        details: "Activated categories will be available for selection.",
+                        confirmLabel: "Activate",
+                        variant: "primary",
+                        execute: async () => { await bulkStatus("active"); },
+                      });
+                    }}
+                    disabled={saving}
+                  >Activate</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!selectedIds.length || saving) return;
+                      const n = selectedIds.length;
+                      setPendingConfirm({
+                        title: "Confirm Deactivation",
+                        message: `Are you sure you want to deactivate ${n} selected categor${n === 1 ? "y" : "ies"}?`,
+                        details: "This action can be reversed later by activating again.",
+                        confirmLabel: "Deactivate",
+                        variant: "danger",
+                        execute: async () => { await bulkStatus("inactive"); },
+                      });
+                    }}
+                    disabled={saving}
+                  >Deactivate</button>
                   <button type="button" className="danger" onClick={requestBulkDelete} disabled={saving}>Delete</button>
                   <button type="button" className="ghost" onClick={() => setSelectedIds([])} disabled={saving}>Clear</button>
                 </div>
@@ -1277,8 +1333,21 @@ export function StudentCategoryManagerPanel() {
                 type="button"
                 className="status-footer-btn primary"
                 onClick={() => {
-                  const nextStatus = statusDrawerCategory.status === "active" ? "inactive" : "active";
-                  void updateStatus(statusDrawerCategory, nextStatus);
+                  const willDeactivate = statusDrawerCategory.status === "active";
+                  const nextStatus: "active" | "inactive" = willDeactivate ? "inactive" : "active";
+                  const target = statusDrawerCategory;
+                  setPendingConfirm({
+                    title: willDeactivate ? "Confirm Deactivation" : "Confirm Activation",
+                    message: willDeactivate
+                      ? "Are you sure you want to deactivate this category?"
+                      : "Are you sure you want to activate this category?",
+                    details: willDeactivate
+                      ? "This action can be reversed later by activating again."
+                      : "The category will be available for selection again.",
+                    confirmLabel: willDeactivate ? "Deactivate" : "Activate",
+                    variant: willDeactivate ? "danger" : "primary",
+                    execute: async () => { await updateStatus(target, nextStatus); },
+                  });
                 }}
                 disabled={saving}
               >
@@ -1288,6 +1357,18 @@ export function StudentCategoryManagerPanel() {
           </aside>
         </div>
       ) : null}
+
+      <ConfirmationModal
+        isOpen={pendingConfirm !== null}
+        title={pendingConfirm?.title ?? ""}
+        message={pendingConfirm?.message ?? ""}
+        details={pendingConfirm?.details}
+        confirmLabel={pendingConfirm?.confirmLabel ?? "Confirm"}
+        variant={pendingConfirm?.variant ?? "danger"}
+        isConfirming={confirming}
+        onConfirm={() => void runPendingConfirm()}
+        onCancel={() => { if (!confirming) setPendingConfirm(null); }}
+      />
 
       <ToastContainer
         position="top-right"

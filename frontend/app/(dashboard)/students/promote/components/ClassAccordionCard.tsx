@@ -125,6 +125,18 @@ export default function ClassAccordionCard({
           </span>
         </div>
 
+        {/* NEW (Fix 2a): Section name pills */}
+        <div className="flex gap-1 ml-2 flex-shrink-0">
+          {group.sections.map((sec) => (
+            <span
+              key={sec.key}
+              className="text-[10px] px-1.5 py-0.5 bg-[#F1F1F5] text-[#6B6B7B] rounded font-medium"
+            >
+              {sec.sectionName}
+            </span>
+          ))}
+        </div>
+
         {/* Chips */}
         <div className="flex flex-wrap gap-1.5 ml-4 items-center">
           <span className="whitespace-nowrap flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FAFAFD] text-[#3A3A4A] border border-[#E6E6EC]">

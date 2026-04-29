@@ -90,6 +90,13 @@ function writeRuntimeMeta(date: string, studentId: number, meta: RuntimeAttendan
   localStorage.setItem(runtimeMetaKey(date), JSON.stringify(current));
 }
 
+function clearRuntimeMeta(date: string, studentIds: number[]): void {
+  if (typeof window === 'undefined') return;
+  const current = readRuntimeMeta(date);
+  studentIds.forEach((id) => { delete current[id]; });
+  localStorage.setItem(runtimeMetaKey(date), JSON.stringify(current));
+}
+
 function mapDjangoStudentToStudent(raw: DjangoStudent): Student {
   const full_name = `${raw.first_name} ${raw.last_name}`.trim();
   const initials = [raw.first_name[0], raw.last_name[0]].filter(Boolean).join('').toUpperCase();
@@ -158,12 +165,14 @@ export function useStudents() {
         const student = mapDjangoStudentToStudent(raw);
         const meta = metaMap[student.id];
         if (!meta) return student;
+        // Issue #3: respect explicit nulls in runtime meta (the user may have
+        // reset times — null must override the server value, not fall through).
         return {
           ...student,
-          sign_in_time: meta.sign_in_time ?? student.sign_in_time,
-          sign_out_time: meta.sign_out_time ?? student.sign_out_time,
-          arrival_time: meta.arrival_time ?? student.arrival_time,
-          pickup_time: meta.pickup_time ?? student.pickup_time,
+          sign_in_time: 'sign_in_time' in meta ? (meta.sign_in_time ?? null) : student.sign_in_time,
+          sign_out_time: 'sign_out_time' in meta ? (meta.sign_out_time ?? null) : student.sign_out_time,
+          arrival_time: 'arrival_time' in meta ? (meta.arrival_time ?? null) : student.arrival_time,
+          pickup_time: 'pickup_time' in meta ? (meta.pickup_time ?? null) : student.pickup_time,
         };
       });
       setStudents((p) => ({ ...p, [key]: mapped }));
@@ -202,5 +211,11 @@ export function useStudents() {
     setError({});
   }, []);
 
-  return { students, loading, error, loadSection, updateStudent, clearStudents };
+  // Issue #3: wipe runtime-meta entries (sign-in/out times etc.) so a refetch
+  // returns to genuine server state instead of replaying stale optimistic data.
+  const clearStudentMeta = useCallback((date: string, studentIds: number[]) => {
+    clearRuntimeMeta(date, studentIds);
+  }, []);
+
+  return { students, loading, error, loadSection, updateStudent, clearStudents, clearStudentMeta };
 }

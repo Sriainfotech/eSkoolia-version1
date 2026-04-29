@@ -160,14 +160,29 @@ export default function PromoteStudentTable({
                 </td>
                 <td className="px-4 py-2.5 text-[12px] text-[#3A3A4A] max-w-[280px]">
                   {d.status === 'not_promoted' ? (
-                    <button
-                      onClick={() => onOpenNotPromoted(rec)}
-                      className="text-left text-[#4729F4] hover:underline"
-                    >
-                      {d.retention_reason
-                        ? `${d.retention_reason.replace(/_/g, ' ')} — edit`
-                        : 'Add reason'}
-                    </button>
+                    <div className="flex items-center gap-2 group">
+                      <span
+                        className="inline-flex items-center text-[11px] font-semibold text-[#991B1B] bg-[#FFF1F2] border border-[#FECACA] rounded px-2 py-0.5 capitalize max-w-[160px] truncate"
+                        title={d.retention_reason ? d.retention_reason.replace(/_/g, ' ') : 'No reason set'}
+                      >
+                        {d.retention_reason
+                          ? d.retention_reason.replace(/_/g, ' ')
+                          : 'No reason set'}
+                      </span>
+                      {!isReadOnly && (
+                        <button
+                          onClick={() => onOpenNotPromoted(rec)}
+                          title="Edit retention details"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-[#F1F1F5]"
+                          aria-label={`Edit retention details for ${rec.student_name}`}
+                        >
+                          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="#6B6B7B" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M11 2l3 3-9 9H2v-3l9-9z" />
+                            <line x1="9" y1="4" x2="12" y2="7" />
+                          </svg>
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <span className="text-[#9CA0AE] italic">—</span>
                   )}

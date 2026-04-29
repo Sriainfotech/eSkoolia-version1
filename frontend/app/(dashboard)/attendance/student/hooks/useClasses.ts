@@ -227,6 +227,10 @@ export function useClasses(date: string) {
   }, [fetchClasses]);
 
   // Re-fetch per-class attendance counts whenever date or base classes change
+  const [summaryRefreshTick, setSummaryRefreshTick] = useState(0);
+  const refreshClassSummary = useCallback(() => {
+    setSummaryRefreshTick((n) => n + 1);
+  }, []);
   useEffect(() => {
     if (!baseClasses.length) return;
     // Seed immediately with base classes (0 counts) so UI renders fast
@@ -244,16 +248,29 @@ export function useClasses(date: string) {
           return fetchSummary(newToken);
         }
         if (!res.ok) return;
-        const data: { date: string; classes: Array<{ class_id: number; present: number; absent: number; late: number; total: number; pct: number }> } = await res.json();
+        const data: { date: string; classes: Array<{ class_id: number; present: number; signed_in?: number; absent: number; late: number; total: number; pct: number }> } = await res.json();
         if (cancelled) return;
-        const summaryMap: Record<number, { present: number; absent: number; late: number; pct: number }> = {};
+        const summaryMap: Record<number, { present: number; signed_in: number; absent: number; late: number; pct: number }> = {};
         for (const row of data.classes ?? []) {
-          summaryMap[row.class_id] = { present: row.present, absent: row.absent, late: row.late, pct: row.pct };
+          summaryMap[row.class_id] = {
+            present: row.present,
+            signed_in: row.signed_in ?? 0,
+            absent: row.absent,
+            late: row.late,
+            pct: row.pct,
+          };
         }
         setClasses(baseClasses.map((cls) => {
           const s = summaryMap[cls.id];
           if (!s) return cls;
-          return { ...cls, total_present: s.present, total_absent: s.absent, total_late: s.late, overall_pct: s.pct };
+          return {
+            ...cls,
+            total_present: s.present,
+            total_signed_in: s.signed_in,
+            total_absent: s.absent,
+            total_late: s.late,
+            overall_pct: s.pct,
+          };
         }));
       } catch {
         // silently fail — accordion will show local counts when opened
@@ -261,7 +278,7 @@ export function useClasses(date: string) {
     }
     fetchSummary(getToken());
     return () => { cancelled = true; };
-  }, [date, baseClasses]);
+  }, [date, baseClasses, summaryRefreshTick]);
 
-  return { classes, loading, error };
+  return { classes, loading, error, refreshClassSummary };
 }

@@ -1903,6 +1903,119 @@ class StudentDocumentViewSet(TenantScopedModelViewSet):
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
 
+<<<<<<< HEAD
+    @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser])
+    def upload_document(self, request):
+        """
+        Upload a student document.
+        
+        Expects:
+        - student_id (required): Student ID (database ID or UUID)
+        - document_type (required): Document type (birth_certificate, aadhaar_card, medical_information)
+        - file (required): File to upload
+        """
+        try:
+            student_id_input = request.data.get("student_id")
+            document_type = request.data.get("document_type")
+            file_obj = request.FILES.get("file")
+            
+            logger.info(f"Document upload attempt: student_id={student_id_input}, document_type={document_type}, file={file_obj.name if file_obj else None}")
+            
+            # Validations
+            if not student_id_input:
+                return Response(
+                    {"error": "Student ID is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not document_type:
+                return Response(
+                    {"error": "Document type is required."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if not file_obj:
+                return Response(
+                    {"error": "No file selected."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check student exists and user has access.
+            # The frontend may send either the numeric DB id or the UUID student_id.
+            # We detect which one it is up front — querying a UUIDField with a
+            # non-UUID string raises django.core.exceptions.ValidationError, not
+            # Student.DoesNotExist, so we must validate the format ourselves.
+            import uuid as _uuid
+            student = None
+            sid_str = str(student_id_input).strip()
+
+            if sid_str.isdigit():
+                try:
+                    student = Student.objects.get(id=int(sid_str))
+                except Student.DoesNotExist:
+                    student = None
+
+            if student is None:
+                try:
+                    _uuid.UUID(sid_str)
+                except ValueError:
+                    pass
+                else:
+                    try:
+                        student = Student.objects.get(student_id=sid_str)
+                    except Student.DoesNotExist:
+                        student = None
+
+            if student is None:
+                logger.warning(f"Student not found with ID: {student_id_input}")
+                return Response(
+                    {"error": "Student not found."},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Check permission
+            if not request.user.is_superuser and student.school_id != request.user.school_id:
+                logger.warning(f"Permission denied: user school {request.user.school_id} != student school {student.school_id}")
+                raise PermissionDenied("You don't have permission to upload documents for this student.")
+            
+            # Validate file type
+            allowed_extensions = [".pdf", ".jpg", ".jpeg", ".png"]
+            file_name_lower = file_obj.name.lower()
+            if not any(file_name_lower.endswith(ext) for ext in allowed_extensions):
+                return Response(
+                    {"error": "Only PDF, JPG, JPEG, and PNG files are allowed."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validate file size (5MB)
+            if file_obj.size > 5242880:
+                return Response(
+                    {"error": "File size must be less than 5MB."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create document record
+            document = StudentDocument.objects.create(
+                student=student,
+                school=student.school,
+                document_type=document_type,
+                title=document_type.replace("_", " ").title(),
+                file=file_obj,
+                original_name=file_obj.name,
+                file_size=file_obj.size,
+                uploaded_by=request.user,
+            )
+            
+            # Serialize and return
+            serializer = self.get_serializer(document)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
+        except Exception as e:
+            logger.error(f"Document upload error: {str(e)}", exc_info=True)
+            return Response(
+                {"error": "An error occurred during file upload. Please try again."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 class StudentTransferHistoryViewSet(TenantScopedModelViewSet):
     serializer_class = StudentTransferHistorySerializer
@@ -1925,16 +2038,25 @@ class PromotionBatchViewSet(TenantScopedModelViewSet):
     permission_codes = {"*": "student_info.student_promote.view"}
 
     def get_queryset(self):
+        from django.db.models import Prefetch
+
         user = self.request.user
-        qs = PromotionBatch.objects.select_related("school", "academic_year", "target_year", "created_by", "confirmed_by").prefetch_related(
-            "records",
-            "records__student",
-            "records__from_class",
-            "records__from_section",
-            "records__to_class",
-            "records__to_section",
-            "records__failed_subjects",
+        # CHANGED (perf): use a Prefetch so records are loaded with select_related
+        # for student/from_class/to_class — avoids N+1 during nested serialization.
+        records_qs = (
+            PromotionRecord.objects.select_related(
+                "student",
+                "from_class",
+                "from_section",
+                "to_class",
+                "to_section",
+            )
+            .prefetch_related("failed_subjects")
+            .order_by("id")
         )
+        qs = PromotionBatch.objects.select_related(
+            "school", "academic_year", "target_year", "created_by", "confirmed_by",
+        ).prefetch_related(Prefetch("records", queryset=records_qs))
         if user.is_superuser:
             return qs
         if user.school_id:
@@ -1942,12 +2064,16 @@ class PromotionBatchViewSet(TenantScopedModelViewSet):
         return qs.none()
 
     def _recompute_counts(self, batch: PromotionBatch):
-        total = batch.records.count()
-        promoted = batch.records.filter(status=PromotionRecord.STATUS_PROMOTE).count()
-        retained = batch.records.filter(status=PromotionRecord.STATUS_NOT_PROMOTED).count()
-        batch.total_students = total
-        batch.promoted_count = promoted
-        batch.retained_count = retained
+        # CHANGED (perf): single aggregate query instead of three count() round-trips.
+        from django.db.models import Count, Q
+        agg = batch.records.aggregate(
+            total=Count("id"),
+            promoted=Count("id", filter=Q(status=PromotionRecord.STATUS_PROMOTE)),
+            retained=Count("id", filter=Q(status=PromotionRecord.STATUS_NOT_PROMOTED)),
+        )
+        batch.total_students = agg["total"] or 0
+        batch.promoted_count = agg["promoted"] or 0
+        batch.retained_count = agg["retained"] or 0
         batch.save(update_fields=["total_students", "promoted_count", "retained_count"])
 
     def _get_client_ip(self, request):
@@ -2163,14 +2289,91 @@ class PromotionBatchViewSet(TenantScopedModelViewSet):
 
         reason = data.get("reason") or record.retention_reason or "other"
         failed_subject_names = list(record.failed_subjects.values_list("name", flat=True))
-        parts = [
-            f"Student {record.student.first_name} {record.student.last_name} requires review.",
-            f"Primary reason: {reason.replace('_', ' ')}.",
-        ]
-        if failed_subject_names:
-            parts.append(f"Focus subjects: {', '.join(failed_subject_names)}.")
-        parts.append("Recommendation: schedule parent meeting, assign remedial plan, and re-evaluate within 6-8 weeks.")
-        recommendation = " ".join(parts)
+
+        # CHANGED (Fix 5): structured Assessment / Recommendation / Interventions output
+        student_name = f"{record.student.first_name} {record.student.last_name}".strip() or record.student.admission_no
+        first_name = student_name.split()[0] if student_name else "the student"
+        class_name = getattr(record.from_class, "name", "the current class")
+
+        # Pull subjects of concern from notes if present (frontend stores them there)
+        notes_subject_match = None
+        if record.notes:
+            import re as _re
+            m = _re.search(r"Subjects of concern:\s*([^\n]+)", record.notes, _re.IGNORECASE)
+            if m:
+                notes_subject_match = [s.strip() for s in m.group(1).split(",") if s.strip()]
+        focus_subjects = failed_subject_names or notes_subject_match or []
+        top_subjects = ", ".join(focus_subjects[:2]) if focus_subjects else "core subjects"
+
+        context_map = {
+            "academic":       f"{student_name} has not met the academic promotion criteria for {class_name}." + (f" Areas of concern: {', '.join(focus_subjects)}." if focus_subjects else ""),
+            "attendance":     f"{student_name}'s attendance for {class_name} is below the minimum 75% required for promotion.",
+            "medical":        f"{student_name} had prolonged medical absence in {class_name} that significantly impacted curriculum coverage.",
+            "behavioral":     f"{student_name} has recurring behavioural concerns in {class_name} despite multiple documented interventions.",
+            "parent_request": f"The parent/guardian of {student_name} has formally requested retention in {class_name}.",
+            "other":          f"{student_name} requires retention in {class_name} based on administrative assessment." + (f" Areas of concern: {', '.join(focus_subjects)}." if focus_subjects else ""),
+        }
+        situation = context_map.get(reason, context_map["other"])
+
+        intervention_map = {
+            "academic": [
+                f"Enrol {first_name} in targeted remedial sessions for {top_subjects} for the first 6 weeks.",
+                f"Pair {first_name} with a peer-mentor and assign weekly graded practice in the weakest subject.",
+                f"Schedule fortnightly progress reviews with subject teachers and share results with parents.",
+                f"Use diagnostic assessments at week 4 and week 12 to confirm conceptual recovery.",
+                f"Provide {first_name} with a personalised study plan and quiet supervised study slots after class.",
+            ],
+            "attendance": [
+                f"Implement an attendance improvement plan with daily tracking for {first_name}.",
+                f"Hold a parent–counsellor meeting to identify and resolve the root cause of absences.",
+                f"Set a written attendance contract with weekly targets shared with the family.",
+                f"Provide catch-up notes and lesson recordings for any future absence.",
+                f"Review attendance every fortnight and recognise consecutive on-time weeks.",
+            ],
+            "medical": [
+                f"Design a flexible learning schedule that accommodates {first_name}'s ongoing care needs.",
+                f"Co-ordinate with the school nurse to maintain a wellness log throughout the year.",
+                f"Provide bridging worksheets covering missed curriculum topics in priority order.",
+                f"Offer assistive learning resources (recorded lessons, extended deadlines) where required.",
+                f"Schedule monthly check-ins with class teacher and parent to reassess workload.",
+            ],
+            "behavioral": [
+                f"Assign a school counsellor to {first_name} with weekly one-to-one sessions for the first term.",
+                f"Introduce a behaviour contract co-signed by {first_name}, parents and the class teacher.",
+                f"Use positive-reinforcement tracking with measurable weekly goals.",
+                f"Provide structured peer-group activities to develop social and emotional skills.",
+                f"Review behaviour log monthly and adjust the support plan as needed.",
+            ],
+            "parent_request": [
+                f"Develop an enrichment plan that strengthens {first_name}'s foundational skills during the repeat year.",
+                f"Hold a goal-setting meeting with {first_name} and parents to define success criteria for the year.",
+                f"Encourage participation in co-curricular activities to build confidence and leadership.",
+                f"Offer optional advanced practice in subjects of strength to keep {first_name} challenged.",
+                f"Schedule quarterly reviews with parents to track holistic progress.",
+            ],
+            "other": [
+                f"Create an individualised learning plan tailored to {first_name}'s specific needs.",
+                f"Hold a meeting with parents and key teachers to align on the support strategy.",
+                f"Set measurable progress goals and review them monthly.",
+                f"Offer additional academic and pastoral support resources as required.",
+                f"Document all interventions in {first_name}'s student file for continuity.",
+            ],
+        }
+        interventions = intervention_map.get(reason, intervention_map["other"])
+
+        recommendation = (
+            f"## Assessment Summary\n"
+            f"{situation} A formal review of {first_name}'s academic, attendance and pastoral records "
+            f"indicates that promotion to the next class would not be in the student's best interest at this stage. "
+            f"The school has carefully weighed continuity, peer relationships and academic readiness before reaching this recommendation. "
+            f"This is an opportunity for {first_name} to consolidate learning rather than a setback.\n\n"
+            f"## Recommendation\n"
+            f"It is recommended that {first_name} be retained for one academic year in {class_name}. "
+            f"The repeat year should focus on {top_subjects} alongside building consistent study habits and confidence. "
+            f"With targeted support, {first_name} has clear potential to thrive and progress strongly in the following year.\n\n"
+            f"## Suggested Interventions\n"
+            + "\n".join(f"• {item}" for item in interventions)
+        )
 
         record.ai_recommendation = recommendation
         record.last_modified_by = request.user

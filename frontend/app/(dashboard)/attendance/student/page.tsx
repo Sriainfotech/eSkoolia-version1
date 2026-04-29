@@ -22,8 +22,10 @@ import ViewNotesModal from './components/ViewNotesModal';
 
 import UnlockEditDialog from './components/UnlockEditDialog';
 import StudentAttendanceImportDialog from './components/StudentAttendanceImportDialog';
+import ConfirmDialogHost, { confirmDialog } from './components/ConfirmDialog';
+import ExportOptionsDialogHost, { exportOptionsDialog } from './components/ExportOptionsDialog';
 
-const LATE_RATIO_THRESHOLD = 0.7;
+const LATE_RATIO_THRESHOLD = 0;
 const LATE_MINUTES_BUFFER = 20;
 
 function toMinutes(time: string): number | null {
@@ -81,8 +83,8 @@ export default function StudentAttendancePage() {
   const [notesDialogState, setNotesDialogState] = useState<{ classId: number; sectionId: number; studentId: number; mode: 'add' | 'view' } | null>(null);
 
   // -- Data hooks -----------------------------------------------
-  const { classes, loading: classesLoading } = useClasses(selectedDate);
-  const { students, loading: studentsLoading, loadSection, updateStudent, clearStudents } = useStudents();
+  const { classes, loading: classesLoading, refreshClassSummary } = useClasses(selectedDate);
+  const { students, loading: studentsLoading, loadSection, updateStudent, clearStudents, clearStudentMeta } = useStudents();
   const { kpis: backendKpis, exportAttendance, patchMark, saveBulk, downloadSampleTemplate } = useAttendance(selectedDate);
   const selectedDateRef = useRef(selectedDate);
   const studentsRef = useRef(students);
@@ -264,47 +266,58 @@ export default function StudentAttendancePage() {
   }, [currentDay, handleMidnightReset]);
 
   const handleExportCsv = useCallback(async () => {
-    const allStudents = Object.values(students).flat();
+    const opts = await exportOptionsDialog({
+      defaultDate: selectedDate,
+      classes: classes.map((c) => ({
+        id: String(c.id),
+        name: c.name,
+        sections: (c.sections ?? []).map((s) => ({ id: String(s.id), name: s.name })),
+      })),
+      initialClassId: 'all',
+      initialSectionId: 'all',
+    });
+    if (!opts) return;
 
-    const exported = await exportAttendance(
-      'all',
-      () => pushToast('Attendance export downloaded.', 'success'),
-      () => {
-        // Fallback to local export only if backend export fails.
-      },
-    );
-    if (exported) return;
+    const exportArgs: { sectionId?: string; dateFrom?: string; dateTo?: string; singleDate?: boolean; format?: 'xlsx' | 'csv' } = {
+      format: 'xlsx',
+      sectionId: opts.sectionId,
+    };
+    if (opts.scope === 'day') {
+      exportArgs.singleDate = true;
+      exportArgs.dateFrom = opts.date;
+      exportArgs.dateTo = opts.date;
+    } else if (opts.scope === 'month') {
+      const [yy, mm] = opts.month.split('-').map(Number);
+      const lastDay = new Date(yy, mm, 0).getDate();
+      exportArgs.dateFrom = `${opts.month}-01`;
+      exportArgs.dateTo = `${opts.month}-${String(lastDay).padStart(2, '0')}`;
+    } else {
+      if (!opts.dateFrom || !opts.dateTo) {
+        pushToast('Please pick both From and To dates.', 'error');
+        return;
+      }
+      exportArgs.dateFrom = opts.dateFrom;
+      exportArgs.dateTo = opts.dateTo;
+    }
 
-    if (allStudents.length === 0) {
-      pushToast('No loaded student data to export. Open a class section first.', 'error');
+    if (opts.scope === 'day') {
+      // override: use the picked single date as the request date
+      await exportAttendance(
+        opts.classId,
+        () => pushToast('Attendance report downloaded.', 'success'),
+        (msg) => pushToast(msg || 'Failed to download report.', 'error'),
+        { ...exportArgs, dateFrom: undefined, dateTo: undefined, singleDate: true },
+      );
       return;
     }
 
-    const header = ['Admission No', 'Student Name', 'Roll No', 'Status', 'Absent Reason', 'Sign In', 'Sign Out', 'Lunch'];
-    const rows = allStudents.map((s) => [
-      s.admission_no || '',
-      s.full_name || '',
-      s.roll_no || '',
-      s.status || 'unmarked',
-      s.absent_reason || '',
-      s.sign_in_time || '',
-      s.sign_out_time || '',
-      s.lunch ? 'Yes' : 'No',
-    ]);
-
-    const escapeCell = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
-    const csv = [header, ...rows].map((line) => line.map(escapeCell).join(',')).join('\n');
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `student_attendance_${selectedDate}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(link.href);
-    pushToast('Attendance CSV exported successfully.', 'success');
-  }, [students, selectedDate, exportAttendance, pushToast]);
+    await exportAttendance(
+      opts.classId,
+      () => pushToast('Attendance report downloaded.', 'success'),
+      (msg) => pushToast(msg || 'Failed to download report.', 'error'),
+      exportArgs,
+    );
+  }, [classes, selectedDate, exportAttendance, pushToast]);
 
   const commitStudentStatus = useCallback(
     (
@@ -315,15 +328,21 @@ export default function StudentAttendancePage() {
       absentReason?: string,
       options?: { signInTime?: string | null; signOutTime?: string | null; successMessage?: string },
     ) => {
-      const autoSignInTime = newStatus === 'present' && !student.sign_in_time
-        ? currentTimeHHMM()
-        : student.sign_in_time;
+      // Issue #1: never auto-sign-in on a status change. Sign-in only happens
+      // when the explicit Sign-in flow runs and passes options.signInTime.
+      const signInTime = options?.signInTime !== undefined ? options.signInTime : student.sign_in_time;
+      const signOutTime = options?.signOutTime !== undefined ? options.signOutTime : student.sign_out_time;
+      // Issue #2: arrival mirrors sign-in, pickup mirrors sign-out.
+      const arrivalTime = signInTime ?? student.arrival_time;
+      const pickupTime = signOutTime ?? student.pickup_time;
       const nextStudent = {
         ...student,
         status: newStatus,
         absent_reason: absentReason ?? null,
-        sign_in_time: options?.signInTime ?? autoSignInTime,
-        sign_out_time: options?.signOutTime ?? student.sign_out_time,
+        sign_in_time: signInTime,
+        sign_out_time: signOutTime,
+        arrival_time: arrivalTime,
+        pickup_time: pickupTime,
       };
       updateStudent(classId, sectionId, nextStudent, selectedDate);
       patchMark(
@@ -335,6 +354,10 @@ export default function StudentAttendancePage() {
           section_id: sectionId,
           status: newStatus,
           absent_reason: absentReason,
+          sign_in_time: signInTime ?? undefined,
+          sign_out_time: signOutTime ?? undefined,
+          arrival_time: arrivalTime ?? undefined,
+          pickup_time: pickupTime ?? undefined,
         },
         () => pushToast(options?.successMessage ?? 'Attendance updated.', 'success'),
         (msg) => {
@@ -396,16 +419,34 @@ export default function StudentAttendancePage() {
     }
   }, [isReadOnly]);
 
-  const handleToggleAbsent = useCallback((classId: number, sectionId: number, student: Student) => {
+  const handleToggleAbsent = useCallback(async (classId: number, sectionId: number, student: Student) => {
     if (isReadOnly) return;
     if (student.sign_in_time && !student.sign_out_time) {
       pushToast('Sign out the student before marking absent.', 'error');
       return;
     }
     if (student.status === 'absent') {
-      commitStudentStatus(classId, sectionId, student, 'present');
+      // Issue #1 + #4: confirm reverting via centered dialog (no native browser prompt).
+      const { ok } = await confirmDialog({
+        title: 'Remove absent mark?',
+        message: `${student.full_name} will be moved back to the unmarked list. You can sign them in afterwards.`,
+        tone: 'warn',
+        confirmLabel: 'Yes, remove',
+        cancelLabel: 'Keep absent',
+      });
+      if (!ok) return;
+      // Revert to present without auto sign-in (issue #1 + #2).
+      commitStudentStatus(classId, sectionId, student, 'present', undefined, { signInTime: null });
       return;
     }
+    // Issue #1 + #4: confirm flipping to absent via centered dialog.
+    const { ok } = await confirmDialog({
+      title: 'Mark student absent?',
+      message: `Confirm marking ${student.full_name} as absent for today. You'll be asked to add a reason next.`,
+      tone: 'danger',
+      confirmLabel: 'Mark absent',
+    });
+    if (!ok) return;
     setAbsentDialogState({ classId, sectionId, student, mode: 'mark' });
   }, [isReadOnly, commitStudentStatus, pushToast]);
 
@@ -437,12 +478,96 @@ export default function StudentAttendancePage() {
     });
   }, [isReadOnly, getLateThresholdInfo, commitStudentStatus]);
 
-  const handleSignOut = useCallback((classId: number, sectionId: number, student: Student) => {
+  const handleSignOut = useCallback(async (classId: number, sectionId: number, student: Student) => {
     if (isReadOnly || !student.sign_in_time || student.sign_out_time) return;
     const now = currentTimeHHMM();
-    updateStudent(classId, sectionId, { ...student, sign_out_time: now }, selectedDate);
-    pushToast('Sign-out saved.', 'success');
-  }, [isReadOnly, updateStudent, selectedDate, pushToast]);
+
+    // Issue #7: very short stay (sign-in & sign-out same or under 1 hour apart) → centered confirm
+    const inMins = toMinutes(student.sign_in_time);
+    const outMins = toMinutes(now);
+    let shortStayNote: string | null = null;
+    if (inMins !== null && outMins !== null && outMins - inMins < 60) {
+      const gap = Math.max(0, outMins - inMins);
+      const { ok, note } = await confirmDialog({
+        title: 'Sign out so soon?',
+        message: `${student.full_name} signed in at ${student.sign_in_time} — only ${gap} minute${gap === 1 ? '' : 's'} ago. Confirm to sign them out now.`,
+        tone: 'warn',
+        confirmLabel: 'Confirm sign-out',
+        cancelLabel: 'Wait',
+        noteLabel: 'Reason / note',
+        notePlaceholder: 'e.g. parent emergency pickup…',
+        noteRequired: false,
+      });
+      if (!ok) return;
+      shortStayNote = note ?? null;
+    }
+
+    // Issue #2: early pickup detection (vs. peer baseline). Uses centered dialog now.
+    const key = `${classId}-${sectionId}`;
+    const peers = students[key] ?? [];
+    const peerOuts = peers
+      .filter((s) => s.id !== student.id && s.sign_out_time)
+      .map((s) => toMinutes(s.sign_out_time as string))
+      .filter((v): v is number => v !== null);
+    const latestPeer = peerOuts.length > 0 ? Math.max(...peerOuts) : null;
+    const isEarly = outMins !== null && latestPeer !== null && (latestPeer - outMins) >= 20;
+    let earlyReason: string | null = null;
+    if (isEarly) {
+      const { ok, note } = await confirmDialog({
+        title: 'Early pickup',
+        message: `${student.full_name} is being picked up ${latestPeer! - outMins!} minutes earlier than typical for the section. Please add a reason for the records.`,
+        tone: 'warn',
+        confirmLabel: 'Confirm sign-out',
+        noteLabel: 'Reason',
+        notePlaceholder: 'e.g. doctor appointment…',
+        noteRequired: true,
+      });
+      if (!ok) return;
+      earlyReason = (note ?? '').trim() || null;
+      if (!earlyReason) {
+        pushToast('A reason is required for early pickup.', 'error');
+        return;
+      }
+    }
+
+    // Build combined note text (early-pickup wins, short-stay appended)
+    const noteFragments: string[] = [];
+    if (earlyReason) noteFragments.push(`Early pickup: ${earlyReason}`);
+    if (shortStayNote) noteFragments.push(`Short stay: ${shortStayNote}`);
+    const combinedNoteText = noteFragments.join(' | ') || null;
+
+    const updatedNotes = combinedNoteText
+      ? [
+          ...student.notes,
+          { id: `note-${Date.now()}`, text: combinedNoteText, created_at: new Date().toISOString() } as StudentNote,
+        ]
+      : student.notes;
+    const next: Student = {
+      ...student,
+      sign_out_time: now,
+      pickup_time: now,
+      notes: updatedNotes,
+      notes_count: updatedNotes.length,
+    };
+    updateStudent(classId, sectionId, next, selectedDate);
+    patchMark(
+      student.id,
+      {
+        student_id: student.id,
+        date: selectedDate,
+        class_id: classId,
+        section_id: sectionId,
+        sign_out_time: now,
+        pickup_time: now,
+        ...(combinedNoteText ? { note: combinedNoteText } : {}),
+      },
+      () => pushToast(combinedNoteText ? 'Sign-out saved with note.' : 'Sign-out saved.', 'success'),
+      (msg) => {
+        updateStudent(classId, sectionId, student, selectedDate);
+        pushToast(msg || 'Failed to sign out.', 'error');
+      },
+    );
+  }, [isReadOnly, students, updateStudent, selectedDate, patchMark, pushToast]);
 
   const handleBulkMark = useCallback((classId: number, sectionId: number, status: AttendanceStatus) => {
     const key = `${classId}-${sectionId}`;
@@ -454,13 +579,26 @@ export default function StudentAttendancePage() {
     const targets = status === 'present' ? baseTargets.filter((s) => s.status !== 'absent') : baseTargets;
     if (targets.length === 0) return;
     const now = new Date().toTimeString().slice(0, 5);
-    // Update local state immediately so the UI reflects changes
+    // Issue #1: marking present must auto sign-in (and mirror arrival = sign-in).
+    const shouldSignIn = status === 'present';
     targets.forEach((s) => {
       const update: Student = { ...s, status };
-      if (status === 'present' && !s.sign_in_time) update.sign_in_time = now;
+      if (shouldSignIn && !s.sign_in_time) {
+        update.sign_in_time = now;
+        update.arrival_time = s.arrival_time ?? now;
+      }
       updateStudent(classId, sectionId, update, selectedDate);
     });
-    const marks = targets.map((s) => ({ student_id: s.id, date: selectedDate, class_id: classId, section_id: sectionId, status }));
+    const marks = targets.map((s) => {
+      const base: Record<string, unknown> = {
+        student_id: s.id, date: selectedDate, class_id: classId, section_id: sectionId, status,
+      };
+      if (shouldSignIn && !s.sign_in_time) {
+        base.sign_in_time = now;
+        base.arrival_time = s.arrival_time ?? now;
+      }
+      return base as { student_id: number; date: string; class_id: number; section_id: number; status: AttendanceStatus };
+    });
     saveBulk(
       marks,
       (saved) => pushToast(`${saved} attendance record(s) updated.`, 'success'),
@@ -475,9 +613,19 @@ export default function StudentAttendancePage() {
     const now = currentTimeHHMM();
     const targets = (students[key] ?? []).filter((s) => ids.has(s.id) && s.status !== 'absent');
     targets.forEach((s) => {
-      updateStudent(classId, sectionId, { ...s, status: 'present', sign_in_time: s.sign_in_time ?? now }, selectedDate);
+      updateStudent(classId, sectionId, {
+        ...s,
+        status: 'present',
+        sign_in_time: s.sign_in_time ?? now,
+        arrival_time: s.arrival_time ?? s.sign_in_time ?? now,
+      }, selectedDate);
     });
-    const marks = targets.map((s) => ({ student_id: s.id, date: selectedDate, class_id: classId, section_id: sectionId, status: 'present' as const }));
+    const marks = targets.map((s) => ({
+      student_id: s.id, date: selectedDate, class_id: classId, section_id: sectionId,
+      status: 'present' as const,
+      sign_in_time: s.sign_in_time ?? now,
+      arrival_time: s.arrival_time ?? s.sign_in_time ?? now,
+    }));
     saveBulk(
       marks,
       (saved) => pushToast(`${saved} sign-in record(s) saved.`, 'success'),
@@ -504,24 +652,28 @@ export default function StudentAttendancePage() {
     saveBulk(
       marks,
       (saved) => {
-        pushToast(`Saved ${saved} attendance row(s).`, 'success');
+        // Issue #9: close the accordion AND show a small success toast.
+        pushToast(`✓ Saved ${saved} attendance record(s).`, 'success');
         setOpenClasses((prev) => {
           const next = new Set(prev);
           next.delete(classId);
           return next;
         });
+        // Clear selections for this section.
+        setSelectedRows((prev) => ({ ...prev, [`${classId}-${sectionId}`]: new Set() }));
+        // Refresh class-summary so accordion percentages reflect what was just saved.
+        refreshClassSummary();
       },
-      () => pushToast('Failed to save attendance.', 'error'),
+      (msg) => pushToast(msg ? `Failed to save: ${msg}` : 'Failed to save attendance.', 'error'),
     );
-  }, [students, selectedDate, saveBulk, pushToast]);
+  }, [students, selectedDate, saveBulk, pushToast, refreshClassSummary]);
 
-  const handleOpenNote = useCallback((classId: number, sectionId: number, student: Student) => {
-    setNotesDialogState({
-      classId,
-      sectionId,
-      studentId: student.id,
-      mode: student.notes_count > 0 ? 'view' : 'add',
-    });
+  const handleOpenNote = useCallback((classId: number, sectionId: number, student: Student, mode: 'add' | 'view' = 'add') => {
+    // Issue #3: Add icon ALWAYS opens a fresh-note composer, View icon ALWAYS
+    // shows the existing notes list. The caller decides via `mode`. If view is
+    // requested but no notes exist, fall back to add silently.
+    const effectiveMode = mode === 'view' && student.notes_count === 0 ? 'add' : mode;
+    setNotesDialogState({ classId, sectionId, studentId: student.id, mode: effectiveMode });
   }, []);
 
   const handleSaveNote = useCallback((classId: number, sectionId: number, studentId: number, noteText: string) => {
@@ -570,9 +722,58 @@ export default function StudentAttendancePage() {
     );
   }, [students, selectedDate, patchMark, updateStudent, pushToast]);
 
-  const handleReset = useCallback((classId: number, sectionId: number) => {
+  const handleReset = useCallback(async (classId: number, sectionId: number) => {
+    // Issue #9: Reset must wipe today's attendance state on the server too,
+    // not just refetch. Send an explicit clear payload (status -> present
+    // baseline, sign_in/out cleared) for every loaded student in the section,
+    // then re-fetch to mirror server truth.
+    const key = `${classId}-${sectionId}`;
+    const sectionStudents = students[key] ?? [];
+    if (sectionStudents.length === 0) {
+      loadSection(classId, sectionId, selectedDate);
+      return;
+    }
+    const marks = sectionStudents.map((s) => ({
+      student_id: s.id,
+      date: selectedDate,
+      class_id: classId,
+      section_id: sectionId,
+      status: 'present' as const,
+      absent_reason: '',
+      arrival_time: '',
+      sign_in_time: '',
+      sign_out_time: '',
+      pickup_time: '',
+      pickup_by: '',
+      note: '',
+    }));
+    // Optimistically clear the UI so the student rows revert immediately.
+    sectionStudents.forEach((s) => {
+      updateStudent(classId, sectionId, {
+        ...s,
+        status: 'unmarked' as AttendanceStatus,
+        absent_reason: null,
+        arrival_time: null,
+        sign_in_time: null,
+        sign_out_time: null,
+        pickup_time: null,
+        pickup_by: null,
+        notes: [],
+        notes_count: 0,
+      }, selectedDate);
+    });
+    // Issue #3: also wipe runtime localStorage meta so a refetch (or accordion
+    // re-open) doesn't replay the pre-reset sign-in/out times.
+    clearStudentMeta(selectedDate, sectionStudents.map((s) => s.id));
+    await new Promise<void>((resolve) => {
+      saveBulk(
+        marks,
+        () => { pushToast('Section attendance reset.', 'success'); resolve(); },
+        (msg) => { pushToast(msg || 'Failed to reset attendance.', 'error'); resolve(); },
+      );
+    });
     loadSection(classId, sectionId, selectedDate);
-  }, [loadSection, selectedDate]);
+  }, [students, selectedDate, saveBulk, updateStudent, pushToast, loadSection, clearStudentMeta]);
 
   const handleMarkAllVisible = useCallback((status: AttendanceStatus) => {
     openClasses.forEach((classId) => {
@@ -594,13 +795,21 @@ export default function StudentAttendancePage() {
       if (!sectionStudents || sectionStudents.length === 0) return;
       const targets = sectionStudents.filter((s) => s.status !== 'absent');
       targets.forEach((s) => {
-        const update: Student = { ...s, status: 'present', sign_in_time: s.sign_in_time ?? now };
+        // Issue #1: marking present must auto sign-in + arrival.
+        const update: Student = {
+          ...s,
+          status: 'present',
+          sign_in_time: s.sign_in_time ?? now,
+          arrival_time: s.arrival_time ?? s.sign_in_time ?? now,
+        };
         updateStudent(classId, sec.id, update, selectedDate);
         touched += 1;
       });
       const marks = targets.map((s) => ({
         student_id: s.id, date: selectedDate, class_id: classId, section_id: sec.id,
         status: 'present' as const,
+        sign_in_time: s.sign_in_time ?? now,
+        arrival_time: s.arrival_time ?? s.sign_in_time ?? now,
       }));
       saveBulk(marks, () => {}, () => {});
     });
@@ -654,6 +863,18 @@ export default function StudentAttendancePage() {
         sectionFilter={sectionFilter}
         onSectionFilterChange={setSectionFilter}
         onMarkAllVisible={handleMarkAllVisible}
+        allVisibleMarked={(() => {
+          // Issue #4: disable header bulk action when every visible (loaded) student is already marked.
+          const visible = Array.from(openClasses).flatMap((classId) => {
+            const cls = classes.find((c) => c.id === classId);
+            if (!cls) return [] as Student[];
+            const sectionId = activeSections[classId] ?? cls.sections[0]?.id;
+            if (!sectionId) return [] as Student[];
+            return students[`${classId}-${sectionId}`] ?? [];
+          });
+          if (visible.length === 0) return false;
+          return visible.every((s) => s.status === 'present' || s.status === 'absent' || s.status === 'late');
+        })()}
       />
 
       {classesLoading ? (
@@ -751,7 +972,7 @@ export default function StudentAttendancePage() {
         return (
           <NotesModal
             student={notesStudent}
-            initialNote={notesStudent.notes[0]?.text ?? ''}
+            initialNote={mode === 'add' ? '' : (notesStudent.notes[0]?.text ?? '')}
             onSave={(_s, noteText) => handleSaveNote(classId, sectionId, studentId, noteText)}
             onClose={() => setNotesDialogState(null)}
           />
@@ -782,6 +1003,18 @@ export default function StudentAttendancePage() {
               'present',
               reason ? `School approved: ${reason}` : undefined,
               { signInTime: lateDialogState.signInTime },
+            );
+            setLateDialogState(null);
+          }}
+          onMarkAbsent={(reason) => {
+            // Issue #8: admin rejected the custom reason and chose to mark absent.
+            commitStudentStatus(
+              lateDialogState.classId,
+              lateDialogState.sectionId,
+              lateDialogState.student,
+              'absent',
+              reason || undefined,
+              { signInTime: null },
             );
             setLateDialogState(null);
           }}
@@ -826,6 +1059,8 @@ export default function StudentAttendancePage() {
           );
         }}
       />
+      <ConfirmDialogHost />
+      <ExportOptionsDialogHost />
     </div>
   );
 }

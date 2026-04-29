@@ -292,11 +292,13 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
             pickup_time_map = data.get("pickup_time") or {}
             pickup_by_map = data.get("pickup_by") or {}
             lock_attendance = data.get("lock_attendance", False)
+            note_map_early = data.get("note") or data.get("attendance_note") or {}
             has_time_payload = any([arrival_time_map, sign_in_time_map, sign_out_time_map, pickup_time_map, pickup_by_map])
+            has_note_payload = bool(note_map_early)
 
-            if not attendance_map and not lunch_map and not has_time_payload:
+            if not attendance_map and not lunch_map and not has_time_payload and not has_note_payload:
                 return Response(
-                    {"success": False, "message": "Please provide attendance or lunch data"},
+                    {"success": False, "message": "Please provide attendance, lunch, time or note data"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -1009,12 +1011,22 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
         )
         total_by_class: dict[int, int] = {row["current_class_id"]: row["count"] for row in student_counts}
 
-        # Per-class attendance aggregates for the date
+        # Per-class attendance aggregates for the date — only count students
+        # who are still active (so deactivated students don't push counts > total).
+        # `signed_in` counts present rows that actually have a sign-in time
+        # so the percentage reflects who really arrived rather than who was
+        # only marked Present in advance.
+        active_student_ids = Student.objects.filter(is_active=True, **school_filter).values_list("id", flat=True)
         rows = (
-            StudentAttendance.objects.filter(attendance_date=parsed_date, **school_filter)
+            StudentAttendance.objects
+            .filter(attendance_date=parsed_date, student_id__in=list(active_student_ids), **school_filter)
             .values("class_id")
             .annotate(
                 present=Count(Case(When(attendance_type="P", then=1), output_field=IntegerField())),
+                signed_in=Count(Case(
+                    When(attendance_type="P", sign_in_time__isnull=False, then=1),
+                    output_field=IntegerField(),
+                )),
                 absent=Count(Case(When(attendance_type="A", then=1), output_field=IntegerField())),
                 late=Count(Case(When(attendance_type="L", then=1), output_field=IntegerField())),
             )
@@ -1026,6 +1038,7 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
             if cid is not None:
                 counts_by_class[cid] = {
                     "present": row["present"] or 0,
+                    "signed_in": row["signed_in"] or 0,
                     "absent": row["absent"] or 0,
                     "late": row["late"] or 0,
                 }
@@ -1035,16 +1048,25 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
         result = []
         for cls_id in all_class_ids:
             total = total_by_class.get(cls_id, 0)
-            c = counts_by_class.get(cls_id, {"present": 0, "absent": 0, "late": 0})
-            marked = c["present"] + c["absent"] + c["late"]
+            c = counts_by_class.get(cls_id, {"present": 0, "signed_in": 0, "absent": 0, "late": 0})
+            # Clamp to total to be defensive against stray duplicates.
+            present = min(c["present"], total) if total else c["present"]
+            signed_in = min(c["signed_in"], total) if total else c["signed_in"]
+            absent = min(c["absent"], total) if total else c["absent"]
+            late = min(c["late"], total) if total else c["late"]
+            marked = present + absent + late
+            attended = signed_in + late
             result.append({
                 "class_id": cls_id,
                 "total": total,
-                "present": c["present"],
-                "absent": c["absent"],
-                "late": c["late"],
+                "present": present,
+                "signed_in": signed_in,
+                "absent": absent,
+                "late": late,
                 "unmarked": max(0, total - marked),
-                "pct": round((c["present"] / total) * 100) if total > 0 else 0,
+                # pct now reflects students who actually arrived (signed in or late),
+                # so a class marked Present in advance without sign-ins shows 0%.
+                "pct": round((attended / total) * 100) if total > 0 else 0,
             })
 
         return Response({"date": date_str, "classes": result})
@@ -1101,7 +1123,12 @@ class StudentAttendanceDailySummaryAPIView(AttendanceTenantMixin, APIView):
 
 
 class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
-    """Exports attendance rows in CSV/XLSX format."""
+    """Exports attendance rows in CSV/XLSX format.
+
+    XLSX output follows the Attendance Report spec: two sheets (Details + Summary),
+    styled header block, color-coded rows, autofilter, freeze panes, group separators,
+    and conditional formatting on the summary sheet.
+    """
 
     def get(self, request):
         format_type = (request.query_params.get("format") or "csv").lower()
@@ -1110,6 +1137,8 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
         month = request.query_params.get("month")
         year = request.query_params.get("year")
         date_value = request.query_params.get("date")
+        date_from = request.query_params.get("date_from")
+        date_to = request.query_params.get("date_to")
 
         queryset = StudentAttendance.objects.select_related("student").filter(**self.school_filter(request))
         if class_id:
@@ -1122,7 +1151,20 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
             queryset = queryset.filter(attendance_date__year=year)
         if date_value:
             queryset = queryset.filter(attendance_date=date_value)
+        if date_from:
+            queryset = queryset.filter(attendance_date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(attendance_date__lte=date_to)
 
+        if format_type == "xlsx":
+            return self._export_xlsx(
+                request, queryset,
+                class_id=class_id, section_id=section_id,
+                month=month, year=year,
+                date_value=date_value, date_from=date_from, date_to=date_to,
+            )
+
+        # ---- CSV (legacy) ----
         rows = [
             [
                 att.student.admission_no,
@@ -1140,49 +1182,435 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
             ]
             for att in queryset.order_by("attendance_date", "student_id")
         ]
-
         headers = [
-            "admission_no",
-            "student_name",
-            "roll_no",
-            "attendance_date",
-            "attendance_type",
-            "note",
-            "arrival_time",
-            "sign_in_time",
-            "sign_out_time",
-            "pickup_time",
-            "pickup_by",
-            "lunch",
+            "admission_no", "student_name", "roll_no", "attendance_date",
+            "attendance_type", "note", "arrival_time", "sign_in_time",
+            "sign_out_time", "pickup_time", "pickup_by", "lunch",
         ]
-
-        if format_type == "xlsx":
-            try:
-                from openpyxl import Workbook
-            except Exception:
-                return Response({"detail": "openpyxl is required for xlsx export."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "attendance"
-            ws.append(headers)
-            for row in rows:
-                ws.append(row)
-            output = BytesIO()
-            wb.save(output)
-            output.seek(0)
-            response = HttpResponse(
-                output.getvalue(),
-                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-            response["Content-Disposition"] = 'attachment; filename="student_attendance_export.xlsx"'
-            return response
-
         output = StringIO()
         writer = csv.writer(output)
         writer.writerow(headers)
         writer.writerows(rows)
         response = HttpResponse(output.getvalue(), content_type="text/csv")
         response["Content-Disposition"] = 'attachment; filename="student_attendance_export.csv"'
+        return response
+
+    # ------------------------------------------------------------------
+    # XLSX builder (styled, two-sheet, per spec)
+    # ------------------------------------------------------------------
+    def _export_xlsx(self, request, queryset, *, class_id, section_id,
+                     month, year, date_value, date_from, date_to):
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+            from openpyxl.utils import get_column_letter
+            from openpyxl.formatting.rule import ColorScaleRule
+        except Exception:
+            return Response(
+                {"detail": "openpyxl is required for xlsx export."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # ---- Resolve names ----
+        rows_qs = list(queryset.order_by("attendance_date", "class_id", "section_id", "student_id"))
+
+        class_ids = {r.class_id for r in rows_qs if r.class_id}
+        section_ids = {r.section_id for r in rows_qs if r.section_id}
+        classes_map = {c.id: c.name for c in Class.objects.filter(id__in=class_ids)}
+        sections_map = {s.id: s.name for s in Section.objects.filter(id__in=section_ids)}
+
+        # School name
+        school_name = "School"
+        try:
+            from apps.tenancy.models import School
+            sid = getattr(request.user, "school_id", None)
+            if sid:
+                sch = School.objects.filter(id=sid).first()
+                if sch and getattr(sch, "name", None):
+                    school_name = sch.name
+        except Exception:
+            pass
+
+        # ---- Status helpers ----
+        STATUS_MAP = {"P": "Present", "A": "Absent", "L": "Late", "F": "Half Day", "H": "Holiday"}
+
+        def status_label(att):
+            base = STATUS_MAP.get(att.attendance_type, att.attendance_type or "")
+            # Derive "Early Sign-Out" for present rows where stay < 60 min
+            if base == "Present" and att.sign_in_time and att.sign_out_time:
+                try:
+                    base_dt = datetime.combine(att.attendance_date, att.sign_in_time)
+                    out_dt = datetime.combine(att.attendance_date, att.sign_out_time)
+                    if (out_dt - base_dt).total_seconds() < 3600:
+                        return "Early Sign-Out"
+                except Exception:
+                    pass
+            return base
+
+        # ---- Styles ----
+        navy = "1A237E"
+        header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+        title_font = Font(name="Calibri", size=16, bold=True, color="FFFFFF")
+        subtitle_font = Font(name="Calibri", size=12, bold=True)
+        meta_font = Font(name="Calibri", size=10, italic=True, color="424242")
+        navy_fill = PatternFill("solid", fgColor=navy)
+        center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        right = Alignment(horizontal="right", vertical="center")
+        thin = Side(style="thin", color="CFD8DC")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        STATUS_STYLE = {
+            "Present":        {"bg": "E8F5E9", "fg": "1B5E20"},
+            "Absent":         {"bg": "FFEBEE", "fg": "B71C1C"},
+            "Late":           {"bg": "FFF8E1", "fg": "E65100"},
+            "Early Sign-Out": {"bg": "E3F2FD", "fg": "0D47A1"},
+            "Half Day":       {"bg": "F3E5F5", "fg": "4A148C"},
+            "Holiday":        {"bg": "ECEFF1", "fg": "37474F"},
+        }
+        group_fill = PatternFill("solid", fgColor="ECEFF1")
+        group_font = Font(name="Calibri", size=10, bold=True, color="263238")
+
+        # ---- Determine report metadata ----
+        def fmt_month(d):
+            return d.strftime("%B %Y") if d else ""
+
+        if date_from and date_to:
+            try:
+                df = datetime.strptime(date_from, "%Y-%m-%d").date()
+                dt = datetime.strptime(date_to, "%Y-%m-%d").date()
+                if df.month == dt.month and df.year == dt.year:
+                    title_period = fmt_month(df)
+                else:
+                    title_period = f"{df.strftime('%d %b %Y')} – {dt.strftime('%d %b %Y')}"
+                file_period = f"{df.strftime('%d%b')}_{dt.strftime('%d%b_%Y')}"
+            except Exception:
+                title_period = f"{date_from} – {date_to}"
+                file_period = f"{date_from}_{date_to}"
+        elif month and year:
+            try:
+                d = date(int(year), int(month), 1)
+                title_period = fmt_month(d)
+                file_period = d.strftime("%B_%Y")
+            except Exception:
+                title_period = f"{month}/{year}"
+                file_period = f"{month}_{year}"
+        elif date_value:
+            try:
+                d = datetime.strptime(date_value, "%Y-%m-%d").date()
+                title_period = d.strftime("%d %B %Y")
+                file_period = d.strftime("%d%b_%Y")
+            except Exception:
+                title_period = date_value
+                file_period = date_value
+        elif rows_qs:
+            d = rows_qs[0].attendance_date
+            title_period = fmt_month(d)
+            file_period = d.strftime("%B_%Y")
+        else:
+            today = date.today()
+            title_period = fmt_month(today)
+            file_period = today.strftime("%B_%Y")
+
+        # Filter description
+        if class_id and section_id:
+            cls_name = classes_map.get(int(class_id), f"[ID: {class_id}]") if str(class_id).isdigit() else class_id
+            sec_name = sections_map.get(int(section_id), f"[ID: {section_id}]") if str(section_id).isdigit() else section_id
+            filter_label = f"Filter: Class: {cls_name} — Section: {sec_name}"
+            file_filter = f"{cls_name}_{sec_name}".replace(" ", "")
+        elif class_id:
+            cls_name = classes_map.get(int(class_id), f"[ID: {class_id}]") if str(class_id).isdigit() else class_id
+            filter_label = f"Filter: Class: {cls_name}"
+            file_filter = str(cls_name).replace(" ", "")
+        elif section_id:
+            sec_name = sections_map.get(int(section_id), f"[ID: {section_id}]") if str(section_id).isdigit() else section_id
+            filter_label = f"Filter: Section: {sec_name}"
+            file_filter = f"Section{sec_name}".replace(" ", "")
+        else:
+            filter_label = "Filter: All Classes"
+            file_filter = "All_Classes"
+
+        # Academic year — derive from earliest year in data (Apr–Mar). Fall back to current year.
+        if rows_qs:
+            sample_year = rows_qs[0].attendance_date.year
+            sample_month = rows_qs[0].attendance_date.month
+        else:
+            sample_year = date.today().year
+            sample_month = date.today().month
+        ay_start = sample_year if sample_month >= 4 else sample_year - 1
+        academic_year = f"{ay_start}–{ay_start + 1}"
+
+        # ---- Build workbook ----
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Attendance Details"
+
+        columns = [
+            ("S.No", 6),
+            ("Date", 14),
+            ("Day", 12),
+            ("Academic Year", 14),
+            ("Month", 12),
+            ("Class", 16),
+            ("Section", 14),
+            ("Student ID", 12),
+            ("Student Name", 24),
+            ("Status", 16),
+            ("Sign-In Time", 13),
+            ("Sign-Out Time", 13),
+            ("Remarks / Reason", 32),
+        ]
+        last_col = len(columns)
+        last_col_letter = get_column_letter(last_col)
+
+        # ---- Header block (rows 1-4) ----
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+        c = ws.cell(row=1, column=1, value=school_name)
+        c.font = title_font
+        c.fill = navy_fill
+        c.alignment = center
+        ws.row_dimensions[1].height = 32
+
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=last_col)
+        c = ws.cell(row=2, column=1, value=f"Attendance Report — {title_period}")
+        c.font = subtitle_font
+        c.alignment = center
+        ws.row_dimensions[2].height = 22
+
+        ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=last_col)
+        c = ws.cell(row=3, column=1, value=f"Academic Year: {academic_year}")
+        c.font = meta_font
+        c.alignment = center
+
+        ws.merge_cells(start_row=4, start_column=1, end_row=4, end_column=last_col)
+        c = ws.cell(row=4, column=1, value=filter_label)
+        c.font = meta_font
+        c.alignment = center
+
+        # Row 5 blank separator
+        header_row_idx = 6
+
+        # Column widths
+        for i, (_, w) in enumerate(columns, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = max(w, 10)
+
+        # ---- Column header row ----
+        for i, (h, _) in enumerate(columns, start=1):
+            cell = ws.cell(row=header_row_idx, column=i, value=h)
+            cell.font = header_font
+            cell.fill = navy_fill
+            cell.alignment = center
+            cell.border = border
+        ws.row_dimensions[header_row_idx].height = 28
+
+        # ---- Build data rows, grouped by class/section when multi-class ----
+        # Pre-sort: Date desc → Class → Section → Student Name
+        def sort_key(att):
+            name = (
+                f"{att.student.first_name} {att.student.last_name}".strip().lower()
+                if att.student else ""
+            )
+            return (
+                -att.attendance_date.toordinal(),
+                classes_map.get(att.class_id or 0, ""),
+                sections_map.get(att.section_id or 0, ""),
+                name,
+            )
+        rows_sorted = sorted(rows_qs, key=sort_key)
+
+        unique_classes = {r.class_id for r in rows_sorted}
+        multi_class = len(unique_classes) > 1
+
+        current_row = header_row_idx + 1
+        sno = 0
+        last_group = None
+        # Group buckets for separator headers
+        from itertools import groupby
+        def group_keyer(att):
+            return (att.class_id, att.section_id)
+
+        for group_key, group_iter in groupby(rows_sorted, key=group_keyer):
+            group_list = list(group_iter)
+            if multi_class:
+                cls_n = classes_map.get(group_key[0] or 0, f"[ID: {group_key[0]}]")
+                sec_n = sections_map.get(group_key[1] or 0, f"[ID: {group_key[1]}]")
+                pres = sum(1 for a in group_list if a.attendance_type == "P")
+                absn = sum(1 for a in group_list if a.attendance_type == "A")
+                latn = sum(1 for a in group_list if a.attendance_type == "L")
+                tot = len({a.student_id for a in group_list})
+                group_label = (
+                    f"Class: {cls_n} — Section: {sec_n}  |  Total Students: {tot}  |  "
+                    f"Present: {pres}  |  Absent: {absn}  |  Late: {latn}"
+                )
+                ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=last_col)
+                gc = ws.cell(row=current_row, column=1, value=group_label)
+                gc.fill = group_fill
+                gc.font = group_font
+                gc.alignment = left
+                ws.row_dimensions[current_row].height = 22
+                current_row += 1
+
+            for att in group_list:
+                sno += 1
+                full_name = (
+                    f"{att.student.first_name} {att.student.last_name}".strip()
+                    if att.student else f"[ID: {att.student_id}]"
+                )
+                if not full_name:
+                    full_name = f"[ID: {att.student_id}]"
+                status_text = status_label(att)
+                style = STATUS_STYLE.get(status_text)
+
+                cls_n = classes_map.get(att.class_id or 0, f"[ID: {att.class_id}]" if att.class_id else "")
+                sec_n = sections_map.get(att.section_id or 0, f"[ID: {att.section_id}]" if att.section_id else "")
+
+                values = [
+                    sno,
+                    att.attendance_date,
+                    att.attendance_date.strftime("%A"),
+                    academic_year,
+                    att.attendance_date.strftime("%B"),
+                    cls_n,
+                    sec_n,
+                    att.student.admission_no if att.student else att.student_id,
+                    full_name,
+                    status_text,
+                    att.sign_in_time.strftime("%H:%M") if att.sign_in_time else "",
+                    att.sign_out_time.strftime("%H:%M") if att.sign_out_time else "",
+                    att.notes or "",
+                ]
+                for i, val in enumerate(values, start=1):
+                    cell = ws.cell(row=current_row, column=i, value=val)
+                    cell.border = border
+                    if i == 2:  # Date column
+                        cell.number_format = "DD MMM YYYY"
+                        cell.alignment = center
+                    elif i in (1, 3, 4, 5, 7, 10, 11, 12):
+                        cell.alignment = center
+                    elif i == 8:
+                        cell.alignment = right
+                    else:
+                        cell.alignment = left
+                    if style:
+                        cell.fill = PatternFill("solid", fgColor=style["bg"])
+                        cell.font = Font(name="Calibri", size=10, color=style["fg"])
+                current_row += 1
+
+        # AutoFilter + freeze panes
+        if current_row > header_row_idx + 1:
+            ws.auto_filter.ref = f"A{header_row_idx}:{last_col_letter}{current_row - 1}"
+        ws.freeze_panes = ws.cell(row=header_row_idx + 1, column=3)  # freeze header + S.No, Date
+
+        # ---- Sheet 2: Summary ----
+        ws2 = wb.create_sheet("Summary")
+        sum_cols = [
+            ("Class", 18), ("Section", 14), ("Total Students", 14),
+            ("Present", 10), ("Absent", 10), ("Late", 10),
+            ("Early Sign-Out", 14), ("Attendance %", 14),
+        ]
+        for i, (_, w) in enumerate(sum_cols, start=1):
+            ws2.column_dimensions[get_column_letter(i)].width = w
+
+        # Title row
+        ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(sum_cols))
+        tc = ws2.cell(row=1, column=1, value=f"{school_name} — Attendance Summary ({title_period})")
+        tc.font = title_font
+        tc.fill = navy_fill
+        tc.alignment = center
+        ws2.row_dimensions[1].height = 30
+
+        # Header row
+        for i, (h, _) in enumerate(sum_cols, start=1):
+            cell = ws2.cell(row=3, column=i, value=h)
+            cell.font = header_font
+            cell.fill = navy_fill
+            cell.alignment = center
+            cell.border = border
+        ws2.row_dimensions[3].height = 26
+
+        # Aggregate
+        from collections import defaultdict as _dd
+        bucket = _dd(lambda: {"students": set(), "P": 0, "A": 0, "L": 0, "ESO": 0})
+        for att in rows_sorted:
+            key = (att.class_id, att.section_id)
+            b = bucket[key]
+            b["students"].add(att.student_id)
+            stext = status_label(att)
+            if stext == "Early Sign-Out":
+                b["ESO"] += 1
+                b["P"] += 1  # still counted as present for attendance %
+            elif att.attendance_type == "P":
+                b["P"] += 1
+            elif att.attendance_type == "A":
+                b["A"] += 1
+            elif att.attendance_type == "L":
+                b["L"] += 1
+
+        sum_row = 4
+        sorted_keys = sorted(
+            bucket.keys(),
+            key=lambda k: (classes_map.get(k[0] or 0, ""), sections_map.get(k[1] or 0, "")),
+        )
+        tot_students = tot_p = tot_a = tot_l = tot_eso = 0
+        for k in sorted_keys:
+            b = bucket[k]
+            cls_n = classes_map.get(k[0] or 0, f"[ID: {k[0]}]" if k[0] else "—")
+            sec_n = sections_map.get(k[1] or 0, f"[ID: {k[1]}]" if k[1] else "—")
+            total = len(b["students"])
+            pct = round(((b["P"] + b["L"]) / total) * 100, 1) if total else 0.0
+            row_vals = [cls_n, sec_n, total, b["P"], b["A"], b["L"], b["ESO"], pct / 100.0]
+            for i, v in enumerate(row_vals, start=1):
+                cell = ws2.cell(row=sum_row, column=i, value=v)
+                cell.border = border
+                if i == 8:
+                    cell.number_format = "0.0%"
+                    cell.alignment = right
+                elif i in (3, 4, 5, 6, 7):
+                    cell.alignment = right
+                else:
+                    cell.alignment = left
+            tot_students += total
+            tot_p += b["P"]; tot_a += b["A"]; tot_l += b["L"]; tot_eso += b["ESO"]
+            sum_row += 1
+
+        # Totals row
+        tot_pct = round(((tot_p + tot_l) / tot_students) * 100, 1) if tot_students else 0.0
+        totals = ["TOTAL", "", tot_students, tot_p, tot_a, tot_l, tot_eso, tot_pct / 100.0]
+        for i, v in enumerate(totals, start=1):
+            cell = ws2.cell(row=sum_row, column=i, value=v)
+            cell.font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+            cell.fill = navy_fill
+            cell.border = border
+            if i == 8:
+                cell.number_format = "0.0%"
+                cell.alignment = right
+            elif i in (3, 4, 5, 6, 7):
+                cell.alignment = right
+            else:
+                cell.alignment = left
+
+        # Conditional 3-color scale on Attendance % column (H4..H{sum_row-1})
+        if sum_row > 4:
+            rule = ColorScaleRule(
+                start_type="num", start_value=0, start_color="FFCDD2",
+                mid_type="num", mid_value=0.85, mid_color="FFF9C4",
+                end_type="num", end_value=1, end_color="C8E6C9",
+            )
+            ws2.conditional_formatting.add(f"H4:H{sum_row - 1}", rule)
+            ws2.auto_filter.ref = f"A3:H{sum_row - 1}"
+        ws2.freeze_panes = "A4"
+
+        # ---- Filename ----
+        filename = f"Attendance_{file_filter}_{file_period}.xlsx"
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+        response = HttpResponse(
+            output.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
 
 

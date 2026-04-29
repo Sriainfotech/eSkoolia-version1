@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 export type StatusFilter = 'all' | 'pending' | 'promote' | 'not_promoted';
 export type ClassOption = { key: string; classLabel: string };
@@ -21,12 +21,32 @@ interface Props {
   onReset: () => void;
 }
 
-const STATUS_PILLS: { value: StatusFilter; label: string }[] = [
+const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: 'all',          label: 'All' },
   { value: 'pending',      label: 'Pending' },
   { value: 'promote',      label: 'Promote' },
   { value: 'not_promoted', label: 'Not Promoted' },
 ];
+
+const STATUS_LABEL: Record<StatusFilter, string> = {
+  all: 'All',
+  pending: 'Pending',
+  promote: 'Promote',
+  not_promoted: 'Not Promoted',
+};
+
+// Inline icons (avoid importing the student-groups page module)
+const FilterIco = () => (
+  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+  </svg>
+);
+const XIco = () => (
+  <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
 
 export default function PromoteSmartFilter({
   classOptions,
@@ -42,85 +62,204 @@ export default function PromoteSmartFilter({
   onSearchSubmit,
   onReset,
 }: Props) {
+  const [filterOpen, setFilterOpen] = useState(false);
+
+  // Pending (uncommitted) filter state — applied on "Apply Filter"
+  const [pendingClass, setPendingClass] = useState(classKey);
+  const [pendingSection, setPendingSection] = useState(sectionKey);
+  const [pendingStatus, setPendingStatus] = useState<StatusFilter>(status);
+
+  // Resync pending → applied if parent resets externally
+  useEffect(() => { setPendingClass(classKey); }, [classKey]);
+  useEffect(() => { setPendingSection(sectionKey); }, [sectionKey]);
+  useEffect(() => { setPendingStatus(status); }, [status]);
+
+  const hasFilterChanges =
+    pendingClass !== classKey ||
+    pendingSection !== sectionKey ||
+    pendingStatus !== status;
+
+  const applyFilters = () => {
+    if (pendingClass !== classKey) onClassChange(pendingClass);
+    if (pendingSection !== sectionKey) onSectionChange(pendingSection);
+    if (pendingStatus !== status) onStatusChange(pendingStatus);
+    setFilterOpen(false);
+  };
+
+  // Active applied filter chips
+  type Chip = { key: 'search' | 'class' | 'section' | 'status'; label: string; clear: () => void };
+  const chips = useMemo<Chip[]>(() => {
+    const out: Chip[] = [];
+    if (search.trim()) {
+      // Search is shown live in the input box itself — no separate chip needed.
+    }
+    if (classKey !== 'all') {
+      const c = classOptions.find((o) => o.key === classKey);
+      if (c) out.push({ key: 'class', label: c.classLabel, clear: () => { setPendingClass('all'); onClassChange('all'); } });
+    }
+    if (sectionKey !== 'all') {
+      const s = sectionOptions.find((o) => o.key === sectionKey);
+      if (s) out.push({ key: 'section', label: `Sec ${s.label}`, clear: () => { setPendingSection('all'); onSectionChange('all'); } });
+    }
+    if (status !== 'all') {
+      out.push({ key: 'status', label: STATUS_LABEL[status], clear: () => { setPendingStatus('all'); onStatusChange('all'); } });
+    }
+    return out;
+  }, [search, classKey, sectionKey, status, classOptions, sectionOptions, onSearchChange, onSearchSubmit, onClassChange, onSectionChange, onStatusChange]);
+
+  const pendingCount =
+    (pendingClass !== 'all' ? 1 : 0) +
+    (pendingSection !== 'all' ? 1 : 0) +
+    (pendingStatus !== 'all' ? 1 : 0);
+
+  const handleResetAll = () => {
+    setPendingClass('all');
+    setPendingSection('all');
+    setPendingStatus('all');
+    onReset();
+  };
+
   return (
-    <div className="flex flex-wrap items-center gap-3 mb-4">
-      {/* Class */}
-      <div className="flex items-center gap-1.5">
-        <label className="text-xs font-medium text-[#6B6B80] whitespace-nowrap">Class</label>
-        <select
-          value={classKey}
-          onChange={(e) => onClassChange(e.target.value)}
-          className="text-sm border border-[#E6E6EC] rounded-lg px-3 py-1.5 bg-white text-[#1A1A2E] focus:outline-none focus:ring-2 focus:ring-[#4729F4]"
-        >
-          <option value="all">All classes</option>
-          {classOptions.map((c) => (
-            <option key={c.key} value={c.key}>{c.classLabel}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Section */}
-      <div className="flex items-center gap-1.5">
-        <label className="text-xs font-medium text-[#6B6B80] whitespace-nowrap">Section</label>
-        <select
-          value={sectionKey}
-          onChange={(e) => onSectionChange(e.target.value)}
-          disabled={sectionOptions.length === 0}
-          className="text-sm border border-[#E6E6EC] rounded-lg px-3 py-1.5 bg-white text-[#1A1A2E] focus:outline-none focus:ring-2 focus:ring-[#4729F4] disabled:bg-[#F4F4F8] disabled:text-[#9CA0AE]"
-        >
-          <option value="all">All sections</option>
-          {sectionOptions.map((s) => (
-            <option key={s.key} value={s.key}>{s.label}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Status pills */}
-      <div className="flex gap-1.5">
-        {STATUS_PILLS.map(({ value, label }) => (
-          <button
-            key={value}
-            onClick={() => onStatusChange(value)}
-            className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition ${
-              status === value
-                ? 'bg-[#4729F4] text-white'
-                : 'bg-white border border-[#E6E6EC] text-[#6B6B80] hover:bg-[#F5F5FA]'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Search */}
-      <div className="flex items-center gap-1.5 flex-1 min-w-[220px]">
-        <div className="relative flex-1">
-          <svg className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9CA0AE]" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-            <circle cx="11" cy="11" r="8" />
-            <path d="m21 21-4.3-4.3" />
-          </svg>
+    <div className="sg-filter-shell" style={{ marginBottom: 16 }}>
+      {/* Always-visible: search + controls */}
+      <div className="sg-search-row">
+        <div className="sg-searchbox">
+          <FilterIco />
           <input
-            type="search"
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') onSearchSubmit(); }}
-            placeholder="Search student name or admission no…"
-            className="w-full text-sm border border-[#E6E6EC] rounded-lg pl-8 pr-3 py-1.5 bg-white text-[#1A1A2E] focus:outline-none focus:ring-2 focus:ring-[#4729F4]"
+            placeholder="Search student name, admission no, class or section…"
           />
+          {search && (
+            <button className="sg-search-clear" onClick={() => { onSearchChange(''); onSearchSubmit(); }} aria-label="Clear search">
+              <XIco />
+            </button>
+          )}
         </div>
         <button
-          onClick={onSearchSubmit}
-          className="bg-[#4729F4] text-white h-9 px-4 text-sm font-semibold rounded-lg cursor-pointer hover:bg-[#3a21d4] transition-colors"
+          type="button"
+          className={`sg-filter-toggle-btn${filterOpen ? ' open' : ''}`}
+          onClick={() => setFilterOpen((v) => !v)}
         >
-          Search
+          <FilterIco />
+          <span>Filters</span>
+          {pendingCount > 0 && <span className="sg-filter-badge">{pendingCount}</span>}
+          {hasFilterChanges && <span className="sg-filter-pending-dot" />}
+          <span className="sg-filter-caret">{filterOpen ? '▲' : '▼'}</span>
         </button>
-        <button
-          onClick={onReset}
-          className="bg-white border border-[#E6E6EC] h-9 px-3 text-sm font-medium text-[#3A3A4A] rounded-lg cursor-pointer hover:bg-[#F4F4F8] transition-colors"
-        >
-          Reset
-        </button>
+        {(chips.length > 0 || hasFilterChanges) && (
+          <button type="button" className="sg-reset-btn" onClick={handleResetAll}>
+            Reset all
+          </button>
+        )}
       </div>
+
+      {/* Active applied filter chips */}
+      {chips.length > 0 && (
+        <div className="sg-active-strip">
+          {chips.map((c, i) => (
+            <span key={`${c.key}-${i}`} className="sg-active-chip">
+              {c.label}
+              <button className="sg-active-chip-x" onClick={c.clear} aria-label={`Remove ${c.label}`}>
+                <XIco />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Collapsible filter pills */}
+      {filterOpen && (
+        <div className="sg-filter-body">
+          {/* Status (always shown — quick switch) */}
+          <div className="sg-filter-group">
+            <div className="sg-filter-label">Decision Status</div>
+            <div className="sg-pill-row">
+              {STATUS_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  className={`sg-pill${pendingStatus === opt.value ? ' active' : ''}`}
+                  onClick={() => setPendingStatus(opt.value)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Class */}
+          <div className="sg-filter-group">
+            <div className="sg-filter-label">Class</div>
+            <div className="sg-pill-row">
+              <button
+                type="button"
+                className={`sg-pill${pendingClass === 'all' ? ' active' : ''}`}
+                onClick={() => { setPendingClass('all'); setPendingSection('all'); }}
+              >
+                All
+              </button>
+              {classOptions.map((c) => (
+                <button
+                  key={c.key}
+                  type="button"
+                  className={`sg-pill${pendingClass === c.key ? ' active' : ''}`}
+                  onClick={() => { setPendingClass(c.key); setPendingSection('all'); }}
+                >
+                  {c.classLabel}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Section (only when a class is chosen) */}
+          {pendingClass !== 'all' && sectionOptions.length > 0 && (
+            <div className="sg-filter-group">
+              <div className="sg-filter-label">Section</div>
+              <div className="sg-pill-row">
+                <button
+                  type="button"
+                  className={`sg-pill${pendingSection === 'all' ? ' active' : ''}`}
+                  onClick={() => setPendingSection('all')}
+                >
+                  All
+                </button>
+                {sectionOptions.map((s) => (
+                  <button
+                    key={s.key}
+                    type="button"
+                    className={`sg-pill${pendingSection === s.key ? ' active' : ''}`}
+                    onClick={() => setPendingSection(s.key)}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Apply / Cancel */}
+          <div className="sg-filter-apply-row">
+            <button
+              type="button"
+              className={`sg-apply-btn${hasFilterChanges ? ' changed' : ''}`}
+              onClick={applyFilters}
+            >
+              {hasFilterChanges ? '✓ Apply Filter' : '✓ Applied'}
+            </button>
+            {hasFilterChanges && (
+              <button
+                type="button"
+                className="sg-cancel-btn"
+                onClick={() => { setPendingClass(classKey); setPendingSection(sectionKey); setPendingStatus(status); setFilterOpen(false); }}
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

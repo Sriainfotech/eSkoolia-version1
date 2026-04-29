@@ -80,14 +80,27 @@ function getAcademicYears(): string[] {
 }
 
 function getWeekRanges(month: number, year: number) {
+  // Issue #6: Calendar weeks aligned to Sunday → Saturday inside the month.
+  // Partial leading/trailing weeks are kept (e.g. month starts Wed → week 1
+  // is Wed–Sat). Each entry's start/end are clamped to the month.
   const daysInMonth = new Date(year, month, 0).getDate();
   const monthAbbr = new Date(year, month - 1, 1).toLocaleString('en-GB', { month: 'short' });
   const ranges: { week: number; label: string; dateRange: string; start: number; end: number }[] = [];
-  for (let w = 1; w <= 6; w++) {
-    const start = (w - 1) * 7 + 1;
-    if (start > daysInMonth) break;
-    const end = Math.min(w * 7, daysInMonth);
-    ranges.push({ week: w, label: `Week ${w}`, dateRange: `${monthAbbr} ${start}–${end}`, start, end });
+  let weekIdx = 0;
+  let cursor = 1;
+  while (cursor <= daysInMonth) {
+    const dow = new Date(year, month - 1, cursor).getDay(); // 0=Sun, 6=Sat
+    const remainingInWeek = 6 - dow;                         // days until Sat
+    const end = Math.min(cursor + remainingInWeek, daysInMonth);
+    weekIdx += 1;
+    ranges.push({
+      week: weekIdx,
+      label: `Week ${weekIdx}`,
+      dateRange: `${monthAbbr} ${cursor}–${end}`,
+      start: cursor,
+      end,
+    });
+    cursor = end + 1;
   }
   return ranges;
 }
@@ -272,66 +285,37 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
     setDownloading(true);
     try {
       const token = getToken();
-      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+      const headers = { Authorization: `Bearer ${token}` };
       const classParam = active.classId ? `&class_id=${active.classId}` : '';
       const sectionParam = active.classId && active.sectionId ? `&section_id=${active.sectionId}` : '';
       const base = `month=${active.month}&year=${active.year}${classParam}${sectionParam}`;
 
-      // Prefer backend-native export (CSV) with current filters.
+      // Use the styled XLSX export (two sheets, color-coded, autofilter, summary).
       const exportRes = await fetch(
-        `${API_BASE_URL}/api/v1/attendance/student-attendance/export/?${base}&format=csv`,
+        `${API_BASE_URL}/api/v1/attendance/student-attendance/export/?${base}&format=xlsx`,
         { headers },
       );
-      if (exportRes.ok) {
-        const blob = await exportRes.blob();
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = `Attendance_Report_${active.month}_${active.year}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(link.href);
-        return;
-      }
+      if (!exportRes.ok) throw new Error(`Export failed (${exportRes.status})`);
 
+      const cd = exportRes.headers.get('Content-Disposition') || '';
+      const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
       const monthName = MONTHS.find((m) => m.value === active.month)?.label ?? String(active.month);
       const selectedClass = classes.find((c) => c.id === active.classId);
       const selectedSection = selectedClass?.sections.find((s) => s.id === active.sectionId);
       const scope = selectedClass && selectedSection
         ? `${selectedClass.display_label}_Section_${selectedSection.name}`
         : selectedClass ? selectedClass.display_label : 'All_Classes';
-      const filename = `Attendance_${scope}_${monthName}_${active.year}.csv`;
+      const fallbackName = `Attendance_${scope}_${monthName}_${active.year}.xlsx`;
+      const filename = match ? decodeURIComponent(match[1]) : fallbackName;
 
-      // Fetch all records (school-wide or filtered)
-      const records = await fetchAllPages<DailyRecord>(
-        `${API_BASE_URL}/api/v1/attendance/student-attendance/?${base}&page_size=100`,
-        headers,
-      );
-
-      // Build CSV rows
-      const csvRows: string[][] = [
-        [`Attendance Report — ${scope} — ${monthName} ${active.year}`],
-        [],
-        ['Record ID', 'Student ID', 'Date', 'Status'],
-        ...records.map((r) => [
-          String(r.id),
-          String(r.student),
-          r.attendance_date,
-          r.attendance_type === 'P' ? 'Present' : r.attendance_type === 'A' ? 'Absent' : r.attendance_type === 'L' ? 'Late' : r.attendance_type,
-        ]),
-      ];
-
-      // If class+section selected, also include per-student summary
-      if (active.classId && active.sectionId && reportRows.length > 0) {
-        csvRows.push([], ['Student Summary'], ['Name', 'Admission No', 'Present Days', 'Absent Days', 'Late Days', 'Attendance %']);
-        reportRows.forEach((row) => {
-          const t = (row.present ?? 0) + (row.absent ?? 0) + (row.late ?? 0);
-          const pct = t > 0 ? Math.round(((row.present ?? 0) / t) * 100) : 0;
-          csvRows.push([row.name ?? '-', row.admission_no ?? '-', String(row.present ?? 0), String(row.absent ?? 0), String(row.late ?? 0), `${pct}%`]);
-        });
-      }
-
-      downloadCSV(csvRows, filename);
+      const blob = await exportRes.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
     } catch {
       // silently fail download
     } finally {

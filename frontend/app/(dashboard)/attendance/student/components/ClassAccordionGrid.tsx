@@ -42,14 +42,17 @@ interface SectionFooterProps {
   present: number;
   absent: number;
   late: number;
+  total: number;
   signedInCount: number;
   onMarkAllPresent: () => void;
   onSignOutAll: () => void;
   onReset: () => void;
   onSave: () => void;
 }
-function SectionFooter({ present, absent, late, signedInCount, onMarkAllPresent, onSignOutAll, onReset, onSave }: SectionFooterProps) {
+function SectionFooter({ present, absent, late, total, signedInCount, onMarkAllPresent, onSignOutAll, onReset, onSave }: SectionFooterProps) {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  // Issue #4: disable "All Present" once every student has been marked.
+  const allMarked = total > 0 && (present + absent + late) >= total;
   return (
     <>
       <div className="px-5 py-2.5 border-t border-[#F1F1F5] bg-[#FAFAFD] flex items-center justify-between flex-wrap gap-2">
@@ -59,7 +62,14 @@ function SectionFooter({ present, absent, late, signedInCount, onMarkAllPresent,
           <span className="flex items-center gap-1 text-[11px] font-medium text-[#3A3A4A]"><span className="w-1.5 h-1.5 rounded-full bg-[#B4721B] inline-block" />{late} late</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <button onClick={onMarkAllPresent} className="bg-[#E4F6ED] text-[#0A8C5A] h-8 px-3 text-[11px] font-semibold rounded-lg border border-[#0A8C5A]/20 hover:bg-[#c8edd8] transition-colors">✓ All Present</button>
+          <button
+            onClick={onMarkAllPresent}
+            disabled={allMarked}
+            title={allMarked ? 'All students already marked' : 'Mark all unmarked students present'}
+            className="bg-[#E4F6ED] text-[#0A8C5A] h-8 px-3 text-[11px] font-semibold rounded-lg border border-[#0A8C5A]/20 hover:bg-[#c8edd8] transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#E4F6ED]"
+          >
+            {allMarked ? '✓ All Marked' : '✓ All Present'}
+          </button>
           {signedInCount > 0 && (
             <button onClick={onSignOutAll} className="bg-[#F4F4F8] text-[#3A3A4A] h-8 px-3 text-[11px] font-semibold rounded-lg border border-[#E6E6EC] hover:bg-[#E6E6EC] transition-colors">Sign Out All ({signedInCount})</button>
           )}
@@ -105,7 +115,7 @@ interface SectionBodyProps {
   onBulkSignIn: (classId: number, sectionId: number) => void;
   onSave: (classId: number, sectionId: number) => void;
   onReset: (classId: number, sectionId: number) => void;
-  onOpenNote: (classId: number, sectionId: number, student: Student) => void;
+  onOpenNote: (classId: number, sectionId: number, student: Student, mode?: 'add' | 'view') => void;
   readOnly?: boolean;
 }
 
@@ -126,15 +136,20 @@ function SectionBody({ classId, sectionId, sectionSummary, students, loading, se
   const present = students.filter((s) => s.status === 'present').length;
   const absent = students.filter((s) => s.status === 'absent').length;
   const late = students.filter((s) => s.status === 'late').length;
-  const pct = students.length > 0 ? Math.round((present / students.length) * 100) : 0;
+  // Issue #5 + #6: only count students who actually arrived (sign-in present)
+  // toward the attendance percentage; clamp to 0–100.
+  const attendedPresent = students.filter((s) => s.status === 'present' && !!s.sign_in_time).length;
+  const pct = students.length > 0
+    ? Math.max(0, Math.min(100, Math.round(((attendedPresent + late) / students.length) * 100)))
+    : 0;
   const handleSignOutAll = () => { if (readOnly) return; const t = nowTime(); students.filter((s) => s.sign_in_time && !s.sign_out_time).forEach((s) => onSignOut(classId, sectionId, { ...s, sign_out_time: t })); };
   if (loading) return <div className="p-4 space-y-2">{[0,1,2,3].map((i) => <div key={i} className="h-10 rounded-lg bg-[#F0F0F5] animate-pulse" style={{ opacity: 1 - i * 0.15 }} />)}</div>;
   if (students.length === 0) return <div className="py-8 text-center text-sm text-[#9B9BAD]">No students found for this section.</div>;
   return (
     <div>
       <SectionInnerBar present={present} absent={absent} late={late} total={students.length} pct={pct} />
-      {!readOnly && selectedRows.size > 0 && <BulkActionBar count={selectedRows.size} onClear={() => onSelectionChange(key, new Set())} onMarkAll={(status) => onBulkMark(classId, sectionId, status)} onSignInAll={() => onBulkSignIn(classId, sectionId)} />}
-      <AttendanceTable students={visible} loading={false} selectedIds={readOnly ? new Set<number>() : selectedRows} onSelect={readOnly ? () => {} : toggleOne} onSelectAll={readOnly ? () => {} : toggleAll} onToggleAbsent={readOnly ? () => {} : (s) => onToggleAbsent(classId, sectionId, s)} onToggleLunch={readOnly ? () => {} : (s) => onToggleLunch(classId, sectionId, s)} onSignIn={readOnly ? () => {} : (s) => onSignIn(classId, sectionId, s)} onSignOut={readOnly ? () => {} : (s) => onSignOut(classId, sectionId, s)} onViewNotes={(s) => onOpenNote(classId, sectionId, s)} onEditStatusPrompt={readOnly ? () => {} : (s) => onEditStatusPrompt(classId, sectionId, s)} onEditNote={(s) => onOpenNote(classId, sectionId, s)} onDeleteNote={(s) => onOpenNote(classId, sectionId, s)} />
+      {!readOnly && selectedRows.size > 0 && <BulkActionBar count={selectedRows.size} onClear={() => onSelectionChange(key, new Set())} onMarkAll={(status) => onBulkMark(classId, sectionId, status)} onSignInAll={() => onBulkSignIn(classId, sectionId)} onSignOutAll={() => { const t = nowTime(); students.filter((s) => selectedRows.has(s.id) && s.sign_in_time && !s.sign_out_time).forEach((s) => onSignOut(classId, sectionId, { ...s, sign_out_time: t })); }} />}
+      <AttendanceTable students={visible} loading={false} selectedIds={readOnly ? new Set<number>() : selectedRows} onSelect={readOnly ? () => {} : toggleOne} onSelectAll={readOnly ? () => {} : toggleAll} onToggleAbsent={readOnly ? () => {} : (s) => onToggleAbsent(classId, sectionId, s)} onToggleLunch={readOnly ? () => {} : (s) => onToggleLunch(classId, sectionId, s)} onSignIn={readOnly ? () => {} : (s) => onSignIn(classId, sectionId, s)} onSignOut={readOnly ? () => {} : (s) => onSignOut(classId, sectionId, s)} onViewNotes={(s) => onOpenNote(classId, sectionId, s, 'view')} onEditStatusPrompt={readOnly ? () => {} : (s) => onEditStatusPrompt(classId, sectionId, s)} onEditNote={(s) => onOpenNote(classId, sectionId, s, 'add')} onDeleteNote={(s) => onOpenNote(classId, sectionId, s, 'view')} />
       {readOnly ? (
         <div className="px-5 py-2.5 border-t border-[#F1F1F5] bg-[#FAFAFD] flex items-center gap-2">
           <span className="flex items-center gap-1 text-[11px] font-medium text-[#3A3A4A]"><span className="w-1.5 h-1.5 rounded-full bg-[#0A8C5A] inline-block" />{present} present</span>
@@ -144,7 +159,7 @@ function SectionBody({ classId, sectionId, sectionSummary, students, loading, se
           <span className="text-[10px] text-[#9CA0AE] italic">Read-only</span>
         </div>
       ) : (
-        <SectionFooter present={present} absent={absent} late={late} signedInCount={signedInCount} onMarkAllPresent={() => onBulkMark(classId, sectionId, 'present')} onSignOutAll={handleSignOutAll} onReset={() => onReset(classId, sectionId)} onSave={() => onSave(classId, sectionId)} />
+        <SectionFooter present={present} absent={absent} late={late} total={students.length} signedInCount={signedInCount} onMarkAllPresent={() => onBulkMark(classId, sectionId, 'present')} onSignOutAll={handleSignOutAll} onReset={() => onReset(classId, sectionId)} onSave={() => onSave(classId, sectionId)} />
       )}
     </div>
   );
@@ -172,7 +187,7 @@ interface ClassCardProps {
   onBulkSignIn: (classId: number, sectionId: number) => void;
   onSave: (classId: number, sectionId: number) => void;
   onReset: (classId: number, sectionId: number) => void;
-  onOpenNote: (classId: number, sectionId: number, student: Student) => void;
+  onOpenNote: (classId: number, sectionId: number, student: Student, mode?: 'add' | 'view') => void;
   readOnly?: boolean;
   dateMode?: 'today' | 'past' | 'future';
   onMarkAllPresentForClass?: (classId: number) => void;
@@ -188,26 +203,49 @@ function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, st
   const isLoading = sectionKey ? (loadingStudents[sectionKey] ?? false) : false;
   const sectionSelected = sectionKey ? (selectedRows[sectionKey] ?? new Set<number>()) : new Set<number>();
   const activeSectionSummary = filteredSections.find((s) => s.id === activeSec) ?? filteredSections[0];
+
+  // Issue #2 + #5 + #6: accordion-level counts must reflect the WHOLE class,
+  // not just the currently-loaded section. Always start from the backend
+  // class-summary numbers (cls.total_present etc.), then if all sections are
+  // loaded locally we can overlay the live local counts for accuracy.
+  const allSectionsLoaded = filteredSections.length > 0 && filteredSections.every((sec) => {
+    const arr = students[`${cls.id}-${sec.id}`];
+    return Array.isArray(arr) && arr.length > 0;
+  });
   const allLoaded = filteredSections.flatMap((sec) => students[`${cls.id}-${sec.id}`] ?? []);
-  const sectionsOpened = allLoaded.length > 0;
 
-  // Use locally-loaded student counts when accordion is open (most accurate),
-  // otherwise fall back to the backend class-summary counts from cls.total_present etc.
-  const totalPresent = sectionsOpened ? allLoaded.filter((s) => s.status === 'present').length : (cls.total_present ?? 0);
-  const totalAbsent = sectionsOpened ? allLoaded.filter((s) => s.status === 'absent').length : (cls.total_absent ?? 0);
-  const totalLate = sectionsOpened ? allLoaded.filter((s) => s.status === 'late').length : (cls.total_late ?? 0);
-  const totalForPct = sectionsOpened ? allLoaded.length : cls.total_students;
-  const attendancePct = totalForPct > 0 ? Math.round((totalPresent / totalForPct) * 100) : (cls.overall_pct ?? 0);
+  // Count "actually attended" students = present AND signed-in (issue #5).
+  const localAttended = allLoaded.filter((s) => s.status === 'present' && !!s.sign_in_time).length;
+  const localPresentMarked = allLoaded.filter((s) => s.status === 'present').length;
+  const localAbsent = allLoaded.filter((s) => s.status === 'absent').length;
+  const localLate = allLoaded.filter((s) => s.status === 'late').length;
 
-  // Attendance status badge logic — use backend total when not yet opened
-  const totalMarked = sectionsOpened
-    ? allLoaded.filter((s) => s.status && s.status !== 'unmarked').length
-    : totalPresent + totalAbsent + totalLate;
-  const totalLoaded = sectionsOpened ? allLoaded.length : cls.total_students;
+  const totalPresent = allSectionsLoaded ? localPresentMarked : (cls.total_present ?? 0);
+  const totalAbsent = allSectionsLoaded ? localAbsent : (cls.total_absent ?? 0);
+  const totalLate = allSectionsLoaded ? localLate : (cls.total_late ?? 0);
+  const totalForPct = cls.total_students;
+
+  // Use signed-in count as the "attended" numerator when computing pct so that
+  // students marked present without a sign-in don't push it to 100%.
+  // Backend exposes `total_signed_in` (Present rows with sign_in_time set).
+  const backendAttended = (cls.total_signed_in ?? 0) + (cls.total_late ?? 0);
+  const attendedForPct = allSectionsLoaded ? (localAttended + localLate) : backendAttended;
+  const rawPct = totalForPct > 0
+    ? Math.round((attendedForPct / totalForPct) * 100)
+    : 0;
+  // Issue #6: never display impossible values.
+  const attendancePct = Math.max(0, Math.min(100, rawPct));
+
+  // Attendance status badge logic — "complete" should mean every student has
+  // arrived (sign-in or late) or is absent, not merely that the row was marked.
+  const totalLoaded = cls.total_students;
+  const accountedFor = allSectionsLoaded
+    ? (localAttended + localLate + localAbsent)
+    : (backendAttended + (cls.total_absent ?? 0));
   const attendanceStatus: 'needed' | 'in_progress' | 'complete' | 'none' =
     totalLoaded === 0 ? 'none' :
-    totalMarked === 0 ? 'needed' :
-    totalMarked < totalLoaded ? 'in_progress' : 'complete';
+    accountedFor === 0 ? 'needed' :
+    accountedFor < totalLoaded ? 'in_progress' : 'complete';
 
   const levelBorderColor = cls.level === 'primary' ? 'border-l-[#22C55E]' : cls.level === 'middle' ? 'border-l-[#4729F4]' : 'border-l-[#F59E0B]';
   return (
@@ -240,7 +278,7 @@ function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, st
           )}
         </div>
         <div className="flex-1" />
-        {!isOpen && dateMode === 'today' && !readOnly && showMarkAll && onMarkAllPresentForClass && (
+        {!isOpen && dateMode === 'today' && !readOnly && showMarkAll && onMarkAllPresentForClass && attendanceStatus !== 'complete' && (
           <button
             disabled={markAllCooldown}
             onClick={(e) => {
@@ -302,7 +340,7 @@ export interface ClassAccordionGridProps {
   onBulkSignIn: (classId: number, sectionId: number) => void;
   onSave: (classId: number, sectionId: number) => void;
   onReset: (classId: number, sectionId: number) => void;
-  onOpenNote: (classId: number, sectionId: number, student: Student) => void;
+  onOpenNote: (classId: number, sectionId: number, student: Student, mode?: 'add' | 'view') => void;
   readOnly?: boolean;
   dateMode?: 'today' | 'past' | 'future';
   selectedDate?: string;
