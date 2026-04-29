@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import s from "./StudentMultiClassPanel.module.css";
 import { API_BASE_URL } from "@/lib/api";
@@ -481,6 +481,7 @@ function EditModal({cls,student,cardDefs,onCardChange,onClose,onSave}:{cls:MockC
 export function StudentMultiClassPanel() {
   const router=useRouter();
   const [enrolled,setEnrolled]=useState<EnrolledStudent>({name:"",admissionNo:"",rollNo:"",className:"",sectionName:"",academicYear:""});
+  const autoOpenedForEnrolledRef=useRef(false);
   useEffect(()=>{
     try{const raw=typeof window!=="undefined"&&localStorage.getItem("eskoolia_last_enrolled_student");if(raw)setEnrolled(JSON.parse(raw));}catch{}
   },[]);
@@ -541,6 +542,39 @@ export function StudentMultiClassPanel() {
   const [aiSug,setAiSug]=useState<AISuggestion|null>(null);const[aiLoading,setAiLoading]=useState(false);
   const [editStudent,setEditStudent]=useState<MockStudent|null>(null);
   const [editClass,setEditClass]=useState<MockClass|null>(null);
+
+  useEffect(()=>{
+    if(autoOpenedForEnrolledRef.current||classListLoading||classList.length===0)return;
+    if(!enrolled.admissionNo&&!enrolled.name)return;
+
+    const norm=(value:string)=>String(value||"").trim().toLowerCase();
+    const admission=norm(enrolled.admissionNo);
+    const roll=norm(enrolled.rollNo);
+    const name=norm(enrolled.name);
+
+    const classCandidates=enrolled.className
+      ?classList.filter((cl)=>norm(cl.label)===norm(enrolled.className))
+      :classList;
+
+    for(const cls of classCandidates){
+      for(const sec of cls.sections){
+        const matched=sec.students.find((st)=>{
+          const admNo=norm(st.admNo);
+          const rollNo=norm(st.rollNo);
+          const studentName=norm(st.name);
+          if(admission&&admNo===admission)return true;
+          if(roll&&rollNo===roll)return true;
+          return !!name&&studentName===name;
+        });
+        if(matched){
+          setEditClass(cls);
+          setEditStudent(matched);
+          autoOpenedForEnrolledRef.current=true;
+          return;
+        }
+      }
+    }
+  },[classListLoading,classList,enrolled]);
 
   const enrolledIdx=classList.findIndex(c=>c.label===enrolled.className);
 

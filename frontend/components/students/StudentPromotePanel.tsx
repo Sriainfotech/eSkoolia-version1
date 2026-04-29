@@ -1,905 +1,644 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TopToast } from "@/components/common/TopToast";
-import { studentThemeClassName } from "./studentTheme";
+import { promotionApi, type PromotionBatch, type PromotionRecord } from "@/lib/promotion-api";
+
+import PromoteHeader, { type AcademicYearOption } from "@/app/(dashboard)/students/promote/components/PromoteHeader";
+import PromoteKPICards from "@/app/(dashboard)/students/promote/components/PromoteKPICards";
+import PromoteSmartFilter, {
+  type StatusFilter,
+} from "@/app/(dashboard)/students/promote/components/PromoteSmartFilter";
+import ClassAccordionCard, {
+  type ClassGroup,
+} from "@/app/(dashboard)/students/promote/components/ClassAccordionCard";
+import NotPromotedDialog, {
+  type RetentionReason,
+} from "@/app/(dashboard)/students/promote/components/NotPromotedDialog";
+import ConfirmBatchModal from "@/app/(dashboard)/students/promote/components/ConfirmBatchModal";
+import type { RecordDecision } from "@/app/(dashboard)/students/promote/components/PromoteStudentTable";
+import type { SectionTabItem } from "@/app/(dashboard)/students/promote/components/PromoteSectionTabs";
+
+// ── Types ──────────────────────────────────────────────────────────────────────
 
 type ApiList<T> = T[] | { results?: T[] };
-
 type AcademicYear = { id: number; name: string; is_current?: boolean };
-type SchoolClass = { id: number; name: string };
-type Section = { id: number; school_class: number; name: string };
 
-type StudentRow = {
-  id: number;
-  admission_no: string;
-  roll_no?: string;
-  first_name: string;
-  last_name?: string;
-  current_class?: number | null;
-  current_section?: number | null;
-  is_active: boolean;
-};
-
-type PromoteResponse = {
-  success?: boolean;
-  promoted?: number;
-  failed?: number;
-  total?: number;
-  errors?: Array<{ student_id: number; admission_no: string; error: string }>;
-  message?: string;
-  detail?: string;
-};
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 function listData<T>(value: ApiList<T>): T[] {
-  return Array.isArray(value) ? value : value.results || [];
-}
-
-async function apiGet<T>(path: string): Promise<T> {
-  return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
-}
-
-async function apiPost<T>(path: string, payload: unknown): Promise<T> {
-  return apiRequestWithRefresh<T>(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
-function fieldStyle(hasError = false) {
-  return {
-    width: "100%",
-    height: 36,
-    border: `1px solid ${hasError ? "#dc2626" : "var(--line)"}`,
-    borderRadius: 8,
-    padding: "0 10px",
-    backgroundColor: hasError ? "#fef2f2" : "transparent",
-    fontFamily: "inherit",
-    fontSize: 13,
-  } as const;
-}
-
-function btnStyle(color = "var(--primary)", disabled = false) {
-  return {
-    height: 36,
-    padding: "0 14px",
-    border: `1px solid ${color}`,
-    background: color,
-    color: "#fff",
-    borderRadius: 8,
-    cursor: disabled ? "not-allowed" : "pointer",
-    fontSize: 13,
-    opacity: disabled ? 0.6 : 1,
-    fontFamily: "inherit",
-  } as const;
-}
-
-function secondaryBtnStyle(disabled = false) {
-  return {
-    height: 36,
-    padding: "0 14px",
-    border: "1px solid var(--line)",
-    background: "transparent",
-    color: "var(--primary)",
-    borderRadius: 8,
-    cursor: disabled ? "not-allowed" : "pointer",
-    fontSize: 13,
-    opacity: disabled ? 0.6 : 1,
-    fontFamily: "inherit",
-  } as const;
-}
-
-function boxStyle() {
-  return {
-    background: "var(--surface)",
-    border: "1px solid var(--line)",
-    borderRadius: "var(--radius)",
-    padding: 16,
-  } as const;
-}
-
-function errorBoxStyle() {
-  return {
-    background: "#fef2f2",
-    border: "1px solid #fecaca",
-    borderRadius: "var(--radius)",
-    padding: 12,
-    marginBottom: 12,
-    color: "#dc2626",
-    fontSize: 13,
-  } as const;
-}
-
-function successBoxStyle() {
-  return {
-    background: "#ecfdf5",
-    border: "1px solid #a7f3d0",
-    borderRadius: "var(--radius)",
-    padding: 12,
-    marginBottom: 12,
-    color: "#059669",
-    fontSize: 13,
-  } as const;
-}
-
-function fullName(row: StudentRow) {
-  return `${row.first_name || ""} ${row.last_name || ""}`.trim() || "-";
+  return Array.isArray(value) ? value : value.results ?? [];
 }
 
 function sanitizeLabel(value: string) {
-  return String(value || "").replace(/<[^>]*>/g, "").trim();
+  return String(value ?? "").replace(/<[^>]*>/g, "").trim();
 }
 
-function formatClassDisplayName(name: string, id: number) {
+function parseAcademicYearStart(name: string): number | null {
   const cleaned = sanitizeLabel(name);
-  if (!cleaned) {
-    return `Class ${id}`;
-  }
-  if (/^\d+$/.test(cleaned)) {
-    return `Class ${cleaned}`;
-  }
-  return cleaned
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(" ");
+  const match = cleaned.match(/^(\d{4})-(\d{4})$/);
+  if (!match) return null;
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end !== start + 1) return null;
+  return start;
 }
+
+const CLASS_NAME_ORDER: Record<string, number> = {
+  PRENURSERY: 0,
+  "PRE-NURSERY": 0,
+  "PRE NURSERY": 0,
+  PRE_NURSERY: 0,
+  PREKG: 1,
+  "PRE-KG": 1,
+  "PRE KG": 1,
+  NURSERY: 2,
+  LKG: 3,
+  UKG: 4,
+};
+
+function classSortKey(name: string): number {
+  const upper = String(name ?? "").trim().toUpperCase();
+  if (upper in CLASS_NAME_ORDER) return CLASS_NAME_ORDER[upper];
+  // Match "Grade 5", "Class 7", "Standard 10", or just "5"
+  const m = upper.match(/(\d+)/);
+  if (m) return 100 + Number(m[1]);
+  return 9999;
+}
+
+function compareClassNames(a: string, b: string): number {
+  const ka = classSortKey(a);
+  const kb = classSortKey(b);
+  if (ka !== kb) return ka - kb;
+  return a.localeCompare(b);
+}
+
+const apiGet = <T,>(path: string) =>
+  apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
+
+// ── Main component ─────────────────────────────────────────────────────────────
 
 export function StudentPromotePanel() {
   const [years, setYears] = useState<AcademicYear[]>([]);
-  const [classes, setClasses] = useState<SchoolClass[]>([]);
-  const [currentSections, setCurrentSections] = useState<Section[]>([]);
-  const [promoteSections, setPromoteSections] = useState<Section[]>([]);
-  const [students, setStudents] = useState<StudentRow[]>([]);
-
-  const [currentYearId, setCurrentYearId] = useState("");
-  const [currentClassId, setCurrentClassId] = useState("");
-  const [currentSectionId, setCurrentSectionId] = useState("");
-
-  const [promoteYearId, setPromoteYearId] = useState("");
-  const [promoteClassId, setPromoteClassId] = useState("");
-  const [promoteSectionId, setPromoteSectionId] = useState("");
-
-  const [checked, setChecked] = useState<Record<number, boolean>>({});
-
   const [loadingCriteria, setLoadingCriteria] = useState(true);
-  const [loadingStudents, setLoadingStudents] = useState(false);
-  const [loadingCurrentSections, setLoadingCurrentSections] = useState(false);
-  const [loadingPromoteSections, setLoadingPromoteSections] = useState(false);
-  const [promoting, setPromoting] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
 
-  // Validation errors
-  const [searchErrors, setSearchErrors] = useState<Record<string, string>>({});
-  const [promoteErrors, setPromoteErrors] = useState<Record<string, string>>({});
+  const [fromYearId, setFromYearId] = useState("");
+  const [toYearId, setToYearId] = useState("");
 
-  // Confirmation modal state
-  const [showConfirm, setShowConfirm] = useState(false);
+  const [batch, setBatch] = useState<PromotionBatch | null>(null);
+  const [loadingBatch, setLoadingBatch] = useState(false);
+  const [savingDecisions, setSavingDecisions] = useState(false);
+  const [confirmingBatch, setConfirmingBatch] = useState(false);
 
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 10;
+  const [decisions, setDecisions] = useState<Record<number, RecordDecision>>({});
 
-  const validAcademicYears = useMemo(
-    () => years.filter((item) => /^\d{4}-\d{4}$/.test(sanitizeLabel(item.name))),
-    [years],
+  const [classKey, setClassKey] = useState("all");
+  const [sectionKey, setSectionKey] = useState("all");
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+
+  const [npDialog, setNpDialog] = useState<{ record: PromotionRecord } | null>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+
+  const showToast = useCallback(
+    (message: string, tone: "success" | "error") => setToast({ message, tone }),
+    [],
   );
 
-  const normalizedClasses = useMemo(
-    () => classes.map((item) => ({ ...item, display_name: formatClassDisplayName(item.name, item.id) })),
-    [classes],
-  );
+  // ── Load academic years (current + 3 prior) ─────────────────────────────────
 
   useEffect(() => {
-    const load = async () => {
+    (async () => {
       try {
         setLoadingCriteria(true);
-        setError("");
-        const [yearData, classData, sectionData] = await Promise.all([
-          apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
-          apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
-          apiGet<ApiList<Section>>("/api/v1/core/sections/?page_size=200"),
-        ]);
-        const loadedYears = listData(yearData);
-        setYears(loadedYears);
-        setClasses(listData(classData));
-        const allSections = listData(sectionData);
-        setCurrentSections(allSections);
-        setPromoteSections(allSections);
+        const yearData = await apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/");
+        const loaded = listData(yearData).filter((y) => /^\d{4}-\d{4}$/.test(sanitizeLabel(y.name)));
+        setYears(loaded);
 
-        const current = loadedYears.find((item) => item.is_current && /^\d{4}-\d{4}$/.test(sanitizeLabel(item.name)));
+        const current = loaded.find((y) => y.is_current);
         if (current) {
-          setCurrentYearId(String(current.id));
-
-          const [start] = sanitizeLabel(current.name).split("-");
-          const nextStart = Number(start) + 1;
-          const nextYear = loadedYears.find((item) => sanitizeLabel(item.name) === `${nextStart}-${nextStart + 1}`);
-          if (nextYear) {
-            setPromoteYearId(String(nextYear.id));
+          setFromYearId(String(current.id));
+          const start = parseAcademicYearStart(current.name);
+          if (start != null) {
+            const next = loaded.find((y) => sanitizeLabel(y.name) === `${start + 1}-${start + 2}`);
+            if (next) setToYearId(String(next.id));
           }
         }
-
-        if (!current) {
-          const now = new Date();
-          const startYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-          const suggested = `${startYear + 1}-${startYear + 2}`;
-          const suggestedYear = loadedYears.find((item) => sanitizeLabel(item.name) === suggested);
-          if (suggestedYear) {
-            setPromoteYearId(String(suggestedYear.id));
-          }
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : "";
-        setError(message && message !== "401" ? message : "Unable to load promote criteria.");
+      } catch {
+        showToast("Unable to load academic years.", "error");
       } finally {
         setLoadingCriteria(false);
       }
-    };
-    void load();
+    })();
+  }, [showToast]);
+
+  // ── Year option lists: From = current + 3 prior; To = future or current+1+ ──
+
+  const fromYearOptions = useMemo<AcademicYearOption[]>(() => {
+    const current = years.find((y) => y.is_current);
+    const sorted = [...years].sort((a, b) => {
+      const sa = parseAcademicYearStart(a.name) ?? 0;
+      const sb = parseAcademicYearStart(b.name) ?? 0;
+      return sb - sa;
+    });
+    if (!current) return sorted.slice(0, 4).map((y) => ({ id: y.id, name: y.name }));
+    const cs = parseAcademicYearStart(current.name) ?? 0;
+    return sorted
+      .filter((y) => {
+        const s = parseAcademicYearStart(y.name);
+        return s != null && s <= cs && s >= cs - 3;
+      })
+      .map((y) => ({ id: y.id, name: y.name }));
+  }, [years]);
+
+  const toYearOptions = useMemo<AcademicYearOption[]>(() => {
+    const fromId = Number(fromYearId);
+    const fromYear = years.find((y) => y.id === fromId);
+    const fs = fromYear ? parseAcademicYearStart(fromYear.name) : null;
+    return years
+      .filter((y) => {
+        if (y.id === fromId) return false;
+        if (fs == null) return true;
+        const s = parseAcademicYearStart(y.name);
+        return s != null && s > fs;
+      })
+      .sort((a, b) => (parseAcademicYearStart(a.name) ?? 0) - (parseAcademicYearStart(b.name) ?? 0))
+      .map((y) => ({ id: y.id, name: y.name }));
+  }, [years, fromYearId]);
+
+  // ── Initialise decisions from batch ─────────────────────────────────────────
+
+  const initDecisions = useCallback((records: PromotionRecord[]) => {
+    const d: Record<number, RecordDecision> = {};
+    records.forEach((r) => {
+      d[r.id] = {
+        status: r.status,
+        retention_reason: r.retention_reason ?? "",
+        failed_subject_ids: r.failed_subject_ids ?? [],
+        notes: r.notes ?? "",
+        ai_recommendation: r.ai_recommendation ?? "",
+      };
+    });
+    setDecisions(d);
+    setExpanded({});
   }, []);
 
-  const loadSectionsForClass = async (targetClassId: string, type: "current" | "promote") => {
-    if (!targetClassId) {
-      if (type === "current") {
-        setCurrentSections([]);
-        setCurrentSectionId("");
-      } else {
-        setPromoteSections([]);
-        setPromoteSectionId("");
-      }
+  const loadBatch = async () => {
+    if (!fromYearId || !toYearId) {
+      showToast("Please select both From and To academic years.", "error");
       return;
     }
-
+    if (fromYearId === toYearId) {
+      showToast("From and To years must be different.", "error");
+      return;
+    }
+    setLoadingBatch(true);
     try {
-      if (type === "current") {
-        setLoadingCurrentSections(true);
-        setCurrentSectionId("");
-      } else {
-        setLoadingPromoteSections(true);
-        setPromoteSectionId("");
-      }
-
-      let nextSections: Section[] = [];
-      try {
-        const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
-        nextSections = listData(data);
-      } catch {
-        const fallback = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?school_class=${encodeURIComponent(targetClassId)}&page_size=200`);
-        nextSections = listData(fallback);
-      }
-      if (type === "current") {
-        setCurrentSections(nextSections);
-      } else {
-        setPromoteSections(nextSections);
-      }
-    } catch {
-      setError("Unable to load sections for selected class.");
+      const result = await promotionApi.createOrGetBatch({
+        academic_year: Number(fromYearId),
+        target_year: Number(toYearId),
+      });
+      setBatch(result);
+      initDecisions(result.records);
+      setSelectedIds(new Set());
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Failed to load batch.", "error");
     } finally {
-      if (type === "current") {
-        setLoadingCurrentSections(false);
-      } else {
-        setLoadingPromoteSections(false);
-      }
+      setLoadingBatch(false);
     }
   };
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      if (currentClassId) {
-        void loadSectionsForClass(currentClassId, "current");
-      } else {
-        setCurrentSections([]);
-        setCurrentSectionId("");
-      }
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [currentClassId]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      if (promoteClassId) {
-        void loadSectionsForClass(promoteClassId, "promote");
-      } else {
-        setPromoteSections([]);
-        setPromoteSectionId("");
-      }
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [promoteClassId]);
-
-  useEffect(() => {
-    if (error) {
-      setToast({ message: error, tone: "error" });
+  const refreshBatch = async () => {
+    if (!batch) return;
+    try {
+      const yearName = batch.academic_year_name;
+      const refreshed = await promotionApi.getBatchByYear(yearName);
+      setBatch(refreshed);
+      initDecisions(refreshed.records);
+    } catch {
+      // ignore
     }
-  }, [error]);
+  };
 
-  useEffect(() => {
-    if (success) {
-      setToast({ message: success, tone: "success" });
-    }
-  }, [success]);
+  // ── Filter options ──────────────────────────────────────────────────────────
 
-  const classMap = useMemo(() => new Map(normalizedClasses.map((item) => [item.id, item.display_name])), [normalizedClasses]);
-  const sectionMap = useMemo(() => {
-    const merged = [...currentSections, ...promoteSections];
-    return new Map(merged.map((item) => [item.id, sanitizeLabel(item.name)]));
-  }, [currentSections, promoteSections]);
-
-  const searchedRows = useMemo(() => {
-    return students.filter((row) => {
-      if (!row.is_active) {
-        return false;
+  const classOptions = useMemo(() => {
+    if (!batch) return [];
+    const map = new Map<string, { key: string; classLabel: string }>();
+    batch.records.forEach((r) => {
+      const key = r.from_class == null ? "unassigned" : String(r.from_class);
+      if (!map.has(key)) {
+        map.set(key, { key, classLabel: r.from_class_name ?? "Unassigned Class" });
       }
-      if (currentClassId && String(row.current_class || "") !== currentClassId) {
-        return false;
-      }
-      if (currentSectionId && String(row.current_section || "") !== currentSectionId) {
-        return false;
-      }
-      return true;
     });
-  }, [students, currentClassId, currentSectionId]);
+    return Array.from(map.values()).sort((a, b) => compareClassNames(a.classLabel, b.classLabel));
+  }, [batch]);
 
-  // Pagination
-  const totalPages = Math.max(1, Math.ceil(searchedRows.length / pageSize));
-  const paginatedRows = useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    return searchedRows.slice(start, start + pageSize);
-  }, [searchedRows, currentPage]);
+  const sectionOptions = useMemo(() => {
+    if (!batch || classKey === "all") return [];
+    const map = new Map<string, { key: string; label: string }>();
+    batch.records.forEach((r) => {
+      const cKey = r.from_class == null ? "unassigned" : String(r.from_class);
+      if (cKey !== classKey) return;
+      const sKey = r.from_section == null ? "none" : String(r.from_section);
+      if (!map.has(sKey)) {
+        map.set(sKey, { key: sKey, label: r.from_section_name ?? "—" });
+      }
+    });
+    return Array.from(map.values());
+  }, [batch, classKey]);
 
-  const selectedIds = useMemo(
-    () => Object.entries(checked).filter(([, value]) => value).map(([id]) => Number(id)),
-    [checked],
+  // ── Filtered records ───────────────────────────────────────────────────────
+
+  const filteredRecords = useMemo(() => {
+    if (!batch) return [] as PromotionRecord[];
+    const q = search.trim().toLowerCase();
+    return batch.records.filter((r) => {
+      if (status !== "all") {
+        const s = decisions[r.id]?.status ?? r.status;
+        if (s !== status) return false;
+      }
+      const cKey = r.from_class == null ? "unassigned" : String(r.from_class);
+      if (classKey !== "all" && cKey !== classKey) return false;
+      const sKey = r.from_section == null ? "none" : String(r.from_section);
+      if (sectionKey !== "all" && sKey !== sectionKey) return false;
+      if (!q) return true;
+      return [r.student_name, r.admission_no, r.from_class_name ?? "", r.from_section_name ?? ""]
+        .join(" ")
+        .toLowerCase()
+        .includes(q);
+    });
+  }, [batch, search, status, classKey, sectionKey, decisions]);
+
+  // ── Group into class → section ─────────────────────────────────────────────
+
+  const classGroups = useMemo<ClassGroup[]>(() => {
+    const map = new Map<string, {
+      classKey: string; classId: number | null; className: string;
+      sectionMap: Map<string, SectionTabItem>;
+    }>();
+    filteredRecords.forEach((r) => {
+      const cKey = r.from_class == null ? "unassigned" : String(r.from_class);
+      if (!map.has(cKey)) {
+        map.set(cKey, {
+          classKey: cKey,
+          classId: r.from_class,
+          className: r.from_class_name ?? "Unassigned Class",
+          sectionMap: new Map(),
+        });
+      }
+      const cls = map.get(cKey)!;
+      const sKey = r.from_section == null ? "none" : String(r.from_section);
+      if (!cls.sectionMap.has(sKey)) {
+        cls.sectionMap.set(sKey, {
+          key: sKey,
+          sectionId: r.from_section,
+          sectionName: r.from_section_name ?? "—",
+          records: [],
+        });
+      }
+      cls.sectionMap.get(sKey)!.records.push(r);
+    });
+    return Array.from(map.values())
+      .map((c) => {
+        const sections = Array.from(c.sectionMap.values()).sort((a, b) =>
+          a.sectionName.localeCompare(b.sectionName),
+        );
+        const totalRecords = sections.reduce((acc, s) => acc + s.records.length, 0);
+        return {
+          classKey: c.classKey,
+          classId: c.classId,
+          className: c.className,
+          totalRecords,
+          sections,
+        };
+      })
+      .sort((a, b) => compareClassNames(a.className, b.className));
+  }, [filteredRecords]);
+
+  // ── Decision handlers ──────────────────────────────────────────────────────
+
+  const handleStatusChange = useCallback(
+    (recordId: number, newStatus: RecordDecision["status"]) => {
+      setDecisions((prev) => ({
+        ...prev,
+        [recordId]: {
+          ...(prev[recordId] ?? {
+            status: "pending",
+            retention_reason: "",
+            failed_subject_ids: [],
+            notes: "",
+            ai_recommendation: "",
+          }),
+          status: newStatus,
+          ...(newStatus !== "not_promoted"
+            ? { retention_reason: "", failed_subject_ids: [], ai_recommendation: "" }
+            : {}),
+        },
+      }));
+    },
+    [],
   );
 
-  // Validate search criteria
-  const validateSearch = (): boolean => {
-    const errors: Record<string, string> = {};
-    if (!currentClassId) errors.class = "Please select current class";
-    if (!currentSectionId) errors.section = "Please select current section";
-    setSearchErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  // Validate promote criteria
-  const validatePromote = (): boolean => {
-    const errors: Record<string, string> = {};
-    if (!promoteYearId) errors.year = "Please select next academic year";
-    if (!promoteClassId) errors.class = "Please select next class";
-    if (!promoteSectionId) errors.section = "Please select next section";
-
-    // Check current class is not same as promote class
-    if (promoteClassId && currentClassId && promoteClassId === currentClassId) {
-      errors.class = "Next class cannot be the same as current class";
-    }
-
-    const selectedYear = validAcademicYears.find((item) => String(item.id) === promoteYearId);
-    if (promoteYearId && !selectedYear) {
-      errors.year = "Please select a valid academic year";
-    }
-
-    setPromoteErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  const canSearch = Boolean(currentClassId && currentSectionId && !loadingStudents && !loadingCurrentSections);
-
-  const search = async () => {
-    if (!validateSearch()) {
-      return;
-    }
-
-    try {
-      setLoadingStudents(true);
-      setError("");
-      setSuccess("");
-      setCurrentPage(1);
-      const data = await apiGet<ApiList<StudentRow>>("/api/v1/students/students/?is_active=true");
-      const rows = listData(data);
-      setStudents(rows);
-      const init: Record<number, boolean> = {};
-      rows.forEach((row) => {
-        init[row.id] = false;
-      });
-      setChecked(init);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "";
-      setError(message && message !== "401" ? message : "Unable to fetch students for promotion.");
-    } finally {
-      setLoadingStudents(false);
-    }
-  };
-
-  const setAll = (value: boolean) => {
-    const next: Record<number, boolean> = {};
-    paginatedRows.forEach((row) => {
-      next[row.id] = value;
+  const handleSelect = useCallback((recordId: number, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(recordId);
+      else next.delete(recordId);
+      return next;
     });
-    setChecked((prev) => ({ ...prev, ...next }));
-  };
+  }, []);
 
-  const promoteConfirmed = async () => {
-    if (!selectedIds.length) {
-      setError("Please select at least one student");
-      return;
-    }
+  const handleSelectMany = useCallback((ids: number[], checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) ids.forEach((id) => next.add(id));
+      else ids.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, []);
 
-    if (!validatePromote()) {
-      return;
-    }
-
+  const handleNotPromotedConfirm = async (data: {
+    record_id: number;
+    reason: RetentionReason;
+    notes: string;
+    ai_recommendation: string;
+  }) => {
+    if (!batch) return;
     try {
-      setPromoting(true);
-      setError("");
-      setSuccess("");
-      setShowConfirm(false);
-
-      const payload = {
-        student_ids: selectedIds,
-        to_class: Number(promoteClassId),
-        to_section: promoteSectionId ? Number(promoteSectionId) : null,
-        to_academic_year: Number(promoteYearId),
-        note: "Promoted from Student Promote panel",
-      };
-
-      const result = await apiPost<PromoteResponse>("/api/v1/students/students/promote/", payload);
-
-      // Handle success response
-      if (result.promoted !== undefined) {
-        const total = result.promoted + (result.failed || 0);
-        if (result.failed && result.failed > 0) {
-          setSuccess(`✓ ${result.promoted} students promoted, ${result.failed} failed`);
-          if (result.errors && result.errors.length > 0) {
-            setError(`Failed students: ${result.errors.map((e) => e.admission_no).join(", ")}`);
-          }
-        } else {
-          setSuccess(`✓ All ${result.promoted} students promoted successfully!`);
-        }
-      } else {
-        setSuccess("Students promoted successfully.");
-      }
-
-      // Remove promoted students from current list immediately for better UX.
-      setStudents((prev) => prev.filter((row) => !selectedIds.includes(row.id)));
-      setChecked((prev) => {
-        const next = { ...prev };
-        selectedIds.forEach((id) => {
-          delete next[id];
-        });
-        return next;
+      await promotionApi.updateRecord(batch.id, {
+        record_id: data.record_id,
+        status: "not_promoted",
+        retention_reason: data.reason,
+        notes: data.notes,
       });
-
-      // Refresh list using current criteria.
-      await search();
+      setDecisions((prev) => ({
+        ...prev,
+        [data.record_id]: {
+          ...(prev[data.record_id] ?? {
+            status: "not_promoted",
+            retention_reason: data.reason,
+            failed_subject_ids: [],
+            notes: data.notes,
+            ai_recommendation: data.ai_recommendation,
+          }),
+          status: "not_promoted",
+          retention_reason: data.reason,
+          notes: data.notes,
+          ai_recommendation: data.ai_recommendation,
+        },
+      }));
+      setNpDialog(null);
+      await refreshBatch();
+      showToast("Student marked as Not Promoted.", "success");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "";
-      setError(message && message !== "401" ? message : "Unable to promote selected students.");
-    } finally {
-      setPromoting(false);
+      showToast(err instanceof Error ? err.message : "Failed to save retention.", "error");
     }
   };
 
-  const promote = () => {
-    if (!selectedIds.length) {
-      setError("Please select at least one student");
-      return;
+  // ── Bulk actions ──────────────────────────────────────────────────────────
+
+  const handleBulkPromote = async (records: PromotionRecord[]) => {
+    if (!batch || records.length === 0) return;
+    try {
+      await promotionApi.bulkUpdate(batch.id, {
+        action: "promote",
+        scope: "selection",
+        record_ids: records.map((r) => r.id),
+      });
+      records.forEach((r) => handleStatusChange(r.id, "promote"));
+      await refreshBatch();
+      showToast(`${records.length} student${records.length === 1 ? "" : "s"} marked Promote.`, "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Bulk promote failed.", "error");
     }
-    if (!validatePromote()) {
-      return;
-    }
-    setShowConfirm(true);
   };
+
+  const handleBulkNotPromoted = async (records: PromotionRecord[]) => {
+    if (!batch || records.length === 0) return;
+    try {
+      await promotionApi.bulkUpdate(batch.id, {
+        action: "skip",
+        scope: "selection",
+        record_ids: records.map((r) => r.id),
+      });
+      records.forEach((r) => handleStatusChange(r.id, "not_promoted"));
+      await refreshBatch();
+      showToast(`${records.length} student${records.length === 1 ? "" : "s"} marked Not Promoted.`, "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Bulk action failed.", "error");
+    }
+  };
+
+  const handleBulkReset = async (records: PromotionRecord[]) => {
+    if (!batch || records.length === 0) return;
+    try {
+      await promotionApi.bulkUpdate(batch.id, {
+        action: "reset",
+        scope: "selection",
+        record_ids: records.map((r) => r.id),
+      });
+      records.forEach((r) => handleStatusChange(r.id, "pending"));
+      await refreshBatch();
+      showToast(`${records.length} decision${records.length === 1 ? "" : "s"} reset.`, "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Reset failed.", "error");
+    }
+  };
+
+  // ── Save / Confirm ──────────────────────────────────────────────────────
+
+  const handleSaveDraft = async () => {
+    if (!batch) return;
+    setSavingDecisions(true);
+    try {
+      const dirty = batch.records.filter((r) => {
+        const d = decisions[r.id];
+        if (!d) return false;
+        return (
+          d.status !== r.status ||
+          (d.retention_reason ?? "") !== (r.retention_reason ?? "") ||
+          (d.notes ?? "") !== (r.notes ?? "")
+        );
+      });
+      for (const rec of dirty) {
+        const d = decisions[rec.id];
+        await promotionApi.updateRecord(batch.id, {
+          record_id: rec.id,
+          status: d.status,
+          retention_reason: d.retention_reason,
+          notes: d.notes,
+        });
+      }
+      await refreshBatch();
+      showToast(`Saved ${dirty.length} change${dirty.length === 1 ? "" : "s"}.`, "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Save failed.", "error");
+    } finally {
+      setSavingDecisions(false);
+    }
+  };
+
+  const handleConfirmBatch = async () => {
+    if (!batch) return;
+    setConfirmingBatch(true);
+    try {
+      await promotionApi.confirmBatch(batch.id);
+      await refreshBatch();
+      setShowConfirmModal(false);
+      showToast("Batch confirmed and students promoted.", "success");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Confirm failed.", "error");
+    } finally {
+      setConfirmingBatch(false);
+    }
+  };
+
+  const isReadOnly = batch?.status === "confirmed" || batch?.status === "finalized";
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className={`${studentThemeClassName} legacy-panel student-promote-panel`}>
-      {toast ? (
-        <TopToast
-          message={toast.message}
-          tone={toast.tone}
-          onClose={() => setToast(null)}
+    <div className="flex flex-col h-full bg-[#F5F5FA]">
+      {toast && <TopToast message={toast.message} tone={toast.tone} onClose={() => setToast(null)} />}
+
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+        <PromoteHeader
+          fromYears={fromYearOptions}
+          toYears={toYearOptions}
+          fromYearId={fromYearId}
+          toYearId={toYearId}
+          onFromYearChange={setFromYearId}
+          onToYearChange={setToYearId}
+          onLoad={loadBatch}
+          loading={loadingBatch || loadingCriteria}
+          totalStudents={batch?.kpi.total}
         />
-      ) : null}
-      <style>{`
-        .student-promote-panel button:focus,
-        .student-promote-panel select:focus,
-        .student-promote-panel input:focus {
-          outline: 2px solid #5D87FF;
-          outline-offset: 2px;
-        }
-      `}</style>
-      <section className="sms-breadcrumb mb-20">
-        <div className="container-fluid">
-          <div className="student-page-header">
-            <h1 className="student-page-title">Student Promote</h1>
-            <div className="student-page-crumbs">
-              <span>Dashboard</span>
-              <span>/</span>
-              <span>Student Information</span>
-              <span>/</span>
-              <span>Student Promote</span>
-            </div>
+
+        <PromoteKPICards kpi={batch?.kpi ?? null} />
+
+        <PromoteSmartFilter
+          classOptions={classOptions}
+          sectionOptions={sectionOptions}
+          classKey={classKey}
+          sectionKey={sectionKey}
+          status={status}
+          search={searchInput}
+          onClassChange={(k) => { setClassKey(k); setSectionKey("all"); }}
+          onSectionChange={setSectionKey}
+          onStatusChange={setStatus}
+          onSearchChange={setSearchInput}
+          onSearchSubmit={() => setSearch(searchInput)}
+          onReset={() => {
+            setClassKey("all");
+            setSectionKey("all");
+            setStatus("all");
+            setSearchInput("");
+            setSearch("");
+          }}
+        />
+
+        {!batch && !loadingBatch && (
+          <div className="bg-white rounded-xl border border-dashed border-[#E6E6EC] p-10 text-center text-sm text-[#6B6B7B]">
+            Choose two academic years above and click <strong>Load batch</strong> to begin.
+          </div>
+        )}
+
+        {loadingBatch && (
+          <div className="bg-white rounded-xl border border-[#E6E6EC] p-10 text-center text-sm text-[#6B6B7B]">
+            Loading promotion batch…
+          </div>
+        )}
+
+        {batch && classGroups.length === 0 && !loadingBatch && (
+          <div className="bg-white rounded-xl border border-dashed border-[#E6E6EC] p-10 text-center text-sm text-[#6B6B7B]">
+            No students match the current filters.
+          </div>
+        )}
+
+        <div className="space-y-3">
+          {classGroups.map((group) => (
+            <ClassAccordionCard
+              key={group.classKey}
+              group={group}
+              isOpen={!!expanded[group.classKey]}
+              isReadOnly={isReadOnly}
+              decisions={decisions}
+              selectedIds={selectedIds}
+              onToggle={() =>
+                setExpanded((prev) => ({ ...prev, [group.classKey]: !prev[group.classKey] }))
+              }
+              onSelect={handleSelect}
+              onSelectMany={handleSelectMany}
+              onStatusChange={handleStatusChange}
+              onOpenNotPromoted={(record) => setNpDialog({ record })}
+              onPromoteAll={handleBulkPromote}
+              onNotPromotedAll={(records) => {
+                if (records.length === 1) {
+                  setNpDialog({ record: records[0] });
+                } else {
+                  void handleBulkNotPromoted(records);
+                }
+              }}
+              onResetAll={handleBulkReset}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Sticky footer */}
+      {batch && (
+        <div className="border-t border-[#E6E6EC] bg-white px-6 py-3 flex items-center justify-between gap-4 flex-wrap">
+          <div className="text-xs text-[#6B6B7B]">
+            Status: <strong className="text-[#0B0B14] uppercase">{batch.status}</strong>
+            {" · "}
+            {batch.kpi.completion_percentage}% decided
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleSaveDraft}
+              disabled={isReadOnly || savingDecisions}
+              className="h-9 px-4 text-sm font-semibold text-[#3A3A4A] bg-white border border-[#E6E6EC] rounded-lg hover:bg-[#F4F4F8] transition-colors disabled:opacity-40"
+            >
+              {savingDecisions ? "Saving…" : "Save Draft"}
+            </button>
+            <button
+              onClick={() => setShowConfirmModal(true)}
+              disabled={isReadOnly || batch.kpi.pending > 0}
+              className="h-9 px-5 text-sm font-bold text-white bg-[#4729F4] rounded-lg hover:bg-[#3a21d4] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              ✓ Confirm &amp; Promote
+            </button>
           </div>
         </div>
-      </section>
+      )}
 
-      <section className="admin-visitor-area up_st_admin_visitor">
-        <div className="container-fluid p-0" style={{ display: "grid", gap: 16 }}>
-          {/* Error/Success Messages */}
-          {error && (
-            <div style={errorBoxStyle()}>
-              ⚠️ {error}
-            </div>
-          )}
-          {success && (
-            <div style={successBoxStyle()}>
-              {success}
-            </div>
-          )}
+      {npDialog && batch && (
+        <NotPromotedDialog
+          batchId={batch.id}
+          record={npDialog.record}
+          initialReason={decisions[npDialog.record.id]?.retention_reason}
+          initialNotes={decisions[npDialog.record.id]?.notes}
+          initialAi={decisions[npDialog.record.id]?.ai_recommendation}
+          onConfirm={handleNotPromotedConfirm}
+          onCancel={() => setNpDialog(null)}
+        />
+      )}
 
-          {/* Search Criteria Section */}
-          <div className="white-box" style={boxStyle()}>
-            <h3 style={{ marginTop: 0, marginBottom: 10, fontSize: 16, fontWeight: 600 }}><span aria-hidden="true" style={{ color: "#5D87FF" }}>🔍</span> Search Criteria</h3>
-            <p style={{ margin: "0 0 12px", color: "var(--text-muted)", fontSize: 13 }}>Select criteria to view students</p>
-
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(180px, 1fr)) auto", gap: 12, marginBottom: 6, alignItems: "end" }}>
-              <div>
-                <label style={{ display: "block", fontSize: 13, marginBottom: 6, fontWeight: 500 }}>Academic Year</label>
-                <select
-                  aria-label="Current academic year"
-                  value={currentYearId}
-                  onChange={(e) => setCurrentYearId(e.target.value)}
-                  style={fieldStyle()}
-                  disabled={loadingCriteria}
-                >
-                  <option value="">Select Academic Year</option>
-                  {validAcademicYears.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {sanitizeLabel(item.name)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label style={{ display: "block", fontSize: 13, marginBottom: 6, fontWeight: 500 }}>
-                  Current Class <span style={{ color: "#dc2626" }}>*</span>
-                </label>
-                <select
-                  aria-label="Current class"
-                  value={currentClassId}
-                  onChange={(e) => {
-                    setCurrentClassId(e.target.value);
-                    setCurrentSections([]);
-                    setSearchErrors((prev) => ({ ...prev, class: "" }));
-                  }}
-                  style={fieldStyle(!!searchErrors.class)}
-                >
-                  <option value="">Select Class</option>
-                  {normalizedClasses.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.display_name}
-                    </option>
-                  ))}
-                </select>
-                {searchErrors.class && <p style={{ color: "#dc2626", fontSize: 12, margin: "4px 0 0 0" }}>{searchErrors.class}</p>}
-              </div>
-
-              <div>
-                <label style={{ display: "block", fontSize: 13, marginBottom: 6, fontWeight: 500 }}>
-                  Current Section <span style={{ color: "#dc2626" }}>*</span>
-                </label>
-                <select
-                  aria-label="Current section"
-                  value={currentSectionId}
-                  onChange={(e) => {
-                    setCurrentSectionId(e.target.value);
-                    setSearchErrors((prev) => ({ ...prev, section: "" }));
-                  }}
-                  style={fieldStyle(!!searchErrors.section)}
-                  disabled={!currentClassId || loadingCurrentSections}
-                >
-                  <option value="">{loadingCurrentSections ? "Loading sections..." : currentClassId ? "Select Section" : "Select Class First"}</option>
-                  {currentSections.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {sanitizeLabel(item.name)}
-                    </option>
-                  ))}
-                </select>
-                {searchErrors.section && <p style={{ color: "#dc2626", fontSize: 12, margin: "4px 0 0 0" }}>{searchErrors.section}</p>}
-              </div>
-
-              <button
-                type="button"
-                onClick={() => void search()}
-                style={btnStyle("var(--primary)", !canSearch)}
-                disabled={!canSearch}
-                aria-label="Search students"
-              >
-                {loadingStudents ? "⏳ Fetching..." : "🔍 Search"}
-              </button>
-            </div>
-            {!currentClassId || !currentSectionId ? (
-              <p style={{ margin: 0, fontSize: 12, color: "#dc2626" }}>Please select Class and Section to continue</p>
-            ) : null}
-          </div>
-
-          {/* Students Table Section */}
-          {students.length > 0 ? (
-            <div className="white-box" style={boxStyle()}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>📋 Select Students ({selectedIds.length} selected)</h3>
-                <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
-                  Page {currentPage} of {totalPages} | Total: {searchedRows.length}
-                </span>
-              </div>
-
-              <div style={{ overflowX: "auto", marginBottom: 16 }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ background: "var(--surface-muted)" }}>
-                      <th style={{ padding: 12, borderBottom: "2px solid var(--line)", textAlign: "left", width: 60 }}>
-                        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <input
-                            type="checkbox"
-                            onChange={(e) => setAll(e.target.checked)}
-                            checked={paginatedRows.length > 0 && paginatedRows.every((row) => checked[row.id])}
-                            aria-label="Select all students on current page"
-                          />
-                          All
-                        </label>
-                      </th>
-                      <th style={{ padding: 12, borderBottom: "2px solid var(--line)", textAlign: "left" }}>Admission No</th>
-                      <th style={{ padding: 12, borderBottom: "2px solid var(--line)", textAlign: "left" }}>Name</th>
-                      <th style={{ padding: 12, borderBottom: "2px solid var(--line)", textAlign: "left" }}>Class/Section</th>
-                      <th style={{ padding: 12, borderBottom: "2px solid var(--line)", textAlign: "left" }}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paginatedRows.map((row) => (
-                      <tr key={row.id} style={{ borderBottom: "1px solid var(--line)" }}>
-                        <td style={{ padding: 12 }}>
-                          <input
-                            type="checkbox"
-                            checked={!!checked[row.id]}
-                            onChange={(e) => setChecked((prev) => ({ ...prev, [row.id]: e.target.checked }))}
-                            aria-label={`Select ${fullName(row)}`}
-                          />
-                        </td>
-                        <td style={{ padding: 12, fontWeight: 500 }}>{row.admission_no || "-"}</td>
-                        <td style={{ padding: 12 }}>{fullName(row)}</td>
-                        <td style={{ padding: 12, fontSize: 13, color: "var(--text-muted)" }}>
-                          {(classMap.get(row.current_class || 0) || "-") +
-                            (row.current_section ? ` (${sectionMap.get(row.current_section) || "-"})` : "")}
-                        </td>
-                        <td style={{ padding: 12 }}>
-                          <span style={{ background: "#ecfdf5", color: "#059669", padding: "4px 8px", borderRadius: 4, fontSize: 12, fontWeight: 500 }}>
-                            Active ✓
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div style={{ display: "flex", gap: 6, justifyContent: "center", alignItems: "center", marginBottom: 16 }}>
-                  <button
-                    onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                    disabled={currentPage === 1}
-                    style={secondaryBtnStyle(currentPage === 1)}
-                  >
-                    ← Previous
-                  </button>
-                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                    <button
-                      key={page}
-                      onClick={() => setCurrentPage(page)}
-                      style={{
-                        ...secondaryBtnStyle(false),
-                        background: currentPage === page ? "var(--primary)" : "transparent",
-                        color: currentPage === page ? "#fff" : "var(--primary)",
-                        fontWeight: currentPage === page ? 600 : 400,
-                      }}
-                    >
-                      {page}
-                    </button>
-                  ))}
-                  <button
-                    onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                    disabled={currentPage === totalPages}
-                    style={secondaryBtnStyle(currentPage === totalPages)}
-                  >
-                    Next →
-                  </button>
-                </div>
-              )}
-
-              {/* Promotion Preview Section */}
-              <div style={{ background: "#f3f4f6", padding: 16, borderRadius: 8, marginBottom: 16 }}>
-                <h4 style={{ marginTop: 0, marginBottom: 12, fontSize: 14, fontWeight: 600 }}>📋 Promotion Summary</h4>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-                  <div style={{ background: "#fff", padding: 12, borderRadius: 6, border: "1px solid var(--line)" }}>
-                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Students Selected</div>
-                    <div style={{ fontSize: 20, fontWeight: 600, color: "var(--primary)" }}>{selectedIds.length}</div>
-                  </div>
-                  <div style={{ background: "#fff", padding: 12, borderRadius: 6, border: "1px solid var(--line)" }}>
-                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Destination</div>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>
-                      {promoteClassId ? classMap.get(Number(promoteClassId)) || "N/A" : "Not selected"}
-                      {promoteSectionId ? ` (${sectionMap.get(Number(promoteSectionId)) || "N/A"})` : ""}
-                    </div>
-                  </div>
-                  <div style={{ background: "#fff", padding: 12, borderRadius: 6, border: "1px solid var(--line)" }}>
-                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Next Academic Year</div>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>
-                      {promoteYearId ? validAcademicYears.find((y) => String(y.id) === promoteYearId)?.name || "N/A" : "Not selected"}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Promotion Options Section */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(150px, 1fr))", gap: 12, marginBottom: 16 }}>
-                <div>
-                  <label style={{ display: "block", fontSize: 13, marginBottom: 6, fontWeight: 500 }}>
-                    Next Academic Year <span style={{ color: "#dc2626" }}>*</span>
-                  </label>
-                  <select
-                    aria-label="Next academic year"
-                    value={promoteYearId}
-                    onChange={(e) => {
-                      setPromoteYearId(e.target.value);
-                      setPromoteErrors((prev) => ({ ...prev, year: "" }));
-                    }}
-                    style={fieldStyle(!!promoteErrors.year)}
-                  >
-                    <option value="">Select Year</option>
-                    {validAcademicYears
-                      .filter((item) => !currentYearId || String(item.id) !== currentYearId)
-                      .map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {sanitizeLabel(item.name)}
-                        </option>
-                      ))}
-                  </select>
-                  {promoteErrors.year && <p style={{ color: "#dc2626", fontSize: 12, margin: "4px 0 0 0" }}>{promoteErrors.year}</p>}
-                </div>
-
-                <div>
-                  <label style={{ display: "block", fontSize: 13, marginBottom: 6, fontWeight: 500 }}>
-                    Next Class <span style={{ color: "#dc2626" }}>*</span>
-                  </label>
-                  <select
-                    aria-label="Next class"
-                    value={promoteClassId}
-                    onChange={(e) => {
-                      setPromoteClassId(e.target.value);
-                      setPromoteSections([]);
-                      setPromoteErrors((prev) => ({ ...prev, class: "" }));
-                    }}
-                    style={fieldStyle(!!promoteErrors.class)}
-                  >
-                    <option value="">Select Class</option>
-                    {normalizedClasses.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.display_name}
-                      </option>
-                    ))}
-                  </select>
-                  {promoteErrors.class && <p style={{ color: "#dc2626", fontSize: 12, margin: "4px 0 0 0" }}>{promoteErrors.class}</p>}
-                </div>
-
-                <div>
-                  <label style={{ display: "block", fontSize: 13, marginBottom: 6, fontWeight: 500 }}>
-                    Next Section <span style={{ color: "#dc2626" }}>*</span>
-                  </label>
-                  <select
-                    aria-label="Next section"
-                    value={promoteSectionId}
-                    onChange={(e) => {
-                      setPromoteSectionId(e.target.value);
-                      setPromoteErrors((prev) => ({ ...prev, section: "" }));
-                    }}
-                    style={fieldStyle(!!promoteErrors.section)}
-                    disabled={!promoteClassId || loadingPromoteSections}
-                  >
-                    <option value="">{loadingPromoteSections ? "Loading sections..." : promoteClassId ? "Select Section" : "Select Class First"}</option>
-                    {promoteSections.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {sanitizeLabel(item.name)}
-                      </option>
-                    ))}
-                  </select>
-                  {promoteErrors.section && <p style={{ color: "#dc2626", fontSize: 12, margin: "4px 0 0 0" }}>{promoteErrors.section}</p>}
-                </div>
-
-                <div style={{ display: "flex", alignItems: "flex-end", gap: 6 }}>
-                  <button
-                    type="button"
-                    onClick={() => void promote()}
-                    style={btnStyle("#16a34a", promoting || !selectedIds.length)}
-                    disabled={promoting || !selectedIds.length}
-                    aria-label="Promote selected students"
-                  >
-                    {promoting ? "⏳ Promoting..." : "⬆ Promote"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : loadingStudents ? (
-            <div className="white-box" style={boxStyle()}>
-              <div style={{ marginBottom: 10, color: "var(--text-muted)", fontSize: 13 }}>Loading students...</div>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ padding: 10, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Student</th>
-                    <th style={{ padding: 10, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Class/Section</th>
-                    <th style={{ padding: 10, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Array.from({ length: 5 }).map((_, index) => (
-                    <tr key={index}>
-                      <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>
-                        <div style={{ height: 12, width: "70%", borderRadius: 999, background: "#e2e8f0" }} />
-                      </td>
-                      <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>
-                        <div style={{ height: 12, width: "60%", borderRadius: 999, background: "#e2e8f0" }} />
-                      </td>
-                      <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>
-                        <div style={{ height: 12, width: "45%", borderRadius: 999, background: "#e2e8f0" }} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : students.length === 0 && currentClassId && currentSectionId ? (
-            <div className="white-box" style={boxStyle()}>
-              <div style={{ textAlign: "center", padding: 40 }}>
-                <div style={{ fontSize: 48, marginBottom: 12 }}>📭</div>
-                <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>No students found</div>
-                <div style={{ color: "var(--text-muted)", fontSize: 13 }}>No active students found for the selected criteria. Try changing filters.</div>
-              </div>
-            </div>
-          ) : (
-            <div className="white-box" style={boxStyle()}>
-              <div style={{ textAlign: "center", padding: 40 }}>
-                <div style={{ fontSize: 48, marginBottom: 12 }}>🔎</div>
-                <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Select criteria to view students</div>
-                <div style={{ color: "var(--text-muted)", fontSize: 13 }}>Select class and section above, then click Search to view students.</div>
-              </div>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Confirmation Modal */}
-      {showConfirm && (
-        <div style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-          <div style={{ background: "#fff", borderRadius: "var(--radius)", padding: 24, maxWidth: 400, boxShadow: "0 10px 15px rgba(0,0,0,0.1)" }}>
-            <h3 style={{ margin: "0 0 12px 0", fontSize: 18, fontWeight: 600 }}>⚠️ Confirm Promotion</h3>
-            <p style={{ margin: "0 0 20px 0", color: "var(--text-muted)", lineHeight: 1.6 }}>
-              You are about to promote <strong>{selectedIds.length}</strong> student{selectedIds.length !== 1 ? "s" : ""} from{" "}
-              <strong>{classMap.get(Number(currentClassId)) || "N/A"}</strong> ({validAcademicYears.find((item) => String(item.id) === currentYearId)?.name || "N/A"}) to{" "}
-              <strong>{classMap.get(Number(promoteClassId)) || "N/A"}</strong> ({validAcademicYears.find((item) => String(item.id) === promoteYearId)?.name || "N/A"}). Proceed?
-            </p>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={() => setShowConfirm(false)} style={secondaryBtnStyle(false)} aria-label="Cancel promotion">
-                Cancel
-              </button>
-              <button onClick={() => void promoteConfirmed()} style={btnStyle("#16a34a", promoting)} disabled={promoting} aria-label="Confirm promotion">
-                {promoting ? "Promoting..." : "Confirm"}
-              </button>
-            </div>
-          </div>
-        </div>
+      {showConfirmModal && batch && (
+        <ConfirmBatchModal
+          kpi={batch.kpi}
+          targetYearName={batch.target_year_name}
+          submitting={confirmingBatch}
+          onConfirm={handleConfirmBatch}
+          onCancel={() => setShowConfirmModal(false)}
+        />
       )}
     </div>
   );

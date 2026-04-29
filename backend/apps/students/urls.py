@@ -1,6 +1,8 @@
 from rest_framework.routers import DefaultRouter
 from .views import (
     GuardianViewSet,
+    PromotionAuditLogViewSet,
+    PromotionBatchViewSet,
     StudentCategoryViewSet,
     StudentDocumentViewSet,
     StudentGroupViewSet,
@@ -18,6 +20,8 @@ router.register("groups", StudentGroupViewSet, basename="student-group")
 router.register("guardians", GuardianViewSet, basename="guardian")
 router.register("students", StudentViewSet, basename="student")
 router.register("promotions", StudentPromotionHistoryViewSet, basename="student-promotion")
+router.register("promotion-batches", PromotionBatchViewSet, basename="promotion-batch")
+router.register("promotion-audits", PromotionAuditLogViewSet, basename="promotion-audit")
 router.register("documents", StudentDocumentViewSet, basename="student-document")
 router.register("transfers", StudentTransferHistoryViewSet, basename="student-transfer")
 router.register("multi-class-records", StudentMultiClassRecordViewSet, basename="student-multi-class-record")

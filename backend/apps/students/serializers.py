@@ -4,6 +4,9 @@ from datetime import date
 from rest_framework import serializers
 from .models import (
     Guardian,
+    PromotionAuditLog,
+    PromotionBatch,
+    PromotionRecord,
     Student,
     StudentCategory,
     StudentDocument,
@@ -312,6 +315,182 @@ class StudentPromotionHistorySerializer(serializers.ModelSerializer):
             "promoted_at",
         ]
         read_only_fields = ["id", "promoted_by", "promoted_at"]
+
+
+class PromotionRecordSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    admission_no = serializers.CharField(source="student.admission_no", read_only=True)
+    from_class_name = serializers.CharField(source="from_class.name", read_only=True)
+    from_section_name = serializers.CharField(source="from_section.name", read_only=True)
+    to_class_name = serializers.CharField(source="to_class.name", read_only=True)
+    to_section_name = serializers.CharField(source="to_section.name", read_only=True)
+    failed_subject_ids = serializers.PrimaryKeyRelatedField(
+        source="failed_subjects",
+        many=True,
+        read_only=True,
+    )
+
+    class Meta:
+        model = PromotionRecord
+        fields = [
+            "id",
+            "student",
+            "student_name",
+            "admission_no",
+            "from_class",
+            "from_class_name",
+            "from_section",
+            "from_section_name",
+            "to_class",
+            "to_class_name",
+            "to_section",
+            "to_section_name",
+            "status",
+            "retention_reason",
+            "failed_subject_ids",
+            "notes",
+            "ai_recommendation",
+            "decision_made_at",
+        ]
+        read_only_fields = ["id", "decision_made_at"]
+
+    def get_student_name(self, obj):
+        return f"{obj.student.first_name} {obj.student.last_name}".strip()
+
+
+class PromotionBatchSerializer(serializers.ModelSerializer):
+    academic_year_name = serializers.CharField(source="academic_year.name", read_only=True)
+    target_year_name = serializers.CharField(source="target_year.name", read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+    kpi = serializers.SerializerMethodField()
+    records = PromotionRecordSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PromotionBatch
+        fields = [
+            "id",
+            "academic_year",
+            "academic_year_name",
+            "target_year",
+            "target_year_name",
+            "status",
+            "created_by_name",
+            "created_at",
+            "confirmed_at",
+            "total_students",
+            "promoted_count",
+            "retained_count",
+            "kpi",
+            "records",
+        ]
+
+    def get_created_by_name(self, obj):
+        if not obj.created_by:
+            return "-"
+        return obj.created_by.get_full_name() or obj.created_by.email
+
+    def get_kpi(self, obj):
+        total = max(0, obj.total_students)
+        promoted = max(0, obj.promoted_count)
+        retained = max(0, obj.retained_count)
+        pending = max(0, total - (promoted + retained))
+        completion = round(((promoted + retained) / total) * 100, 1) if total else 0
+        return {
+            "total": total,
+            "promoted": promoted,
+            "not_promoted": retained,
+            "pending": pending,
+            "completion_percentage": completion,
+        }
+
+
+class PromotionBatchCreateSerializer(serializers.Serializer):
+    academic_year = serializers.IntegerField(min_value=1)
+    target_year = serializers.IntegerField(min_value=1)
+
+    def validate(self, attrs):
+        from apps.core.models import AcademicYear
+
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        school_id = getattr(user, "school_id", None)
+
+        academic_year_id = attrs.get("academic_year")
+        target_year_id = attrs.get("target_year")
+        if academic_year_id == target_year_id:
+            raise serializers.ValidationError({"target_year": "Target year must be different from current academic year."})
+
+        year_qs = AcademicYear.objects.filter(id=academic_year_id)
+        target_qs = AcademicYear.objects.filter(id=target_year_id)
+        if user and not user.is_superuser and school_id:
+            year_qs = year_qs.filter(school_id=school_id)
+            target_qs = target_qs.filter(school_id=school_id)
+
+        year = year_qs.first()
+        target = target_qs.first()
+        if not year:
+            raise serializers.ValidationError({"academic_year": "Invalid academic year."})
+        if not target:
+            raise serializers.ValidationError({"target_year": "Invalid target academic year."})
+
+        attrs["academic_year_obj"] = year
+        attrs["target_year_obj"] = target
+        return attrs
+
+
+class PromotionRecordUpdateSerializer(serializers.Serializer):
+    record_id = serializers.IntegerField(min_value=1)
+    status = serializers.ChoiceField(choices=[value for value, _ in PromotionRecord.STATUS_CHOICES])
+    retention_reason = serializers.ChoiceField(
+        choices=[value for value, _ in PromotionRecord.REASON_CHOICES],
+        required=False,
+        allow_blank=True,
+    )
+    failed_subject_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    to_class = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+    to_section = serializers.IntegerField(min_value=1, required=False, allow_null=True)
+
+
+class PromotionBulkUpdateSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=["promote", "skip", "reset"])
+    scope = serializers.ChoiceField(choices=["class", "section", "selection"])
+    class_id = serializers.IntegerField(min_value=1, required=False)
+    section_id = serializers.IntegerField(min_value=1, required=False)
+    record_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False)
+
+    def validate(self, attrs):
+        scope = attrs.get("scope")
+        if scope == "class" and not attrs.get("class_id"):
+            raise serializers.ValidationError({"class_id": "class_id is required when scope is class."})
+        if scope == "section" and not attrs.get("section_id"):
+            raise serializers.ValidationError({"section_id": "section_id is required when scope is section."})
+        if scope == "selection" and not attrs.get("record_ids"):
+            raise serializers.ValidationError({"record_ids": "record_ids is required when scope is selection."})
+        return attrs
+
+
+class PromotionAiRequestSerializer(serializers.Serializer):
+    record_id = serializers.IntegerField(min_value=1)
+    reason = serializers.ChoiceField(
+        choices=[value for value, _ in PromotionRecord.REASON_CHOICES],
+        required=False,
+        allow_blank=True,
+    )
+
+
+class PromotionAuditLogSerializer(serializers.ModelSerializer):
+    performed_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PromotionAuditLog
+        fields = ["id", "batch", "action", "performed_by", "performed_by_name", "record", "details", "ip_address", "created_at"]
+        read_only_fields = fields
+
+    def get_performed_by_name(self, obj):
+        if not obj.performed_by:
+            return "-"
+        return obj.performed_by.get_full_name() or obj.performed_by.email
 
 
 class StudentPromoteRequestSerializer(serializers.Serializer):
