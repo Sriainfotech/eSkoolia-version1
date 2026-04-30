@@ -210,7 +210,7 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
   }
 
   // ── Fetch data based on active filters ─────────────────────────
-  const fetchData = useCallback(async (filters: ActiveFilters) => {
+  const fetchData = useCallback(async (filters: ActiveFilters, attempt = 0): Promise<void> => {
     setLoading(true);
     setError(null);
     try {
@@ -257,6 +257,11 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
       setReportRows(rows);
       setInsights(nextInsights);
     } catch (e) {
+      // Bug 3: Auto-retry once after a short pause before surfacing the error.
+      if (attempt < 1) {
+        await new Promise((r) => setTimeout(r, 1500));
+        return fetchData(filters, attempt + 1);
+      }
       setError(e instanceof Error ? e.message : 'Failed to load report');
     } finally {
       setLoading(false);
@@ -491,11 +496,11 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
                       <div className="space-y-1">
                         <div className="flex items-center justify-between text-[9px]">
                           <span className="text-[#6B6B7B] flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[#0A8C5A] inline-block" />Present</span>
-                          <span className="font-bold text-[#0A8C5A]">{wk.present}</span>
+                          <span className="font-bold text-[#0A8C5A]">{wk.present} {wk.present === 1 ? 'day' : 'days'}</span>
                         </div>
                         <div className="flex items-center justify-between text-[9px]">
                           <span className="text-[#6B6B7B] flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[#C2264E] inline-block" />Absent</span>
-                          <span className="font-bold text-[#C2264E]">{wk.absent}</span>
+                          <span className="font-bold text-[#C2264E]">{wk.absent} {wk.absent === 1 ? 'day' : 'days'}</span>
                         </div>
                       </div>
                     </>
@@ -519,7 +524,8 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
                 <p className="text-[9px] text-[#9CA0AE] -mt-1.5">{weeksWithData.length} wk{weeksWithData.length !== 1 ? 's' : ''} data</p>
                 {overallTotal > 0 ? (
                   <>
-                    <div className="flex justify-center"><DonutRing pct={avgPresentPct} size={60} /></div>
+                    {/* Bug 8: donut centre and legend MUST share one source of truth (weighted average). */}
+                    <div className="flex justify-center"><DonutRing pct={overallPresentPct} size={60} /></div>
                     <div className="space-y-1">
                       <div className="flex items-center justify-between text-[9px]">
                         <span className="text-[#6B6B7B] flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[#0A8C5A] inline-block" />Present</span>

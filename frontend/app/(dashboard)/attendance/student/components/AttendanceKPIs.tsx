@@ -7,6 +7,7 @@ interface AttendanceKPIsProps {
   data: KPIData | null;
   selectedDate?: string;
   today?: string;
+  error?: string | null;
 }
 
 interface KPICardProps {
@@ -55,12 +56,34 @@ function ratioLabel(part: number, total: number): string {
   return `${part}/${total}`;
 }
 
-export default function AttendanceKPIs({ data, selectedDate, today }: AttendanceKPIsProps) {
+export default function AttendanceKPIs({ data, selectedDate, today, error }: AttendanceKPIsProps) {
   if (!data) {
+    if (error) {
+      // Bug 2: Render the 4 cards with a clear error placeholder rather than a blank box.
+      return (
+        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {['Present', 'Absent', 'Late Arrivals', 'RTE Compliance Risk'].map((label) => (
+            <article key={label} className="rounded-2xl border border-[#E6E6EC] bg-white px-4 py-3">
+              <span className="block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#64748B]">{label}</span>
+              <span className="mt-2 block text-[40px] font-bold leading-none text-[#9CA0AE]">—</span>
+              <span className="mt-2 block text-xs text-[#C2264E]">Failed to load. {error}</span>
+            </article>
+          ))}
+        </div>
+      );
+    }
+    // Bug 2: Detailed skeleton with shimmer bars instead of bare boxes.
     return (
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-24 animate-pulse rounded-2xl border border-[#E6E6EC] bg-white" />
+          <div key={i} className="animate-pulse rounded-2xl border border-[#E6E6EC] bg-white px-4 py-3">
+            <div className="flex items-center justify-between">
+              <div className="h-3 w-1/3 rounded bg-gray-200" />
+              <div className="h-7 w-7 rounded-lg bg-gray-200" />
+            </div>
+            <div className="mt-3 h-10 w-1/4 rounded bg-gray-200" />
+            <div className="mt-3 h-3 w-2/3 rounded bg-gray-200" />
+          </div>
         ))}
       </div>
     );
@@ -98,25 +121,48 @@ export default function AttendanceKPIs({ data, selectedDate, today }: Attendance
         trendColor="#16A34A"
       />
 
-      <KPICard
-        label={`Absent ${onText}`}
-        value={data.absent_today}
-        sub={absentReasonSub}
-        badgeText="AB"
-        badgeBg="#FFF1F2"
-        badgeColor="#E11D48"
-        trend={`-${data.absent_today}`}
-        trendColor="#E11D48"
-      />
+      {(() => {
+        // Bug 7: derive a meaningful trend label/colour for absences.
+        // Negative delta on absences = good (fewer absent than yesterday) → green.
+        const absentDelta = typeof data.absent_delta === 'number' ? data.absent_delta : -data.absent_today;
+        let absentTrend: string;
+        let absentTrendColor: string;
+        if (absentDelta < 0) {
+          absentTrend = `↓ ${Math.abs(absentDelta)} vs yesterday`;
+          absentTrendColor = '#16A34A';
+        } else if (absentDelta > 0) {
+          absentTrend = `↑ ${absentDelta} vs yesterday`;
+          absentTrendColor = '#E11D48';
+        } else {
+          absentTrend = 'Same as yesterday';
+          absentTrendColor = '#9CA0AE';
+        }
+        return (
+          <KPICard
+            label={`Absent ${onText}`}
+            value={data.absent_today}
+            sub={absentReasonSub}
+            badgeText="AB"
+            badgeBg="#FFF1F2"
+            badgeColor="#E11D48"
+            trend={absentTrend}
+            trendColor={absentTrendColor}
+          />
+        );
+      })()}
 
       <KPICard
         label="Late Arrivals"
         value={data.late_today}
-        sub={
-          data.late_student_name
-            ? `${data.late_student_name}${data.late_minutes ? ` - ${data.late_minutes} min late` : ''}`
-            : 'No late entries'
-        }
+        sub={(() => {
+          // Bug 6: Subtext must be driven by lateCount, never contradict the headline number.
+          if ((data.late_today ?? 0) === 0) return 'No late entries';
+          if (data.late_student_name) {
+            return `${data.late_student_name}${data.late_minutes ? ` - ${data.late_minutes} min late` : ''}`;
+          }
+          const n = data.late_today;
+          return `${n} student${n === 1 ? '' : 's'} arrived late today`;
+        })()}
         badgeText="LT"
         badgeBg="#FFFBEB"
         badgeColor="#D97706"

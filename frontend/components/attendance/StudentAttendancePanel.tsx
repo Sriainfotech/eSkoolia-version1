@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TopToast } from "@/components/common/TopToast";
+import { pluralize } from "@/lib/utils/pluralize";
 
 type AcademicYear = { id: number; name: string; is_current: boolean };
 type SchoolClass = { id: number; name: string };
@@ -255,7 +256,7 @@ export default function StudentAttendancePanel() {
       setAttendance(init);
       setLoaded(true);
       setStudentsPage(1);
-      setSuccess(`Loaded ${(data.students || []).length} student records.`);
+      setSuccess(`Loaded ${pluralize((data.students || []).length, "student record")}.`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       setError(message && message !== "401" ? message : "Failed to load students.");

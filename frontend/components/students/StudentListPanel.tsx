@@ -9,6 +9,7 @@ import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
 import { usePersistentPagination } from "@/hooks/usePersistentPagination";
+import { pluralize } from "@/lib/utils/pluralize";
 
 const playfairDisplay = Playfair_Display({
   subsets: ["latin"],
@@ -626,6 +627,33 @@ export function StudentListPanel() {
 
   const selectedRows = useMemo(() => students.filter((row) => selectedIds.includes(row.id)), [students, selectedIds]);
 
+  // Bug #2: "Showing X students" must reflect the same data the tree renders.
+  // Derive from the per-section maps that drive the accordion view.
+  const treeLoadedStudentCount = useMemo(() => {
+    let total = 0;
+    classSectionStudents.forEach((rows) => { total += rows.length; });
+    return total;
+  }, [classSectionStudents]);
+
+  // Bug #3: NEW THIS MONTH should reflect the current calendar month, not all-time.
+  const currentMonthLabel = useMemo(() => {
+    const now = new Date();
+    return now.toLocaleString("en-US", { month: "long", year: "numeric" });
+  }, []);
+  const newThisMonthCount = useMemo(() => {
+    const now = new Date();
+    const month = now.getMonth();
+    const year = now.getFullYear();
+    return students.filter((row) => {
+      const raw = (row as { created_at?: string; admission_date?: string }).created_at
+        || (row as { created_at?: string; admission_date?: string }).admission_date;
+      if (!raw) return false;
+      const d = new Date(raw);
+      if (Number.isNaN(d.getTime())) return false;
+      return d.getMonth() === month && d.getFullYear() === year;
+    }).length;
+  }, [students]);
+
   const allVisibleSelected = students.length > 0 && students.every((row) => selectedIds.includes(row.id));
 
   const toggleSelectAllVisible = () => {
@@ -1049,13 +1077,17 @@ export function StudentListPanel() {
           </article>
           <article className="stat-card">
             <p className="stat-label">New this month</p>
-            <p className="stat-value">{formatCount(newCount)}</p>
-            <p className="stat-hint">Latest page intake</p>
+            <p className="stat-value">{formatCount(newThisMonthCount)}</p>
+            <p className="stat-hint">Enrolled in {currentMonthLabel}</p>
           </article>
-          <article className="stat-card attention">
+          <article className={docsPendingCount > 0 ? "stat-card attention" : "stat-card"}>
             <p className="stat-label">Docs pending</p>
             <p className="stat-value">{formatCount(docsPendingCount)}</p>
-            <p className="stat-hint">Needs attention</p>
+            <p className="stat-hint">
+              {docsPendingCount === 0
+                ? "All documents up to date"
+                : `${pluralize(docsPendingCount, "document")} need review`}
+            </p>
           </article>
         </div>
 
@@ -1089,7 +1121,7 @@ export function StudentListPanel() {
                 {statusFilter !== "all" && <span className="sl-atag p-purple">{statusFilter}</span>}
                 {specialFilter && <span className="sl-atag p-amber">{specialFilter === "special" ? "special needs" : specialFilter === "allergy" ? "has allergy" : "on medication"}</span>}
                 {classFilter && <span className="sl-atag p-gray">{classMap.get(Number(classFilter)) || "Class"}</span>}
-                {debouncedSearch && <span className="sl-atag p-blue">"{debouncedSearch}"</span>}
+                {debouncedSearch && <span className="sl-atag p-blue">&ldquo;{debouncedSearch}&rdquo;</span>}
               </div>
               <svg
                 className={filterPanelOpen ? "sl-chevron open" : "sl-chevron"}
@@ -1155,9 +1187,9 @@ export function StudentListPanel() {
                         className="sl-fsel"
                         value={sectionFilter}
                         onChange={(e) => { setSectionFilter(e.target.value); setPage(1); }}
-                        disabled={filteredSections.length === 0}
+                        disabled={!classFilter || filteredSections.length === 0}
                       >
-                        <option value="">All sections</option>
+                        <option value="">{!classFilter ? "Select a class first" : "All sections"}</option>
                         {filteredSections.map((row) => (
                           <option key={row.id} value={row.id}>
                             {formatSectionLabel(String(row.name || row.section_name || ""), row.id)}
@@ -1220,7 +1252,7 @@ export function StudentListPanel() {
                   <div className="sl-filter-foot-left">
                     <span className="sl-filter-count">
                       {filterApplied ? (
-                        <>Showing <strong>{formatCount(totalCount)}</strong> student{totalCount !== 1 ? "s" : ""}</>
+                        <>Showing <strong>{formatCount(treeLoadedStudentCount)}</strong> {treeLoadedStudentCount === 1 ? "student" : "students"}</>
                       ) : (
                         <em style={{ color: "#9a9db4", fontStyle: "normal" }}>Click <strong style={{ color: "#4f39f6" }}>Apply</strong> to load students</em>
                       )}
@@ -1266,7 +1298,7 @@ export function StudentListPanel() {
               {!loadingMeta && (
                 <div className="sl-panel-tags">
                   <span className="sl-atag p-blue">{classes.length} class{classes.length !== 1 ? "es" : ""}</span>
-                  <span className="sl-atag p-gray">{sections.length} section{sections.length !== 1 ? "s" : ""}</span>
+                  <span className="sl-atag p-gray">{pluralize(sections.length, "section")}</span>
                 </div>
               )}
               <svg
@@ -1364,11 +1396,11 @@ export function StudentListPanel() {
                             {clsFullName && clsFullName !== clsLabel && <span className="sl-cls-full">{clsFullName}</span>}
                           </div>
                           <div className="sl-cls-badges">
-                            <span className="sl-badge p-blue">{loadedStudentCount} students</span>
+                            <span className="sl-badge p-blue">{pluralize(loadedStudentCount, "student")}</span>
                             <span className="sl-badge p-green">{activeStudentCount} active</span>
                             <span className="sl-badge p-amber">{specialNeedsClsCount} special needs</span>
                             <span className="sl-badge p-red">{docsPendingClsCount} docs pending</span>
-                            <span className="sl-badge p-gray">{clsSections.length} section{clsSections.length !== 1 ? "s" : ""}</span>
+                            <span className="sl-badge p-gray">{pluralize(clsSections.length, "section")}</span>
                           </div>
                           {hasLoadedAny && loadedStudentCount > 0 && (
                             <div className="sl-cls-progress">
@@ -1658,7 +1690,7 @@ export function StudentListPanel() {
 
                                           {/* Table footer */}
                                           <div className="sl-tbl-foot">
-                                            <span>{secStudents.length} students in {secLabel}</span>
+                                            <span>{pluralize(secStudents.length, "student")} in {secLabel}</span>
                                             <Link href="/students/add" className="sl-add-link">+ Add student</Link>
                                           </div>
                                         </>
@@ -1704,9 +1736,14 @@ export function StudentListPanel() {
             </div>
 
             <div className="drawer-body">
-              {viewLoading ? <p className="drawer-note">Loading student profile...</p> : null}
-              {viewError ? <p className="drawer-error">{viewError}</p> : null}
-
+              {viewLoading ? (
+                <p className="drawer-note">Loading student profile...</p>
+              ) : viewError ? (
+                <p className="drawer-error">{viewError}</p>
+              ) : !viewStudent ? (
+                <p className="drawer-note">No profile data available.</p>
+              ) : (
+                <>
               {drawerTab === "profile" && (
                 <>
                   <div className="drawer-section">
@@ -1792,6 +1829,8 @@ export function StudentListPanel() {
                   <p className="drawer-section-title">Fees</p>
                   <p className="drawer-note">Fee module integration is coming soon.</p>
                 </div>
+              )}
+                </>
               )}
             </div>
 

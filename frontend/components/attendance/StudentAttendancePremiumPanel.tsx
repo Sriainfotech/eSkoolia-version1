@@ -543,7 +543,7 @@ export default function StudentAttendancePremiumPanel() {
                   <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50 text-amber-600"><Clock3 className="h-4 w-4" /></span>
                 </div>
                 <p className="mt-2 text-4xl leading-none text-[#111827] heading-playfair">{lateCount}</p>
-                <p className="mt-2 text-sm text-[#64748B]">{lateCount ? "14 min late" : "No late entries"}</p>
+                <p className="mt-2 text-sm text-[#64748B]">{lateCount === 0 ? "No late entries" : lateCount === 1 ? "1 late entry" : `${lateCount} late entries`}</p>
               </article>
 
               <article className="rounded-2xl border border-[#E5E7EB] bg-white p-4">

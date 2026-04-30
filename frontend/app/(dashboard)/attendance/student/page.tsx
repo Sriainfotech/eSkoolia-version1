@@ -24,6 +24,7 @@ import UnlockEditDialog from './components/UnlockEditDialog';
 import StudentAttendanceImportDialog from './components/StudentAttendanceImportDialog';
 import ConfirmDialogHost, { confirmDialog } from './components/ConfirmDialog';
 import ExportOptionsDialogHost, { exportOptionsDialog } from './components/ExportOptionsDialog';
+import { useCurrentAcademicYear } from '@/hooks/useCurrentAcademicYear';
 
 const LATE_RATIO_THRESHOLD = 0;
 const LATE_MINUTES_BUFFER = 20;
@@ -45,7 +46,9 @@ export default function StudentAttendancePage() {
 
   // -- Date & filters -------------------------------------------
   const [selectedDate, setSelectedDate] = useState<string>(() => formatDate(new Date()));
-  const [academicYear, setAcademicYear] = useState('2025-26');
+  const { year: defaultAcademicYear } = useCurrentAcademicYear('2026-27');
+  const [academicYear, setAcademicYear] = useState(defaultAcademicYear);
+  useEffect(() => { setAcademicYear(defaultAcademicYear); }, [defaultAcademicYear]);
   const [levelFilter, setLevelFilter] = useState<LevelFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');

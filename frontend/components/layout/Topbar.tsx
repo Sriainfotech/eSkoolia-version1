@@ -57,24 +57,6 @@ export function Topbar() {
     };
   }, []);
 
-  const currentUserInitials = useMemo(() => {
-    const first = String(currentUser?.first_name || "").trim();
-    const last = String(currentUser?.last_name || "").trim();
-    const username = String(currentUser?.username || "").trim();
-    const email = String(currentUser?.email || "").trim();
-
-    if (first || last) {
-      return getInitialsFromName(`${first} ${last}`);
-    }
-    if (username) {
-      return getInitialsFromName(username.replace(/[._-]+/g, " "));
-    }
-    if (email.includes("@")) {
-      return getInitialsFromName(email.split("@")[0] || "");
-    }
-    return "U";
-  }, [currentUser]);
-
   const currentUserLabel = useMemo(() => {
     const first = String(currentUser?.first_name || "").trim();
     const last = String(currentUser?.last_name || "").trim();
@@ -85,6 +67,11 @@ export function Topbar() {
     if (username) return username;
     return "Admin";
   }, [currentUser]);
+
+  // Bug #10: avatar initial must reflect the same name shown next to it.
+  const currentUserInitials = useMemo(() => {
+    return getInitialsFromName(currentUserLabel);
+  }, [currentUserLabel]);
 
   const handleLogout = async () => {
     if (loggingOut) return;

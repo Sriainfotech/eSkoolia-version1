@@ -253,8 +253,6 @@ export function TransportRoutePanel() {
           stop_type: form.stop_type,
           scheduled_time: form.scheduled_time || null,
           geofence_radius: Number(form.geofence_radius || 100),
-      toast.showApiError(loadError, "Failed to load route builder data");
-      setError(loadError instanceof Error ? loadError.message : "Failed to load route builder data");
         }),
       });
 
@@ -295,8 +293,7 @@ export function TransportRoutePanel() {
     const currentIndex = sortedStops.findIndex((stop) => stop.id === stopId);
     if (currentIndex < 0) {
       return;
-      toast.showApiError(saveError, "Failed to save stop");
-      setError(saveError instanceof Error ? saveError.message : "Failed to save stop");
+    }
 
     const swapIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
     if (swapIndex < 0 || swapIndex >= sortedStops.length) {

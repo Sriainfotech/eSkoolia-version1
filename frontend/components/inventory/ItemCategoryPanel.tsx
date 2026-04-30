@@ -6,6 +6,16 @@ import { buildPaginationQuery, extractListData, extractPaginationMeta, type List
 import { PaginationControls } from "@/components/common/PaginationControls";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { usePersistentPagination } from "@/hooks/usePersistentPagination";
+import { Button } from "@/components/ui/button";
+
+export function validateCategoryName(value: string): string {
+  const v = String(value || "").trim();
+  if (!v) return "Category name is required.";
+  if (v.length < 3) return "Category name must be at least 3 characters.";
+  if (!/[a-zA-Z]/.test(v)) return "Category name must contain at least one letter.";
+  if (v.length > 100) return "Category name must not exceed 100 characters.";
+  return "";
+}
 
 type ItemCategory = {
   id: number;
@@ -94,13 +104,9 @@ export function ItemCategoryPanel() {
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   const validateForm = (): boolean => {
-    const trimmedTitle = formTitle.trim();
-    if (!trimmedTitle) {
-      setFieldError("Item category name is required.");
-      return false;
-    }
-    if (trimmedTitle.length > 100) {
-      setFieldError("Item category name must not exceed 100 characters.");
+    const validationError = validateCategoryName(formTitle);
+    if (validationError) {
+      setFieldError(validationError);
       return false;
     }
     return true;
@@ -201,7 +207,9 @@ export function ItemCategoryPanel() {
                 value={formTitle}
                 onChange={(e) => {
                   setFormTitle(e.target.value);
-                  if (fieldError) setFieldError("");
+                  // Live-validate so the user sees feedback immediately.
+                  const liveError = validateCategoryName(e.target.value);
+                  setFieldError(liveError);
                   if (error) setError("");
                 }}
                 maxLength={100}
@@ -215,13 +223,13 @@ export function ItemCategoryPanel() {
             </label>
 
             <div style={{ display: "flex", gap: 8 }}>
-              <button type="submit" disabled={saving} style={buttonStyle()}>
+              <Button type="submit" disabled={saving} variant="default">
                 {saving ? "Saving..." : "Save"}
-              </button>
+              </Button>
               {editingId ? (
-                <button type="button" onClick={resetForm} style={buttonStyle("#6b7280")}>
+                <Button type="button" onClick={resetForm} variant="outline">
                   Cancel
-                </button>
+                </Button>
               ) : null}
             </div>
           </form>
@@ -262,12 +270,12 @@ export function ItemCategoryPanel() {
                     </td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
                       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <button type="button" onClick={() => startEdit(row)} style={buttonStyle("#0ea5e9")}>
+                        <Button type="button" onClick={() => startEdit(row)} variant="outline" size="sm">
                           Edit
-                        </button>
-                        <button type="button" onClick={() => setDeleteCandidate(row)} style={buttonStyle("#dc2626")}>
+                        </Button>
+                        <Button type="button" onClick={() => setDeleteCandidate(row)} variant="destructive" size="sm">
                           Delete
-                        </button>
+                        </Button>
                       </div>
                     </td>
                   </tr>

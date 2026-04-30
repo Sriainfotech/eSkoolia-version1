@@ -735,7 +735,7 @@ export function StudentMultiClassPanel() {
             {enrolled.name&&<span className={s.enrollChip}><LinkIcon/> From enrollment: {enrolled.name}</span>}
           </div>
           <div className={s.roGrid}>
-            {[{label:"Student Name",value:enrolled.name||"—",mono:false},{label:"Admission No.",value:enrolled.admissionNo||"—",mono:true},{label:"Roll No.",value:enrolled.rollNo||"—",mono:true},{label:"Class",value:enrolled.className||"—",mono:false},{label:"Section",value:enrolled.sectionName||"—",mono:false},{label:"Academic Year",value:enrolled.academicYear||"2025-26",mono:false}].map(f=>(
+            {[{label:"Student Name",value:enrolled.name||"—",mono:false},{label:"Admission No.",value:enrolled.admissionNo||"—",mono:true},{label:"Roll No.",value:enrolled.rollNo||"—",mono:true},{label:"Class",value:enrolled.className||"—",mono:false},{label:"Section",value:enrolled.sectionName||"—",mono:false},{label:"Academic Year",value:enrolled.academicYear||"2026-27",mono:false}].map(f=>(
               <div key={f.label} className={s.roField}><label>{f.label}</label><input readOnly value={f.value} className={`${s.roInput} ${f.mono?s.roInputMono:""}`}/></div>
             ))}
           </div>

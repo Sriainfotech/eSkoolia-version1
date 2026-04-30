@@ -93,6 +93,7 @@ export interface KPIData {
   late_student_name: string | null;
   late_minutes: number | null;
   delta_pct: number;
+  absent_delta?: number;
 }
 
 export interface WeeklyBar {
