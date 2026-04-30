@@ -81,19 +81,19 @@
 }
 .pageTitle {
   margin: 0;
-  font-family: "Playfair Display", Georgia, serif;
-  font-size: 50px;
-  font-weight: 500;
-  line-height: 0.95;
+  font-family: var(--font-playfair), Georgia, "Times New Roman", serif;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.15;
   letter-spacing: -0.02em;
-  color: #181817;
+  color: #0f172a;
 }
 .pageTitle em {
-  font-family: "Playfair Display", Georgia, serif;
+  font-family: var(--font-playfair), Georgia, "Times New Roman", serif;
   font-style: italic;
-  font-size: 50px;
-  font-weight: 600;
-  color: #5b3df5;
+  font-size: 32px;
+  font-weight: 400;
+  color: #6c3ce1;
 }
 .pageSubtitle {
   font-size: 11.5px;

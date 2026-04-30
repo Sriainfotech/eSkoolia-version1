@@ -15,21 +15,22 @@ export default function AttendancePageHeader({ onImport, onExport, onDownloadSam
         <h1
           style={{
             margin: 0,
-            fontFamily: '"Playfair Display", Georgia, serif',
-            fontSize: '50px',
-            fontWeight: 500,
-            lineHeight: 0.95,
+            fontFamily: 'var(--font-playfair), "Playfair Display", Georgia, serif',
+            fontSize: '32px',
+            fontWeight: 700,
+            lineHeight: 1.15,
             letterSpacing: '-0.02em',
-            color: '#181817',
+            color: '#0f172a',
           }}
         >
           Student{' '}
           <span
             style={{
-              color: '#5b3df5',
-              fontFamily: '"Playfair Display", Georgia, serif',
+              color: '#6c3ce1',
+              fontFamily: 'var(--font-playfair), "Playfair Display", Georgia, serif',
               fontStyle: 'italic',
-              fontWeight: 600,
+              fontSize: '32px',
+              fontWeight: 400,
             }}
           >
             Attendance

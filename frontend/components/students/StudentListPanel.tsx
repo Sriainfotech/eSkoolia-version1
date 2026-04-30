@@ -1046,8 +1046,8 @@ export function StudentListPanel() {
       <main className="page">
         <div className="page-head">
           <div>
-            <h1>
-              Student <em>List</em>
+            <h1 style={{ margin: 0, fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontSize: '32px', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15, color: '#0f172a' }}>
+              Student <em style={{ fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontStyle: 'italic', fontSize: '32px', fontWeight: 400, color: '#6c3ce1' }}>List</em>
             </h1>
             <p>Browse, search, and manage every enrolled student · Click any row to see full profile.</p>
           </div>
@@ -1996,19 +1996,20 @@ export function StudentListPanel() {
 
         h1 {
           margin: 0;
-          font-size: 50px;
-          font-weight: 500;
-          line-height: 0.95;
+          font-size: 32px;
+          font-weight: 700;
+          line-height: 1.15;
           letter-spacing: -0.02em;
-          color: #181817;
-          font-family: "Playfair Display", Georgia, serif;
+          color: #0f172a;
+          font-family: var(--font-playfair), Georgia, "Times New Roman", serif;
         }
 
         h1 em {
-          color: #5b3df5;
-          font-family: "Playfair Display", Georgia, serif;
+          color: #6c3ce1;
+          font-family: var(--font-playfair), Georgia, "Times New Roman", serif;
           font-style: italic;
-          font-weight: 600;
+          font-weight: 400;
+          font-size: 32px;
         }
 
         .page-head > div:first-child p {

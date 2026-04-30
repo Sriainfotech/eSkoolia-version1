@@ -1409,16 +1409,19 @@ export function StudentCategoryManagerPanel() {
         }
         .head-row h1 {
           margin: 0;
-          font-size: 50px;
-          line-height: 0.95;
-          font-family: "Playfair Display", Georgia, serif;
-          font-weight: 500;
+          font-size: 32px;
+          line-height: 1.15;
+          font-family: var(--font-playfair), "Playfair Display", Georgia, serif;
+          font-weight: 700;
+          letter-spacing: -0.02em;
+          color: #0f172a;
         }
         .head-row h1 span {
-          color: #5b3df5;
-          font-family: "Playfair Display", Georgia, serif;
+          color: #6c3ce1;
+          font-family: var(--font-playfair), "Playfair Display", Georgia, serif;
           font-style: italic;
-          font-weight: 600;
+          font-size: 32px;
+          font-weight: 400;
         }
         .head-row p {
           margin: 10px 0 0;
@@ -2519,7 +2522,7 @@ export function StudentCategoryManagerPanel() {
             align-items: stretch;
           }
           .head-row h1 {
-            font-size: 40px;
+            font-size: 28px;
           }
           .bulk-strip,
           .footer-row {

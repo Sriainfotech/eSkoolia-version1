@@ -1007,7 +1007,7 @@ export function StudentGroupPanel() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
         <div>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--teal)", textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 4 }}>Student Information</div>
-          <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0, color: "var(--dark)", lineHeight: 1.2 }}>Student Group</h1>
+          <h1 style={{ margin: 0, fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontSize: '32px', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15, color: '#0f172a' }}>Student <em style={{ fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontStyle: 'italic', fontSize: '32px', fontWeight: 400, color: '#6c3ce1' }}>Group</em></h1>
           <div style={{ fontSize: 13, color: "var(--light)", marginTop: 4 }}>Manage students across houses &amp; clubs — assign in bulk, class by class</div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>

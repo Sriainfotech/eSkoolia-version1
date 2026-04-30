@@ -490,8 +490,8 @@ export function StudentCategoryPanel() {
         <div className="container-fluid p-0">
           <div className="hero-head">
             <div>
-              <h1>
-                Student <span>Categories</span>
+              <h1 style={{ margin: 0, fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontSize: '32px', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15, color: '#0f172a' }}>
+                Student <span style={{ fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontStyle: 'italic', fontSize: '32px', fontWeight: 400, color: '#6c3ce1' }}>Categories</span>
               </h1>
               <p>Classification tags used across admissions, fee rules, and reporting.</p>
             </div>
@@ -845,8 +845,8 @@ export function StudentCategoryPanel() {
         }
         .hero-head h1 {
           margin: 0;
-          font-size: 50px;
-          line-height: 0.95;
+          font-size: 32px;
+          line-height: 1.15;
           font-weight: 700;
           letter-spacing: -0.02em;
         }
@@ -1471,7 +1471,7 @@ export function StudentCategoryPanel() {
             align-items: stretch;
           }
           .hero-head h1 {
-            font-size: 40px;
+            font-size: 28px;
           }
           .bulk-bar,
           .pagination-row {
