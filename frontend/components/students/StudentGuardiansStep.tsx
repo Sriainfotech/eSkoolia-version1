@@ -257,9 +257,27 @@ export function StudentGuardiansStep({
                     <select
                       className={`gdn-select ${errs.relation ? "is-invalid" : ""}`}
                       value={draft.relation}
-                      onChange={(e) =>
-                        updateDraft(draft.clientId, { relation: e.target.value })
-                      }
+                      onChange={(e) => {
+                        const nextRel = e.target.value;
+                        const norm = nextRel.trim().toLowerCase();
+                        // Find any OTHER non-empty card already using this relation.
+                        const conflictIdx = drafts.findIndex((d, i) => {
+                          if (d.clientId === draft.clientId) return false;
+                          const isFilled =
+                            (d.fullName || "").trim() ||
+                            (d.phone || "").trim() ||
+                            d.linkedExistingId != null ||
+                            d.isPrimary;
+                          return isFilled && (d.relation || "").trim().toLowerCase() === norm;
+                        });
+                        if (conflictIdx !== -1) {
+                          const proceed = window.confirm(
+                            `${nextRel} is already assigned to Guardian ${conflictIdx + 1}. Do you want to add another ${nextRel} as well? Click Cancel to pick a different relation instead.`,
+                          );
+                          if (!proceed) return; // keep previous selection
+                        }
+                        updateDraft(draft.clientId, { relation: nextRel });
+                      }}
                     >
                       {RELATION_OPTIONS.map((r) => (
                         <option key={r} value={r}>
