@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 
 export type GuardianDraft = {
@@ -44,7 +44,7 @@ export function makeEmptyGuardianDraft(isPrimary: boolean): GuardianDraft {
     isPrimary,
     linkedExistingId: null,
     fullName: "",
-    relation: "Father",
+    relation: "",
     phone: "",
     email: "",
     occupation: "",
@@ -62,6 +62,43 @@ export function StudentGuardiansStep({
 }: StudentGuardiansStepProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
+  
+  // Sibling search states
+  const [siblingSearchName, setSiblingSearchName] = useState("");
+  const [siblingSearchClass, setSiblingSearchClass] = useState("");
+  const [siblingSearchResults, setSiblingSearchResults] = useState<Array<{
+    id: number;
+    first_name: string;
+    last_name: string;
+    current_class_name?: string;
+    current_section_name?: string;
+    guardian?: { id: number; full_name: string; relation: string; phone: string; email?: string; occupation?: string };
+  }>>([]);
+  const [siblingLinkLoading, setSiblingLinkLoading] = useState(false);
+  const [siblingSearchError, setSiblingSearchError] = useState("");
+
+  // Local error state per card for inline onBlur validation
+  const [localErrors, setLocalErrors] = useState<GuardianFieldErrors[]>(() =>
+    drafts.map(() => ({}))
+  );
+
+  // Keep localErrors in sync when drafts length changes
+  useEffect(() => {
+    setLocalErrors((prev) => {
+      if (prev.length === drafts.length) return prev;
+      const next = drafts.map((_, i) => prev[i] || {});
+      return next;
+    });
+  }, [drafts.length]);
+
+  const setCardError = (idx: number, field: keyof GuardianDraft, msg: string) => {
+    setLocalErrors((prev) => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], [field]: msg || undefined };
+      if (!msg) delete next[idx][field];
+      return next;
+    });
+  };
 
   const updateDraft = (clientId: string, patch: Partial<GuardianDraft>) => {
     onDraftsChange(
@@ -89,6 +126,22 @@ export function StudentGuardiansStep({
     onDraftsChange(drafts.filter((d) => d.clientId !== clientId));
   };
 
+  const clearCard = (clientId: string) => {
+    onDraftsChange(
+      drafts.map((d) =>
+        d.clientId === clientId
+          ? { ...makeEmptyGuardianDraft(d.isPrimary), clientId: d.clientId }
+          : d,
+      ),
+    );
+  };
+
+  const setAsPrimary = (clientId: string) => {
+    onDraftsChange(
+      drafts.map((d) => ({ ...d, isPrimary: d.clientId === clientId })),
+    );
+  };
+
   const addCard = () => {
     onDraftsChange([...drafts, makeEmptyGuardianDraft(false)]);
   };
@@ -113,6 +166,83 @@ export function StudentGuardiansStep({
     );
     setPickerOpen(false);
     setPickerQuery("");
+  };
+
+  const searchSiblings = async () => {
+    if (!siblingSearchName.trim()) {
+      setSiblingSearchError("Please enter a name to search");
+      return;
+    }
+    
+    setSiblingLinkLoading(true);
+    setSiblingSearchError("");
+    setSiblingSearchResults([]);
+    
+    try {
+      // Get auth token
+      const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
+      if (!token) {
+        setSiblingSearchError("Authentication required. Please log in again.");
+        setSiblingLinkLoading(false);
+        return;
+      }
+      
+      const params = new URLSearchParams({
+        search: siblingSearchName.trim(),
+        limit: '20',
+      });
+      if (siblingSearchClass.trim()) {
+        params.append('class_name', siblingSearchClass.trim());
+      }
+      
+      const response = await fetch(`/api/v1/students/students/?${params.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Search failed: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      const results = Array.isArray(data) ? data : (data.results || []);
+      setSiblingSearchResults(results);
+      
+      if (results.length === 0) {
+        setSiblingSearchError("No students found with that name/class");
+      }
+    } catch (err) {
+      setSiblingSearchError(err instanceof Error ? err.message : "Failed to search students");
+    } finally {
+      setSiblingLinkLoading(false);
+    }
+  };
+
+  const linkSiblingGuardian = (sibling: typeof siblingSearchResults[0]) => {
+    if (sibling.guardian) {
+      onDraftsChange(
+        drafts.map((d, idx) =>
+          idx === 0
+            ? {
+                ...d,
+                isPrimary: true,
+                linkedExistingId: sibling.guardian!.id,
+                fullName: sibling.guardian!.full_name,
+                relation: sibling.guardian!.relation || "Father",
+                phone: sibling.guardian!.phone || "",
+                email: sibling.guardian!.email || d.email,
+                occupation: sibling.guardian!.occupation || d.occupation,
+              }
+            : d,
+        ),
+      );
+      setSiblingSearchName("");
+      setSiblingSearchClass("");
+      setSiblingSearchResults([]);
+      setPickerOpen(false);
+    }
   };
 
   const filteredExisting = useMemo(() => {
@@ -158,47 +288,113 @@ export function StudentGuardiansStep({
       </button>
 
       {pickerOpen ? (
-        <div className="gdn-picker" role="region" aria-label="Existing guardian picker">
-          <input
-            type="search"
-            className="gdn-picker-search"
-            placeholder="Search by name or phone…"
-            value={pickerQuery}
-            onChange={(e) => setPickerQuery(e.target.value)}
-          />
-          {filteredExisting.length === 0 ? (
-            <p className="gdn-picker-empty">
-              {existingGuardians.length === 0
-                ? "No guardians have been created yet for this school."
-                : "No matching guardians. Try a different search."}
+        <div className="gdn-picker" role="region" aria-label="Sibling guardian search">
+          <div style={{ padding: '16px', borderBottom: '1px solid #e5e7eb' }}>
+            <h4 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 600, color: '#374151' }}>
+              Search for a sibling to link their guardian
+            </h4>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+              <input
+                type="text"
+                className="gdn-picker-search"
+                placeholder="Sibling's Name"
+                value={siblingSearchName}
+                onChange={(e) => setSiblingSearchName(e.target.value)}
+                style={{ flex: 2 }}
+              />
+              <input
+                type="text"
+                className="gdn-picker-search"
+                placeholder="Class (optional)"
+                value={siblingSearchClass}
+                onChange={(e) => setSiblingSearchClass(e.target.value)}
+                style={{ flex: 1 }}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void searchSiblings()}
+              disabled={siblingLinkLoading}
+              style={{
+                width: '100%',
+                padding: '10px 16px',
+                background: siblingLinkLoading ? '#9ca3af' : '#6c3ce1',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                fontSize: 14,
+                fontWeight: 600,
+                cursor: siblingLinkLoading ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {siblingLinkLoading ? 'Searching...' : 'Search Students'}
+            </button>
+          </div>
+          
+          {siblingSearchError ? (
+            <p style={{ padding: 16, color: '#dc2626', fontSize: 13, margin: 0 }}>
+              {siblingSearchError}
             </p>
-          ) : (
+          ) : null}
+          
+          {siblingSearchResults.length > 0 ? (
             <ul className="gdn-picker-list">
-              {filteredExisting.map((g) => (
-                <li key={g.id} className="gdn-picker-item">
-                  <div className="gdn-picker-item-main">
-                    <div className="gdn-picker-item-name">{g.full_name}</div>
-                    <div className="gdn-picker-item-meta">
-                      {g.relation || "—"} · {g.phone || "no phone"}
+              {siblingSearchResults.map((student) => (
+                <li key={student.id} style={{ 
+                  padding: 12, 
+                  borderBottom: '1px solid #f3f4f6',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start',
+                }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: '#111827', marginBottom: 4 }}>
+                      {student.first_name} {student.last_name}
                     </div>
+                    <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>
+                      Class: {student.current_class_name || '—'} {student.current_section_name ? `/ ${student.current_section_name}` : ''}
+                    </div>
+                    {student.guardian ? (
+                      <div style={{ fontSize: 12, color: '#374151', padding: 8, background: '#f9fafb', borderRadius: 6, marginTop: 6 }}>
+                        <div><strong>Guardian:</strong> {student.guardian.full_name}</div>
+                        <div>{student.guardian.relation} · {student.guardian.phone}</div>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12, color: '#9ca3af', fontStyle: 'italic' }}>
+                        No guardian on file
+                      </div>
+                    )}
                   </div>
-                  <button
-                    type="button"
-                    className="gdn-picker-link-btn"
-                    onClick={() => linkExistingToPrimary(g)}
-                  >
-                    Link as primary
-                  </button>
+                  {student.guardian ? (
+                    <button
+                      type="button"
+                      onClick={() => linkSiblingGuardian(student)}
+                      style={{
+                        padding: '8px 14px',
+                        background: '#6c3ce1',
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        marginLeft: 12,
+                        flexShrink: 0,
+                      }}
+                    >
+                      Link this guardian
+                    </button>
+                  ) : null}
                 </li>
               ))}
             </ul>
-          )}
+          ) : null}
         </div>
       ) : null}
 
       <div className="gdn-cards">
         {drafts.map((draft, idx) => {
-          const errs = errorsByCard?.[idx] ?? {};
+          const errors = { ...(errorsByCard?.[idx] || {}), ...(localErrors[idx] || {}) };
           return (
             <article key={draft.clientId} className="gdn-card">
               <header className="gdn-card-header">
@@ -211,23 +407,38 @@ export function StudentGuardiansStep({
                     <span className="gdn-badge-linked">LINKED</span>
                   ) : null}
                 </div>
-                <button
-                  type="button"
-                  className="gdn-card-close"
-                  onClick={() => removeCard(draft.clientId)}
-                  aria-label={
-                    draft.isPrimary
-                      ? "Clear primary guardian"
-                      : `Remove guardian ${idx + 1}`
-                  }
-                  title={
-                    draft.isPrimary
-                      ? "Clear primary guardian"
-                      : `Remove guardian ${idx + 1}`
-                  }
-                >
-                  ×
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {!draft.isPrimary && (
+                    <button
+                      type="button"
+                      style={{ fontSize: 12, color: '#6c3ce1', background: 'none', border: '1px solid #c4b5fd', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}
+                      onClick={() => setAsPrimary(draft.clientId)}
+                    >
+                      Set as primary
+                    </button>
+                  )}
+                  {idx === 0 ? (
+                    <button
+                      type="button"
+                      style={{ fontSize: 12, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+                      onClick={() => clearCard(draft.clientId)}
+                      aria-label="Clear guardian 1 fields"
+                      title="Clear all fields for this guardian"
+                    >
+                      Clear fields
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="gdn-card-close"
+                      onClick={() => removeCard(draft.clientId)}
+                      aria-label={`Remove guardian ${idx + 1}`}
+                      title={`Remove guardian ${idx + 1}`}
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
               </header>
 
               <div className="gdn-row gdn-row-3">
@@ -237,16 +448,26 @@ export function StudentGuardiansStep({
                   </label>
                   <input
                     type="text"
-                    className={`gdn-input ${errs.fullName ? "is-invalid" : ""}`}
+                    className={`gdn-input ${errors.fullName ? "is-invalid" : ""}`}
                     placeholder="e.g. Rajesh Sharma"
                     value={draft.fullName}
                     onChange={(e) =>
-                      updateDraft(draft.clientId, { fullName: e.target.value })
+                      updateDraft(draft.clientId, { 
+                        fullName: e.target.value.replace(/[^A-Za-z\s''.,-]/g, '').slice(0, 100)
+                      })
                     }
+                    onBlur={() => {
+                      const v = draft.fullName.trim();
+                      if (!v) setCardError(idx, 'fullName', 'Guardian name is required');
+                      else if (v.length < 3) setCardError(idx, 'fullName', 'Name must be at least 3 characters');
+                      else if (!/^[A-Za-z\s''.,\-]+$/.test(v)) setCardError(idx, 'fullName', 'Name can only contain letters, spaces, and basic punctuation');
+                      else setCardError(idx, 'fullName', '');
+                    }}
+                    aria-describedby={`guardian_${idx}_fullName-error`}
                     autoComplete="off"
                   />
-                  {errs.fullName ? (
-                    <p className="gdn-err-text">{errs.fullName}</p>
+                  {errors.fullName ? (
+                    <span id={`guardian_${idx}_fullName-error`} role="alert" aria-live="polite" className="gdn-err-text">{errors.fullName}</span>
                   ) : null}
                 </div>
                 <div className="gdn-field">
@@ -255,7 +476,7 @@ export function StudentGuardiansStep({
                   </label>
                   <div className="gdn-select-wrap">
                     <select
-                      className={`gdn-select ${errs.relation ? "is-invalid" : ""}`}
+                      className={`gdn-select ${errors.relation ? "is-invalid" : ""}`}
                       value={draft.relation}
                       onChange={(e) => {
                         const nextRel = e.target.value;
@@ -270,7 +491,7 @@ export function StudentGuardiansStep({
                             d.isPrimary;
                           return isFilled && (d.relation || "").trim().toLowerCase() === norm;
                         });
-                        if (conflictIdx !== -1) {
+                        if (conflictIdx !== -1 && nextRel) {
                           const proceed = window.confirm(
                             `${nextRel} is already assigned to Guardian ${conflictIdx + 1}. Do you want to add another ${nextRel} as well? Click Cancel to pick a different relation instead.`,
                           );
@@ -278,7 +499,13 @@ export function StudentGuardiansStep({
                         }
                         updateDraft(draft.clientId, { relation: nextRel });
                       }}
+                      onBlur={() => {
+                        if (!draft.relation) setCardError(idx, 'relation', 'Relationship is required');
+                        else setCardError(idx, 'relation', '');
+                      }}
+                      aria-describedby={`guardian_${idx}_relation-error`}
                     >
+                      <option value="">Select relation</option>
                       {RELATION_OPTIONS.map((r) => (
                         <option key={r} value={r}>
                           {r}
@@ -289,8 +516,8 @@ export function StudentGuardiansStep({
                       ⌄
                     </span>
                   </div>
-                  {errs.relation ? (
-                    <p className="gdn-err-text">{errs.relation}</p>
+                  {errors.relation ? (
+                    <span id={`guardian_${idx}_relation-error`} role="alert" aria-live="polite" className="gdn-err-text">{errors.relation}</span>
                   ) : null}
                 </div>
                 <div className="gdn-field">
@@ -300,23 +527,30 @@ export function StudentGuardiansStep({
                   <input
                     type="tel"
                     inputMode="numeric"
-                    className={`gdn-input ${errs.phone ? "is-invalid" : ""}`}
+                    className={`gdn-input ${errors.phone ? "is-invalid" : ""}`}
                     placeholder="10-digit mobile"
                     value={draft.phone}
                     maxLength={10}
                     onChange={(e) =>
                       updateDraft(draft.clientId, { phone: phoneOnInput(e) })
                     }
+                    onBlur={() => {
+                      const p = draft.phone.replace(/\D/g, '');
+                      if (!p) setCardError(idx, 'phone', 'Phone number is required');
+                      else if (!/^[6-9]\d{9}$/.test(p)) setCardError(idx, 'phone', 'Enter a valid 10-digit number starting with 6-9');
+                      else if (/^(\d)\1{9}$/.test(p)) setCardError(idx, 'phone', 'Phone number appears invalid (all same digits)');
+                      else setCardError(idx, 'phone', '');
+                    }}
+                    aria-describedby={`guardian_${idx}_phone-error`}
                     autoComplete="off"
                   />
-                  {errs.phone ? (
-                    <p className="gdn-err-text">{errs.phone}</p>
+                  {errors.phone ? (
+                    <span id={`guardian_${idx}_phone-error`} role="alert" aria-live="polite" className="gdn-err-text">{errors.phone}</span>
                   ) : null}
                 </div>
               </div>
 
-              {draft.isPrimary ? (
-                <div className="gdn-row gdn-row-2">
+              <div className="gdn-row gdn-row-2">
                   <div className="gdn-field">
                     <div className="gdn-label-row">
                       <label className="gdn-label">Email</label>
@@ -324,16 +558,29 @@ export function StudentGuardiansStep({
                     </div>
                     <input
                       type="email"
-                      className={`gdn-input ${errs.email ? "is-invalid" : ""}`}
+                      className={`gdn-input ${errors.email ? "is-invalid" : ""}`}
                       placeholder="guardian@example.com"
                       value={draft.email}
                       onChange={(e) =>
-                        updateDraft(draft.clientId, { email: e.target.value })
+                        updateDraft(draft.clientId, { email: e.target.value.slice(0, 100) })
                       }
+                      onBlur={() => {
+                        const e = draft.email.trim();
+                        if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) {
+                          setCardError(idx, 'email', 'Enter a valid email address');
+                        } else if (e) {
+                          const [local] = e.split('@');
+                          if (/^(.)\1+$/.test(local)) setCardError(idx, 'email', 'Email address appears invalid');
+                          else setCardError(idx, 'email', '');
+                        } else {
+                          setCardError(idx, 'email', '');
+                        }
+                      }}
+                      aria-describedby={`guardian_${idx}_email-error`}
                       autoComplete="off"
                     />
-                    {errs.email ? (
-                      <p className="gdn-err-text">{errs.email}</p>
+                    {errors.email ? (
+                      <span id={`guardian_${idx}_email-error`} role="alert" aria-live="polite" className="gdn-err-text">{errors.email}</span>
                     ) : null}
                   </div>
                   <div className="gdn-field">
@@ -347,13 +594,14 @@ export function StudentGuardiansStep({
                       placeholder="e.g. Engineer"
                       value={draft.occupation}
                       onChange={(e) =>
-                        updateDraft(draft.clientId, { occupation: e.target.value })
+                        updateDraft(draft.clientId, { 
+                          occupation: e.target.value.replace(/[^A-Za-z0-9\s.,&'-]/g, '').slice(0, 100)
+                        })
                       }
                       autoComplete="off"
                     />
                   </div>
                 </div>
-              ) : null}
             </article>
           );
         })}

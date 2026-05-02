@@ -218,6 +218,7 @@ class StudentDocument(models.Model):
         ("aadhaar_card", "Aadhaar Card"),
         ("medical_information", "Medical Information"),
         ("caste_certificate", "Caste Certificate"),
+        ("consent_form", "Signed Consent Form"),
         ("other", "Other"),
     ]
     
@@ -333,10 +334,12 @@ class StudentRecordAudit(models.Model):
     ACTION_SOFT_DELETE = "soft_delete"
     ACTION_RESTORE = "restore"
     ACTION_PERMANENT_DELETE = "permanent_delete"
+    ACTION_UPDATE = "update"
     ACTION_CHOICES = [
         (ACTION_SOFT_DELETE, "Soft Delete"),
         (ACTION_RESTORE, "Restore"),
         (ACTION_PERMANENT_DELETE, "Permanent Delete"),
+        (ACTION_UPDATE, "Update"),
     ]
 
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="student_record_audits")

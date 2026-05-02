@@ -1,10 +1,12 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { StudentDocumentsUpload, type DocumentType as DocumentTypeKey } from "./StudentDocumentsUpload";
+import { ConsentForm } from "./ConsentForm";
+import { ScanFillModal } from "./ScanFillModal";
 import {
   StudentGuardiansStep,
   makeEmptyGuardianDraft,
@@ -205,16 +207,66 @@ const MOTHER_TONGUES = [
   "Other",
 ];
 
-const NAV_ITEMS = [
-  { id: "identity", label: "Identity", description: "Basic profile, DOB, photo", index: 1 },
-  { id: "academic", label: "Academic", description: "Class, section, year", index: 2 },
-  { id: "contact", label: "Contact & address", description: "Phone, email, location", index: 3 },
-  { id: "guardians", label: "Guardians", description: "Parent/guardian details", index: 4 },
-  { id: "documents", label: "Documents", description: "Consent and student records", index: 5 },
-  { id: "review", label: "Review", description: "Final check before submit", index: 6 },
-] as const;
+type NavBadge = 'GOI' | 'NEW' | 'SENSITIVE';
+type NavGroup = 'health-identity';
 
-type NavItemId = (typeof NAV_ITEMS)[number]["id"];
+const NAV_ITEMS: ReadonlyArray<{ id: string; label: string; description: string; badge?: NavBadge; group?: NavGroup }> = [
+  { id: 'identity',       label: 'Student identity',    description: 'Basic profile, DOB, photo' },
+  { id: 'academic',       label: 'Academic placement',  description: 'Class, section, year' },
+  { id: 'contact',        label: 'Contact & address',   description: 'Phone, email, location' },
+  { id: 'guardians',      label: 'Family & guardians',  description: 'Parent/guardian details' },
+  { id: 'apaar',          label: 'Government identity', description: 'Government identity',        badge: 'GOI' },
+  { id: 'documents',      label: 'Documents',           description: 'Consent and student records' },
+  { id: 'medical',        label: 'Medical & emergency', description: 'Health, vaccinations',       badge: 'NEW',       group: 'health-identity' },
+  { id: 'speciallyAbled', label: 'Specially abled',     description: 'PwD accommodations',         badge: 'NEW',       group: 'health-identity' },
+  { id: 'identityMarks',  label: 'Identity marks',      description: 'Physical identifiers',       badge: 'SENSITIVE', group: 'health-identity' },
+  { id: 'review',         label: 'Review',              description: 'Confirm & enroll' },
+];
+
+const STATE_TONGUE_MAP: Record<string, string> = {
+  "Tamil Nadu": "Tamil",
+  "Kerala": "Malayalam",
+  "Karnataka": "Kannada",
+  "Andhra Pradesh": "Telugu",
+  "Telangana": "Telugu",
+  "Maharashtra": "Marathi",
+  "Gujarat": "Gujarati",
+  "Punjab": "Punjabi",
+  "West Bengal": "Bengali",
+  "Odisha": "Odia",
+  "Assam": "Assamese",
+  "Bihar": "Hindi",
+  "Uttar Pradesh": "Hindi",
+  "Madhya Pradesh": "Hindi",
+  "Rajasthan": "Hindi",
+  "Haryana": "Hindi",
+  "Delhi": "Hindi",
+  "Jharkhand": "Hindi",
+  "Chhattisgarh": "Hindi",
+  "Uttarakhand": "Hindi",
+  "Himachal Pradesh": "Hindi",
+  "Jammu and Kashmir": "Kashmiri",
+  "Goa": "Konkani",
+  "Manipur": "Manipuri",
+  "Meghalaya": "English",
+  "Mizoram": "English",
+  "Nagaland": "English",
+  "Tripura": "Bengali",
+  "Sikkim": "Nepali",
+  "Arunachal Pradesh": "English",
+};
+
+const COMMON_VACCINATIONS = [
+  { id: "bcg", label: "BCG" },
+  { id: "opv", label: "OPV" },
+  { id: "hepb", label: "Hepatitis B" },
+  { id: "dpt", label: "DPT" },
+  { id: "mmr", label: "MMR" },
+  { id: "tdap", label: "Tdap booster" },
+  { id: "hpv", label: "HPV" },
+];
+
+type NavItemId = 'identity' | 'academic' | 'contact' | 'guardians' | 'apaar' | 'documents' | 'medical' | 'speciallyAbled' | 'identityMarks' | 'review';
 
 const CLASS_AGE_RULES_STRICT: Record<string, { min: number; max: number }> = {
   LKG: { min: 3.5, max: 5.5 },
@@ -476,17 +528,42 @@ function sanitizeText(value: string): string {
   return value.replace(/<[^>]*>/g, "").replace(/[\u0000-\u001f\u007f]/g, "").trim();
 }
 
-function isValidEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-}
+const isValidEmail = (v: string) => {
+  if (!v.trim()) return true; // optional field — empty is OK
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v)) return false;
+  const [local] = v.split('@');
+  if (/^(.)\1+$/.test(local)) return false; // all same char
+  if (local.length < 2) return false;
+  return true;
+};
 
-function isValidPhone(phone: string): boolean {
-  return /^\d{10}$/.test(phone.trim());
-}
+const isValidPhone = (v: string) => {
+  const d = v.replace(/\D/g, '');
+  if (!/^[6-9]\d{9}$/.test(d)) return false;
+  // reject all-same digits (e.g. 9999999999)
+  if (/^(\d)\1{9}$/.test(d)) return false;
+  // reject numbers where any single digit appears 7 or more times (e.g. 9000000000)
+  const digitFreq = Array.from(d).reduce<Record<string, number>>((acc, ch) => { acc[ch] = (acc[ch] || 0) + 1; return acc; }, {});
+  if (Object.values(digitFreq).some(count => count >= 7)) return false;
+  const seq = '0123456789';
+  if (seq.includes(d) || seq.split('').reverse().join('').includes(d)) return false;
+  return true;
+};
 
 function isValidPincode(pincode: string): boolean {
   return /^\d{6}$/.test(pincode.trim());
 }
+
+const isValidAadhaar = (v: string) => {
+  const d = v.replace(/[\s-]/g, '');
+  if (!/^\d{12}$/.test(d)) return false;
+  if (/^(\d)\1{11}$/.test(d)) return false;
+  return true;
+};
+
+const isValidPEN = (v: string) => /^\d{11}$/.test(v.replace(/\s/g, ''));
+
+const isValidABCId = (v: string) => /^[A-Z0-9]{12}$/.test(v.replace(/\s/g, '').toUpperCase());
 
 function isLikelyValidClassName(value: string): boolean {
   const clean = sanitizeText(value);
@@ -560,6 +637,7 @@ async function compressImage(file: File, maxWidth = 1200, quality = 0.8): Promis
 
 export function StudentAddPanel() {
   const STUDENT_DRAFT_STORAGE_KEY = "students:add:draft:v1";
+  const STUDENT_DRAFTS_KEY = "students:add:drafts:v2";
   const searchParams = useSearchParams();
   const modeParam = (searchParams.get("mode") || "add").toLowerCase();
   const isViewMode = modeParam === "view";
@@ -603,6 +681,10 @@ export function StudentAddPanel() {
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [addressLine, setAddressLine] = useState("");
+  const [landmark, setLandmark] = useState("");
+  const [transportModes, setTransportModes] = useState<string[]>([]);
+  const [transportCustom, setTransportCustom] = useState("");
+  const [showTransportAI, setShowTransportAI] = useState(false);
   const [city, setCity] = useState("");
   const [district, setDistrict] = useState("");
   const [stateName, setStateName] = useState("");
@@ -620,12 +702,57 @@ export function StudentAddPanel() {
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
   const [isDisabled, setIsDisabled] = useState(false);
+  const [isPwD, setIsPwD] = useState(false);
+  const [streamId, setStreamId] = useState("");
+  const [apaarRaw, setApaarRaw] = useState("");
+  const [apaarStatus, setApaarStatus] = useState<"idle" | "verifying" | "verified" | "notfound">("idle");
+  const [apaarBannerDismissed, setApaarBannerDismissed] = useState(false);
+  const [autoFilledFields, setAutoFilledFields] = useState<Set<string>>(new Set());
+  const [emergencyName, setEmergencyName] = useState("");
+  const [emergencyPhone, setEmergencyPhone] = useState("");
+  const [emergencyCopiedFromGuardian, setEmergencyCopiedFromGuardian] = useState(false);
+  const [vision, setVision] = useState("");
+  const [heightCm, setHeightCm] = useState("");
+  const [weightKg, setWeightKg] = useState("");
+  const [medicalConditionInput, setMedicalConditionInput] = useState("");
+  const [medicalConditions, setMedicalConditions] = useState<string[]>([]);
+  const [medCondError, setMedCondError] = useState("");
+  const [allergyInput, setAllergyInput] = useState("");
+  const [allergies, setAllergies] = useState<string[]>([]);
+  const [currentMedications, setCurrentMedications] = useState("");
+  const [treatingDoctor, setTreatingDoctor] = useState("");
+  const [checkedVaccinations, setCheckedVaccinations] = useState<string[]>([]);
+  const [sectionLater, setSectionLater] = useState(false);
+  const [sectionsSummary, setSectionsSummary] = useState<Array<{ section_id: number; name: string; count: number; capacity: number }>>([]);
+  const [reviewConfirmed, setReviewConfirmed] = useState(false);
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [draftsOpen, setDraftsOpen] = useState(false);
+  const [consentOpenWithSettings, setConsentOpenWithSettings] = useState(false);
+  const [consentInitialAction, setConsentInitialAction] = useState<'upload-signed' | 'blank-form' | 'print-pdf' | null>(null);
+  // Standalone "upload signed copy" flow — does NOT open the full ConsentForm modal first
+  const signedUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const [signedUploadFile, setSignedUploadFile] = useState<File | null>(null);
+  const [signedUploadPreviewUrl, setSignedUploadPreviewUrl] = useState<string>('');
+  const [signedUploadStatus, setSignedUploadStatus] = useState<'idle' | 'uploading' | 'done' | 'error'>('idle');
+  const [signedUploadError, setSignedUploadError] = useState<string>('');
+  const [signedUploadOpen, setSignedUploadOpen] = useState<boolean>(false);
+  const [scanFillOpen, setScanFillOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [draftSearch, setDraftSearch] = useState("");
+  const [draftSort, setDraftSort] = useState<'recent' | 'oldest' | 'progress'>('recent');
+  const [draftsPage, setDraftsPage] = useState(1);
+  const [houseId, setHouseId] = useState("");
+  const [houseGroups, setHouseGroups] = useState<Array<{id: string; name: string; emoji: string; color: string; bgColor: string; studentsCount: number}>>([]);
+  const [houseAiSuggestion, setHouseAiSuggestion] = useState<{groupId: string; groupName: string; reason: string} | null>(null);
+  const [houseAiLoading, setHouseAiLoading] = useState(false);
 
   const [guardianDrafts, setGuardianDrafts] = useState<GuardianDraft[]>(() => [
     makeEmptyGuardianDraft(true),
   ]);
   const [guardianCardErrors, setGuardianCardErrors] = useState<GuardianFieldErrors[]>([{}]);
   const [guardianSubmitError, setGuardianSubmitError] = useState<string | null>(null);
+  const [friendsContacts, setFriendsContacts] = useState<{id: string; name: string; relation: string; phone: string}[]>([]);
+  const [friendsContactsOpen, setFriendsContactsOpen] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -636,6 +763,7 @@ export function StudentAddPanel() {
   const [toastMessage, setToastMessage] = useState("");
   const [toastType, setToastType] = useState<"success" | "error">("success");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [validationErrorList, setValidationErrorList] = useState<Array<{field: string; message: string; section: NavItemId}>>([]);
   const [checkingAdmission, setCheckingAdmission] = useState(false);
   const [admissionChecked, setAdmissionChecked] = useState(false);
   const [pinLookupLoading, setPinLookupLoading] = useState(false);
@@ -647,25 +775,60 @@ export function StudentAddPanel() {
   const [lastPinLookup, setLastPinLookup] = useState("");
   const [pendingSectionId, setPendingSectionId] = useState("");
   const [activeNavSection, setActiveNavSection] = useState<NavItemId>("identity");
-  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(() => {
+    if (typeof window !== 'undefined') return sessionStorage.getItem('enrollScanBannerDismissed') === 'true';
+    return false;
+  });
   const [draftSavedAt, setDraftSavedAt] = useState<number | null>(null);
-  const [draftLabel, setDraftLabel] = useState("Draft not saved yet");
-  const [currentEnrolledCount, setCurrentEnrolledCount] = useState("1,533");
+  const [draftLabel, setDraftLabel] = useState("Draft saved");
+  const [draftSaveStatus, setDraftSaveStatus] = useState<'unsaved'|'saving'|'saved'>('saved');
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  const [draftSavedModalOpen, setDraftSavedModalOpen] = useState(false);
+  const [unsavedNavModalOpen, setUnsavedNavModalOpen] = useState(false);
+  const pendingNavRef = useRef<null | (() => void)>(null);
+  const [infoChecklistOpen, setInfoChecklistOpen] = useState(false);
+  const [currentEnrolledCount, setCurrentEnrolledCount] = useState<string | null>(null);
   const [admissionNoEditable, setAdmissionNoEditable] = useState(false);
   const [dobDisplay, setDobDisplay] = useState("");
   const [classAgeWarning, setClassAgeWarning] = useState("");
   const [motherTongue, setMotherTongue] = useState("");
   const [otherMotherTongue, setOtherMotherTongue] = useState("");
   const [religion, setReligion] = useState("Prefer not to say");
-  const [nationality, setNationality] = useState("Indian");
+  const [nationality, setNationality] = useState("");
   const [otherNationality, setOtherNationality] = useState("");
-  const [admissionType, setAdmissionType] = useState("New admission");
+  const [admissionType, setAdmissionType] = useState("");
   const [previousSchoolName, setPreviousSchoolName] = useState("");
   const [rteCertificateNo, setRteCertificateNo] = useState("");
   const [consentChecked, setConsentChecked] = useState(false);
   const [medicalNotes, setMedicalNotes] = useState("");
   const [docBirthCertificate, setDocBirthCertificate] = useState(false);
   const [docAadhaar, setDocAadhaar] = useState(false);
+  // No-section modal state
+  const [noSectionModalOpen, setNoSectionModalOpen] = useState(false);
+  const [sectionNotRequired, setSectionNotRequired] = useState(false);
+  // APAAR step state
+  const [aadhaarNo, setAadhaarNo] = useState("");
+  const [aadhaarVisible, setAadhaarVisible] = useState(false);
+  const [pen, setPen] = useState("");
+  const [digiMobile, setDigiMobile] = useState("");
+  const [abcId, setAbcId] = useState("");
+  // Specially abled step state
+  const [disabilityTypes, setDisabilityTypes] = useState<string[]>([]);
+  const [disabilityPercent, setDisabilityPercent] = useState(0);
+  const [udid, setUdid] = useState("");
+  const [accommodations, setAccommodations] = useState<string[]>([]);
+  const [additionalNotes, setAdditionalNotes] = useState("");
+  const [otherDisabilityText, setOtherDisabilityText] = useState("");
+  const [pwdFlash, setPwdFlash] = useState(false);
+  // Identity marks step state
+  const [identityMarks, setIdentityMarks] = useState<{location:string; description:string}[]>([]);
+  const [eyeColour, setEyeColour] = useState("");
+  const [hairColour, setHairColour] = useState("");
+  const [complexion, setComplexion] = useState("");
+  const [build, setBuild] = useState("");
+  const [markFormOpen, setMarkFormOpen] = useState(false);
+  const [newMarkLocation, setNewMarkLocation] = useState("");
+  const [newMarkDescription, setNewMarkDescription] = useState("");
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
@@ -675,10 +838,14 @@ export function StudentAddPanel() {
   const admissionNoRef = useRef("");
   const isManualEditRef = useRef(false);
   const admissionNoInitRequestedRef = useRef(false);
+  // A1: prevents re-entrant submit from triggering an effect-state cycle.
+  const isSubmittingRef = useRef(false);
 
   // Track newly created student ID so documents can be uploaded immediately after creation
   const [newlyCreatedStudentId, setNewlyCreatedStudentId] = useState<number | null>(null);
   const [autoSaving, setAutoSaving] = useState(false);
+  const [maxReachedIdx, setMaxReachedIdx] = useState(0);
+  const [returnToReview, setReturnToReview] = useState(false);
 
   // Consolidated document upload state with proper status management
   type DocumentStatus = "idle" | "validating" | "uploading" | "success" | "error";
@@ -695,10 +862,14 @@ export function StudentAddPanel() {
     birth_certificate: DocumentState;
     aadhaar_card: DocumentState;
     medical_information: DocumentState;
+    caste_certificate: DocumentState;
+    udid_card: DocumentState;
   }>({
     birth_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
     aadhaar_card: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
     medical_information: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+    caste_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+    udid_card: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
   });
 
   // Track last error toast ID to avoid duplicates
@@ -706,19 +877,43 @@ export function StudentAddPanel() {
 
   const pinIsValid = /^\d{6}$/.test(pincode.trim());
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const maxDobIso = useMemo(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 2);
+    return d.toISOString().slice(0, 10);
+  }, []);
 
-  const validAcademicYears = useMemo(
-    () => academicYears.filter((item) => /^\d{4}-\d{4}$/.test(String(item.name || "").trim())),
-    [academicYears],
-  );
+  const validAcademicYears = useMemo(() => {
+    const filtered = academicYears.filter((item) => /^\d{4}-\d{4}$/.test(String(item.name || "").trim()));
+    const now = new Date();
+    const currentStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    return [...filtered].sort((a, b) => {
+      const aStart = parseInt(String(a.name).slice(0, 4), 10);
+      const bStart = parseInt(String(b.name).slice(0, 4), 10);
+      if (aStart === currentStartYear) return -1;
+      if (bStart === currentStartYear) return 1;
+      const aFuture = aStart > currentStartYear;
+      const bFuture = bStart > currentStartYear;
+      if (aFuture && bFuture) return aStart - bStart;
+      if (!aFuture && !bFuture) return bStart - aStart;
+      if (aFuture) return -1;
+      return 1;
+    });
+  }, [academicYears]);
 
   const validCategories = useMemo(
     () =>
+      // TODO: ask backend team to clean Category table in Django admin
       categories.filter((item) => {
         const name = String(item.name || "").trim();
         const lowered = name.toLowerCase();
-        if (!name || name.length < 2) return false;
+        if (!name || name.length < 3) return false;
         if (["abc", "asdf", "gk", "test", "demo"].includes(lowered)) return false;
+        if (/^(.)\1+$/i.test(name)) return false;
+        // Reject names where > 60% of characters are the same (e.g. "weeeeeeeeeee")
+        const charFreq = name.split('').reduce((acc, c) => { acc[c.toLowerCase()] = (acc[c.toLowerCase()]||0)+1; return acc; }, {} as Record<string,number>);
+        const maxFreq = Math.max(...Object.values(charFreq));
+        if (maxFreq / name.length > 0.6) return false;
         return /^[A-Za-z0-9][A-Za-z0-9 ]{1,99}$/.test(name);
       }),
     [categories],
@@ -785,6 +980,19 @@ export function StudentAddPanel() {
     admissionNoRef.current = admissionNo;
   }, [admissionNo]);
 
+  // Defer admission number generation until the admin has actually started
+  // entering a real student (i.e. typed a first name). This avoids consuming
+  // ADM sequence numbers and showing a random pre-filled value when the user
+  // is just exploring the page.
+  useEffect(() => {
+    if (isExistingStudentMode) return;
+    if (!firstName.trim()) return;
+    if (admissionNoRef.current.trim()) return;
+    void initializeAdmissionNo();
+    // initializeAdmissionNo is stable; only need to re-evaluate when firstName changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstName, isExistingStudentMode]);
+
   // Keep guardianId (the FK the student payload uses) in sync with the primary
   // draft's resolved ID. This matters for the auto-save path, which reads
   // guardianId directly, and keeps edit mode coherent after a picker link.
@@ -824,6 +1032,30 @@ export function StudentAddPanel() {
     });
   }, [guardianId, guardians, guardianDrafts]);
 
+  // FIX 9: B-40 — pre-fill emergency contact from primary guardian when fields are empty
+  useEffect(() => {
+    const name = guardianDrafts[0]?.fullName?.trim() || "";
+    const ph = guardianDrafts[0]?.phone?.trim() || "";
+    // Fill if empty OR if only 1 char was previously set (safeguard against partial fill)
+    if (name && (!emergencyName || emergencyName.length <= 1)) {
+      setEmergencyName(name);
+      setEmergencyCopiedFromGuardian(true);
+    }
+    if (ph && (!emergencyPhone || emergencyPhone.length <= 1)) {
+      setEmergencyPhone(ph);
+      setEmergencyCopiedFromGuardian(true);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [guardianDrafts[0]?.fullName, guardianDrafts[0]?.phone]);
+
+  // TODO 12: Detect form changes and set draft status to unsaved
+  useEffect(() => {
+    if (draftSaveStatus === 'saved') {
+      setDraftSaveStatus('unsaved');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstName, lastName, dateOfBirth, gender, classId, sectionId, phone, email, addressLine, city, stateName, pincode, emergencyName, emergencyPhone, guardianDrafts]);
+
   const stateOptions = useMemo(() => Object.keys(stateCityMap).sort((a, b) => a.localeCompare(b)), [stateCityMap]);
 
   const currentUserInitials = useMemo(() => {
@@ -844,46 +1076,49 @@ export function StudentAddPanel() {
     return "U";
   }, [currentUser]);
 
-  const canSubmit = !loading && !saving && !photoUploading && !sectionLoading && !classId ? false : !loading && !saving && !photoUploading && !sectionLoading;
+  const canSubmit = !loading && !saving && !photoUploading && !sectionLoading && !classId ? false : !loading && !saving && !photoUploading && !sectionLoading && (activeNavSection !== 'review' || reviewConfirmed);
 
   const progressFields = [
-    rollNo,
     firstName,
     lastName,
     dateOfBirth,
+    gender,
+    classId,
+    sectionId || (sectionLater ? "later" : ""),
     academicYearId,
-    gender === "other" ? customGender : "",
-    bloodGroup,
+    categoryId,
     phone,
-    email,
     addressLine,
     city,
     district,
     stateName,
     pincode,
-    photo,
-    categoryId,
-    guardianId,
-    classId,
-    sectionId,
-    motherTongue,
-    motherTongue === "Other" ? otherMotherTongue : "",
-    religion !== "Prefer not to say" ? religion : "",
-    nationality !== "Indian" ? nationality : "",
-    nationality === "Other" ? otherNationality : "",
-    admissionType !== "New admission" ? admissionType : "",
-    previousSchoolName,
-    rteCertificateNo,
-    consentChecked,
-    medicalNotes,
-    docBirthCertificate,
-    docAadhaar,
-    isDisabled,
-    statusValue !== "active" ? statusValue : "",
+    (guardianDrafts[0]?.linkedExistingId != null || (guardianDrafts[0]?.fullName?.trim() ?? "")) ? "x" : "",
+    guardianDrafts[0]?.phone?.trim() || "",
+    consentChecked ? "x" : "",
   ];
 
+  const isStepComplete = (stepId: string): boolean => {
+    switch (stepId) {
+      case 'identity': return !!(firstName.trim() && lastName.trim() && dateOfBirth);
+      case 'academic': return !!(academicYearId && classId && (sectionId || sectionLater));
+      case 'contact': return !!(phone.trim() && addressLine.trim() && stateName && city && pincode.trim());
+      case 'guardians': return !!(guardianDrafts[0]?.fullName?.trim() && guardianDrafts[0]?.phone?.trim());
+      case 'documents': return consentChecked;
+      default: return false;
+    }
+  };
+
   const completedProgressFields = progressFields.filter(isProgressFieldFilled).length;
-  const footerProgressPercent = progressFields.length > 0 ? Math.round((completedProgressFields / progressFields.length) * 100) : 0;
+  // Progress: same 12-field check used in requiredCompletionPct (so footer and modal agree)
+  const footerProgressPercent = Math.round(([
+    Boolean(firstName.trim()), Boolean(lastName.trim()), Boolean(dateOfBirth), Boolean(gender),
+    Boolean(classId), Boolean(sectionId || sectionLater),
+    Boolean(phone.trim() && /^\d{10}$/.test(phone.trim())),
+    Boolean(addressLine.trim()), Boolean(pincode.trim() && /^\d{6}$/.test(pincode.trim())),
+    Boolean(guardianDrafts?.[0]?.fullName?.trim()), Boolean(guardianDrafts?.[0]?.phone?.trim()),
+    Boolean(consentChecked),
+  ].filter(Boolean).length / 12) * 100);
   const footerProgressBucket = Math.min(100, Math.floor(footerProgressPercent / 10) * 10);
   const footerProgressClass = `progress-fill-${footerProgressBucket}`;
 
@@ -968,7 +1203,24 @@ export function StudentAddPanel() {
       docBirthCertificate,
       docAadhaar,
     };
+    // Backward-compat: still write single-draft key for auto-restore on reload
     window.localStorage.setItem(STUDENT_DRAFT_STORAGE_KEY, JSON.stringify(payload));
+
+    // Multi-draft system: students:add:drafts:v2
+    try {
+      const rawDrafts = window.localStorage.getItem(STUDENT_DRAFTS_KEY);
+      let drafts: Array<{id:string; savedAt:number; label:string; admissionNo:string; firstName:string; lastName:string; classId:string; data:typeof payload}> = [];
+      try { drafts = rawDrafts ? JSON.parse(rawDrafts) : []; } catch { drafts = []; }
+      const label = `${firstName || 'Unnamed'} ${lastName || ''}`.trim() + ` — ${new Date(payload.savedAt).toLocaleString('en-IN')}`;
+      const existingIdx = admissionNo.trim() ? drafts.findIndex(d => d.admissionNo === admissionNo.trim()) : -1;
+      const draftEntry = { id: existingIdx >= 0 ? drafts[existingIdx].id : `draft-${Date.now()}`, savedAt: payload.savedAt, label, admissionNo: admissionNo.trim(), firstName: firstName.trim(), lastName: lastName.trim(), classId, data: payload };
+      if (existingIdx >= 0) {
+        drafts[existingIdx] = draftEntry;
+      } else {
+        drafts.push(draftEntry);
+      }
+      window.localStorage.setItem(STUDENT_DRAFTS_KEY, JSON.stringify(drafts));
+    } catch { /* ignore localStorage quota errors */ }
   };
 
   const restoreDraftSnapshot = () => {
@@ -1026,6 +1278,51 @@ export function StudentAddPanel() {
     }
   };
 
+  const restoreDraftFromObject = (draft: Record<string, unknown>) => {
+    setAdmissionNo(String(draft.admissionNo || ""));
+    setIsManualEdit(Boolean(draft.isManualEdit));
+    setRollNo(String(draft.rollNo || ""));
+    setFirstName(String(draft.firstName || ""));
+    setLastName(String(draft.lastName || ""));
+    setDateOfBirth(String(draft.dateOfBirth || ""));
+    setAcademicYearId(String(draft.academicYearId || ""));
+    setGender(String(draft.gender || "male"));
+    setCustomGender(String(draft.customGender || ""));
+    setBloodGroup(String(draft.bloodGroup || ""));
+    setPhone(String(draft.phone || ""));
+    setEmail(String(draft.email || ""));
+    setAddressLine(String(draft.addressLine || ""));
+    setCity(String(draft.city || ""));
+    setDistrict(String(draft.district || ""));
+    setStateName(String(draft.stateName || ""));
+    setPincode(String(draft.pincode || ""));
+    setPhoto(String(draft.photo || ""));
+    setPhotoName(String(draft.photoName || ""));
+    setStatusValue((String(draft.statusValue || "active") as "active" | "inactive" | "transferred" | "dropped"));
+    setCategoryId(String(draft.categoryId || ""));
+    setGuardianId(String(draft.guardianId || ""));
+    const restoredClassId = String(draft.classId || "");
+    const restoredSectionId = String(draft.sectionId || "");
+    setClassId(restoredClassId);
+    setSectionId("");
+    setPendingSectionId(restoredSectionId);
+    setIsDisabled(Boolean(draft.isDisabled));
+    setMotherTongue(String(draft.motherTongue || ""));
+    setOtherMotherTongue(String(draft.otherMotherTongue || ""));
+    setReligion(String(draft.religion || "Prefer not to say"));
+    setNationality(String(draft.nationality || "Indian"));
+    setOtherNationality(String(draft.otherNationality || ""));
+    setAdmissionType(String(draft.admissionType || "New admission"));
+    setPreviousSchoolName(String(draft.previousSchoolName || ""));
+    setRteCertificateNo(String(draft.rteCertificateNo || ""));
+    setConsentChecked(Boolean(draft.consentChecked));
+    setMedicalNotes(String(draft.medicalNotes || ""));
+    setDocBirthCertificate(Boolean(draft.docBirthCertificate));
+    setDocAadhaar(Boolean(draft.docAadhaar));
+    setDraftSavedAt(typeof draft.savedAt === "number" ? draft.savedAt : Date.now());
+    jumpToSection("identity");
+  };
+
   const loadSectionsForClass = async (targetClassId: string) => {
     if (!targetClassId) {
       setSections([]);
@@ -1034,18 +1331,36 @@ export function StudentAddPanel() {
       return;
     }
 
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      setSectionLoading(false);
+      setSectionLoadError("Could not load sections. Check your connection and retry.");
+    }, 8000);
+
     try {
       setSectionLoading(true);
       setSectionLoadError("");
       setSections([]);
       setSectionId("");
       const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
-      setSections(listData(data));
+      window.clearTimeout(timeoutId);
+      if (!timedOut) {
+        const sectionsArray = listData(data);
+        setSections(sectionsArray);
+        // Check if no sections found
+        if (!sectionsArray || sectionsArray.length === 0) {
+          setNoSectionModalOpen(true);
+        }
+      }
     } catch (loadError) {
-      setSections([]);
-      setSectionLoadError(parseError(loadError) || "Unable to load sections for selected class.");
+      window.clearTimeout(timeoutId);
+      if (!timedOut) {
+        setSections([]);
+        setSectionLoadError(parseError(loadError) || "Unable to load sections for selected class.");
+      }
     } finally {
-      setSectionLoading(false);
+      if (!timedOut) setSectionLoading(false);
     }
   };
 
@@ -1134,7 +1449,7 @@ export function StudentAddPanel() {
 
       if (!response.success || !resolvedState || !resolvedDistrict || (!resolvedCity && resolvedCityOptions.length === 0)) {
         setSingleFieldError("pincode", "Invalid PIN Code");
-        setPinLookupMessage("Invalid PIN Code");
+        setPinLookupMessage("");
         setManualAddressMode(true);
         setStateName("");
         setDistrict("");
@@ -1165,7 +1480,7 @@ export function StudentAddPanel() {
       const message = parsePincodeError(error) || "Could not auto-fetch address. Please enter State, District, and City manually.";
       if (/invalid pin code/i.test(message)) {
         setSingleFieldError("pincode", "Invalid PIN Code");
-        setPinLookupMessage("Invalid PIN Code");
+        setPinLookupMessage("");
         setStateName("");
         setDistrict("");
         setCity("");
@@ -1176,6 +1491,34 @@ export function StudentAddPanel() {
       setManualAddressMode(true);
     } finally {
       setPinLookupLoading(false);
+    }
+  };
+
+  const lookupPincodeViaPostalApi = async (pin: string) => {
+    if (!/^\d{6}$/.test(pin)) return;
+    if (stateName) return; // backend already populated
+    try {
+      setPinLookupMessage("Looking up pincode…");
+      const res = await fetch(`https://api.postalpincode.in/pincode/${pin}`);
+      if (!res.ok) { setPinLookupMessage(""); return; }
+      const json = await res.json() as Array<{ PostOffice?: Array<{ State?: string; District?: string; Name?: string }> }>;
+      const po = json?.[0]?.PostOffice?.[0];
+      if (!po) { setPinLookupMessage(""); return; }
+      const s = String(po.State || "").trim();
+      const d = String(po.District || "").trim();
+      const c = String(po.Name || "").trim();
+      if (s) {
+        setStateName(s);
+        setDistrict(d);
+        setCity(c);
+        updateStateCityMap(s, [c]);
+        setCityOptions([c]);
+        setPinLookupMessage("Address auto-filled from PIN code.");
+      } else {
+        setPinLookupMessage("");
+      }
+    } catch {
+      setPinLookupMessage("");
     }
   };
 
@@ -1230,10 +1573,10 @@ export function StudentAddPanel() {
         if (studentPromise) {
           await studentPromise;
         } else {
-          const restored = restoreDraftSnapshot();
-          if (!restored) {
-            await initializeAdmissionNo();
-          }
+          // NOTE: do NOT auto-generate admission number here. We defer it until
+          // the user actually types a first name (see effect below) so the form
+          // doesn't show a wasted/random ADM number on a blank screen.
+          restoreDraftSnapshot();
         }
       } catch (loadError) {
         setError(parseError(loadError));
@@ -1243,83 +1586,50 @@ export function StudentAddPanel() {
   }, [isExistingStudentMode, studentId]);
 
   useEffect(() => {
-    const flag = window.localStorage.getItem("eskoolia_scan_banner_dismissed") === "true";
-    setBannerDismissed(flag);
+    if (typeof window !== 'undefined') {
+      const flag = sessionStorage.getItem('enrollScanBannerDismissed') === 'true';
+      setBannerDismissed(flag);
+    }
   }, []);
 
   useEffect(() => {
-    setDraftLabel(getDraftTimeAgoText(draftSavedAt));
-    const timer = window.setInterval(() => {
-      setDraftLabel(getDraftTimeAgoText(draftSavedAt));
-    }, 60000);
+    const update = () => {
+      if (autoSaving) {
+        setDraftLabel('Saving…');
+      } else if (draftSavedAt !== null) {
+        setDraftLabel('Draft saved');
+      } else {
+        setDraftLabel('Unsaved changes');
+      }
+    };
+    update();
+    const timer = window.setInterval(update, 60000);
     return () => window.clearInterval(timer);
-  }, [draftSavedAt]);
+  }, [draftSavedAt, autoSaving]);
 
   useEffect(() => {
     const fetchCount = async () => {
       try {
         // TODO: GET /api/students/count when backend endpoint is ready.
-        const data = await apiGet<{ count?: number }>("/api/v1/students/students/?page_size=1");
-        if (typeof data?.count === "number") {
-          setCurrentEnrolledCount(new Intl.NumberFormat("en-IN").format(data.count));
+        const response = await apiGet<{ count?: number; results?: unknown[] }>("/api/v1/students/students/?page_size=1");
+        const count = (response as { count?: number })?.count ?? (response as { data?: { count?: number } })?.data?.count;
+        if (typeof count === "number") {
+          setCurrentEnrolledCount(new Intl.NumberFormat("en-IN").format(count));
+        } else {
+          setCurrentEnrolledCount("0");
         }
       } catch {
-        setCurrentEnrolledCount("1,533");
+        setCurrentEnrolledCount("—");
       }
     };
     void fetchCount();
   }, []);
 
   useEffect(() => {
-    // The scroll happens on .enroll-scroll (the form's inner scrollable area)
-    // rather than the window or <main>, since the footer lives outside the scroll.
-    // Fall back to window if the element hasn't mounted yet or at the mobile
-    // breakpoint where overflow is visible.
-    const scrollEl =
-      (typeof document !== "undefined" &&
-        (document.querySelector(".enroll-scroll") as HTMLElement | null)) || null;
-
-    const getScrollTop = () =>
-      scrollEl ? scrollEl.scrollTop : window.scrollY;
-    const getViewportHeight = () =>
-      scrollEl ? scrollEl.clientHeight : window.innerHeight;
-    const getScrollHeight = () =>
-      scrollEl ? scrollEl.scrollHeight : document.documentElement.scrollHeight;
-
-    const updateActiveSection = () => {
-      const stickyOffset = 120;
-      const scrollTop = getScrollTop();
-      const scanLine = scrollTop + stickyOffset;
-      let nextActive: NavItemId = NAV_ITEMS[0]?.id || "identity";
-
-      for (const item of NAV_ITEMS) {
-        const section = document.getElementById(item.id);
-        if (!section) continue;
-        // offsetTop is relative to the offsetParent; use getBoundingClientRect
-        // so it works consistently whether the scroll container is window or an element.
-        const rect = section.getBoundingClientRect();
-        const containerTop = scrollEl ? scrollEl.getBoundingClientRect().top : 0;
-        const sectionTopWithinScroll = rect.top - containerTop + scrollTop;
-        if (sectionTopWithinScroll <= scanLine) {
-          nextActive = item.id;
-        }
-      }
-
-      if (getViewportHeight() + scrollTop >= getScrollHeight() - 4) {
-        nextActive = NAV_ITEMS[NAV_ITEMS.length - 1]?.id || nextActive;
-      }
-
-      setActiveNavSection((prev) => (prev === nextActive ? prev : nextActive));
-    };
-
-    updateActiveSection();
-    const scrollTarget: Window | HTMLElement = scrollEl ?? window;
-    scrollTarget.addEventListener("scroll", updateActiveSection, { passive: true });
-    window.addEventListener("resize", updateActiveSection);
-    return () => {
-      scrollTarget.removeEventListener("scroll", updateActiveSection);
-      window.removeEventListener("resize", updateActiveSection);
-    };
+    // Wizard mode: sections are display-gated by `activeNavSection`, so the
+    // scroll observer is no longer needed (and would race with sidebar clicks).
+    // Kept as a no-op to preserve hook ordering.
+    return;
   }, [loading]);
 
   useEffect(() => {
@@ -1344,10 +1654,13 @@ export function StudentAddPanel() {
     if (!/^\d{6}$/.test(pincode.trim())) {
       setPinLookupMessage("");
       setLastPinLookup("");
-      setStateName("");
-      setDistrict("");
-      setCity("");
-      setCityOptions([]);
+      // Only clear auto-filled address fields; never wipe manually-entered values
+      if (!manualAddressMode) {
+        setStateName("");
+        setDistrict("");
+        setCity("");
+        setCityOptions([]);
+      }
       return;
     }
 
@@ -1409,6 +1722,146 @@ export function StudentAddPanel() {
     }
     setClassAgeWarning("");
   }, [dateOfBirth, classId, academicYearId, orderedClasses, validAcademicYears]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadHouses = async () => {
+      try {
+        const res = await apiGet<{results?: Array<{id:number; name:string; emoji:string; color:string; bg_color:string; students_count:number}>; count?: number} | Array<{id:number; name:string; emoji:string; color:string; bg_color:string; students_count:number}>>(
+          `/api/v1/students/groups/?type=HOUSE&sort_by=count&page_size=50`
+        );
+        if (cancelled) return;
+        const raw = Array.isArray(res) ? res : (res.results || []);
+        setHouseGroups(raw.map(h => ({id: String(h.id), name: h.name, emoji: h.emoji || '🏠', color: h.color || '#6c3ce1', bgColor: h.bg_color || '#f3f0ff', studentsCount: h.students_count || 0})));
+      } catch { /* non-fatal */ }
+    };
+    void loadHouses();
+    return () => { cancelled = true; };
+  }, []);
+
+  const suggestHouse = async () => {
+    if (houseGroups.length === 0) return;
+    setHouseAiLoading(true);
+    try {
+      const res = await apiGet<{houses: Array<{groupId:number; groupName:string; count:number; emoji?:string}>; total:number}>(
+        `/api/v1/students/groups/sortwell-preview/`
+      );
+      const houses = res.houses || [];
+      if (houses.length === 0) { setHouseAiLoading(false); return; }
+      // Sort by count ascending (fewest students = most balanced)
+      const sorted = [...houses].sort((a, b) => a.count - b.count);
+      const best = sorted[0];
+      const genderNote = gender === 'female' ? ' This also helps gender balance.' : gender === 'male' ? ' This also helps gender balance.' : '';
+      setHouseAiSuggestion({
+        groupId: String(best.groupId),
+        groupName: best.groupName,
+        reason: `${best.groupName} has the fewest students (${best.count}) — assigning here maintains balanced house sizes.${genderNote}`,
+      });
+    } catch { /* non-fatal */ } finally {
+      setHouseAiLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (academicYearId || validAcademicYears.length === 0) return;
+    const now = new Date();
+    const startYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    const targetName = `${startYear}-${startYear + 1}`;
+    const match = validAcademicYears.find((y) => String(y.name).trim() === targetName);
+    if (match) setAcademicYearId(String(match.id));
+  }, [validAcademicYears, academicYearId]);
+
+  useEffect(() => {
+    if (!classId || !sectionId || !academicYearId || rollNo.trim()) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const res = await apiGet<{ success: boolean; roll_no: string }>(
+          `/api/v1/students/students/next-roll-no/?class_id=${encodeURIComponent(classId)}&section_id=${encodeURIComponent(sectionId)}&academic_year_id=${encodeURIComponent(academicYearId)}`,
+        );
+        if (!cancelled && res.success && res.roll_no) {
+          setRollNo(res.roll_no);
+          setAutoFilledFields((prev) => new Set(prev).add("roll_no"));
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [classId, sectionId, academicYearId, rollNo]);
+
+  useEffect(() => {
+    if (!classId || !academicYearId) {
+      setSectionsSummary([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiGet<{ success: boolean; sections: Array<{ section_id: number; name: string; count: number; capacity: number }> }>(
+          `/api/v1/students/students/sections-summary/?class_id=${encodeURIComponent(classId)}&academic_year_id=${encodeURIComponent(academicYearId)}`,
+        );
+        if (!cancelled && res.success) setSectionsSummary(res.sections || []);
+      } catch {
+        if (!cancelled) setSectionsSummary([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [classId, academicYearId]);
+
+  useEffect(() => {
+    if (!stateName || motherTongue) return;
+    const suggestion = STATE_TONGUE_MAP[stateName];
+    if (suggestion && MOTHER_TONGUES.includes(suggestion)) {
+      setMotherTongue(suggestion);
+      setAutoFilledFields((prev) => new Set(prev).add("mother_tongue"));
+    }
+  }, [stateName, motherTongue]);
+
+  useEffect(() => {
+    const primary = guardianDrafts[0];
+    if (!primary) return;
+    const name = primary.fullName?.trim() || "";
+    const ph = primary.phone?.trim() || "";
+    if (!emergencyName && !emergencyPhone && (name || ph)) {
+      setEmergencyName(name);
+      setEmergencyPhone(ph);
+      setEmergencyCopiedFromGuardian(true);
+    }
+  }, [guardianDrafts, emergencyName, emergencyPhone]);
+
+  // Phase C — runInferences: derive helpful defaults from class number
+  useEffect(() => {
+    if (!classId) return;
+    const cls = orderedClasses.find((c) => String(c.id) === classId);
+    const m = String(cls?.name || "").match(/\d+/);
+    const n = m ? Number(m[0]) : null;
+    if (n != null) {
+      const suggested: string[] = [];
+      if (n <= 5) suggested.push("bcg", "opv", "dpt", "mmr");
+      if (n >= 5 && n <= 8) suggested.push("tdap");
+      if (n >= 6) suggested.push("hpv");
+      setCheckedVaccinations((prev) => Array.from(new Set([...prev, ...suggested])));
+    }
+  }, [classId, orderedClasses]);
+
+  // Phase D — APAAR formatting and mock verification
+  useEffect(() => {
+    if (apaarRaw.length !== 12) {
+      setApaarStatus("idle");
+      return;
+    }
+    setApaarStatus("verifying");
+    const timer = window.setTimeout(() => {
+      setApaarStatus("verified");
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [apaarRaw]);
 
   useEffect(() => {
     if (!success) return;
@@ -1548,9 +2001,9 @@ export function StudentAddPanel() {
     setMotherTongue("");
     setOtherMotherTongue("");
     setReligion("Prefer not to say");
-    setNationality("Indian");
+    setNationality("");
     setOtherNationality("");
-    setAdmissionType("New admission");
+    setAdmissionType("");
     setPreviousSchoolName("");
     setRteCertificateNo("");
     setConsentChecked(false);
@@ -1570,9 +2023,13 @@ export function StudentAddPanel() {
   };
 
   const saveDraftNow = () => {
+    setDraftSaveStatus('saving');
     setDraftSavedAt(Date.now());
     saveDraftSnapshot();
-    showToast("Draft saved successfully.", "success", 5000);
+    setTimeout(() => {
+      setDraftSaveStatus('saved');
+      setDraftSavedModalOpen(true);
+    }, 300);
   };
 
   const clearDraftNow = () => {
@@ -1589,18 +2046,196 @@ export function StudentAddPanel() {
 
   const dismissScanBanner = () => {
     setBannerDismissed(true);
-    window.localStorage.setItem("eskoolia_scan_banner_dismissed", "true");
+    if (typeof window !== 'undefined') sessionStorage.setItem('enrollScanBannerDismissed', 'true');
+  };
+
+  // ---- Dirty form detection & navigation guard ----
+  const isFormDirty = useMemo(() => {
+    if (isViewMode) return false;
+    return Boolean(
+      firstName.trim() || lastName.trim() || dateOfBirth || phone.trim() || email.trim() ||
+      addressLine.trim() || pincode.trim() || photo || classId || sectionId ||
+      (guardianDrafts && guardianDrafts.some(g => g?.fullName?.trim() || g?.phone?.trim())) ||
+      previousSchoolName.trim() || rteCertificateNo.trim() || medicalNotes.trim() ||
+      docBirthCertificate || docAadhaar || consentChecked
+    );
+  }, [isViewMode, firstName, lastName, dateOfBirth, phone, email, addressLine, pincode, photo, classId, sectionId, guardianDrafts, previousSchoolName, rteCertificateNo, medicalNotes, docBirthCertificate, docAadhaar, consentChecked]);
+
+  // Required-fields completion percent (used to decide if "Enroll" is offered on exit)
+  const requiredCompletionPct = useMemo(() => {
+    const checks = [
+      Boolean(firstName.trim()),
+      Boolean(lastName.trim()),
+      Boolean(dateOfBirth),
+      Boolean(gender),
+      Boolean(classId),
+      Boolean(sectionId),
+      Boolean(phone.trim() && /^\d{10}$/.test(phone.trim())),
+      Boolean(addressLine.trim()),
+      Boolean(pincode.trim() && /^\d{6}$/.test(pincode.trim())),
+      Boolean(guardianDrafts?.[0]?.fullName?.trim()),
+      Boolean(guardianDrafts?.[0]?.phone?.trim()),
+      Boolean(consentChecked),
+    ];
+    const filled = checks.filter(Boolean).length;
+    return Math.round((filled / checks.length) * 100);
+  }, [firstName, lastName, dateOfBirth, gender, classId, sectionId, phone, addressLine, pincode, guardianDrafts, consentChecked]);
+
+  // Browser-level guard for tab close / refresh
+  useEffect(() => {
+    if (!isFormDirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isFormDirty]);
+
+  // App-level guard: BackButton checks window.__navGuard
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const w = window as unknown as { __navGuard?: (proceed: () => void) => boolean };
+    if (!isFormDirty) {
+      delete w.__navGuard;
+      return;
+    }
+    w.__navGuard = (proceed: () => void) => {
+      pendingNavRef.current = proceed;
+      setUnsavedNavModalOpen(true);
+      return true; // block default navigation
+    };
+    return () => { delete w.__navGuard; };
+  }, [isFormDirty]);
+
+  const continuePendingNav = () => {
+    const proceed = pendingNavRef.current;
+    pendingNavRef.current = null;
+    setUnsavedNavModalOpen(false);
+    if (proceed) {
+      // Detach guard so the second navigation isn't blocked again
+      if (typeof window !== 'undefined') {
+        delete (window as unknown as { __navGuard?: unknown }).__navGuard;
+      }
+      proceed();
+    }
+  };
+
+  const validateNavigationStep = (currentId: string, targetId: string): boolean => {
+    const currentIndex = getSectionIndex(currentId);
+    const targetIndex = getSectionIndex(targetId);
+    
+    // Allow backward navigation
+    if (targetIndex <= currentIndex) return true;
+    
+    // Validate forward navigation based on current step
+    switch (currentIndex) {
+      case 0: // identity
+        if (!firstName.trim()) {
+          setSingleFieldError('first_name', 'First name is required before proceeding.');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
+        if (!lastName.trim()) {
+          setSingleFieldError('last_name', 'Last name is required before proceeding.');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
+        if (!dateOfBirth) {
+          setSingleFieldError('dob', 'Date of birth is required before proceeding.');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
+        break;
+      case 1: // academic
+        if (!classId) {
+          setSingleFieldError('class', 'Class is required before proceeding.');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
+        break;
+      case 2: // contact
+        if (!phone.trim()) {
+          setSingleFieldError('phone', 'Phone number is required.');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
+        if (!isValidPhone(phone.trim())) {
+          setSingleFieldError('phone', 'Enter a valid 10-digit mobile number starting with 6, 7, 8, or 9.');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
+        if (email.trim() && !isValidEmail(email)) {
+          setSingleFieldError('email', 'Enter a valid email address (e.g. parent@gmail.com).');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
+        if (pincode && pincode.length !== 6) {
+          setSingleFieldError('pincode', 'Pincode must be exactly 6 digits.');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
+        break;
+      case 3: // guardians
+        if (!guardianDrafts[0]?.fullName?.trim()) {
+          setSingleFieldError('guardian_name', 'Guardian 1 name is required.');
+          setActiveNavSection('guardians');
+          return false;
+        }
+        if (!guardianDrafts[0]?.phone?.trim()) {
+          setSingleFieldError('guardian_phone', 'Guardian 1 phone is required.');
+          setActiveNavSection('guardians');
+          return false;
+        }
+        break;
+      case 5: // documents (index 5)
+        if (!consentChecked) {
+          setSingleFieldError('consent', 'Parent/guardian consent is required to proceed.');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
+        break;
+      case 6: // medical (index 6)
+        if (!emergencyName.trim()) {
+          setSingleFieldError('emergency_name', 'Emergency contact name is required.');
+          setActiveNavSection('medical');
+          return false;
+        }
+        if (!emergencyPhone.trim()) {
+          setSingleFieldError('emergency_phone', 'Emergency contact phone is required.');
+          setActiveNavSection('medical');
+          return false;
+        }
+        if (!isValidPhone(emergencyPhone)) {
+          setSingleFieldError('emergency_phone', 'Enter a valid 10-digit mobile number starting with 6-9.');
+          setActiveNavSection('medical');
+          return false;
+        }
+        break;
+      // Indexes 4-9: no hard block
+      default:
+        break;
+    }
+    
+    return true;
   };
 
   const jumpToSection = (id: string) => {
-    const target = document.getElementById(id);
-    if (!target) return;
-    // Directly set the active section before scrolling to ensure proper state
     setActiveNavSection(id as NavItemId);
-    // Use a small delay to allow state update, then scroll
+    setMaxReachedIdx(prev => Math.max(prev, getSectionIndex(id)));
+    if (id === 'review') setReturnToReview(false);
+    // In wizard mode the new step renders at the top of the scroll area.
     window.setTimeout(() => {
-      target.scrollIntoView({ behavior: "smooth", block: "start" });
+      const scrollEl = document.querySelector(".enroll-scroll") as HTMLElement | null;
+      if (scrollEl) scrollEl.scrollTo({ top: 0, behavior: "smooth" });
+      else window.scrollTo({ top: 0, behavior: "smooth" });
     }, 50);
+  };
+
+  const getSectionCounter = (id: NavItemId): string => {
+    const idx = NAV_ITEMS.findIndex((n) => n.id === id);
+    const total = NAV_ITEMS.length;
+    return `${String(idx + 1).padStart(2, "0")} / ${String(total).padStart(2, "0")}`;
   };
 
   const getSectionIndex = (id: string): number => {
@@ -1622,11 +2257,14 @@ export function StudentAddPanel() {
     nationality: "identity",
     other_nationality: "identity",
     photo: "identity",
+    apaar_id: "apaar",
     academic_year: "academic",
     class: "academic",
     section: "academic",
     category: "academic",
     rte_certificate: "academic",
+    admission_type: "academic",
+    stream: "academic",
     phone: "contact",
     email: "contact",
     address_line: "contact",
@@ -1635,7 +2273,25 @@ export function StudentAddPanel() {
     state: "contact",
     pincode: "contact",
     guardian: "guardians",
+    aadhaar_no: "apaar",
+    aadhaar: "apaar",
+    pen: "apaar",
+    digi_mobile: "apaar",
+    abc_id: "apaar",
+    apaar_consent: "apaar",
+    disability_type: "speciallyAbled",
+    disability_percent: "speciallyAbled",
+    udid: "speciallyAbled",
+    accommodations_field: "speciallyAbled",
+    identity_marks: "identityMarks",
+    eye_colour: "identityMarks",
+    hair_colour: "identityMarks",
+    complexion: "identityMarks",
+    build: "identityMarks",
+    emergency_name: "medical",
+    emergency_phone: "medical",
     consent: "documents",
+    review_confirm: "review",
   };
 
   const jumpToFirstErrorSection = (errors: Record<string, string>) => {
@@ -1668,23 +2324,34 @@ export function StudentAddPanel() {
     const nextItem = hasNext ? NAV_ITEMS[currentIndex + 1] : null;
 
     return (
-      <div className="section-nav-buttons">
-        {hasPrev ? (
-          <button
-            type="button"
-            onClick={() => jumpToSection(prevItem!.id)}
-            className="btn-nav-prev"
-          >
-            ← {prevItem!.label}
-          </button>
-        ) : (
-          <div />
-        )}
+      <div style={{ display: 'flex', width: '100%', justifyContent: 'space-between', alignItems: 'center', marginTop: 32, paddingTop: 20, borderTop: '1px solid #e5e7eb', gap: 12, position: 'relative', zIndex: 1 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {hasPrev ? (
+            <button
+              type="button"
+              onClick={() => jumpToSection(prevItem!.id)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '10px 22px', border: '1px solid #d1d5db', background: '#fff', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 500, color: '#374151', fontFamily: 'inherit', whiteSpace: 'nowrap' }}
+            >
+              ← {prevItem!.label}
+            </button>
+          ) : (
+            <div />
+          )}
+          {returnToReview && currentSectionId !== 'review' ? (
+            <button
+              type="button"
+              onClick={() => jumpToSection('review')}
+              style={{ padding: '8px 16px', background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, cursor: 'pointer', color: '#374151', fontFamily: 'inherit' }}
+            >
+              ← Back to Review
+            </button>
+          ) : null}
+        </div>
         {hasNext ? (
           <button
             type="button"
-            onClick={() => jumpToSection(nextItem!.id)}
-            className="btn-nav-next"
+            onClick={() => { if (validateNavigationStep(currentSectionId, nextItem!.id)) jumpToSection(nextItem!.id); }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '10px 22px', border: '1px solid #6c3ce1', background: '#6c3ce1', color: '#fff', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600, fontFamily: 'inherit', whiteSpace: 'nowrap', boxShadow: '0 1px 2px rgba(108,60,225,0.18)' }}
           >
             {nextItem!.label} →
           </button>
@@ -1693,6 +2360,47 @@ export function StudentAddPanel() {
         )}
       </div>
     );
+  };
+
+  const validateCurrentStep = (stepId: string): boolean => {
+    const errors: Record<string, string> = {};
+    switch (stepId) {
+      case 'identity':
+        if (!firstName.trim()) errors.first_name = 'First name is required.';
+        if (!lastName.trim()) errors.last_name = 'Last name is required.';
+        if (!dateOfBirth) errors.dob = 'Date of birth is required.';
+        break;
+      case 'academic':
+        if (!academicYearId) errors.academic_year = 'Academic year is required.';
+        if (!classId) errors.class = 'Class is required.';
+        if (!sectionNotRequired && !sectionId && !sectionLater) errors.section = 'Section is required (or check Assign later).';
+        break;
+      case 'contact':
+        if (!phone.trim()) errors.phone = 'Phone is required.';
+        else if (!isValidPhone(phone)) errors.phone = 'Enter a valid 10-digit mobile number starting with 6, 7, 8, or 9.';
+        if (!addressLine.trim()) errors.address_line = 'Address line is required.';
+        if (!stateName) errors.state = 'State is required.';
+        if (!district) errors.district = 'District is required.';
+        if (!city) errors.city = 'City is required.';
+        if (!pincode.trim()) errors.pincode = 'Pincode is required.';
+        break;
+      case 'guardians':
+        if (!guardianDrafts[0]?.fullName?.trim() || !guardianDrafts[0]?.phone?.trim()) {
+          errors.guardian = 'Primary guardian name and phone are required.';
+        }
+        break;
+      case 'documents':
+        if (!consentChecked) errors.consent = 'Parent/guardian consent is required to proceed.';
+        break;
+      default:
+        return true;
+    }
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(prev => ({ ...prev, ...errors }));
+      jumpToFirstErrorSection(errors);
+      return false;
+    }
+    return true;
   };
 
   const onDobMaskedChange = (nextMasked: string) => {
@@ -1741,7 +2449,7 @@ export function StudentAddPanel() {
 
     const validatePhoneInline = (value: string) => {
       if (!value.trim()) return "Phone number is required";
-      if (!isValidPhone(value)) return "Phone number must be exactly 10 digits";
+      if (!isValidPhone(value)) return "Enter a valid 10-digit mobile number starting with 6, 7, 8, or 9";
       return "";
     };
 
@@ -1771,7 +2479,7 @@ export function StudentAddPanel() {
         nextErrors.dob = "Date of birth cannot be in the future";
       } else {
         const age = (now.getTime() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
-        if (age < 3) nextErrors.dob = "Student must be at least 3 years old";
+        if (age < 2) nextErrors.dob = "Student must be at least 2 years old";
         const selectedClass = validClasses.find((item) => String(item.id) === classId);
         const className = String(selectedClass?.name || "");
         const classMatch = className.match(/\d+/);
@@ -1793,34 +2501,38 @@ export function StudentAddPanel() {
 
     if (!classId) nextErrors.class = "Class is required";
     else if (!validClasses.some((row) => String(row.id) === classId)) nextErrors.class = "Please select a valid class";
-    if (!sectionId) nextErrors.section = "Section is required";
-    else if (!sections.some((item) => String(item.id) === sectionId)) nextErrors.section = "Selected section is invalid";
+    if (!sectionNotRequired) {
+      if (!sectionId) nextErrors.section = "Section is required";
+      else if (!sections.some((item) => String(item.id) === sectionId)) nextErrors.section = "Selected section is invalid";
+    }
 
     const phoneError = validatePhoneInline(phone);
     if (phoneError) nextErrors.phone = phoneError;
 
+    if (!sanitizeText(addressLine)) nextErrors.address_line = "Address line is required";
+    else if (sanitizeText(addressLine).length < 10) nextErrors.address_line = "Please enter a complete address (at least 10 characters)";
     if (!sanitizeText(stateName)) nextErrors.state = "State is required";
     if (!sanitizeText(district)) nextErrors.district = "District is required";
     if (!sanitizeText(city)) nextErrors.city = "City is required";
-    if (email.trim() && !isValidEmail(email)) nextErrors.email = "Please enter a valid email address";
-    if (pincode.trim() && !isValidPincode(pincode)) nextErrors.pincode = "Pincode must be exactly 6 digits";
+    if (email.trim() && !isValidEmail(email)) nextErrors.email = "Enter a valid email address (e.g. parent@gmail.com)";
+    if (!pincode.trim()) nextErrors.pincode = "Pincode is required";
+    else if (!isValidPincode(pincode)) nextErrors.pincode = "Pincode must be exactly 6 digits";
 
     if (categoryId && !validCategories.some((row) => String(row.id) === categoryId)) {
       nextErrors.category = "Please select a valid category";
     }
 
-    if (classId && sectionLoading) nextErrors.section = "Please wait until sections are loaded";
-    if (classId && !sectionLoading && sections.length === 0) nextErrors.section = "No sections found for selected class. Use refresh.";
-
-    if (!motherTongue) {
-      nextErrors.mother_tongue = "Mother tongue is required.";
+    if (!sectionNotRequired) {
+      if (classId && sectionLoading) nextErrors.section = "Please wait until sections are loaded";
+      if (classId && !sectionLoading && sections.length === 0) nextErrors.section = "No sections found for selected class. Use refresh.";
     }
+
     if (motherTongue === "Other" && !sanitizeText(otherMotherTongue)) {
       nextErrors.other_mother_tongue = "Please specify language.";
     }
 
     if (!nationality) {
-      nextErrors.nationality = "Nationality is required.";
+      nextErrors.nationality = "Nationality is required";
     }
     if (nationality === "Other" && !sanitizeText(otherNationality)) {
       nextErrors.other_nationality = "Please specify nationality.";
@@ -1829,6 +2541,10 @@ export function StudentAddPanel() {
     if (admissionType === "RTE Quota" && !sanitizeText(rteCertificateNo)) {
       nextErrors.rte_certificate = "RTE certificate number is required.";
     }
+
+    if (!admissionType) nextErrors.admission_type = "Admission type is required";
+
+    if (aadhaarNo.trim() && !isValidAadhaar(aadhaarNo)) nextErrors.aadhaar = "Aadhaar must be exactly 12 digits (no repeated digits)";
 
     if (!consentChecked) {
       nextErrors.consent = "Guardian consent confirmation is required.";
@@ -1847,6 +2563,24 @@ export function StudentAddPanel() {
     if (!hasValidGuardian) {
       nextErrors.guardian = "At least one guardian is required before enrollment.";
     }
+
+    // FIX 17: populate structured validation error list for the review section
+    const FIELD_TO_SECTION: Record<string, NavItemId> = {
+      first_name: 'identity', last_name: 'identity', dob: 'identity', gender: 'identity',
+      admission_no: 'identity', nationality: 'identity',
+      academic_year: 'academic', class: 'academic', section: 'academic', admission_type: 'academic',
+      phone: 'contact', address_line: 'contact', state: 'contact', district: 'contact', city: 'contact', pincode: 'contact', email: 'contact',
+      guardian: 'guardians',
+      aadhaar_no: 'apaar', aadhaar: 'apaar', pen: 'apaar', abc_id: 'apaar', digi_mobile: 'apaar',
+      consent: 'documents',
+    };
+    setValidationErrorList(
+      Object.entries(nextErrors).map(([field, message]) => ({
+        field,
+        message,
+        section: (FIELD_TO_SECTION[field] || 'identity') as NavItemId,
+      }))
+    );
 
     return nextErrors;
   };
@@ -2629,6 +3363,11 @@ export function StudentAddPanel() {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (isViewMode) return;
+    // A1: hard re-entrancy guard. Without this, an effect listening on a
+    // state key the submit also writes to (e.g. fieldErrors → onDraftsChange
+    // → setGuardianCardErrors) can trigger a feedback loop.
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setSuccess("");
     setError("");
     setGuardianSubmitError(null);
@@ -2640,6 +3379,7 @@ export function StudentAddPanel() {
     if (Object.keys(nextErrors).length > 0) {
       setError(`Please fix ${Object.keys(nextErrors).length} validation error(s).`);
       jumpToFirstErrorSection(nextErrors);
+      isSubmittingRef.current = false;
       return;
     }
 
@@ -2648,6 +3388,7 @@ export function StudentAddPanel() {
       if (!ok) {
         setError("Please resolve admission number validation first.");
         jumpToSection("identity");
+        isSubmittingRef.current = false;
         return;
       }
     }
@@ -2659,12 +3400,14 @@ export function StudentAddPanel() {
       setGuardianCardErrors(persistResult.cardErrors);
       setGuardianSubmitError("Please fix the highlighted guardian fields.");
       jumpToSection("guardians");
+      isSubmittingRef.current = false;
       return;
     }
     const resolvedPrimaryGuardianId = persistResult.primaryId;
     if (!resolvedPrimaryGuardianId) {
       setGuardianSubmitError("Please add at least one guardian (Guardian 1 is required).");
       jumpToSection("guardians");
+      isSubmittingRef.current = false;
       return;
     }
     if (guardianId !== String(resolvedPrimaryGuardianId)) {
@@ -2797,20 +3540,32 @@ export function StudentAddPanel() {
       jumpToFirstErrorSection(mappedErrors);
     } finally {
       setSaving(false);
+      isSubmittingRef.current = false;
     }
   };
 
   return (
     <div className="enroll-page student-add-panel-wrap">
-      <form onSubmit={submit} noValidate>
+      <form onSubmit={submit} noValidate onKeyDown={(e) => { if (e.key === 'Enter' && e.target instanceof HTMLInputElement && e.target.type !== 'submit' && e.target.type !== 'checkbox' && e.target.type !== 'radio') { e.preventDefault(); const currentIndex = getSectionIndex(activeNavSection); if (currentIndex < NAV_ITEMS.length - 1) { const nextItem = NAV_ITEMS[currentIndex + 1]; if (validateNavigationStep(activeNavSection, nextItem.id)) jumpToSection(nextItem.id); } } }}>
         <div className="enroll-scroll">
         <div className="top-row">
           <p className="crumbs">
-            <a href="/dashboard">Dashboard</a> / <a href="/students/list">Students</a> / <strong>Enroll</strong>
+            <a href="/dashboard">Dashboard</a> <span className="crumb-sep">/</span> <a href="/students/list">Students</a> <span className="crumb-sep">/</span> <strong>Enroll</strong>
           </p>
           <div className="draft-right">
-            <span className="dot-green" />
-            <span>{draftLabel}</span>
+            <span 
+              className={draftSaveStatus === 'saved' ? "dot-green" : "dot-green"} 
+              style={
+                isFormDirty && draftSaveStatus === 'unsaved' ? { background: '#f59e0b' } :
+                draftSaveStatus === 'saving' ? { background: '#9ca3af', animation: 'pulse 1.5s ease-in-out infinite' } :
+                { background: '#10b981' }
+              } 
+            />
+            <span>
+              {isFormDirty && draftSaveStatus === 'unsaved' ? 'Unsaved changes' :
+               draftSaveStatus === 'saving' ? 'Saving…' :
+               'Draft saved'}
+            </span>
             <span className="avatar-circle">{currentUserInitials}</span>
           </div>
         </div>
@@ -2822,9 +3577,75 @@ export function StudentAddPanel() {
             </h1>
             <p className="hero-subtitle">Admit a new student into the school records. We&apos;ll generate an admission number, place them in a class &amp; section, and notify their guardian.</p>
           </div>
-          <div className="hero-kpi">
-            <p className="hero-kpi-count">{currentEnrolledCount}</p>
-            <p className="hero-kpi-label">CURRENTLY ENROLLED</p>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+            <div className="hero-kpi">
+              <p className="hero-kpi-count">{currentEnrolledCount ?? '…'}</p>
+              <p className="hero-kpi-label">CURRENTLY ENROLLED</p>
+            </div>
+            <div className="hero-actions-row">
+              <button
+                type="button"
+                className="hero-action-btn hero-action-drafts"
+                onClick={() => setDraftsOpen(true)}
+                title="View saved drafts"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="9" y1="13" x2="15" y2="13"/>
+                  <line x1="9" y1="17" x2="13" y2="17"/>
+                </svg>
+                <span>Drafts</span>
+                {(() => {
+                  let count = 0;
+                  try { const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STUDENT_DRAFTS_KEY) : null; count = raw ? (JSON.parse(raw) as unknown[]).length : 0; } catch { /* ignore */ }
+                  return count > 0 ? <span className="hero-action-badge">{count}</span> : null;
+                })()}
+              </button>
+
+              <button
+                type="button"
+                className="hero-action-btn hero-action-ai"
+                onClick={() => setAiOpen(true)}
+                title="Get AI-powered help & suggestions"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 2l1.9 5.8L20 9.7l-5 3.6L16.5 19 12 15.7 7.5 19 9 13.3l-5-3.6 6.1-1.9L12 2z"/>
+                </svg>
+                <span>AI Assist</span>
+                <span className="hero-action-pulse" aria-hidden="true" />
+              </button>
+
+              <button
+                type="button"
+                className="hero-action-btn hero-action-pdf"
+                onClick={() => { setConsentOpenWithSettings(false); setConsentOpen(true); }}
+                title="Preview & customize the consent PDF"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <path d="M9 15h6"/>
+                  <path d="M9 11h6"/>
+                </svg>
+                <span>PDF</span>
+              </button>
+
+              <button
+                type="button"
+                className="hero-action-btn hero-action-info"
+                onClick={() => setInfoChecklistOpen(true)}
+                title="What documents & details will I need?"
+                aria-label="View enrollment checklist"
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="12" y1="16" x2="12" y2="12"/>
+                  <line x1="12" y1="8" x2="12.01" y2="8"/>
+                </svg>
+                <span>What I&apos;ll need</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -2850,33 +3671,69 @@ export function StudentAddPanel() {
           <aside className="section-nav-wrap">
             <nav className="section-nav" aria-label="Enroll navigation">
               <ul className="section-nav-list">
-                {NAV_ITEMS.map((item) => (
-                  <li key={item.id} className={activeNavSection === item.id ? "nav-item active" : "nav-item"} data-target={item.id}>
-                    <button type="button" className="nav-item-inner" onClick={() => jumpToSection(item.id)}>
-                      <span className="nav-bullet">{item.index}</span>
-                      <span className="nav-text">
-                        <span className="nav-label">{item.label}</span>
-                        <span className="nav-copy">{item.description}</span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
+                {(() => {
+                  return NAV_ITEMS.map((item, idx) => {
+                    const prevItem = idx > 0 ? NAV_ITEMS[idx - 1] : null;
+                    const isFirstInGroup = item.group === 'health-identity' && (!prevItem || prevItem.group !== 'health-identity');
+                    const isLocked = idx > maxReachedIdx + 1;
+                    return (
+                      <Fragment key={item.id}>
+                        {isFirstInGroup && (
+                          <li className="nav-group-heading">HEALTH &amp; IDENTITY</li>
+                        )}
+                        <li 
+                          className={activeNavSection === item.id ? "nav-item active" : (isLocked ? "nav-item locked" : "nav-item")} 
+                          data-target={item.id}
+                          aria-current={activeNavSection === item.id ? "step" : undefined}
+                        >
+                          <button 
+                            type="button" 
+                            className="nav-item-inner" 
+                            onClick={() => { 
+                              if (!isLocked && validateNavigationStep(activeNavSection, item.id as NavItemId)) {
+                                jumpToSection(item.id as NavItemId);
+                              }
+                            }} 
+                            disabled={isLocked}
+                            aria-disabled={isLocked ? "true" : undefined}
+                            title={isLocked ? "Complete the previous step to unlock" : undefined}
+                          >
+                            <span className="nav-bullet">{idx + 1}</span>
+                            <span className="nav-text">
+                              <span className="nav-label">
+                                {item.label}
+                                {item.badge && (
+                                  <span className={`nav-badge nav-badge-${item.badge.toLowerCase()}`} title={item.badge === 'GOI' ? 'Government of India' : undefined}>{item.badge}</span>
+                                )}
+                              </span>
+                              <span className="nav-copy">{item.description}</span>
+                            </span>
+                          </button>
+                        </li>
+                      </Fragment>
+                    );
+                  });
+                })()}
               </ul>
               <div className="heads-up-card">
                 <p className="heads-up-title">Heads up</p>
-                <p className="heads-up-body">Fields marked <span className="star">*</span> are required. You can save a draft anytime and come back.</p>
+                <p className="heads-up-body" style={{ lineHeight: 1.6 }}>
+                  <span style={{ color: "#dc2626", fontWeight: 700 }}>*</span> = <strong>Required</strong> — must be filled to enroll<br />
+                  <span style={{ background: "#ecfdf5", color: "#065f46", borderRadius: 999, padding: "1px 6px", fontSize: 10, fontWeight: 600 }}>RECOMMENDED</span> = Strongly suggested but not mandatory<br />
+                  <span style={{ background: "#f3f4f6", color: "#6b7280", borderRadius: 999, padding: "1px 6px", fontSize: 10, fontWeight: 600 }}>OPTIONAL</span> = Fill if available, can be added later
+                </p>
               </div>
             </nav>
           </aside>
 
           <div className="section-content">
-            <section className="section-card" id="identity">
+            <section className="section-card" id="identity" style={{ display: activeNavSection === "identity" ? "block" : "none" }}>
               <div className="section-card-header">
                 <div>
                   <h2 className="section-title">Student <span className="title-accent">identity</span></h2>
                   <p className="section-subtitle">Name, photo, date of birth, and a few basics.</p>
                 </div>
-                <span className="section-counter">01 / 06</span>
+                <span className="section-counter">{getSectionCounter("identity")}</span>
               </div>
 
               <div className="photo-upload-block">
@@ -2909,11 +3766,23 @@ export function StudentAddPanel() {
                     }}
                     onChange={(e) => {
                       const file = e.target.files?.[0];
-                      if (file) void uploadStudentPhoto(file);
+                      if (file) {
+                        if (file.size > 5*1024*1024) { setSingleFieldError('photo','Photo must be smaller than 5MB'); return; }
+                        const img = new Image();
+                        const url = URL.createObjectURL(file);
+                        img.onload = () => {
+                          if (img.width < 400 || img.height < 400) setSingleFieldError('photo','Photo should be at least 400×400 pixels for best quality');
+                          else setSingleFieldError('photo','');
+                          URL.revokeObjectURL(url);
+                        };
+                        img.src = url;
+                        void uploadStudentPhoto(file);
+                      }
                     }}
                     disabled={isViewMode || photoUploading}
+                    aria-describedby="photo-error"
                   />
-                  {fieldErrors.photo ? <p className="error-msg">{fieldErrors.photo}</p> : null}
+                  {fieldErrors.photo ? <span id="photo-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.photo}</span> : null}
                 </div>
               </div>
 
@@ -2924,18 +3793,22 @@ export function StudentAddPanel() {
                     className={fieldErrors.admission_no ? "field-input error" : "field-input"}
                     value={admissionNo}
                     title="Admission number"
-                    placeholder="ADM20260342"
-                    maxLength={10}
+                    placeholder={firstName.trim() ? "e.g. ADM20240001" : "Enter first name to generate"}
+                    maxLength={12}
+                    aria-describedby="admission_no-error"
                     onChange={(e) => {
-                      setAdmissionNo(e.target.value.slice(0, 10));
+                      setAdmissionNo(e.target.value.slice(0, 12));
                       setIsManualEdit(true);
                       setAdmissionChecked(false);
                       setSingleFieldError("admission_no", "");
                     }}
                     onBlur={() => {
-                      const normalized = sanitizeText(admissionNo).replace(/[\s-]/g, "").slice(0, 10);
+                      const normalized = sanitizeText(admissionNo).replace(/[\s-]/g, "").slice(0, 12);
                       setAdmissionNo(normalized);
                       setIsManualEdit(true);
+                      if (normalized.trim() && !/^ADM\d{8,10}$/.test(normalized)) {
+                        setSingleFieldError('admission_no', 'Admission number must be in format ADM followed by 8-10 digits (e.g. ADM20240001)');
+                      }
                       void runAdmissionAvailabilityCheck(normalized);
                     }}
                     readOnly={!admissionNoEditable}
@@ -2943,79 +3816,224 @@ export function StudentAddPanel() {
                   <button type="button" className="edit-btn" onClick={() => setAdmissionNoEditable((prev) => !prev)}>{admissionNoEditable ? "Lock" : "Edit"}</button>
                   <p className="help-text">Auto-generated. Click Edit to customize.</p>
                   {checkingAdmission ? <p className="status-info">Checking availability...</p> : null}
-                  {fieldErrors.admission_no ? <p className="error-msg">{fieldErrors.admission_no}</p> : null}
+                  {fieldErrors.admission_no ? <span id="admission_no-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.admission_no}</span> : null}
                 </div>
 
                 <div className="field-wrapper">
                   <label className="field-label">Roll number <span className="badge badge-assigned-later">ASSIGNED LATER</span></label>
-                  <input className="field-input" title="Roll number" value="Auto when class is set" readOnly disabled />
+                  <input className="field-input" title="Roll number" value="Auto when class is set" readOnly disabled={true} tabIndex={-1} style={{ pointerEvents: 'none', cursor: 'not-allowed', background: '#f3f4f6', color: '#9ca3af' }} />
                   <p className="help-text">Rolls are assigned after class allocation.</p>
                 </div>
 
                 <div className="field-wrapper">
                   <label className="field-label">Status</label>
-                  <div className="status-toggle">
-                    <button type="button" className={statusValue === "active" ? "toggle-pill active" : "toggle-pill"} onClick={() => setStatusValue("active")}>Active</button>
-                    <button type="button" className={statusValue === "inactive" ? "toggle-pill active" : "toggle-pill"} onClick={() => setStatusValue("inactive")}>Inactive</button>
+                  <div className="status-toggle" role="radiogroup" aria-label="Student status">
+                    <button type="button" role="radio" aria-checked={statusValue === "active"} className={statusValue === "active" ? "toggle-pill active" : "toggle-pill"} onClick={() => setStatusValue("active")} onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setStatusValue("active"); } }}>Active</button>
+                    <button type="button" role="radio" aria-checked={statusValue === "inactive"} className={statusValue === "inactive" ? "toggle-pill active" : "toggle-pill"} onClick={() => setStatusValue("inactive")} onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setStatusValue("inactive"); } }}>Inactive</button>
                   </div>
                 </div>
               </div>
 
               <div className="grid-3 mt-20">
-                <div className="field-wrapper"><label className="field-label">First name <span className="req">*</span></label><input className={fieldErrors.first_name ? "field-input error" : "field-input"} value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="e.g. Rahul" />{fieldErrors.first_name ? <p className="error-msg">{fieldErrors.first_name}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">First name <span className="req">*</span></label><input aria-describedby="first_name-error" className={fieldErrors.first_name ? "field-input error" : "field-input"} value={firstName} onChange={(e) => { setFirstName(e.target.value.replace(/[^A-Za-z\s'.-]/g, '')); setSingleFieldError('first_name', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setFirstName(val); if (val.trim() && val.trim().length < 2) { setSingleFieldError('first_name', 'First name must be at least 2 characters'); } }} placeholder="e.g. Rahul" />{fieldErrors.first_name ? <span id="first_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.first_name}</span> : null}</div>
                 <div className="field-wrapper"><label className="field-label">Middle name <span className="badge badge-optional">OPTIONAL</span></label><input className="field-input" title="Middle name" value={customGender} onChange={(e) => setCustomGender(e.target.value)} placeholder="e.g. Kumar" /></div>
-                <div className="field-wrapper"><label className="field-label">Last name <span className="req">*</span></label><input className={fieldErrors.last_name ? "field-input error" : "field-input"} value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="e.g. Sharma" />{fieldErrors.last_name ? <p className="error-msg">{fieldErrors.last_name}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Last name <span className="req">*</span></label><input aria-describedby="last_name-error" className={fieldErrors.last_name ? "field-input error" : "field-input"} value={lastName} onChange={(e) => { setLastName(e.target.value.replace(/[^A-Za-z\s'.-]/g, '')); setSingleFieldError('last_name', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setLastName(val); if (val.trim() && val.trim().length < 2) { setSingleFieldError('last_name', 'Last name must be at least 2 characters'); } }} placeholder="e.g. Sharma" />{fieldErrors.last_name ? <span id="last_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.last_name}</span> : null}</div>
               </div>
 
               <div className="grid-3 mt-20">
-                <div className="field-wrapper"><label className="field-label">Date of birth <span className="req">*</span></label><input type="date" title="Date of birth" className={fieldErrors.dob ? "field-input error" : "field-input"} value={dateOfBirth} max={todayIso} onChange={(e) => { setDateOfBirth(e.target.value); setSingleFieldError("dob", ""); }} />{fieldErrors.dob ? <p className="error-msg">{fieldErrors.dob}</p> : null}</div>
-                <div className="field-wrapper"><label className="field-label">Gender <span className="req">*</span></label><select className={fieldErrors.gender ? "field-select error" : "field-select"} title="Gender" value={gender} onChange={(e) => setGender(e.target.value)}><option value="">Select</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select>{fieldErrors.gender ? <p className="error-msg">{fieldErrors.gender}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Date of birth <span className="req">*</span></label><input type="date" title="Date of birth" aria-describedby="dob-error" className={fieldErrors.dob ? "field-input error" : "field-input"} value={dateOfBirth} min={(() => { const d=new Date(); d.setFullYear(d.getFullYear()-25); return d.toISOString().slice(0,10); })()} max={maxDobIso} onChange={(e) => { setDateOfBirth(e.target.value); setSingleFieldError("dob", ""); }} onBlur={() => { if (dateOfBirth) { const dob = new Date(dateOfBirth); const now = new Date(); const ageyrs = (now.getTime()-dob.getTime())/(365.25*24*60*60*1000); if (ageyrs < 2) setSingleFieldError('dob','Student must be at least 2 years old'); else if (ageyrs > 25) setSingleFieldError('dob','Date of birth seems too old — please verify'); else setSingleFieldError('dob',''); } }} />{fieldErrors.dob ? <span id="dob-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.dob}</span> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Gender <span className="req">*</span></label><select aria-describedby="gender-error" className={fieldErrors.gender ? "field-select error" : "field-select"} title="Gender" value={gender} onChange={(e) => { setGender(e.target.value); setSingleFieldError('gender', ''); }} onBlur={() => { if (!gender) setSingleFieldError('gender','Gender is required'); }}><option value="">Select</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select>{fieldErrors.gender ? <span id="gender-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.gender}</span> : null}</div>
                 <div className="field-wrapper"><label className="field-label">Blood group <span className="badge badge-optional">OPTIONAL</span></label><select className="field-select" title="Blood group" value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)}><option value="">Select</option>{"A+,A-,B+,B-,AB+,AB-,O+,O-".split(",").map((bg) => <option key={bg} value={bg}>{bg}</option>)}</select></div>
               </div>
 
               <div className="grid-3 mt-20">
-                <div className="field-wrapper"><label className="field-label">Mother tongue <span className="req">*</span></label><select className={fieldErrors.mother_tongue ? "field-select error" : "field-select"} title="Mother tongue" value={motherTongue} onChange={(e) => setMotherTongue(e.target.value)}><option value="">Select</option>{MOTHER_TONGUES.map((row) => <option key={row} value={row}>{row}</option>)}</select>{fieldErrors.mother_tongue ? <p className="error-msg">{fieldErrors.mother_tongue}</p> : null}{motherTongue === "Other" ? <input className={fieldErrors.other_mother_tongue ? "field-input error mt-8" : "field-input mt-8"} title="Other mother tongue" value={otherMotherTongue} onChange={(e) => setOtherMotherTongue(e.target.value)} placeholder="Specify language" /> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Mother tongue <span className="badge badge-optional">OPTIONAL</span></label><select className={fieldErrors.mother_tongue ? "field-select error" : "field-select"} title="Mother tongue" value={motherTongue} onChange={(e) => { setMotherTongue(e.target.value); setAutoFilledFields((prev) => { const next = new Set(prev); next.delete("mother_tongue"); return next; }); }}><option value="">Select</option>{MOTHER_TONGUES.map((row) => <option key={row} value={row}>{row}</option>)}</select>{autoFilledFields.has("mother_tongue") && motherTongue ? <p className="status-info">Auto-filled from State. Edit if different.</p> : null}{fieldErrors.mother_tongue ? <p className="error-msg">{fieldErrors.mother_tongue}</p> : null}{motherTongue === "Other" ? <input className={fieldErrors.other_mother_tongue ? "field-input error mt-8" : "field-input mt-8"} title="Other mother tongue" value={otherMotherTongue} onChange={(e) => { setOtherMotherTongue(e.target.value.replace(/[^A-Za-z\s]/g, '').slice(0, 50)); setSingleFieldError('other_mother_tongue', ''); }} placeholder="Specify language" /> : null}</div>
                 <div className="field-wrapper"><label className="field-label">Religion <span className="badge badge-optional">OPTIONAL</span></label><select className="field-select" title="Religion" value={religion} onChange={(e) => setReligion(e.target.value)}><option value="Prefer not to say">Prefer not to say</option><option>Hindu</option><option>Muslim</option><option>Christian</option><option>Sikh</option><option>Buddhist</option><option>Jain</option><option>Other</option></select></div>
-                <div className="field-wrapper"><label className="field-label">Nationality <span className="req">*</span></label><select className={fieldErrors.nationality ? "field-select error" : "field-select"} title="Nationality" value={nationality} onChange={(e) => setNationality(e.target.value)}><option value="Indian">Indian</option><option value="Nepali">Nepali</option><option value="Bhutanese">Bhutanese</option><option value="Other">Other</option></select>{nationality === "Other" ? <input className={fieldErrors.other_nationality ? "field-input error mt-8" : "field-input mt-8"} title="Other nationality" value={otherNationality} onChange={(e) => setOtherNationality(e.target.value)} placeholder="Specify nationality" /> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Nationality <span className="req">*</span></label><select aria-describedby="nationality-error" className={fieldErrors.nationality ? "field-select error" : "field-select"} title="Nationality" value={nationality} onChange={(e) => { setNationality(e.target.value); setSingleFieldError('nationality', ''); }} onBlur={() => { if (!nationality) setSingleFieldError('nationality','Nationality is required'); }}><option value="">Select Nationality</option><option value="Indian">Indian</option><option value="Nepali">Nepali</option><option value="Bhutanese">Bhutanese</option><option value="Other">Other</option></select>{fieldErrors.nationality ? <span id="nationality-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.nationality}</span> : null}{nationality === "Other" ? <input className={fieldErrors.other_nationality ? "field-input error mt-8" : "field-input mt-8"} title="Other nationality" value={otherNationality} onChange={(e) => { setOtherNationality(e.target.value.replace(/[^A-Za-z\s]/g, '').slice(0, 50)); setSingleFieldError('other_nationality', ''); }} placeholder="Specify nationality" /> : null}</div>
               </div>
+
               {renderSectionNavButtons("identity")}
             </section>
 
-            <section className="section-card" id="academic">
-              <div className="section-card-header"><div><h2 className="section-title">Academic <span className="title-accent">placement</span></h2><p className="section-subtitle">Which year, class, section, and category this student belongs to.</p></div><span className="section-counter">02 / 06</span></div>
+            <section className="section-card" id="academic" style={{ display: activeNavSection === "academic" ? "block" : "none" }}>
+              <div className="section-card-header"><div><h2 className="section-title">Academic <span className="title-accent">placement</span></h2><p className="section-subtitle">Which year, class, section, and category this student belongs to.</p></div><span className="section-counter">{getSectionCounter("academic")}</span></div>
               <div className="grid-3">
-                <div className="field-wrapper"><label className="field-label">Academic year <span className="req">*</span></label><select className={fieldErrors.academic_year ? "field-select error" : "field-select"} title="Academic year" value={academicYearId} onChange={(e) => setAcademicYearId(e.target.value)}><option value="">Select</option>{validAcademicYears.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{fieldErrors.academic_year ? <p className="error-msg">{fieldErrors.academic_year}</p> : null}</div>
-                <div className="field-wrapper"><label className="field-label">Class <span className="req">*</span></label><select className={fieldErrors.class ? "field-select error" : "field-select"} title="Class" value={classId} onChange={(e) => setClassId(e.target.value)}><option value="">Choose a class</option>{orderedClasses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{fieldErrors.class ? <p className="error-msg">{fieldErrors.class}</p> : null}</div>
-                <div className="field-wrapper"><label className="field-label">Section <span className="req">*</span></label><select className={fieldErrors.section ? "field-select error" : "field-select"} title="Section" value={sectionId} onChange={(e) => setSectionId(e.target.value)} disabled={!classId || sectionLoading}><option value="">{classId ? (sectionLoading ? "Loading sections..." : "Select Section") : "Pick class first"}</option>{sections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{sectionLoadError ? <p className="error-msg">{sectionLoadError}</p> : null}{fieldErrors.section ? <p className="error-msg">{fieldErrors.section}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Academic year <span className="req">*</span></label><select aria-describedby="academic_year-error" className={fieldErrors.academic_year ? "field-select error" : "field-select"} title="Academic year" value={academicYearId} onChange={(e) => { setAcademicYearId(e.target.value); setSingleFieldError('academic_year', ''); }} onBlur={() => { if (!academicYearId) setSingleFieldError('academic_year','Academic year is required'); }}><option value="">Select</option>{validAcademicYears.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{fieldErrors.academic_year ? <p className="error-msg">{fieldErrors.academic_year}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Class <span className="req">*</span></label><select aria-describedby="class-error" className={fieldErrors.class ? "field-select error" : "field-select"} title="Class" value={classId} onChange={(e) => setClassId(e.target.value)} onBlur={() => { if (!classId) setSingleFieldError('class','Class is required'); }}><option value="">Choose a class</option>{orderedClasses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>{fieldErrors.class ? <p className="error-msg">{fieldErrors.class}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Section <span className="req">*</span>{sectionLoading && <span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid #d1d5db', borderTopColor: '#6c3ce1', borderRadius: '50%', animation: 'spin 0.7s linear infinite', marginLeft: 4 }} aria-label="Loading sections" />}</label>{sectionNotRequired ? <div style={{ padding: '10px 14px', background: '#f0fdf4', border: '1px solid #86efac', borderRadius: 8, fontSize: 13, color: '#166534', fontWeight: 500 }}>Section: Not required for this enrollment</div> : <select aria-describedby="section-error" className={fieldErrors.section ? "field-select error" : "field-select"} title="Section" value={sectionId} onChange={(e) => setSectionId(e.target.value)} onBlur={() => { if (classId && !sectionNotRequired && !sectionId) setSingleFieldError('section','Section is required'); }} disabled={!classId || sectionLoading}><option value="">{classId ? (sectionLoading ? "Loading sections..." : "Select Section") : "Pick class first"}</option>{sections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}{sectionLoadError ? <><p className="error-msg">{sectionLoadError}</p><button type="button" style={{ fontSize: 12, color: '#6c3ce1', background: 'none', border: 'none', cursor: 'pointer', padding: '2px 0', textDecoration: 'underline' }} onClick={() => void loadSectionsForClass(classId)}>Retry</button></> : null}{!sectionNotRequired && fieldErrors.section ? <p className="error-msg">{fieldErrors.section}</p> : null}</div>
               </div>
               {classAgeWarning ? <p className="age-warning">{classAgeWarning}</p> : null}
               <div className="grid-2 mt-20">
                 <div className="field-wrapper"><label className="field-label">Category <span className="badge badge-optional">OPTIONAL</span></label><select className={fieldErrors.category ? "field-select error" : "field-select"} title="Category" value={categoryId} onChange={(e) => setCategoryId(e.target.value)}><option value="">Select category</option>{validCategories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-                <div className="field-wrapper"><label className="field-label">Admission type</label><select className="field-select" title="Admission type" value={admissionType} onChange={(e) => setAdmissionType(e.target.value)}><option>New admission</option><option>Transfer</option><option>Re-admission</option><option>RTE Quota</option></select></div>
+                <div className="field-wrapper">
+                  <label className="field-label">
+                    Admission type <span className="req">*</span>
+                    <span className="adm-type-tooltip-wrap" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}>
+                      <span className="adm-type-tooltip-icon" style={{ cursor: 'help', marginLeft: 4, fontSize: 11, background: '#e5e7eb', borderRadius: '50%', width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', fontWeight: 700 }}>?</span>
+                      <span className="adm-type-tooltip-body" style={{ display: 'none', position: 'absolute', left: '120%', top: '-4px', width: 260, background: '#1f2937', color: '#f9fafb', borderRadius: 8, padding: '10px 12px', fontSize: 12, lineHeight: 1.6, zIndex: 99, pointerEvents: 'none', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
+                        <strong>Regular / New admission</strong>: standard first-time enrollment<br />
+                        <strong>Transfer</strong>: student transferring from another school<br />
+                        <strong>Re-admission</strong>: student previously enrolled and returning<br />
+                        <strong>RTE Quota</strong>: enrollment under Right to Education Act 2009 reservation
+                      </span>
+                    </span>
+                  </label>
+                  <select aria-describedby="admission_type-error" className={fieldErrors.admission_type ? "field-select error" : "field-select"} title="Admission type" value={admissionType} onChange={(e) => { setAdmissionType(e.target.value); setSingleFieldError('admission_type', ''); }} onBlur={() => { if (!admissionType) setSingleFieldError('admission_type','Admission type is required'); }}><option value="">Select Admission Type</option><option value="New admission">New admission</option><option value="Transfer">Transfer</option><option value="Re-admission">Re-admission</option><option value="RTE Quota">RTE Quota</option></select>
+                  {fieldErrors.admission_type ? <p className="error-msg">{fieldErrors.admission_type}</p> : null}
+                </div>
               </div>
-              {admissionType === "Transfer" ? <div className="field-wrapper mt-20"><label className="field-label">Previous school name</label><input className="field-input" title="Previous school name" value={previousSchoolName} onChange={(e) => setPreviousSchoolName(e.target.value)} /></div> : null}
-              {admissionType === "RTE Quota" ? <div className="field-wrapper mt-20"><label className="field-label">RTE certificate number <span className="req">*</span></label><input className={fieldErrors.rte_certificate ? "field-input error" : "field-input"} title="RTE certificate number" value={rteCertificateNo} onChange={(e) => setRteCertificateNo(e.target.value)} />{fieldErrors.rte_certificate ? <p className="error-msg">{fieldErrors.rte_certificate}</p> : null}</div> : null}
+              {admissionType === "Transfer" ? <div className="field-wrapper mt-20"><label className="field-label">Previous school name</label><input className="field-input" title="Previous school name" value={previousSchoolName} onChange={(e) => setPreviousSchoolName(e.target.value.replace(/[^A-Za-z0-9\s.,&'-]/g, '').slice(0, 100))} onBlur={(e) => setPreviousSchoolName(toTitleCase(e.target.value))} /></div> : null}
+              {admissionType === "RTE Quota" ? <div className="field-wrapper mt-20"><label className="field-label">RTE certificate number <span className="req">*</span></label><input className={fieldErrors.rte_certificate ? "field-input error" : "field-input"} title="RTE certificate number" value={rteCertificateNo} onChange={(e) => { setRteCertificateNo(e.target.value.replace(/[^A-Z0-9-]/g, '').slice(0, 30).toUpperCase()); setSingleFieldError('rte_certificate', ''); }} />{fieldErrors.rte_certificate ? <p className="error-msg">{fieldErrors.rte_certificate}</p> : null}</div> : null}
+              {(() => {
+                const cls = orderedClasses.find((c) => String(c.id) === classId);
+                const m = String(cls?.name || "").match(/\d+/);
+                const n = m ? Number(m[0]) : null;
+                if (n != null && n >= 11) {
+                  return (
+                    <div className="field-wrapper mt-20">
+                      <label className="field-label">Stream <span className="badge badge-optional">OPTIONAL</span></label>
+                      <select className="field-select" title="Stream" value={streamId} onChange={(e) => setStreamId(e.target.value)}>
+                        <option value="">Select stream</option>
+                        <option value="science">Science</option>
+                        <option value="commerce">Commerce</option>
+                        <option value="arts">Arts / Humanities</option>
+                        <option value="vocational">Vocational</option>
+                      </select>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
+              {sectionsSummary.length > 0 ? (
+                <div className="mt-20" style={{ background: "#f7f5ff", border: "1px solid #c4b5fd", borderRadius: 12, padding: 14 }}>
+                  <p style={{ margin: "0 0 8px", fontWeight: 600, fontSize: 13, color: "#4c33e6" }}>Section capacity for this class</p>
+                  <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexWrap: "wrap", gap: 10 }}>
+                    {sectionsSummary.map((s) => {
+                      const full = s.count >= s.capacity;
+                      return (
+                        <li key={s.section_id} style={{ background: "#fff", borderRadius: 8, padding: "6px 10px", border: "1px solid #e5e7eb", fontSize: 12 }}>
+                          <strong>{s.name}</strong>: {s.count}/{s.capacity}{full ? " (full)" : ""}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <label style={{ display: "inline-flex", gap: 6, marginTop: 8, fontSize: 12, color: "#4b5563" }}>
+                    <input type="checkbox" checked={sectionLater} onChange={(e) => { setSectionLater(e.target.checked); if (e.target.checked) setSectionId(""); }} />
+                    Assign section later
+                  </label>
+                </div>
+              ) : null}
+
+              {houseGroups.length > 0 && (
+                <div className="mt-20" style={{ background: '#faf5ff', border: '1px solid #ddd6fe', borderRadius: 12, padding: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <div>
+                      <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: '#5b21b6' }}>🏠 House assignment <span style={{ fontSize: 11, fontWeight: 500, background: '#ede9fe', borderRadius: 20, padding: '2px 8px', color: '#7c3aed', marginLeft: 6 }}>OPTIONAL</span></p>
+                      <p style={{ margin: '2px 0 0', fontSize: 12, color: '#6b7280' }}>Assign now or leave blank to assign later.</p>
+                    </div>
+                    <button type="button" onClick={() => void suggestHouse()} disabled={houseAiLoading} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8, background: houseAiLoading ? '#e5e7eb' : 'linear-gradient(135deg, #7c3aed, #6c3ce1)', color: houseAiLoading ? '#9ca3af' : '#fff', border: 'none', cursor: houseAiLoading ? 'default' : 'pointer', fontSize: 12, fontWeight: 600 }}>
+                      {houseAiLoading ? (
+                        <><span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid #d1d5db', borderTopColor: '#fff', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />Thinking…</>
+                      ) : (
+                        <><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l1.9 5.8L20 9.7l-5 3.6L16.5 19 12 15.7 7.5 19 9 13.3l-5-3.6 6.1-1.9L12 2z"/></svg>AI Suggest</>
+                      )}
+                    </button>
+                  </div>
+
+                  {houseAiSuggestion && (
+                    <div style={{ marginBottom: 12, padding: '10px 12px', background: '#ede9fe', borderRadius: 8, border: '1px solid #c4b5fd', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                      <span style={{ fontSize: 18, lineHeight: 1 }}>✨</span>
+                      <div style={{ flex: 1 }}>
+                        <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: 13, color: '#4c1d95' }}>Suggestion: {houseAiSuggestion.groupName}</p>
+                        <p style={{ margin: 0, fontSize: 12, color: '#6d28d9' }}>{houseAiSuggestion.reason}</p>
+                      </div>
+                      <button type="button" onClick={() => { setHouseId(String(houseAiSuggestion.groupId)); setHouseAiSuggestion(null); }} style={{ padding: '4px 10px', borderRadius: 6, background: '#7c3aed', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>Apply</button>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: 8 }}>
+                    {[{ id: '', name: 'Assign later', emoji: '—', color: '#9ca3af', bgColor: '#f9fafb', studentsCount: 0 }, ...houseGroups].map(h => {
+                      const selected = houseId === h.id;
+                      return (
+                        <button key={h.id || 'none'} type="button" onClick={() => setHouseId(h.id)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, padding: '10px 8px', borderRadius: 10, border: selected ? `2px solid ${h.color || '#7c3aed'}` : '1.5px solid #e5e7eb', background: selected ? (h.bgColor || '#ede9fe') : '#fff', cursor: 'pointer', transition: 'all 0.15s', fontWeight: selected ? 700 : 500, color: selected ? (h.color || '#5b21b6') : '#374151' }}>
+                          <span style={{ fontSize: 20 }}>{h.emoji}</span>
+                          <span style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.3 }}>{h.name}</span>
+                          {h.id ? <span style={{ fontSize: 10, color: '#9ca3af' }}>{h.studentsCount} students</span> : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {renderSectionNavButtons("academic")}
             </section>
 
-            <section className="section-card" id="contact">
-              <div className="section-card-header"><div><h2 className="section-title">Contact & <span className="title-accent">address</span></h2><p className="section-subtitle">How we reach the student and where they live.</p></div><span className="section-counter">03 / 06</span></div>
+            <section className="section-card" id="contact" style={{ display: activeNavSection === "contact" ? "block" : "none" }}>
+              <div className="section-card-header"><div><h2 className="section-title">Contact & <span className="title-accent">address</span></h2><p className="section-subtitle">How we reach the student and where they live.</p></div><span className="section-counter">{getSectionCounter("contact")}</span></div>
               <div className="grid-2">
-                <div className="field-wrapper"><label className="field-label">Phone <span className="req">*</span></label><input className={fieldErrors.phone ? "field-input error" : "field-input"} title="Phone number" value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))} placeholder="10-digit mobile number" />{fieldErrors.phone ? <p className="error-msg">{fieldErrors.phone}</p> : null}</div>
-                <div className="field-wrapper"><label className="field-label">Email <span className="badge badge-recommended">RECOMMENDED</span></label><input className={fieldErrors.email ? "field-input error" : "field-input"} title="Student email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="student@example.com" />{fieldErrors.email ? <p className="error-msg">{fieldErrors.email}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Phone <span className="req">*</span></label><input aria-describedby="phone-error" className={fieldErrors.phone ? "field-input error" : "field-input"} title="Phone number" value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 10)); setSingleFieldError('phone', ''); }} onBlur={() => { if (!phone.trim()) { setSingleFieldError('phone', 'Phone number is required'); } else if (!isValidPhone(phone)) { setSingleFieldError('phone', 'Enter a valid 10-digit mobile number starting with 6, 7, 8, or 9 (no repeated or sequential digits)'); } else { setSingleFieldError('phone', ''); } }} placeholder="10-digit mobile number" />{fieldErrors.phone ? <span id="phone-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.phone}</span> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Email <span className="badge badge-recommended">RECOMMENDED</span></label><input aria-describedby="email-error" className={fieldErrors.email ? "field-input error" : "field-input"} title="Student email" value={email} onChange={(e) => { setEmail(e.target.value); setSingleFieldError('email', ''); }} onBlur={(e) => { const val = e.target.value.trim(); if (val && !isValidEmail(val)) { setSingleFieldError('email', 'Enter a valid email address (e.g. parent@gmail.com)'); } }} placeholder="student@example.com" />{fieldErrors.email ? <span id="email-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.email}</span> : null}</div>
               </div>
               <div className="grid-2 mt-20">
-                <div className="field-wrapper"><label className="field-label">Pincode <span className="req">*</span></label><input className={fieldErrors.pincode ? "field-input error" : "field-input"} title="Pincode" value={pincode} onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))} maxLength={6} />{pinLookupMessage ? <p className="status-info">{pinLookupMessage}</p> : null}{fieldErrors.pincode ? <p className="error-msg">{fieldErrors.pincode}</p> : null}</div>
-                <div className="field-wrapper"><label className="field-label">Address line</label><input className="field-input" title="Address line" value={addressLine} onChange={(e) => setAddressLine(e.target.value)} /></div>
+                <div className="field-wrapper"><label className="field-label">Pincode <span className="req">*</span></label><input aria-describedby="pincode-error" className={fieldErrors.pincode ? "field-input error" : "field-input"} title="Pincode" value={pincode} required minLength={6} maxLength={6} onChange={(e) => { setPincode(e.target.value.replace(/\D/g, "").slice(0, 6)); setSingleFieldError('pincode', ''); }} onBlur={() => { const trimmed = pincode.trim(); if (!trimmed) { setSingleFieldError('pincode', 'Pincode is required'); } else if (!/^[1-9]\d{5}$/.test(trimmed)) { setSingleFieldError('pincode', 'Enter a valid 6-digit Indian pincode'); } else { void lookupPincodeViaPostalApi(trimmed); } }} />{pinLookupLoading ? <p className="status-info" style={{ color: '#6c3ce1' }}>⏳ Looking up address…</p> : (pinLookupMessage ? <p className="status-info">{pinLookupMessage}</p> : null)}{fieldErrors.pincode ? <span id="pincode-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.pincode}</span> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Address line <span className="req">*</span></label><input aria-describedby="address_line-error" className={fieldErrors.address_line ? "field-input error" : "field-input"} title="Address line" value={addressLine} onChange={(e) => { setAddressLine(e.target.value.slice(0, 200)); setSingleFieldError("address_line", ""); }} onBlur={() => { if (!addressLine.trim()) { setSingleFieldError('address_line', 'Address is required'); } else if (addressLine.trim().length < 10) { setSingleFieldError('address_line', 'Please enter a complete address (at least 10 characters)'); } else { setSingleFieldError('address_line', ''); } }} />{fieldErrors.address_line ? <span id="address_line-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.address_line}</span> : null}</div>
               </div>
               <div className="grid-3 mt-20">
-                <div className="field-wrapper"><label className="field-label">State <span className="req">*</span></label>{manualAddressMode ? <input className={fieldErrors.state ? "field-input error" : "field-input"} title="State" value={stateName} onChange={(e) => setStateName(e.target.value)} /> : <select className={fieldErrors.state ? "field-select error" : "field-select"} title="State" value={stateName} onChange={(e) => { const nextState = e.target.value; setStateName(nextState); setDistrict(""); setCity(""); void loadCitiesForState(nextState); }} disabled={!pinIsValid}><option value="">Select State</option>{stateOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select>}{fieldErrors.state ? <p className="error-msg">{fieldErrors.state}</p> : null}</div>
-                <div className="field-wrapper"><label className="field-label">District <span className="req">*</span></label><input className={fieldErrors.district ? "field-input error" : "field-input"} title="District" value={district} onChange={(e) => setDistrict(e.target.value)} disabled={!manualAddressMode && !pinIsValid} />{fieldErrors.district ? <p className="error-msg">{fieldErrors.district}</p> : null}</div>
-                <div className="field-wrapper"><label className="field-label">City <span className="req">*</span></label>{manualAddressMode || cityOptions.length === 0 ? <input className={fieldErrors.city ? "field-input error" : "field-input"} title="City" value={city} onChange={(e) => setCity(e.target.value)} disabled={!manualAddressMode && !pinIsValid} /> : <select className={fieldErrors.city ? "field-select error" : "field-select"} title="City" value={city} onChange={(e) => setCity(e.target.value)}><option value="">Select City</option>{cityOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select>}{fieldErrors.city ? <p className="error-msg">{fieldErrors.city}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">State <span className="req">*</span></label>{manualAddressMode ? <input className={fieldErrors.state ? "field-input error" : "field-input"} title="State" value={stateName} onChange={(e) => { setStateName(e.target.value.replace(/[^A-Za-z\s.-]/g, '').slice(0, 60)); setSingleFieldError('state', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setStateName(val); if (!val.trim()) { setSingleFieldError('state', 'State is required'); } }} /> : <select className={fieldErrors.state ? "field-select error" : "field-select"} title="State" value={stateName} onChange={(e) => { const nextState = e.target.value; setStateName(nextState); setDistrict(""); setCity(""); void loadCitiesForState(nextState); }} disabled={!pinIsValid}><option value="">Select State</option>{stateOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select>}{fieldErrors.state ? <p className="error-msg">{fieldErrors.state}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">District <span className="req">*</span></label><input className={fieldErrors.district ? "field-input error" : "field-input"} title="District" value={district} onChange={(e) => { setDistrict(e.target.value.replace(/[^A-Za-z\s.-]/g, '').slice(0, 60)); setSingleFieldError('district', ''); }} onBlur={(e) => { setDistrict(toTitleCase(e.target.value)); if (!e.target.value.trim()) { setSingleFieldError('district', 'District is required'); } else if (e.target.value.trim().length < 2) { setSingleFieldError('district', 'District name too short'); } }} disabled={!manualAddressMode && !pinIsValid} />{fieldErrors.district ? <p className="error-msg">{fieldErrors.district}</p> : null}</div>
+                <div className="field-wrapper"><label className="field-label">City <span className="req">*</span></label><input list="city-options" className={fieldErrors.city ? "field-input error" : "field-input"} title="City" value={city} onChange={(e) => { setCity(e.target.value.replace(/[^A-Za-z\s.-]/g, '').slice(0, 60)); setSingleFieldError('city', ''); }} onBlur={(e) => { setCity(toTitleCase(e.target.value)); if (!e.target.value.trim()) { setSingleFieldError('city', 'City is required'); } else if (e.target.value.trim().length < 2) { setSingleFieldError('city', 'City name too short'); } }} disabled={!manualAddressMode && !pinIsValid} /><datalist id="city-options">{cityOptions.map((item) => <option key={item} value={item} />)}</datalist>{fieldErrors.city ? <p className="error-msg">{fieldErrors.city}</p> : null}</div>
+              </div>
+              <div className="grid-2 mt-20">
+                <div className="field-wrapper">
+                  <label className="field-label">Landmark <span className="badge badge-optional">OPTIONAL</span></label>
+                  <input className="field-input" title="Landmark" value={landmark} onChange={(e) => setLandmark(e.target.value.slice(0, 100))} placeholder="Near school, landmark, area name…" />
+                </div>
+                <div className="field-wrapper">
+                  <label className="field-label">Means of transport <span className="badge badge-optional">OPTIONAL</span></label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                    {['School bus', 'Private vehicle', 'Auto-rickshaw', 'Cycle', 'Walk', 'Public bus/metro', 'Cab/Taxi'].map(mode => (
+                      <button key={mode} type="button"
+                        className={`pill-btn ${transportModes.includes(mode) ? 'pill-btn-active' : ''}`}
+                        onClick={() => setTransportModes(prev => prev.includes(mode) ? prev.filter(x => x !== mode) : [...prev, mode])}>
+                        {mode}
+                      </button>
+                    ))}
+                    <button type="button" className="pill-btn" style={{ background: '#f3e8ff', color: '#7c3aed', border: '1px solid #ddd6fe' }}
+                      onClick={() => setShowTransportAI(v => !v)}>
+                      ✨ AI suggest
+                    </button>
+                  </div>
+                  {showTransportAI && (
+                    <div style={{ marginTop: 8, padding: '10px 12px', background: '#faf5ff', borderRadius: 8, border: '1px solid #e9d5ff', fontSize: 13 }}>
+                      <p style={{ margin: '0 0 6px', fontWeight: 600, color: '#7c3aed' }}>🤖 AI Suggestion</p>
+                      <p style={{ margin: '0 0 8px', color: '#6b7280' }}>
+                        Based on the address ({city || 'this area'}), common transport options include School bus, Auto-rickshaw, and Private vehicle.
+                      </p>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        {['School bus', 'Auto-rickshaw', 'Private vehicle'].filter(m => !transportModes.includes(m)).map(mode => (
+                          <button key={mode} type="button"
+                            className="pill-btn"
+                            onClick={() => { setTransportModes(prev => [...prev, mode]); setShowTransportAI(false); }}>
+                            + {mode}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                    <input className="field-input" style={{ flex: 1 }} value={transportCustom} onChange={(e) => setTransportCustom(e.target.value)} placeholder="Custom transport mode…" />
+                    <button type="button" className="btn-outline" style={{ padding: '6px 12px', fontSize: 12, whiteSpace: 'nowrap' }}
+                      onClick={() => { if (transportCustom.trim()) { setTransportModes(prev => [...prev, transportCustom.trim()]); setTransportCustom(""); } }}>
+                      Add
+                    </button>
+                  </div>
+                </div>
               </div>
               {renderSectionNavButtons("contact")}
             </section>
 
+            <div style={{ display: activeNavSection === "guardians" ? "block" : "none" }}>
             <StudentGuardiansStep
               drafts={guardianDrafts}
               onDraftsChange={(next) => {
@@ -3038,54 +4056,548 @@ export function StudentAddPanel() {
                 }
               }}
               existingGuardians={guardians}
-              sectionCounter="04 / 06"
+              sectionCounter={getSectionCounter("guardians")}
               errorsByCard={guardianCardErrors}
               submitError={guardianSubmitError ?? fieldErrors.guardian ?? null}
               navButtonsSlot={renderSectionNavButtons("guardians")}
             />
+            </div>
 
+            {/* Friends & Family Emergency Contacts */}
+            <div style={{ display: activeNavSection === "guardians" ? "block" : "none" }}>
+              <div style={{ margin: '0 24px 24px', border: '1px solid #e5e7eb', borderRadius: 12, overflow: 'hidden' }}>
+                <button
+                  type="button"
+                  onClick={() => setFriendsContactsOpen(v => !v)}
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', background: '#f9fafb', border: 'none', cursor: 'pointer', fontSize: 14, fontWeight: 600, color: '#374151' }}
+                >
+                  <span>👥 Friends & Family Emergency Contacts <span style={{ fontSize: 12, fontWeight: 400, color: '#6b7280' }}>(in case parents are unreachable)</span></span>
+                  <span>{friendsContactsOpen ? '▲' : '▼'}</span>
+                </button>
+                {friendsContactsOpen && (
+                  <div style={{ padding: '16px 18px', background: '#fff' }}>
+                    {friendsContacts.length === 0 && (
+                      <p style={{ fontSize: 13, color: '#9ca3af', marginBottom: 12 }}>No emergency contacts added yet. Use these for people other than listed guardians.</p>
+                    )}
+                    {friendsContacts.map((fc, i) => (
+                      <div key={fc.id} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 10, marginBottom: 10, alignItems: 'end' }}>
+                        <div className="field-wrapper" style={{ marginBottom: 0 }}>
+                          <label className="field-label">Name</label>
+                          <input className="field-input" value={fc.name} onChange={e => setFriendsContacts(prev => prev.map((x, j) => j === i ? { ...x, name: e.target.value.replace(/[^A-Za-z\s'.-]/g, '') } : x))} placeholder="Full name" />
+                        </div>
+                        <div className="field-wrapper" style={{ marginBottom: 0 }}>
+                          <label className="field-label">Relation</label>
+                          <input className="field-input" value={fc.relation} onChange={e => setFriendsContacts(prev => prev.map((x, j) => j === i ? { ...x, relation: e.target.value } : x))} placeholder="Uncle, Aunt, Family friend…" />
+                        </div>
+                        <div className="field-wrapper" style={{ marginBottom: 0 }}>
+                          <label className="field-label">Phone</label>
+                          <input className="field-input" value={fc.phone} onChange={e => setFriendsContacts(prev => prev.map((x, j) => j === i ? { ...x, phone: e.target.value.replace(/\D/g,'').slice(0,10) } : x))} placeholder="10-digit mobile" />
+                        </div>
+                        <button type="button" onClick={() => setFriendsContacts(prev => prev.filter((_, j) => j !== i))} style={{ padding: '8px 10px', background: '#fee2e2', border: '1px solid #fca5a5', borderRadius: 8, cursor: 'pointer', color: '#dc2626', fontSize: 13 }}>✕</button>
+                      </div>
+                    ))}
+                    <button type="button"
+                      onClick={() => setFriendsContacts(prev => [...prev, { id: String(Date.now() + Math.random()), name: '', relation: '', phone: '' }])}
+                      style={{ padding: '8px 16px', background: '#f0fdf4', border: '1px dashed #86efac', borderRadius: 8, cursor: 'pointer', fontSize: 13, color: '#166534', fontWeight: 500 }}>
+                      + Add contact
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <section className="section-card" id="apaar" style={{ display: activeNavSection === 'apaar' ? 'block' : 'none' }}>
+              <div className="section-card-header">
+                <div>
+                  <h2 className="section-title">Government <span className="title-accent">identity</span></h2>
+                  <p className="section-subtitle">India&apos;s &ldquo;One Nation, One Student ID&rdquo; — a 12-digit lifelong academic identity issued by the Ministry of Education (NEP 2020).</p>
+                </div>
+                <span className="section-counter">{getSectionCounter('apaar')}</span>
+              </div>
+              <div className="apaar-tip">📋 Entering a valid APAAR ID auto-fills all matching fields across the form. Try <code>1234 5678 9012</code> to see it in action.</div>
+              <div className="grid-2 mt-20">
+                <div className="field-wrapper">
+                  <label className="field-label">APAAR ID <span className="badge badge-optional">OPTIONAL</span></label>
+                  <input
+                    className={fieldErrors.apaar_id ? "field-input error" : "field-input"}
+                    title="APAAR ID"
+                    value={(apaarRaw.match(/.{1,4}/g) || []).join(" ")}
+                    onChange={(e) => {
+                      const digits = e.target.value.replace(/\D/g, "").slice(0, 12);
+                      setApaarRaw(digits);
+                      setSingleFieldError('apaar_id', '');
+                    }}
+                    placeholder="1234 5678 9012"
+                    maxLength={14}
+                  />
+                  {apaarStatus === "verifying" ? <p className="status-info">Verifying APAAR…</p> : null}
+                  {apaarStatus === "verified" ? <p className="status-info" style={{ color: "#047857" }}>✓ APAAR verified.</p> : null}
+                  {fieldErrors.apaar_id ? <p className="error-msg">{fieldErrors.apaar_id}</p> : null}
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+                  <button
+                    type="button"
+                    className="btn-upload-file"
+                    style={{ marginBottom: 0 }}
+                    disabled={apaarStatus === 'verifying' || !apaarRaw.trim()}
+                    onClick={() => {
+                      if (!apaarRaw.trim()) {
+                        setSingleFieldError('apaar_id', 'Please enter an APAAR ID before verifying.');
+                        return;
+                      }
+                      setApaarStatus('verifying');
+                      window.setTimeout(() => {
+                        try {
+                          setApaarStatus('verified');
+                          setSingleFieldError('apaar_id', '');
+                        } catch {
+                          setApaarStatus('idle');
+                          setSingleFieldError('apaar_id', 'Could not verify. Please try again.');
+                        }
+                      }, 700);
+                    }}
+                  >
+                    {apaarStatus === 'verifying' ? '⟳ Verifying…' : '✓ Verify & Fetch'}
+                  </button>
+                  <button type="button" className="btn-upload-file" style={{ marginBottom: 0 }}>Generate new</button>
+                </div>
+              </div>
+              <div className="form-divider"><span>OTHER GOVERNMENT IDS</span></div>
+              <div className="grid-2">
+                <div className="field-wrapper">
+                  <label className="field-label">Aadhaar number <span className="badge badge-optional">OPTIONAL</span></label>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input
+                      key={aadhaarVisible ? 'aadhaar-show' : 'aadhaar-hide'}
+                      className={`field-input ${fieldErrors.aadhaar_no ? 'error' : ''}`}
+                      title="Aadhaar number"
+                      type={aadhaarVisible ? "text" : "password"}
+                      readOnly={!aadhaarVisible}
+                      aria-describedby="aadhaar-error"
+                      value={aadhaarVisible
+                        ? aadhaarNo.replace(/(\d{4})(\d{0,4})(\d{0,4})/, (_, a, b, c) => [a, b, c].filter(Boolean).join(' ')).trim()
+                        : (aadhaarNo.length >= 4 ? 'XXXX XXXX ' + aadhaarNo.slice(-4) : aadhaarNo.padEnd(aadhaarNo.length, 'X'))}
+                      onChange={(e) => { if (aadhaarVisible) { setAadhaarNo(e.target.value.replace(/\D/g,'').slice(0,12)); setSingleFieldError('aadhaar_no',''); } }}
+                      onBlur={() => { if (aadhaarNo.trim() && !isValidAadhaar(aadhaarNo)) setSingleFieldError('aadhaar_no','Aadhaar must be exactly 12 digits (no repeated digits)'); else if (aadhaarNo.trim()) setSingleFieldError('aadhaar_no',''); }}
+                      placeholder="12-digit Aadhaar"
+                      maxLength={14}
+                      style={{ flex: 1 }}
+                    />
+                    <button type="button" onClick={() => setAadhaarVisible(v => !v)} style={{ padding: '6px 10px', background: 'none', border: '1px solid #d1d5db', borderRadius: 6, cursor: 'pointer', fontSize: 12, color: '#6b7280' }}>
+                      {aadhaarVisible ? '🙈 Hide' : '👁 Show'}
+                    </button>
+                  </div>
+                  <p className="help-text">Stored encrypted — used for APAAR KYC only</p>
+                  <p className="help-text" style={{ color: '#6b7280', fontStyle: 'italic' }}>Aadhaar is only required if performing APAAR KYC verification.</p>
+                  {fieldErrors.aadhaar_no ? <span id="aadhaar-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.aadhaar_no}</span> : null}
+                </div>
+                <div className="field-wrapper">
+                  <label className="field-label">PEN / UDISE+ <span className="badge badge-optional">OPTIONAL</span></label>
+                  <input aria-describedby="pen-error" className={fieldErrors.pen ? "field-input error" : "field-input"} title="PEN number" value={pen} onChange={(e) => { setPen(e.target.value.replace(/\D/g, '').slice(0, 11)); setSingleFieldError('pen', ''); }} onBlur={() => { if (pen.trim() && !isValidPEN(pen)) setSingleFieldError('pen','PEN/UDISE+ must be exactly 11 digits'); else if (pen.trim()) setSingleFieldError('pen',''); }} placeholder="Permanent Education Number" />
+                  {fieldErrors.pen ? <span id="pen-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.pen}</span> : null}
+                </div>
+              </div>
+              <div className="grid-2 mt-20">
+                <div className="field-wrapper">
+                  <label className="field-label">DigiLocker mobile <span className="badge badge-optional">OPTIONAL</span></label>
+                  <input aria-describedby="digi_mobile-error" className={fieldErrors.digi_mobile ? "field-input error" : "field-input"} title="DigiLocker mobile" value={digiMobile} onChange={(e) => { setDigiMobile(e.target.value.replace(/\D/g,'').slice(0,10)); setSingleFieldError('digi_mobile',''); }} onBlur={() => { if (digiMobile.trim() && !isValidPhone(digiMobile)) setSingleFieldError('digi_mobile','Enter a valid 10-digit mobile number starting with 6-9'); else if (digiMobile.trim()) setSingleFieldError('digi_mobile',''); }} placeholder="Aadhaar-linked mobile" />
+                  {fieldErrors.digi_mobile ? <span id="digi_mobile-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.digi_mobile}</span> : null}
+                </div>
+                <div className="field-wrapper">
+                  <label className="field-label">ABC Portal ID <span className="badge badge-optional">OPTIONAL</span> <span title="ABC ID (Academic Bank of Credits) is issued by the Government of India's National Academic Depository. Find yours at abc.gov.in" style={{ cursor: 'help', fontSize: 11, background: '#e5e7eb', borderRadius: '50%', width: 16, height: 16, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', fontWeight: 700 }}>?</span></label>
+                  <input aria-describedby="abc_id-error" className={fieldErrors.abc_id ? "field-input error" : "field-input"} title="ABC Portal ID" value={abcId} onChange={(e) => { setAbcId(e.target.value.replace(/[^A-Za-z0-9]/g, "").toUpperCase().slice(0, 12)); setSingleFieldError('abc_id',''); }} onBlur={() => { if (abcId.trim() && !isValidABCId(abcId)) setSingleFieldError('abc_id','ABC ID must be exactly 12 alphanumeric characters'); else if (abcId.trim()) setSingleFieldError('abc_id',''); }} placeholder="From abc.gov.in" />
+                  {fieldErrors.abc_id ? <span id="abc_id-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.abc_id}</span> : null}
+                </div>
+              </div>
+              <div className="encryption-disclosure">
+                🔒 Aadhaar and biometric data are stored AES-256 encrypted and are never shared with third parties. Access is restricted to authorised school administrators only, in compliance with the DPDPA 2023.
+              </div>
+              {renderSectionNavButtons('apaar')}
+            </section>
+
+            <div style={{ display: activeNavSection === "documents" ? "block" : "none" }}>
             <StudentDocumentsUpload
               documents={documents}
               onPickFile={handleDocumentPick}
               consentChecked={consentChecked}
               onConsentChange={setConsentChecked}
               consentError={fieldErrors.consent}
-              sectionCounter="05 / 06"
+              sectionCounter={getSectionCounter("documents")}
+              categoryName={validCategories.find((c) => String(c.id) === categoryId)?.name}
+              isPwD={isPwD}
               navButtonsSlot={renderSectionNavButtons("documents")}
             />
+            </div>
+
+            <section className="section-card" id="medical" style={{ display: activeNavSection === "medical" ? "block" : "none" }}>
+              <div className="section-card-header">
+                <div>
+                  <h2 className="section-title">Medical & <span className="title-accent">emergency</span></h2>
+                  <p className="section-subtitle">Health snapshot, allergies, vaccinations, and an emergency contact.</p>
+                </div>
+                <span className="section-counter">{getSectionCounter("medical")}</span>
+              </div>
+
+              <div className="grid-3">
+                <div className="field-wrapper">
+                  <label className="field-label">Height <span className="badge badge-optional">OPTIONAL</span></label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input type="number" min="30" max="250" step="0.1" className={fieldErrors.height ? "field-input error" : "field-input"} title="Height in cm" value={heightCm} onChange={(e) => { setHeightCm(e.target.value); setSingleFieldError('height',''); }} onBlur={() => { const v = parseFloat(heightCm); if (heightCm && (v < 30 || v > 250)) setSingleFieldError('height', 'Height must be between 30 and 250 cm.'); }} placeholder="e.g. 120" />
+                    <span style={{ fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap' }}>cm</span>
+                  </div>
+                  {fieldErrors.height ? <p className="error-msg">{fieldErrors.height}</p> : null}
+                </div>
+                <div className="field-wrapper">
+                  <label className="field-label">Weight <span className="badge badge-optional">OPTIONAL</span></label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <input type="number" min="1" max="200" step="0.1" className={fieldErrors.weight ? "field-input error" : "field-input"} title="Weight in kg" value={weightKg} onChange={(e) => { setWeightKg(e.target.value); setSingleFieldError('weight',''); }} onBlur={() => { const v = parseFloat(weightKg); if (weightKg && (v < 1 || v > 200)) setSingleFieldError('weight', 'Weight must be between 1 and 200 kg.'); }} placeholder="e.g. 22" />
+                    <span style={{ fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap' }}>kg</span>
+                  </div>
+                  {fieldErrors.weight ? <p className="error-msg">{fieldErrors.weight}</p> : null}
+                </div>
+                <div className="field-wrapper">
+                  <label className="field-label">Vision <span className="badge badge-optional">OPTIONAL</span></label>
+                  <div className="pill-btn-row">
+                    <button key="not-assessed" type="button"
+                      onClick={() => setVision("")}
+                      className={`pill-btn ${vision === "" ? 'pill-btn-active' : ''}`}>
+                      Not assessed
+                    </button>
+                    {(['Normal','Near-sighted','Far-sighted','Low vision'] as const).map(v => (
+                      <button key={v} type="button"
+                        onClick={() => setVision(v)}
+                        className={`pill-btn ${vision === v ? 'pill-btn-active' : ''}`}>
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid-2 mt-20">
+                <div className="field-wrapper">
+                  <label className="field-label">Known medical conditions</label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                     <input className="field-input" title="Add a medical condition" value={medicalConditionInput} onChange={(e) => { setMedicalConditionInput(e.target.value.slice(0, 100)); if (medCondError) setMedCondError(''); }} placeholder="Asthma, diabetes…" onKeyDown={(e) => { if ((e.key === "Enter" || e.key === ",") && medicalConditionInput.trim()) { e.preventDefault(); setMedicalConditions((p) => [...p, medicalConditionInput.trim().replace(/,+$/, "")]); setMedicalConditionInput(""); setMedCondError(''); } else if (e.key === "Backspace" && !medicalConditionInput && medicalConditions.length > 0) { setMedicalConditions((p) => p.slice(0, -1)); } }} />
+                     <button type="button" className="btn-upload-file" onClick={() => { if (!medicalConditionInput.trim()) { setMedCondError('Type a condition name before adding.'); return; } setMedicalConditions((p) => [...p, medicalConditionInput.trim()]); setMedicalConditionInput(""); setMedCondError(''); }}>Add</button>
+                   </div>
+                   {medCondError ? <p className="error-msg">{medCondError}</p> : null}
+                  {medicalConditions.length > 0 ? <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>{medicalConditions.map((c, i) => <span key={`${c}-${i}`} style={{ background: "#f3f4f6", padding: "3px 10px", borderRadius: 999, fontSize: 12 }}>{c} <button type="button" onClick={() => setMedicalConditions((p) => p.filter((_, idx) => idx !== i))} style={{ background: "transparent", border: "none", cursor: "pointer", color: "#6b7280" }} aria-label={`Remove ${c}`}>×</button></span>)}</div> : null}
+                </div>
+                <div className="field-wrapper">
+                  <label className="field-label">Allergies</label>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input className="field-input" title="Add an allergy" value={allergyInput} onChange={(e) => setAllergyInput(e.target.value.slice(0, 100))} placeholder="Peanuts, dust…" onKeyDown={(e) => { if ((e.key === "Enter" || e.key === ",") && allergyInput.trim()) { e.preventDefault(); setAllergies((p) => [...p, allergyInput.trim().replace(/,+$/, "")]); setAllergyInput(""); } else if (e.key === "Backspace" && !allergyInput && allergies.length > 0) { setAllergies((p) => p.slice(0, -1)); } }} />
+                    <button type="button" className="btn-upload-file" onClick={() => { if (allergyInput.trim()) { setAllergies((p) => [...p, allergyInput.trim()]); setAllergyInput(""); } }}>Add</button>
+                  </div>
+                  {allergies.length > 0 ? <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>{allergies.map((c, i) => <span key={`${c}-${i}`} style={{ background: "#fef3c7", padding: "3px 10px", borderRadius: 999, fontSize: 12 }}>{c} <button type="button" onClick={() => setAllergies((p) => p.filter((_, idx) => idx !== i))} style={{ background: "transparent", border: "none", cursor: "pointer", color: "#92400e" }} aria-label={`Remove ${c}`}>×</button></span>)}</div> : null}
+                </div>
+              </div>
+
+              <div className="grid-2 mt-20">
+                <div className="field-wrapper">
+                  <label className="field-label">Current medications <span className="badge badge-optional">OPTIONAL</span></label>
+                  <input className="field-input" title="Current medications" value={currentMedications} onChange={(e) => setCurrentMedications(e.target.value.slice(0, 200))} />
+                </div>
+                <div className="field-wrapper">
+                  <label className="field-label">Treating doctor <span className="badge badge-optional">OPTIONAL</span></label>
+                  <input className="field-input" title="Treating doctor" value={treatingDoctor} onChange={(e) => setTreatingDoctor(e.target.value.replace(/[^A-Za-z\s.,]/g, '').slice(0, 100))} />
+                </div>
+              </div>
+
+              <div className="mt-20">
+                <p className="field-label">Vaccinations completed</p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 8 }}>
+                  {COMMON_VACCINATIONS.map((v) => (
+                    <label key={v.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+                      <input type="checkbox" checked={checkedVaccinations.includes(v.id)} onChange={(e) => setCheckedVaccinations((prev) => e.target.checked ? Array.from(new Set([...prev, v.id])) : prev.filter((x) => x !== v.id))} />
+                      {v.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid-2 mt-20">
+                <div className="field-wrapper">
+                  <label className="field-label">Emergency contact name <span className="req">*</span></label>
+                  <input className={fieldErrors.emergency_name ? "field-input error" : "field-input"} title="Emergency contact name" aria-describedby="emergency_name-error" value={emergencyName} onChange={(e) => { setEmergencyName(e.target.value.replace(/[^A-Za-z\s'.-]/g, '')); setEmergencyCopiedFromGuardian(false); setSingleFieldError("emergency_name", ""); }} onBlur={() => { if (!emergencyName.trim()) { setSingleFieldError('emergency_name', 'Emergency contact name is required'); } else if (emergencyName.trim().length < 3) { setSingleFieldError('emergency_name', 'Name must be at least 3 characters'); } else { setSingleFieldError('emergency_name', ''); } }} />
+                  {emergencyCopiedFromGuardian ? <p className="status-info">Pre-filled from primary guardian. Edit if different.</p> : null}
+                  {fieldErrors.emergency_name ? <span id="emergency_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.emergency_name}</span> : null}
+                </div>
+                <div className="field-wrapper">
+                  <label className="field-label">Emergency contact phone <span className="req">*</span></label>
+                  <input className={fieldErrors.emergency_phone ? "field-input error" : "field-input"} title="Emergency contact phone" aria-describedby="emergency_phone-error" value={emergencyPhone} onChange={(e) => { setEmergencyPhone(e.target.value.replace(/\D/g, "").slice(0, 10)); setEmergencyCopiedFromGuardian(false); setSingleFieldError("emergency_phone", ""); }} onBlur={() => { if (!emergencyPhone.trim()) { setSingleFieldError('emergency_phone', 'Emergency contact phone is required'); } else if (!isValidPhone(emergencyPhone)) { setSingleFieldError('emergency_phone', 'Enter a valid 10-digit mobile number starting with 6-9'); } else { setSingleFieldError('emergency_phone', ''); } }} placeholder="10-digit mobile" />
+                  {fieldErrors.emergency_phone ? <span id="emergency_phone-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.emergency_phone}</span> : null}
+                </div>
+              </div>
+
+              {renderSectionNavButtons("medical")}
+            </section>
+
+            <section className="section-card" id="speciallyAbled" style={{ display: activeNavSection === 'speciallyAbled' ? 'block' : 'none' }}>
+              <div className="section-card-header">
+                <div>
+                  <h2 className="section-title">Specially <span className="title-accent">abled</span></h2>
+                  <p className="section-subtitle">As per Rights of Persons with Disabilities Act, 2016.</p>
+                </div>
+                <span className="section-counter">{getSectionCounter('speciallyAbled')}</span>
+              </div>
+              <div className="disclosure-banner-green">🔒 Disclosure is voluntary and optional. Sharing this helps us arrange appropriate accommodations, assistive technologies, and an inclusive learning environment.</div>
+              <div className="pwd-toggle-row">
+                <div>
+                  <div className="pwd-toggle-label">Is this student a Person with Disability (PwD)?</div>
+                  <div className="pwd-toggle-hint">Toggle to disclose — you can update this at any time</div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: 13, color: '#6b7280' }}>{isPwD ? 'Yes — disclosing disability' : 'Not disclosed'}</span>
+                  <label className="toggle-switch">
+                    <input type="checkbox" checked={isPwD} onChange={e => {
+                      const next = e.target.checked;
+                      setIsPwD(next);
+                      if (next) { setPwdFlash(true); window.setTimeout(() => setPwdFlash(false), 2000); }
+                    }} />
+                    <span className="toggle-slider" />
+                  </label>
+                  {pwdFlash && <span style={{ color: '#047857', fontSize: 12, marginLeft: 4, transition: 'opacity 0.5s' }}>✓ Disclosure recorded</span>}
+                </div>
+              </div>
+              {isPwD && (
+                <>
+                  <div className="mt-20">
+                    <p className="field-label">Disability type (select all that apply)</p>
+                    <div className="pill-btn-row" style={{ marginTop: 8 }}>
+                      {['Visual Impairment','Hearing Impairment','Locomotor Disability','Intellectual Disability','Autism Spectrum','Learning Disability','Speech & Language','Mental Illness','Multiple Disabilities','Other / not listed'].map(dt => (
+                        <button key={dt} type="button"
+                          className={`pill-btn ${disabilityTypes.includes(dt) ? 'pill-btn-active' : ''}`}
+                          onClick={() => setDisabilityTypes(prev => prev.includes(dt) ? prev.filter(x => x !== dt) : [...prev, dt])}>
+                          {dt}
+                        </button>
+                      ))}
+                    </div>
+                    {disabilityTypes.includes('Other / not listed') && (
+                      <input className="field-input" style={{ marginTop: 8 }} placeholder="Specify disability type..." value={otherDisabilityText} onChange={e => setOtherDisabilityText(e.target.value.slice(0, 100))} />
+                    )}
+                  </div>
+                  <div className="field-wrapper mt-20">
+                    <label className="field-label">Disability percentage: <span>{disabilityPercent}%</span></label>
+                    <input type="range" min={0} max={100} value={disabilityPercent} onChange={e => setDisabilityPercent(Number(e.target.value))} style={{ width: '100%' }} aria-label="Disability percentage" aria-valuemin={0} aria-valuemax={100} aria-valuenow={disabilityPercent} />
+                    <p className="help-text">As certified by authorised medical authority</p>
+                  </div>
+                  <div className="field-wrapper mt-20">
+                    <label className="field-label">UDID Card Number <span className="badge badge-optional">OPTIONAL</span></label>
+                    <input className="field-input" title="UDID Card Number" value={udid} onChange={e => setUdid(e.target.value.replace(/[^A-Z0-9-]/g, '').slice(0, 30).toUpperCase())} placeholder="Issued by Dept for Empowerment of PwDs" />
+                  </div>
+                  <div className="mt-20">
+                    <p className="field-label">Accommodations required</p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                      {['Scribe / amanuensis for exams','Extra time in examinations (25%)','Wheelchair / ramp access','Sign language interpreter','Braille / large-print materials','Assistive technology / software'].map(acc => (
+                        <label key={acc} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                          <input type="checkbox" checked={accommodations.includes(acc)} onChange={e => setAccommodations(prev => e.target.checked ? [...prev, acc] : prev.filter(x => x !== acc))} />
+                          {acc}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="field-wrapper mt-20">
+                    <label className="field-label">Additional notes <span className="badge badge-optional">OPTIONAL</span></label>
+                    <textarea className="field-textarea" rows={3} value={additionalNotes} onChange={e => setAdditionalNotes(e.target.value.slice(0, 300))} />
+                  </div>
+                </>
+              )}
+              {renderSectionNavButtons('speciallyAbled')}
+            </section>
+
+            <section className="section-card" id="identityMarks" style={{ display: activeNavSection === 'identityMarks' ? 'block' : 'none' }}>
+              <div className="section-card-header">
+                <div>
+                  <h2 className="section-title">Identity <span className="title-accent">marks</span></h2>
+                  <p className="section-subtitle">Physical identification marks for administrative identity verification only.</p>
+                </div>
+                <span className="section-counter">{getSectionCounter('identityMarks')}</span>
+              </div>
+              <div className="apaar-tip" style={{ background: '#fef2f2', borderLeftColor: '#ef4444', color: '#7f1d1d' }}>
+                🚨 Recorded exclusively for identity verification (exam hall, lost documents). Accessible only to authorised administrative staff.
+              </div>
+              <div className="identity-marks-grid">
+                <div className="body-diagram">
+                  <div style={{ background: '#f9fafb', borderRadius: 12, padding: 24, textAlign: 'center', color: '#9ca3af', border: '2px dashed #e5e7eb' }}>
+                    <div style={{ fontSize: 32, marginBottom: 8 }}>🧍</div>
+                    <p style={{ margin: 0, fontSize: 13, fontWeight: 500 }}>Zone diagram coming soon</p>
+                    <p style={{ margin: '4px 0 0', fontSize: 12 }}>Use &quot;+ Add mark manually&quot; below to record identification marks.</p>
+                  </div>
+                </div>
+                <div className="marks-list">
+                  <p className="marks-hint">Click any body zone to record an identification mark, or add manually below.</p>
+                  <button type="button" className="btn-outline-sm" onClick={() => setMarkFormOpen(true)}>+ Add mark manually</button>
+                  {markFormOpen && (
+                    <div style={{ marginTop: 12, padding: 12, border: '1px solid #e5e7eb', borderRadius: 8, background: '#f9fafb' }}>
+                      <div className="field-wrapper">
+                        <label className="field-label">Body location</label>
+                        <input className="field-input" value={newMarkLocation} onChange={e => setNewMarkLocation(e.target.value)} placeholder="e.g. Left forearm" />
+                      </div>
+                      <div className="field-wrapper" style={{ marginTop: 8 }}>
+                        <label className="field-label">Description</label>
+                        <input className="field-input" value={newMarkDescription} onChange={e => setNewMarkDescription(e.target.value.slice(0, 100))} placeholder="e.g. Mole, birthmark, scar" />
+                      </div>
+                      {fieldErrors.mark_location ? <p className="error-msg">{fieldErrors.mark_location}</p> : null}
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                        <button type="button" style={{ padding: '6px 14px', background: '#6c3ce1', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+                          onClick={() => {
+                            if (!newMarkLocation.trim()) { setSingleFieldError('mark_location', 'Please select or enter a body location.'); return; }
+                            setIdentityMarks(prev => [...prev, { location: newMarkLocation.trim(), description: newMarkDescription.trim() }]);
+                            setNewMarkLocation(''); setNewMarkDescription(''); setMarkFormOpen(false);
+                            setSingleFieldError('mark_location', '');
+                          }}>Save mark</button>
+                        <button type="button" style={{ padding: '6px 14px', background: '#fff', border: '1px solid #d1d5db', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+                          onClick={() => { setMarkFormOpen(false); setNewMarkLocation(''); setNewMarkDescription(''); setSingleFieldError('mark_location', ''); }}>Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                  {identityMarks.length > 0 && (
+                    <ul style={{ marginTop: 12, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {identityMarks.map((m, i) => (
+                        <li key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: '#f9fafb', borderRadius: 6, fontSize: 13 }}>
+                          <span><strong>{m.location}:</strong> {m.description}</span>
+                          <button type="button" onClick={() => setIdentityMarks(prev => prev.filter((_, idx) => idx !== i))} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#6b7280' }} aria-label="Remove mark">×</button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+              <div className="form-divider"><span>PHYSICAL DESCRIPTORS</span></div>
+              <div className="grid-2">
+                <div className="field-wrapper"><label className="field-label">Eye colour</label>
+                  <select className="field-select" value={eyeColour} onChange={e=>setEyeColour(e.target.value)}>
+                    <option value="">Select</option><option>Black</option><option>Brown</option><option>Hazel</option><option>Blue</option><option>Green</option><option>Grey</option>
+                  </select></div>
+                <div className="field-wrapper"><label className="field-label">Hair colour</label>
+                  <select className="field-select" value={hairColour} onChange={e=>setHairColour(e.target.value)}>
+                    <option value="">Select</option><option>Black</option><option>Brown</option><option>Blonde</option><option>Red</option><option>Grey</option><option>White</option>
+                  </select></div>
+              </div>
+              <div className="grid-2 mt-20">
+                <div className="field-wrapper"><label className="field-label">Complexion</label>
+                  <select className="field-select" value={complexion} onChange={e=>setComplexion(e.target.value)}>
+                    <option value="">Select</option><option>Fair</option><option>Wheatish</option><option>Medium</option><option>Dark</option>
+                  </select></div>
+                <div className="field-wrapper"><label className="field-label">Build</label>
+                  <select className="field-select" value={build} onChange={e=>setBuild(e.target.value)}>
+                    <option value="">Select</option><option>Slim</option><option>Average</option><option>Athletic</option><option>Heavy</option>
+                  </select></div>
+              </div>
+              {renderSectionNavButtons('identityMarks')}
+            </section>
 
             {/* REVIEW SECTION */}
-            <section className="section-card" id="review">
+            <section className="section-card" id="review" style={{ display: activeNavSection === "review" ? "block" : "none" }}>
               <div className="section-card-header">
                 <div>
                   <h2 className="section-title">Final <span className="title-accent">review</span></h2>
                   <p className="section-subtitle">Double-check before you save. You can edit any section above.</p>
                 </div>
-                <span className="section-counter">06 / 06</span>
+                <span className="section-counter">{getSectionCounter("review")}</span>
               </div>
 
-              <div className="review-summary-grid">
-                <div className="review-item">
-                  <div className="review-label">ADMISSION NO</div>
-                  <div className="review-value">{admissionNo || "Not yet entered"}</div>
+              {/* FIX 17: Structured validation errors */}
+              {validationErrorList.length > 0 && (
+                <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 8, padding: 16, marginBottom: 20 }}>
+                  <p style={{ fontWeight: 600, color: '#7f1d1d', marginBottom: 8 }}>Please fix {validationErrorList.length} validation error(s):</p>
+                  {validationErrorList.map((err, i) => (
+                    <div key={i} style={{ display: 'flex', gap: 8, padding: '4px 0', cursor: 'pointer' }}
+                      onClick={() => { jumpToSection(err.section); setSingleFieldError(err.field, err.message); }}>
+                      <span style={{ color: '#ef4444' }}>•</span>
+                      <span style={{ fontSize: 13, color: '#374151' }}><strong>{NAV_ITEMS.find(n=>n.id===err.section)?.label}</strong> — {err.message}</span>
+                    </div>
+                  ))}
                 </div>
-                <div className="review-item">
-                  <div className="review-label">FULL NAME</div>
-                  <div className="review-value">{[firstName, lastName].filter(Boolean).join(" ") || "Not yet entered"}</div>
+              )}
+
+              {/* FIX 15: Grouped summary */}
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7280', textTransform: 'uppercase' }}>Student Info</div>
+                  <button type="button" onClick={() => { setReturnToReview(true); jumpToSection('identity'); }} style={{ fontSize:12, color:'#6c3ce1', background:'none', border:'none', cursor:'pointer', padding:0, fontWeight:500 }}>Edit →</button>
                 </div>
-                <div className="review-item">
-                  <div className="review-label">CLASS / SECTION</div>
-                  <div className="review-value">
-                    {selectedClass || selectedSection
-                      ? `${selectedClass?.name || classId} / ${selectedSection?.name || sectionId}`
-                      : "Not yet entered"}
-                  </div>
-                </div>
-                <div className="review-item">
-                  <div className="review-label">CONTACT</div>
-                  <div className="review-value">{phone || "Not yet entered"}</div>
+                <div className="review-grid">
+                  <div className="review-item"><div className="review-label">ADMISSION NO</div><div className="review-value">{admissionNo || '—'}</div></div>
+                  <div className="review-item"><div className="review-label">FULL NAME</div><div className="review-value">{[firstName, lastName].filter(Boolean).join(' ') || '—'}</div></div>
+                  <div className="review-item"><div className="review-label">DATE OF BIRTH</div><div className="review-value">{dateOfBirth || '—'}</div></div>
+                  <div className="review-item"><div className="review-label">GENDER</div><div className="review-value">{gender ? gender.charAt(0).toUpperCase() + gender.slice(1) : '—'}</div></div>
+                  <div className="review-item"><div className="review-label">BLOOD GROUP</div><div className="review-value">{bloodGroup || '—'}</div></div>
                 </div>
               </div>
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7280', textTransform: 'uppercase' }}>Academic</div>
+                  <button type="button" onClick={() => { setReturnToReview(true); jumpToSection('academic'); }} style={{ fontSize:12, color:'#6c3ce1', background:'none', border:'none', cursor:'pointer', padding:0, fontWeight:500 }}>Edit →</button>
+                </div>
+                <div className="review-grid">
+                  <div className="review-item"><div className="review-label">CLASS / SECTION</div><div className="review-value">{selectedClass ? `${selectedClass.name}${selectedSection ? ' / ' + selectedSection.name : ''}` : '—'}</div></div>
+                  <div className="review-item"><div className="review-label">ACADEMIC YEAR</div><div className="review-value">{validAcademicYears.find(y => String(y.id) === academicYearId)?.name || '—'}</div></div>
+                </div>
+              </div>
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7280', textTransform: 'uppercase' }}>Guardian</div>
+                  <button type="button" onClick={() => { setReturnToReview(true); jumpToSection('guardians'); }} style={{ fontSize:12, color:'#6c3ce1', background:'none', border:'none', cursor:'pointer', padding:0, fontWeight:500 }}>Edit →</button>
+                </div>
+                <div className="review-grid">
+                  <div className="review-item"><div className="review-label">GUARDIAN NAME</div><div className="review-value">{guardianDrafts[0]?.fullName || '—'}</div></div>
+                  <div className="review-item"><div className="review-label">GUARDIAN PHONE</div><div className="review-value">{guardianDrafts[0]?.phone || '—'}</div></div>
+                </div>
+              </div>
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7280', textTransform: 'uppercase' }}>Contact</div>
+                  <button type="button" onClick={() => { setReturnToReview(true); jumpToSection('contact'); }} style={{ fontSize:12, color:'#6c3ce1', background:'none', border:'none', cursor:'pointer', padding:0, fontWeight:500 }}>Edit →</button>
+                </div>
+                <div className="review-grid">
+                  <div className="review-item"><div className="review-label">PHONE</div><div className="review-value">{phone || '—'}</div></div>
+                  <div className="review-item"><div className="review-label">CITY / STATE</div><div className="review-value">{[city, stateName].filter(Boolean).join(', ') || '—'}</div></div>
+                </div>
+              </div>
+
+              {/* FIX 16: Step completion checklist */}
+              <div style={{ marginTop: 24, marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7280', textTransform: 'uppercase', marginBottom: 12 }}>Step completion</div>
+                {NAV_ITEMS.filter(item => item.id !== 'review').map(item => {
+                  const complete = isStepComplete(item.id);
+                  const icon = complete ? '✓' : '✗';
+                  const color = complete ? '#10b981' : '#ef4444';
+                  return (
+                    <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid #f3f4f6', cursor: 'pointer' }}
+                      onClick={() => { setReturnToReview(true); jumpToSection(item.id as NavItemId); }}>
+                      <span style={{ color, fontWeight: 700, fontSize: 14, width: 18 }}>{icon}</span>
+                      <span style={{ fontSize: 13, color: '#374151' }}>{item.label}</span>
+                      {!complete && <span style={{ fontSize: 11, color: '#6b7280', marginLeft: 'auto' }}>Incomplete</span>}
+                      {complete && <span style={{ fontSize: 11, color: '#10b981', marginLeft: 'auto' }}>Complete</span>}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="review-pdf-section">
+                <div className="review-pdf-title">📄 Preview & Print Filled Form</div>
+                <p className="review-pdf-note">Before enrolling, you can preview the filled admission form.</p>
+                <div className="review-pdf-actions">
+                  <button type="button" className="review-pdf-btn" onClick={() => { setConsentOpenWithSettings(false); setConsentInitialAction(null); setConsentOpen(true); }}>
+                    Open Filled PDF
+                  </button>
+                  <button type="button" className="review-pdf-btn secondary" onClick={() => { setConsentOpenWithSettings(false); setConsentInitialAction('print-pdf'); setConsentOpen(true); }}>
+                    🖨 Print
+                  </button>
+                </div>
+              </div>
+
+              <label style={{ display: "flex", gap: 10, alignItems: "flex-start", marginTop: 18, padding: 14, border: "1px solid #c4b5fd", background: "#f7f5ff", borderRadius: 12, cursor: "pointer" }}>
+                <input type="checkbox" required checked={reviewConfirmed} aria-describedby="review_confirm-error" onChange={(e) => setReviewConfirmed(e.target.checked)} style={{ marginTop: 3 }} />
+                <span style={{ fontSize: 13, color: "#374151" }}>
+                  <strong style={{ display: "block", marginBottom: 2 }}>I&apos;ve reviewed every section</strong>
+                  All required fields are filled and the information is accurate. I&apos;m ready to enroll this student.
+                </span>
+              </label>
+              {!reviewConfirmed && <span id="review_confirm-error" role="alert" aria-live="polite" className="error-msg">Please confirm before enrolling</span>}
 
               {renderSectionNavButtons("review")}
             </section>
@@ -3106,8 +4618,36 @@ export function StudentAddPanel() {
           {error ? <p className="footer-status footer-status-error">{error}</p> : null}
 
           <div className="footer-actions">
-            <button type="button" className="btn-discard" onClick={clearDraftNow}>Discard</button>
+            <button type="button" className="btn-discard" onClick={() => setDiscardConfirmOpen(true)}>Discard</button>
             <button type="button" className="btn-draft" onClick={saveDraftNow}>Save draft</button>
+            <button type="button" className="btn-outline" style={{ fontSize: 11, padding: '6px 10px', background: '#ecfdf5', color: '#065f46', borderColor: '#6ee7b7' }}
+              title="Upload a signed consent form (PDF or image)"
+              onClick={() => {
+                // Open the OS file picker directly — no extra modal screen in the way
+                setSignedUploadStatus('idle');
+                setSignedUploadError('');
+                setSignedUploadFile(null);
+                setSignedUploadPreviewUrl('');
+                signedUploadInputRef.current?.click();
+              }}>
+              📎 Upload signed
+            </button>
+            <button type="button" className="btn-outline" style={{ fontSize: 11, padding: '6px 10px', background: '#fffbeb', color: '#92400e', borderColor: '#fcd34d' }}
+              title="Download a blank intake form for parents to fill manually"
+              onClick={() => { setConsentOpenWithSettings(false); setConsentInitialAction('blank-form'); setConsentOpen(true); }}>
+              📄 Blank form
+            </button>
+            <button type="button" className="btn-outline" style={{ fontSize: 11, padding: '6px 10px', background: '#eff6ff', color: '#1e40af', borderColor: '#93c5fd' }}
+              title="Upload a scanned filled form to auto-fill fields via OCR"
+              onClick={() => setScanFillOpen(true)}>
+              📷 Scan & fill
+            </button>
+            <button type="button" className="btn-outline"
+              disabled={!firstName || !lastName || !admissionNo || !classId || !sectionId}
+              title="Available after student is enrolled."
+              onClick={() => { setConsentOpenWithSettings(false); setConsentInitialAction(null); setConsentOpen(true); }}>
+              🖨 Print / PDF
+            </button>
             {isViewMode && studentId ? (
               <Link href={`/students/add?mode=edit&id=${studentId}`} className="btn-save btn-save-cta">Edit student →</Link>
             ) : (
@@ -3116,6 +4656,277 @@ export function StudentAddPanel() {
           </div>
         </footer>
       </form>
+
+      {discardConfirmOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: '28px 32px', maxWidth: 420, width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+            <h3 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 700, color: '#111827' }}>Discard enrollment?</h3>
+            <p style={{ margin: '0 0 24px', color: '#6b7280', fontSize: 14 }}>All unsaved data will be lost. This cannot be undone.</p>
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setDiscardConfirmOpen(false)} style={{ padding: '9px 20px', border: '1px solid #d1d5db', background: '#fff', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 500 }}>Cancel</button>
+              <button type="button" onClick={() => { setDiscardConfirmOpen(false); clearDraftNow(); }} style={{ padding: '9px 20px', border: '1px solid #dc2626', background: '#dc2626', color: '#fff', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}>Discard</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {unsavedNavModalOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: '28px 32px', maxWidth: 480, width: '92%', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+              <div style={{ width: 36, height: 36, borderRadius: '50%', background: '#fef3c7', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 20 }}>⚠️</span>
+              </div>
+              <h3 style={{ margin: 0, fontSize: 17, fontWeight: 700, color: '#111827' }}>You have unsaved changes</h3>
+            </div>
+            <p style={{ margin: '0 0 6px', color: '#374151', fontSize: 14 }}>
+              You&apos;ve filled <strong>{requiredCompletionPct}%</strong> of the required information for this enrollment.
+            </p>
+            <p style={{ margin: '0 0 22px', color: '#6b7280', fontSize: 13 }}>
+              {requiredCompletionPct >= 80
+                ? 'You can enroll the student now, save as a draft to finish later, or discard everything.'
+                : 'Choose what to do with this in-progress form before leaving.'}
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {requiredCompletionPct >= 80 && (
+                <button type="button" onClick={() => {
+                  setUnsavedNavModalOpen(false);
+                  pendingNavRef.current = null;
+                  // Trigger the form submit (enroll)
+                  const formEl = document.querySelector('form') as HTMLFormElement | null;
+                  if (formEl) formEl.requestSubmit();
+                }} style={{ padding: '11px 18px', background: 'linear-gradient(135deg, #7c3aed, #6c3ce1)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+                  ✓ Enroll student now
+                </button>
+              )}
+              <button type="button" onClick={() => {
+                saveDraftSnapshot();
+                showToast('Draft saved.', 'success', 3000);
+                continuePendingNav();
+              }} style={{ padding: '11px 18px', background: '#fff', color: '#1f2937', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+                💾 Save as draft &amp; leave
+              </button>
+              <button type="button" onClick={() => {
+                clearDraftNow();
+                continuePendingNav();
+              }} style={{ padding: '11px 18px', background: '#fff', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+                🗑 Discard &amp; leave
+              </button>
+              <button type="button" onClick={() => { pendingNavRef.current = null; setUnsavedNavModalOpen(false); }} style={{ padding: '9px 18px', background: 'transparent', color: '#6b7280', border: 'none', fontSize: 13, cursor: 'pointer', marginTop: 4 }}>
+                Cancel — stay on this page
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {draftSavedModalOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 16, padding: '32px 36px', maxWidth: 460, width: '92%', boxShadow: '0 24px 64px rgba(0,0,0,0.22)', textAlign: 'center' }}>
+            {/* Success icon */}
+            <div style={{ width: 56, height: 56, borderRadius: '50%', background: '#ecfdf5', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px' }}>
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                <path d="M6 14l5 5 11-11" stroke="#10b981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </div>
+            <h3 style={{ margin: '0 0 8px', fontSize: 20, fontWeight: 700, color: '#111827' }}>Draft saved!</h3>
+            <p style={{ margin: '0 0 6px', color: '#374151', fontSize: 14, fontWeight: 500 }}>
+              {firstName ? `${firstName}${lastName ? ' ' + lastName : ''}'s` : 'The'} enrollment has been saved as a draft.
+            </p>
+            <p style={{ margin: '0 0 28px', color: '#6b7280', fontSize: 13 }}>
+              You can come back anytime from the <strong>Drafts</strong> button to continue.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftSavedModalOpen(false);
+                  clearDraftNow();
+                }}
+                style={{ padding: '13px 24px', background: 'linear-gradient(135deg, #6c3ce1, #8b5cf6)', color: '#fff', border: 'none', borderRadius: 10, cursor: 'pointer', fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M2 8h12" stroke="#fff" strokeWidth="2" strokeLinecap="round"/></svg>
+                Enroll another student (fresh form)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftSavedModalOpen(false);
+                  if (typeof window !== 'undefined') window.location.href = '/students/list';
+                }}
+                style={{ padding: '13px 24px', background: '#f3f4f6', color: '#374151', border: '1px solid #e5e7eb', borderRadius: 10, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}
+              >
+                Go to students list
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {infoChecklistOpen && (
+        <div onClick={() => setInfoChecklistOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 10001, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 0, maxWidth: 720, width: '100%', maxHeight: '88vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,0.25)' }}>
+            <div style={{ padding: '20px 26px', borderBottom: '1px solid #e5e7eb', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#111827' }}>📋 What you&apos;ll need to enroll a student</h3>
+                <p style={{ margin: '4px 0 0', fontSize: 13, color: '#6b7280' }}>Use this checklist with the parents before starting. <strong style={{ color: '#dc2626' }}>*</strong> = required to enroll.</p>
+              </div>
+              <button type="button" onClick={() => setInfoChecklistOpen(false)} aria-label="Close checklist" style={{ background: 'transparent', border: 'none', fontSize: 22, color: '#6b7280', cursor: 'pointer', padding: 4 }}>×</button>
+            </div>
+            <div style={{ padding: '18px 26px', overflowY: 'auto' }}>
+              {[
+                { n: 1, title: 'Student identity', items: [
+                  { t: 'Full legal name (first, last)', req: true },
+                  { t: 'Date of birth (must match age band of class)', req: true },
+                  { t: 'Gender', req: true },
+                  { t: 'Recent photo (square JPG/PNG, ≥400×400)', req: false },
+                  { t: 'Blood group', req: false },
+                  { t: 'Mother tongue, religion, nationality', req: false },
+                ]},
+                { n: 2, title: 'Academic placement', items: [
+                  { t: 'Academic year', req: true },
+                  { t: 'Class & section', req: true },
+                  { t: 'House (auto-suggested by AI)', req: false },
+                  { t: 'Roll number (auto if blank)', req: false },
+                  { t: 'Admission type, previous school name', req: false },
+                ]},
+                { n: 3, title: 'Contact & address', items: [
+                  { t: 'Mobile number (10-digit)', req: true },
+                  { t: 'Address line, pincode (auto-fills city/state)', req: true },
+                  { t: 'Email address', req: false },
+                  { t: 'Landmark, means of transport', req: false },
+                ]},
+                { n: 4, title: 'Family & guardians', items: [
+                  { t: 'Guardian 1: name, relationship, mobile', req: true },
+                  { t: 'Guardian 1: occupation, email', req: false },
+                  { t: 'Additional guardians (mother/father/other)', req: false },
+                  { t: 'Sibling already in school (for linking)', req: false },
+                  { t: 'Friends/family emergency contacts', req: false },
+                ]},
+                { n: 5, title: 'Government identity', items: [
+                  { t: "Aadhaar number (12-digit) — student's", req: false },
+                  { t: 'Aadhaar of guardian (if student doesn\u2019t have)', req: false },
+                  { t: 'Birth certificate number', req: false },
+                  { t: 'Caste / category certificate (if applicable)', req: false },
+                  { t: 'PAN of guardian (for fee receipts > ₹2L)', req: false },
+                ]},
+                { n: 6, title: 'Documents to upload', items: [
+                  { t: 'Signed parent/guardian consent form', req: true },
+                  { t: 'Birth certificate scan', req: false },
+                  { t: 'Aadhaar scan (student / guardian)', req: false },
+                  { t: 'Previous school TC / report card / mark sheets', req: false },
+                  { t: 'Caste / income certificate (if applicable)', req: false },
+                  { t: 'Custom documents (give a name + short note)', req: false },
+                ]},
+                { n: 7, title: 'Medical & emergency', items: [
+                  { t: 'Emergency contact name & phone', req: true },
+                  { t: 'Known medical conditions (asthma, diabetes…)', req: false },
+                  { t: 'Allergies (food, medication, environment)', req: false },
+                  { t: 'Vaccination history / records', req: false },
+                  { t: 'Family doctor name & phone', req: false },
+                ]},
+                { n: 8, title: 'Specially abled (if applicable)', items: [
+                  { t: 'Type of need (visual, hearing, learning…)', req: false },
+                  { t: 'Disability certificate', req: false },
+                  { t: 'Required accommodations (ramp, scribe, etc.)', req: false },
+                ]},
+                { n: 9, title: 'Identity marks', items: [
+                  { t: 'Visible birth marks, scars, moles (sensitive — keep brief)', req: false },
+                  { t: 'Height & weight', req: false },
+                ]},
+                { n: 10, title: 'Review & enroll', items: [
+                  { t: 'Verify every section', req: true },
+                  { t: 'Print or save the consent PDF', req: false },
+                  { t: 'Submit the form to enroll the student', req: true },
+                ]},
+              ].map((mod) => (
+                <div key={mod.n} style={{ marginBottom: 14, border: '1px solid #e5e7eb', borderRadius: 10, padding: '12px 14px', background: '#fafafa' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    <span style={{ display: 'inline-flex', width: 24, height: 24, borderRadius: '50%', background: '#ede9fe', color: '#6c3ce1', fontSize: 12, fontWeight: 700, alignItems: 'center', justifyContent: 'center' }}>{mod.n}</span>
+                    <h4 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#111827' }}>{mod.title}</h4>
+                  </div>
+                  <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                    {mod.items.map((it, i) => (
+                      <li key={i} style={{ padding: '4px 0', display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, color: '#374151' }}>
+                        <span style={{ color: it.req ? '#dc2626' : '#9ca3af', fontWeight: 700, lineHeight: 1.4, flexShrink: 0 }}>{it.req ? '*' : '·'}</span>
+                        <span>{it.t}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: '14px 26px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end', gap: 10, background: '#f9fafb', borderRadius: '0 0 14px 14px' }}>
+              <button type="button" onClick={() => {
+                // Read school details from header settings (same key as ConsentForm)
+                let schoolName = 'School'; let schoolAddress = ''; let schoolPhone = ''; let affiliationNo = '';
+                try {
+                  const raw = typeof window !== 'undefined' ? window.localStorage.getItem('eskoolia:school:header:v2') : null;
+                  if (raw) { const h = JSON.parse(raw) as { schoolName?: string; schoolAddress?: string; schoolPhone?: string; affiliationNo?: string }; schoolName = h.schoolName || schoolName; schoolAddress = h.schoolAddress || ''; schoolPhone = h.schoolPhone || ''; affiliationNo = h.affiliationNo || ''; }
+                } catch { /* use defaults */ }
+                // Load school details from the same localStorage key used by ConsentForm
+                const _hRaw = typeof window !== 'undefined' ? window.localStorage.getItem('eskoolia:school:header:v2') : null;
+                const _h = _hRaw ? (() => { try { return JSON.parse(_hRaw) as Record<string,string>; } catch { return {}; } })() : {};
+                const _schoolName = _h.schoolName || 'School';
+                const _schoolAddress = _h.schoolAddress || '';
+                const _schoolPhone = _h.schoolPhone || '';
+                const _schoolEmail = _h.schoolEmail || '';
+                const _schoolWebsite = _h.schoolWebsite || '';
+                const _logoDataUrl = _h.logoDataUrl || '';
+                const modules = [
+                  { n: 1, title: 'Student identity', items: [{ t: 'Full legal name (first, last)', req: true },{ t: 'Date of birth (must match age band of class)', req: true },{ t: 'Gender', req: true },{ t: 'Recent photo (square JPG/PNG, ≥400×400)', req: false },{ t: 'Blood group', req: false },{ t: 'Mother tongue, religion, nationality', req: false }]},
+                  { n: 2, title: 'Academic placement', items: [{ t: 'Academic year', req: true },{ t: 'Class & section', req: true },{ t: 'House (auto-suggested by AI)', req: false },{ t: 'Roll number (auto if blank)', req: false },{ t: 'Admission type, previous school name', req: false }]},
+                  { n: 3, title: 'Contact & address', items: [{ t: 'Mobile number (10-digit)', req: true },{ t: 'Address line, pincode (auto-fills city/state)', req: true },{ t: 'Email address', req: false },{ t: 'Landmark, means of transport', req: false }]},
+                  { n: 4, title: 'Family & guardians', items: [{ t: 'Guardian 1: name, relationship, mobile', req: true },{ t: 'Guardian 1: occupation, email', req: false },{ t: 'Additional guardians (mother/father/other)', req: false },{ t: 'Sibling already in school (for linking)', req: false },{ t: 'Friends/family emergency contacts', req: false }]},
+                  { n: 5, title: 'Government identity', items: [{ t: "Aadhaar number (12-digit) — student's", req: false },{ t: 'Aadhaar of guardian (if student doesn\'t have)', req: false },{ t: 'Birth certificate number', req: false },{ t: 'Caste / category certificate (if applicable)', req: false },{ t: 'PAN of guardian (for fee receipts > ₹2L)', req: false }]},
+                  { n: 6, title: 'Documents to upload', items: [{ t: 'Signed parent/guardian consent form', req: true },{ t: 'Birth certificate scan', req: false },{ t: 'Aadhaar scan (student / guardian)', req: false },{ t: 'Previous school TC / report card / mark sheets', req: false },{ t: 'Caste / income certificate (if applicable)', req: false },{ t: 'Custom documents (give a name + short note)', req: false }]},
+                  { n: 7, title: 'Medical & emergency', items: [{ t: 'Emergency contact name & phone', req: true },{ t: 'Known medical conditions (asthma, diabetes…)', req: false },{ t: 'Allergies (food, medication, environment)', req: false },{ t: 'Vaccination history / records', req: false },{ t: 'Family doctor name & phone', req: false }]},
+                  { n: 8, title: 'Specially abled (if applicable)', items: [{ t: 'Type of need (visual, hearing, learning…)', req: false },{ t: 'Disability certificate', req: false },{ t: 'Required accommodations (ramp, scribe, etc.)', req: false }]},
+                  { n: 9, title: 'Identity marks', items: [{ t: 'Visible birth marks, scars, moles (sensitive — keep brief)', req: false },{ t: 'Height & weight', req: false }]},
+                  { n: 10, title: 'Review & enroll', items: [{ t: 'Verify every section', req: true },{ t: 'Print or save the consent PDF', req: false },{ t: 'Submit the form to enroll the student', req: true }]},
+                ];
+                const rows = modules.map(m => `
+                  <div class="mod">
+                    <div class="mod-head"><span class="num">${m.n}</span><strong>${m.title}</strong></div>
+                    <ul>${m.items.map(it => `<li><span class="${it.req ? 'req' : 'opt'}">${it.req ? '★' : '○'}</span>${it.t}</li>`).join('')}</ul>
+                  </div>`).join('');
+                const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"/><title>Enrollment Checklist</title>
+                <style>
+                  *{box-sizing:border-box;margin:0;padding:0}
+                  body{font-family:'Segoe UI',Arial,sans-serif;font-size:12px;color:#111;padding:24px}
+                  h1{font-size:17px;font-weight:800;color:#1a0540;margin-bottom:4px}
+                  .sub{font-size:11px;color:#6b7280;margin-bottom:16px}
+                  .school-bar{font-size:11.5px;color:#374151;padding:6px 10px;background:#f8f7ff;border-radius:6px;border:1px solid #e5e7eb;margin:6px 0 12px}
+                  .legend{font-size:11px;color:#374151;margin-bottom:14px;padding:8px 12px;background:#fef9c3;border-radius:6px;border:1px solid #fde047}
+                  .legend .req{color:#dc2626;font-weight:700} .legend .opt{color:#9ca3af}
+                  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+                  .mod{border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;break-inside:avoid}
+                  .mod-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+                  .num{display:inline-flex;width:20px;height:20px;border-radius:50%;background:#ede9fe;color:#6c3ce1;font-size:11px;font-weight:800;align-items:center;justify-content:center;flex-shrink:0}
+                  .mod-head strong{font-size:12.5px;color:#111827}
+                  ul{list-style:none;padding:0;margin:0}
+                  li{display:flex;align-items:flex-start;gap:6px;padding:3px 0;font-size:11.5px;color:#374151;border-bottom:1px solid #f3f4f6;line-height:1.4}
+                  li:last-child{border-bottom:none}
+                  .req{color:#dc2626;font-weight:700;flex-shrink:0;margin-top:1px}
+                  .opt{color:#9ca3af;flex-shrink:0;margin-top:1px}
+                  .footer{margin-top:18px;font-size:10px;color:#9ca3af;text-align:center;border-top:1px solid #e5e7eb;padding-top:10px}
+                  @media print{body{padding:10px}.grid{grid-template-columns:1fr 1fr}}
+                </style></head><body>
+                <h1>📋 What you'll need to enroll a student</h1>
+                <div class="school-bar"><strong>${schoolName}</strong>${schoolAddress ? ` &nbsp;·&nbsp; ${schoolAddress}` : ''}${schoolPhone ? ` &nbsp;·&nbsp; ${schoolPhone}` : ''}${affiliationNo ? ` &nbsp;·&nbsp; Affiliation: ${affiliationNo}` : ''}</div>
+                <p class="sub">Share with parents before the admission appointment. ★ = required to enroll</p>
+                <div class="legend"><span class="req">★ Required</span> &nbsp;·&nbsp; <span class="opt">○ Optional / bring if available</span></div>
+                <div class="grid">${rows}</div>
+                <div class="footer">${schoolName} &nbsp;·&nbsp; Enrollment Checklist &nbsp;·&nbsp; Printed ${new Date().toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'})}</div>
+                <script>window.onload=()=>{window.print()}</script>
+                </body></html>`;
+                const w = window.open('', '_blank', 'width=800,height=700');
+                if (w) { w.document.write(html); w.document.close(); }
+              }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer', color: '#374151' }}>🖨 Print checklist</button>
+              <button type="button" onClick={() => setInfoChecklistOpen(false)} style={{ padding: '8px 18px', background: '#6c3ce1', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Got it, let&apos;s start</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {photoPreviewOpen && photo ? (
         <div role="dialog" aria-modal="true" aria-label="Student photo preview" onClick={() => setPhotoPreviewOpen(false)} className="photo-preview-overlay">
@@ -3163,11 +4974,723 @@ export function StudentAddPanel() {
         </div>
       ) : null}
 
+      {noSectionModalOpen && (
+        <div 
+          onClick={() => setNoSectionModalOpen(false)} 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()} 
+            role="dialog" 
+            aria-modal="true" 
+            aria-labelledby="no-section-title"
+            style={{
+              background: '#fff',
+              borderRadius: 16,
+              maxWidth: 500,
+              width: '90%',
+              padding: 0,
+              boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04)',
+            }}
+          >
+            <div style={{ padding: '24px 28px', borderBottom: '1px solid #e5e7eb' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 16 }}>
+                <div style={{ 
+                  width: 48, 
+                  height: 48, 
+                  borderRadius: '50%', 
+                  background: '#fef3c7', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                  </svg>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <h3 id="no-section-title" style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 700, color: '#111827' }}>
+                    No Sections Found
+                  </h3>
+                  <p style={{ margin: 0, fontSize: 14, color: '#6b7280', lineHeight: 1.6 }}>
+                    The class you selected has no sections set up yet. What would you like to do?
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: '20px 28px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setNoSectionModalOpen(false);
+                  if (typeof window !== 'undefined') {
+                    window.location.href = '/settings/sections';
+                  }
+                }}
+                style={{
+                  width: '100%',
+                  padding: '12px 20px',
+                  background: '#6c3ce1',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 10,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                }}
+              >
+                <span style={{ flex: 1 }}>Create Sections</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="9 18 15 12 9 6"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSectionId("");
+                  setSectionNotRequired(true);
+                  setNoSectionModalOpen(false);
+                }}
+                style={{
+                  width: '100%',
+                  padding: '12px 20px',
+                  background: '#f3f4f6',
+                  color: '#374151',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 10,
+                  fontSize: 14,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                }}
+              >
+                <span style={{ flex: 1 }}>Proceed Without Section</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setClassId("");
+                  setSections([]);
+                  setSectionId("");
+                  setSectionNotRequired(false);
+                  setNoSectionModalOpen(false);
+                }}
+                style={{
+                  width: '100%',
+                  padding: '12px 20px',
+                  background: '#fff',
+                  color: '#6b7280',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 10,
+                  fontSize: 14,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                  textAlign: 'center',
+                }}
+              >
+                Select Different Class
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {toastMessage ? (
         <div className={toastType === "success" ? "save-toast save-toast-success" : "save-toast save-toast-error"} role="status" aria-live="polite">
           {toastMessage}
         </div>
       ) : null}
+
+      {/* Hidden input + lightweight preview modal for "Upload signed" — bypasses ConsentForm so user sees only the file picker, then a focused preview screen */}
+      <input
+        ref={signedUploadInputRef}
+        type="file"
+        accept="application/pdf,image/jpeg,image/png,image/webp"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (!file) return;
+          if (file.size > 10 * 1024 * 1024) {
+            setSignedUploadError('File is larger than 10 MB. Please upload a smaller scan.');
+            setSignedUploadStatus('error');
+            setSignedUploadOpen(true);
+            return;
+          }
+          if (signedUploadPreviewUrl) URL.revokeObjectURL(signedUploadPreviewUrl);
+          const url = URL.createObjectURL(file);
+          setSignedUploadFile(file);
+          setSignedUploadPreviewUrl(url);
+          setSignedUploadStatus('idle');
+          setSignedUploadError('');
+          setSignedUploadOpen(true);
+        }}
+      />
+
+      {signedUploadOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Preview signed consent copy"
+          onClick={() => { /* click on backdrop closes */
+            setSignedUploadOpen(false);
+            if (signedUploadPreviewUrl) { URL.revokeObjectURL(signedUploadPreviewUrl); }
+            setSignedUploadPreviewUrl('');
+            setSignedUploadFile(null);
+            setSignedUploadStatus('idle');
+            setSignedUploadError('');
+          }}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1200,
+            background: 'rgba(15, 23, 42, 0.55)', backdropFilter: 'blur(2px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(880px, 100%)', maxHeight: '90vh',
+              background: '#fff', borderRadius: 12, boxShadow: '0 24px 60px rgba(2, 6, 23, 0.35)',
+              display: 'flex', flexDirection: 'column', overflow: 'hidden',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 20px', borderBottom: '1px solid #e5e7eb' }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>Preview signed consent copy</div>
+                <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>{signedUploadFile?.name || ''}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSignedUploadOpen(false);
+                  if (signedUploadPreviewUrl) URL.revokeObjectURL(signedUploadPreviewUrl);
+                  setSignedUploadPreviewUrl('');
+                  setSignedUploadFile(null);
+                  setSignedUploadStatus('idle');
+                  setSignedUploadError('');
+                }}
+                style={{ background: 'transparent', border: '1px solid #e5e7eb', borderRadius: 8, padding: '6px 12px', fontSize: 12, cursor: 'pointer', color: '#334155' }}
+              >Close</button>
+            </div>
+
+            <div style={{ flex: 1, overflow: 'auto', background: '#f1f5f9', padding: 16 }}>
+              {signedUploadFile && signedUploadPreviewUrl ? (
+                signedUploadFile.type === 'application/pdf' ? (
+                  <iframe src={signedUploadPreviewUrl} title="Signed copy preview" style={{ width: '100%', height: '70vh', border: '1px solid #e5e7eb', borderRadius: 8, background: '#fff' }} />
+                ) : (
+                  <img src={signedUploadPreviewUrl} alt="Signed copy preview" style={{ display: 'block', maxWidth: '100%', maxHeight: '70vh', margin: '0 auto', border: '1px solid #e5e7eb', borderRadius: 8, background: '#fff' }} />
+                )
+              ) : (
+                <div style={{ padding: 40, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No file selected.</div>
+              )}
+            </div>
+
+            {signedUploadStatus === 'error' && (
+              <div style={{ padding: '10px 20px', background: '#fef2f2', borderTop: '1px solid #fecaca', color: '#b91c1c', fontSize: 12 }}>
+                ⚠ {signedUploadError}
+              </div>
+            )}
+            {signedUploadStatus === 'done' && (
+              <div style={{ padding: '10px 20px', background: '#ecfdf5', borderTop: '1px solid #a7f3d0', color: '#047857', fontSize: 12 }}>
+                ✓ Signed copy uploaded and saved to the student record.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, padding: '12px 20px', borderTop: '1px solid #e5e7eb', background: '#fafafa' }}>
+              <button
+                type="button"
+                onClick={() => signedUploadInputRef.current?.click()}
+                disabled={signedUploadStatus === 'uploading'}
+                style={{ background: '#fff', border: '1px solid #cbd5e1', borderRadius: 8, padding: '8px 14px', fontSize: 13, color: '#334155', cursor: 'pointer' }}
+              >Choose different file</button>
+              <button
+                type="button"
+                disabled={!signedUploadFile || signedUploadStatus === 'uploading' || signedUploadStatus === 'done'}
+                onClick={async () => {
+                  if (!signedUploadFile) return;
+                  if (!studentId) {
+                    setSignedUploadError('Please save / enroll the student first, then upload the signed copy.');
+                    setSignedUploadStatus('error');
+                    return;
+                  }
+                  setSignedUploadStatus('uploading');
+                  setSignedUploadError('');
+                  try {
+                    const fd = new FormData();
+                    fd.append('student_id', String(studentId));
+                    fd.append('document_type', 'consent_form');
+                    fd.append('title', `Signed Consent Form — ${firstName} ${lastName}`.trim());
+                    fd.append('file', signedUploadFile);
+                    const res = await fetch('/api/students/documents/upload_document/', {
+                      method: 'POST', body: fd, credentials: 'include',
+                    });
+                    if (!res.ok) {
+                      const errBody = await res.json().catch(() => ({}));
+                      throw new Error((errBody as Record<string,string>).error || `Upload failed (${res.status})`);
+                    }
+                    setSignedUploadStatus('done');
+                    setToastType('success');
+                    setToastMessage('Signed consent copy uploaded successfully.');
+                    setTimeout(() => setToastMessage(''), 4000);
+                  } catch (err: unknown) {
+                    setSignedUploadError(err instanceof Error ? err.message : 'Upload failed. Please try again.');
+                    setSignedUploadStatus('error');
+                  }
+                }}
+                style={{
+                  background: signedUploadStatus === 'done' ? '#10b981' : '#7c3aed',
+                  border: 'none', color: '#fff', borderRadius: 8, padding: '8px 18px',
+                  fontSize: 13, fontWeight: 600,
+                  cursor: (!signedUploadFile || signedUploadStatus === 'uploading' || signedUploadStatus === 'done') ? 'not-allowed' : 'pointer',
+                  opacity: (!signedUploadFile || signedUploadStatus === 'uploading') ? 0.6 : 1,
+                }}
+              >
+                {signedUploadStatus === 'uploading' ? 'Uploading…' : signedUploadStatus === 'done' ? '✓ Uploaded' : 'Submit signed copy'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {consentOpen && (
+        <ConsentForm
+          onClose={() => { setConsentOpen(false); setConsentOpenWithSettings(false); setConsentInitialAction(null); }}
+          openWithSettings={consentOpenWithSettings}
+          initialAction={consentInitialAction}
+          student={{
+            firstName,
+            lastName,
+            admissionNo,
+            dateOfBirth,
+            classId,
+            sectionId,
+            photo,
+            className: orderedClasses.find((c) => String(c.id) === classId)?.name ?? "",
+            sectionName: sections.find((s) => String(s.id) === sectionId)?.name ?? "",
+            gender,
+            bloodGroup,
+            motherTongue,
+            religion,
+            nationality,
+            statusValue,
+            academicYearName: validAcademicYears.find(y => String(y.id) === academicYearId)?.name,
+            admissionType,
+            categoryName: validCategories.find((c) => String(c.id) === categoryId)?.name,
+            streamId,
+            previousSchoolName,
+            phone,
+            email,
+            addressLine,
+            city,
+            district,
+            stateName,
+            pincode,
+            guardians: guardianDrafts.map(g => ({ full_name: g.fullName, relation: g.relation, phone: g.phone, email: g.email, occupation: g.occupation, isPrimary: g.isPrimary })),
+            pen,
+            abcId,
+            documents: {
+              birth_certificate: { status: documents.birth_certificate.status, fileName: documents.birth_certificate.fileName },
+              aadhaar_card: { status: documents.aadhaar_card.status, fileName: documents.aadhaar_card.fileName },
+              medical_information: { status: documents.medical_information.status, fileName: documents.medical_information.fileName },
+              caste_certificate: { status: documents.caste_certificate.status, fileName: documents.caste_certificate.fileName },
+              udid_card: { status: documents.udid_card.status, fileName: documents.udid_card.fileName },
+            },
+            consentChecked,
+            heightCm,
+            weightKg,
+            vision,
+            medicalConditions,
+            allergies,
+            currentMedications,
+            treatingDoctor,
+            checkedVaccinations,
+            emergencyName,
+            emergencyPhone,
+            isPwD,
+            disabilityTypes,
+            disabilityPercent,
+            udid,
+            accommodations,
+            identityMarks,
+            eyeColour,
+            hairColour,
+            complexion,
+            build,
+          }}
+          onOcrApply={(results) => {
+            if (results.firstName) setFirstName(results.firstName.charAt(0).toUpperCase() + results.firstName.slice(1).toLowerCase());
+            if (results.lastName) setLastName(results.lastName.charAt(0).toUpperCase() + results.lastName.slice(1).toLowerCase());
+            if (results.dateOfBirth) setDateOfBirth(results.dateOfBirth);
+            if (results.gender) setGender(results.gender.charAt(0).toUpperCase() + results.gender.slice(1).toLowerCase());
+            if (results.bloodGroup) setBloodGroup(results.bloodGroup.toUpperCase());
+            if (results.religion) setReligion(results.religion.charAt(0).toUpperCase() + results.religion.slice(1).toLowerCase());
+            if (results.nationality) setNationality(results.nationality.charAt(0).toUpperCase() + results.nationality.slice(1).toLowerCase());
+            if (results.motherTongue) setMotherTongue(results.motherTongue.charAt(0).toUpperCase() + results.motherTongue.slice(1).toLowerCase());
+            if (results.aadhaarNo) setAadhaarNo(results.aadhaarNo.replace(/\s/g, ''));
+            if (results.phone) setPhone(results.phone.replace(/\s/g, ''));
+            if (results.email) setEmail(results.email.toLowerCase().replace(/\s/g, ''));
+            if (results.addressLine) setAddressLine(results.addressLine);
+            if (results.city) setCity(results.city.charAt(0).toUpperCase() + results.city.slice(1).toLowerCase());
+            if (results.district) setDistrict(results.district.charAt(0).toUpperCase() + results.district.slice(1).toLowerCase());
+            if (results.stateName) setStateName(results.stateName.charAt(0).toUpperCase() + results.stateName.slice(1).toLowerCase());
+            if (results.pincode) setPincode(results.pincode.replace(/\s/g, ''));
+            // Guardian: update first guardian draft if exists, else create
+            if (results.guardianName || results.guardianPhone || results.guardianEmail) {
+              setGuardianDrafts(prev => {
+                const updated = [...prev];
+                if (updated.length === 0) {
+                  updated.push(makeEmptyGuardianDraft(true));
+                }
+                const g = { ...updated[0] };
+                if (results.guardianName) g.fullName = results.guardianName;
+                if (results.guardianPhone) g.phone = results.guardianPhone.replace(/\s/g, '');
+                if (results.guardianEmail) g.email = results.guardianEmail.toLowerCase().replace(/\s/g, '');
+                if (results.guardianRelation) g.relation = results.guardianRelation;
+                if (results.guardianOccupation) g.occupation = results.guardianOccupation;
+                updated[0] = g;
+                return updated;
+              });
+            }
+          }}
+        />
+      )}
+
+      {scanFillOpen && (
+        <ScanFillModal
+          onClose={() => setScanFillOpen(false)}
+          onApply={(results) => {
+            if (results.firstName) setFirstName(results.firstName.charAt(0).toUpperCase() + results.firstName.slice(1).toLowerCase());
+            if (results.lastName) setLastName(results.lastName.charAt(0).toUpperCase() + results.lastName.slice(1).toLowerCase());
+            if (results.dateOfBirth) setDateOfBirth(results.dateOfBirth);
+            if (results.gender) setGender(results.gender.charAt(0).toUpperCase() + results.gender.slice(1).toLowerCase());
+            if (results.bloodGroup) setBloodGroup(results.bloodGroup.toUpperCase());
+            if (results.religion) setReligion(results.religion.charAt(0).toUpperCase() + results.religion.slice(1).toLowerCase());
+            if (results.nationality) setNationality(results.nationality.charAt(0).toUpperCase() + results.nationality.slice(1).toLowerCase());
+            if (results.motherTongue) setMotherTongue(results.motherTongue.charAt(0).toUpperCase() + results.motherTongue.slice(1).toLowerCase());
+            if (results.aadhaarNo) setAadhaarNo(results.aadhaarNo.replace(/\s/g, ''));
+            if (results.phone) setPhone(results.phone.replace(/\s/g, ''));
+            if (results.email) setEmail(results.email.toLowerCase().replace(/\s/g, ''));
+            if (results.addressLine) setAddressLine(results.addressLine);
+            if (results.city) setCity(results.city.charAt(0).toUpperCase() + results.city.slice(1).toLowerCase());
+            if (results.district) setDistrict(results.district.charAt(0).toUpperCase() + results.district.slice(1).toLowerCase());
+            if (results.stateName) setStateName(results.stateName.charAt(0).toUpperCase() + results.stateName.slice(1).toLowerCase());
+            if (results.pincode) setPincode(results.pincode.replace(/\s/g, ''));
+            if (results.guardianName || results.guardianPhone || results.guardianEmail) {
+              setGuardianDrafts(prev => {
+                const updated = [...prev];
+                if (updated.length === 0) updated.push(makeEmptyGuardianDraft(true));
+                const g = { ...updated[0] };
+                if (results.guardianName) g.fullName = results.guardianName;
+                if (results.guardianPhone) g.phone = results.guardianPhone.replace(/\s/g, '');
+                if (results.guardianEmail) g.email = results.guardianEmail.toLowerCase().replace(/\s/g, '');
+                if (results.guardianRelation) g.relation = results.guardianRelation;
+                if (results.guardianOccupation) g.occupation = results.guardianOccupation;
+                updated[0] = g;
+                return updated;
+              });
+            }
+            setScanFillOpen(false);
+          }}
+        />
+      )}
+
+      {draftsOpen && (
+        <div className="ai-overlay" onClick={() => setDraftsOpen(false)}>
+          <div className="ai-modal ai-modal-drafts" onClick={e => e.stopPropagation()} role="dialog" aria-labelledby="drafts-title">
+            <div className="ai-modal-head">
+              <div className="ai-modal-head-left">
+                <div className="ai-modal-icon ai-modal-icon-drafts">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </div>
+                <div>
+                  <h3 id="drafts-title" className="ai-modal-title">Saved drafts</h3>
+                  <p className="ai-modal-sub">Pick up where you left off — your work is safe on this device.</p>
+                </div>
+              </div>
+              <button type="button" className="ai-close" onClick={() => setDraftsOpen(false)} aria-label="Close">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+
+            {(() => {
+              let drafts: Array<{id:string; savedAt:number; label:string; admissionNo:string; firstName:string; lastName:string; classId:string; data:Record<string,unknown>}> = [];
+              try {
+                const raw = typeof window !== 'undefined' ? window.localStorage.getItem(STUDENT_DRAFTS_KEY) : null;
+                if (raw) drafts = JSON.parse(raw);
+              } catch { drafts = []; }
+
+              if (drafts.length === 0) {
+                return (
+                  <div className="ai-empty">
+                    <div className="ai-empty-illustration" aria-hidden="true">
+                      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg>
+                    </div>
+                    <h4 className="ai-empty-title">No drafts yet</h4>
+                    <p className="ai-empty-text">Start filling the form and click <strong>Save draft</strong> in the footer — your drafts are stored on this device.</p>
+                    <button type="button" className="ai-cta-btn" onClick={() => setDraftsOpen(false)}>Got it</button>
+                  </div>
+                );
+              }
+
+              const computeDraftStats = (data: Record<string, unknown>) => {
+                const fields = [
+                  data.firstName, data.lastName, data.dateOfBirth, data.gender,
+                  data.admissionNo, data.classId, data.sectionId || data.sectionLater,
+                  data.phone, data.addressLine, data.pincode,
+                  Array.isArray(data.guardianDrafts) && (data.guardianDrafts as unknown[]).length > 0,
+                ];
+                const filled = fields.filter(v => v && String(v).trim() !== '').length;
+                const pct = Math.round((filled / fields.length) * 100);
+                const missing: string[] = [];
+                if (!data.firstName || !data.lastName) missing.push('Name');
+                if (!data.dateOfBirth) missing.push('DOB');
+                if (!data.classId) missing.push('Class');
+                if (!data.phone) missing.push('Phone');
+                if (!Array.isArray(data.guardianDrafts) || (data.guardianDrafts as unknown[]).length === 0) missing.push('Guardian');
+                return { pct, missing };
+              };
+
+              const filtered = drafts
+                .filter(d => {
+                  if (!draftSearch.trim()) return true;
+                  const q = draftSearch.toLowerCase();
+                  return (
+                    (d.firstName || '').toLowerCase().includes(q) ||
+                    (d.lastName || '').toLowerCase().includes(q) ||
+                    (d.admissionNo || '').toLowerCase().includes(q)
+                  );
+                })
+                .map(d => ({ ...d, stats: computeDraftStats(d.data) }));
+
+              filtered.sort((a, b) => {
+                if (draftSort === 'recent') return b.savedAt - a.savedAt;
+                if (draftSort === 'oldest') return a.savedAt - b.savedAt;
+                return b.stats.pct - a.stats.pct;
+              });
+
+              const DRAFTS_PER_PAGE = 15;
+              const totalPages = Math.max(1, Math.ceil(filtered.length / DRAFTS_PER_PAGE));
+              const safePage = Math.min(draftsPage, totalPages);
+              const pageSlice = filtered.slice((safePage - 1) * DRAFTS_PER_PAGE, safePage * DRAFTS_PER_PAGE);
+
+              return (
+                <>
+                  <div className="ai-toolbar">
+                    <div className="ai-search">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                      <input type="text" placeholder="Search by name or admission no…" value={draftSearch} onChange={e => { setDraftSearch(e.target.value); setDraftsPage(1); }} />
+                    </div>
+                    <div className="ai-sort">
+                      {(['recent', 'oldest', 'progress'] as const).map(s => (
+                        <button key={s} type="button" className={draftSort === s ? 'ai-sort-pill active' : 'ai-sort-pill'} onClick={() => { setDraftSort(s); setDraftsPage(1); }}>
+                          {s === 'recent' ? 'Recent' : s === 'oldest' ? 'Oldest' : 'Most complete'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="ai-modal-body">
+                    {filtered.length === 0 ? (
+                      <p className="ai-no-match">No drafts match &quot;{draftSearch}&quot;.</p>
+                    ) : pageSlice.map(draft => {
+                      const diffMs = Math.max(0, Date.now() - draft.savedAt);
+                      const mins = Math.floor(diffMs / 60000);
+                      const timeAgo = mins < 1 ? 'just now' : mins === 1 ? '1 min ago' : mins < 60 ? `${mins} min ago` : mins < 1440 ? `${Math.floor(mins/60)} hr ago` : `${Math.floor(mins/1440)} day(s) ago`;
+                      const name = [draft.firstName, draft.lastName].filter(Boolean).join(' ') || 'Unnamed draft';
+                      const initials = (draft.firstName?.[0] || '?').toUpperCase() + (draft.lastName?.[0] || '').toUpperCase();
+                      const { pct, missing } = draft.stats;
+                      const tone = pct >= 80 ? 'high' : pct >= 40 ? 'mid' : 'low';
+                      const smartTip = pct >= 80
+                        ? 'Almost done — just one click to finish!'
+                        : pct >= 40
+                        ? `Good progress. Still missing: ${missing.slice(0, 2).join(', ')}.`
+                        : 'Just getting started — load to continue.';
+                      return (
+                        <div key={draft.id} className="ai-draft-card">
+                          <div className="ai-draft-avatar" data-tone={tone}>{initials}</div>
+                          <div className="ai-draft-body">
+                            <div className="ai-draft-row">
+                              <span className="ai-draft-name">{name}</span>
+                              {draft.admissionNo && <span className="ai-draft-chip">#{draft.admissionNo}</span>}
+                            </div>
+                            <div className="ai-draft-meta">
+                              <span>Saved {timeAgo}</span>
+                              <span className="ai-dot" />
+                              <span className={`ai-pct ai-pct-${tone}`}>{pct}% complete</span>
+                            </div>
+                            <div className="ai-progress-track">
+                              <div className={`ai-progress-bar ai-progress-${tone}`} style={{ width: `${pct}%` }} />
+                            </div>
+                            <p className="ai-draft-tip">
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l1.9 5.8L20 9.7l-5 3.6L16.5 19 12 15.7 7.5 19 9 13.3l-5-3.6 6.1-1.9L12 2z"/></svg>
+                              {smartTip}
+                            </p>
+                          </div>
+                          <div className="ai-draft-actions">
+                            <button type="button" className="ai-btn-primary" onClick={() => {
+                              restoreDraftFromObject(draft.data);
+                              setDraftsOpen(false);
+                              showToast(`Loaded "${name}". Continue from where you stopped.`, 'success', 4000);
+                            }}>Resume</button>
+                            <button type="button" className="ai-btn-ghost-danger" onClick={() => {
+                              if (!confirm(`Delete draft "${name}"?`)) return;
+                              try {
+                                const raw = window.localStorage.getItem(STUDENT_DRAFTS_KEY);
+                                let arr: typeof drafts = raw ? JSON.parse(raw) : [];
+                                arr = arr.filter(d => d.id !== draft.id);
+                                window.localStorage.setItem(STUDENT_DRAFTS_KEY, JSON.stringify(arr));
+                              } catch { /* ignore */ }
+                              setDraftsOpen(false);
+                              setTimeout(() => setDraftsOpen(true), 0);
+                            }} aria-label={`Delete draft ${name}`}>
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {totalPages > 1 && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '12px 20px', borderTop: '1px solid #f3f4f6' }}>
+                      <button type="button" disabled={safePage <= 1} onClick={() => setDraftsPage(p => Math.max(1, p - 1))} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #e5e7eb', background: safePage <= 1 ? '#f9fafb' : '#fff', cursor: safePage <= 1 ? 'default' : 'pointer', color: safePage <= 1 ? '#d1d5db' : '#374151', fontSize: 13 }}>← Prev</button>
+                      <span style={{ fontSize: 12, color: '#6b7280' }}>Page {safePage} of {totalPages} · {filtered.length} draft{filtered.length !== 1 ? 's' : ''}</span>
+                      <button type="button" disabled={safePage >= totalPages} onClick={() => setDraftsPage(p => Math.min(totalPages, p + 1))} style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #e5e7eb', background: safePage >= totalPages ? '#f9fafb' : '#fff', cursor: safePage >= totalPages ? 'default' : 'pointer', color: safePage >= totalPages ? '#d1d5db' : '#374151', fontSize: 13 }}>Next →</button>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {aiOpen && (() => {
+        const completedSteps = NAV_ITEMS.filter(i => i.id !== 'review' && isStepComplete(i.id)).length;
+        const totalSteps = NAV_ITEMS.length - 1;
+        const overallPct = Math.round((completedSteps / totalSteps) * 100);
+
+        const tips: Array<{ icon: string; title: string; body: string; tone: 'info' | 'warn' | 'success'; action?: { label: string; run: () => void } }> = [];
+
+        if (!firstName.trim() || !lastName.trim() || !dateOfBirth) {
+          tips.push({ icon: '👤', tone: 'warn', title: 'Start with the basics', body: 'Identity is the first step — name and date of birth unlock the rest of the form.', action: { label: 'Go to Identity', run: () => { setAiOpen(false); setActiveNavSection('identity'); } } });
+        }
+        if (phone && !/^\d{10}$/.test(phone.replace(/\D/g, ''))) {
+          tips.push({ icon: '📱', tone: 'warn', title: 'Phone number looks off', body: 'Indian phone numbers should be exactly 10 digits. Re-check the contact step.', action: { label: 'Fix contact', run: () => { setAiOpen(false); setActiveNavSection('contact'); } } });
+        }
+        if (pincode && pincode.length !== 6) {
+          tips.push({ icon: '📍', tone: 'warn', title: 'Pincode incomplete', body: 'Indian pincodes are 6 digits. Enter it and we&apos;ll auto-fill city/district/state.', action: { label: 'Fix pincode', run: () => { setAiOpen(false); setActiveNavSection('contact'); } } });
+        }
+        if (guardianDrafts.length === 0 || !guardianDrafts[0]?.fullName?.trim()) {
+          tips.push({ icon: '👨‍👩‍👧', tone: 'warn', title: 'Add a guardian', body: 'At least one guardian (name + phone) is required before you can submit.', action: { label: 'Add guardian', run: () => { setAiOpen(false); setActiveNavSection('guardians'); } } });
+        }
+        if (overallPct >= 30 && overallPct < 100) {
+          tips.push({ icon: '💾', tone: 'info', title: 'Save your progress', body: `You&apos;re ${overallPct}% done. Save a draft so nothing is lost — you can resume anytime from the Drafts panel.`, action: { label: 'Save draft now', run: () => { setAiOpen(false); saveDraftSnapshot(); showToast('Draft saved.', 'success', 3000); } } });
+        }
+        if (overallPct < 50) {
+          tips.push({ icon: '⚡', tone: 'info', title: 'Speed tip — Aadhaar QR scan', body: 'Got the student&apos;s Aadhaar card? Scan the QR to auto-fill name, DOB, gender and address in one go.', });
+        }
+        if (overallPct === 100) {
+          tips.push({ icon: '🎉', tone: 'success', title: "You're ready to submit!", body: 'Every required step is complete. Head to Review to do a final check, then submit.', action: { label: 'Go to Review', run: () => { setAiOpen(false); setActiveNavSection('review'); } } });
+        }
+        if (tips.length === 0) {
+          tips.push({ icon: '✨', tone: 'success', title: "Everything looks great", body: "No issues spotted. Keep going!" });
+        }
+
+        return (
+          <div className="ai-overlay" onClick={() => setAiOpen(false)}>
+            <div className="ai-modal ai-modal-ai" onClick={e => e.stopPropagation()} role="dialog" aria-labelledby="ai-title">
+              <div className="ai-modal-head ai-modal-head-gradient">
+                <div className="ai-modal-head-left">
+                  <div className="ai-modal-icon ai-modal-icon-ai">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l1.9 5.8L20 9.7l-5 3.6L16.5 19 12 15.7 7.5 19 9 13.3l-5-3.6 6.1-1.9L12 2z"/></svg>
+                  </div>
+                  <div>
+                    <h3 id="ai-title" className="ai-modal-title ai-modal-title-light">Eskoolia AI Assist <span className="ai-beta-pill">BETA</span></h3>
+                    <p className="ai-modal-sub ai-modal-sub-light">Smart tips based on your current form.</p>
+                  </div>
+                </div>
+                <button type="button" className="ai-close ai-close-light" onClick={() => setAiOpen(false)} aria-label="Close">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+              </div>
+
+              <div className="ai-summary-card">
+                <div className="ai-summary-left">
+                  <p className="ai-summary-label">Overall completion</p>
+                  <p className="ai-summary-pct">{overallPct}%</p>
+                  <p className="ai-summary-hint">{completedSteps} of {totalSteps} steps done</p>
+                </div>
+                <div className="ai-summary-ring" data-pct={overallPct} aria-hidden="true">
+                  <svg width="76" height="76" viewBox="0 0 76 76">
+                    <circle cx="38" cy="38" r="32" fill="none" stroke="rgba(108,60,225,0.15)" strokeWidth="6" />
+                    <circle cx="38" cy="38" r="32" fill="none" stroke="url(#aiGrad)" strokeWidth="6" strokeLinecap="round" strokeDasharray={`${(overallPct / 100) * 201} 201`} transform="rotate(-90 38 38)" />
+                    <defs>
+                      <linearGradient id="aiGrad" x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0%" stopColor="#8b5cf6" />
+                        <stop offset="100%" stopColor="#ec4899" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
+                </div>
+              </div>
+
+              <div className="ai-modal-body">
+                <p className="ai-section-label">SUGGESTIONS FOR YOU</p>
+                {tips.map((t, idx) => (
+                  <div key={idx} className={`ai-tip ai-tip-${t.tone}`}>
+                    <div className="ai-tip-icon">{t.icon}</div>
+                    <div className="ai-tip-body">
+                      <p className="ai-tip-title">{t.title}</p>
+                      <p className="ai-tip-text" dangerouslySetInnerHTML={{ __html: t.body }} />
+                    </div>
+                    {t.action && (
+                      <button type="button" className="ai-tip-action" onClick={t.action.run}>{t.action.label} →</button>
+                    )}
+                  </div>
+                ))}
+
+                <div className="ai-quickbar">
+                  <button type="button" className="ai-quick" onClick={() => { setAiOpen(false); saveDraftSnapshot(); showToast('Draft saved.', 'success', 3000); }}>
+                    <span>💾</span> Save draft
+                  </button>
+                  <button type="button" className="ai-quick" onClick={() => { setAiOpen(false); setDraftsOpen(true); }}>
+                    <span>📋</span> View drafts
+                  </button>
+                  <button type="button" className="ai-quick" onClick={() => { setAiOpen(false); setConsentOpenWithSettings(true); setConsentOpen(true); }}>
+                    <span>📄</span> Preview PDF
+                  </button>
+                </div>
+
+                <p className="ai-disclaimer">Tips are generated locally from the data you&apos;ve entered. Nothing is sent to a server.</p>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <style jsx>{`
         /* Root fills the available <main> area AND bleeds through
@@ -3208,6 +5731,7 @@ export function StudentAddPanel() {
           overflow-y: auto;
           overflow-x: hidden;
           padding: 18px;
+          padding-bottom: 32px;
         }
 
         /* Action bar — lives OUTSIDE .enroll-scroll so it's always visible.
@@ -3216,13 +5740,14 @@ export function StudentAddPanel() {
         .enroll-footer {
           flex-shrink: 0;
           display: flex;
+          flex-wrap: wrap;
           justify-content: space-between;
           align-items: center;
-          gap: 16px;
-          min-height: 72px;
+          gap: 12px 24px;
+          min-height: 84px;
           background: #ffffff;
           border-top: 1px solid #ececf2;
-          padding: 14px 24px;
+          padding: 18px 28px;
           box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.05);
           z-index: 40;
         }
@@ -3251,6 +5776,11 @@ export function StudentAddPanel() {
           margin: 0;
         }
 
+        .crumb-sep {
+          margin: 0 4px;
+          color: var(--muted);
+        }
+
         .crumbs a {
           color: var(--muted);
           text-decoration: none;
@@ -3269,6 +5799,18 @@ export function StudentAddPanel() {
           height: 8px;
           border-radius: 50%;
           background: #10b981;
+          transition: background 0.3s;
+        }
+
+        @keyframes dot-pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
+
+        .review-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+          gap: 12px;
         }
 
         .avatar-circle {
@@ -3503,7 +6045,8 @@ export function StudentAddPanel() {
 
         .nav-label {
           font-size: 14px;
-          color: #6b7280;
+          color: #1f2937;
+          font-weight: 500;
           line-height: 1.2;
         }
 
@@ -3516,7 +6059,7 @@ export function StudentAddPanel() {
 
         .nav-copy {
           font-size: 12px;
-          color: #9ca3af;
+          color: #6b7280;
           line-height: 1.3;
         }
 
@@ -3550,6 +6093,25 @@ export function StudentAddPanel() {
           color: #6d28d9;
         }
 
+        /* Locked steps: visible labels, but not interactive */
+        .nav-item.locked .nav-item-inner {
+          cursor: not-allowed;
+        }
+        .nav-item.locked .nav-item-inner:hover {
+          background: transparent;
+        }
+        .nav-item.locked .nav-bullet {
+          background: #f9fafb;
+          color: #9ca3af;
+          border-color: #e5e7eb;
+        }
+        .nav-item.locked .nav-label {
+          color: #4b5563;
+        }
+        .nav-item.locked .nav-copy {
+          color: #9ca3af;
+        }
+
         .heads-up-card {
           margin-top: 20px;
           background: #ede9fe;
@@ -3577,43 +6139,64 @@ export function StudentAddPanel() {
 
         .section-nav-buttons {
           display: flex;
-          gap: 12px;
-          margin-top: 28px;
+          width: 100%;
+          align-items: center;
           justify-content: space-between;
+          margin-top: 32px;
+          padding-top: 20px;
+          border-top: 1px solid var(--line);
+          gap: 12px;
         }
 
         .btn-nav-prev {
-          padding: 10px 20px;
-          border: 1px solid var(--line);
-          background: transparent;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 10px 22px;
+          border: 1px solid #d1d5db;
+          background: #fff;
           border-radius: 8px;
           cursor: pointer;
           font-size: 14px;
           font-weight: 500;
-          color: var(--ink);
-          transition: all 0.2s ease;
+          color: #374151;
+          transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+          white-space: nowrap;
         }
 
         .btn-nav-prev:hover {
           background: #f3f4f6;
-          border-color: #d1d5db;
+          border-color: #9ca3af;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
 
         .btn-nav-next {
-          padding: 10px 20px;
-          border: 1px solid var(--primary);
-          background: var(--primary);
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 10px 22px;
+          border: 1px solid var(--brand);
+          background: var(--brand);
           color: #fff;
           border-radius: 8px;
           cursor: pointer;
           font-size: 14px;
-          font-weight: 500;
-          transition: all 0.2s ease;
+          font-weight: 600;
+          transition: background 0.15s, box-shadow 0.15s, transform 0.15s;
+          box-shadow: 0 1px 2px rgba(108, 60, 225, 0.18);
+          white-space: nowrap;
         }
 
         .btn-nav-next:hover {
-          opacity: 0.9;
+          background: #5a2fc9;
+          border-color: #5a2fc9;
           transform: translateY(-1px);
+          box-shadow: 0 4px 10px rgba(108, 60, 225, 0.25);
+        }
+
+        .btn-nav-next:active {
+          transform: translateY(0);
+          box-shadow: 0 1px 2px rgba(108, 60, 225, 0.18);
         }
 
         .section-content {
@@ -3704,6 +6287,8 @@ export function StudentAddPanel() {
           font-size: 14px;
           background: #fff;
           box-sizing: border-box;
+          appearance: auto;
+          -webkit-appearance: menulist;
         }
 
         .field-input:focus,
@@ -3860,25 +6445,39 @@ export function StudentAddPanel() {
         }
 
         .status-toggle {
-          display: flex;
-          border: 1px solid #e5e7eb;
-          border-radius: 8px;
+          display: inline-flex;
+          border: 1.5px solid #d1d5db;
+          border-radius: 10px;
           overflow: hidden;
+          background: #f3f4f6;
         }
 
         .toggle-pill {
           flex: 1;
           border: none;
-          background: #f9fafb;
+          background: transparent;
           color: #6b7280;
-          padding: 10px 0;
+          padding: 9px 24px;
           cursor: pointer;
+          font-size: 14px;
+          font-weight: 500;
+          transition: background 0.18s, color 0.18s, box-shadow 0.18s;
+          white-space: nowrap;
         }
+
+        .toggle-pill:first-child { border-radius: 8px 0 0 8px; }
+        .toggle-pill:last-child  { border-radius: 0 8px 8px 0; }
 
         .toggle-pill.active {
           background: var(--brand);
           color: #fff;
           font-weight: 600;
+          box-shadow: inset 0 1px 2px rgba(0,0,0,0.12);
+        }
+
+        .toggle-pill:not(.active):hover {
+          background: #e5e7eb;
+          color: #374151;
         }
 
         .doc-check {
@@ -3903,6 +6502,54 @@ export function StudentAddPanel() {
           gap: 12px;
         }
 
+        .review-pdf-section { 
+          margin: 24px 0; 
+          padding: 20px; 
+          background: linear-gradient(135deg, #f8f7ff 0%, #ede9fe 100%); 
+          border-radius: 10px; 
+          border: 1px solid #c4b5fd; 
+          text-align: center; 
+        }
+        .review-pdf-title { 
+          font-size: 16px; 
+          font-weight: 700; 
+          color: #1f2937; 
+          margin-bottom: 6px; 
+        }
+        .review-pdf-note { 
+          font-size: 13px; 
+          color: #6b7280; 
+          margin-bottom: 14px; 
+        }
+        .review-pdf-actions { 
+          display: flex; 
+          gap: 12px; 
+          justify-content: center; 
+          flex-wrap: wrap; 
+        }
+        .review-pdf-btn { 
+          padding: 10px 22px; 
+          background: #6c3ce1; 
+          color: #fff; 
+          border: none; 
+          border-radius: 8px; 
+          font-size: 14px; 
+          font-weight: 600; 
+          cursor: pointer; 
+          transition: background 120ms ease;
+        }
+        .review-pdf-btn:hover { 
+          background: #5a2fc0; 
+        }
+        .review-pdf-btn.secondary { 
+          background: #fff; 
+          color: #6c3ce1; 
+          border: 2px solid #6c3ce1; 
+        }
+        .review-pdf-btn.secondary:hover { 
+          background: #f5f3ff; 
+        }
+
         .age-warning {
           margin: 12px 0 0;
           border: 1px solid #f59e0b;
@@ -3920,25 +6567,28 @@ export function StudentAddPanel() {
           display: flex;
           align-items: center;
           gap: 12px;
-          min-width: 320px;
-          max-width: 52%;
-          flex: 1;
+          flex: 1 1 260px;
+          min-width: 0;
+          max-width: 100%;
+          padding-right: 8px;
+          overflow: hidden;
         }
 
         .footer-progress-label {
           font-size: 13px;
           color: #6b7280;
           white-space: nowrap;
+          flex-shrink: 0;
         }
 
         .footer-progress-track {
           position: relative;
+          flex: 0 0 220px;
           width: 220px;
           height: 6px;
           border-radius: 999px;
           background: #e5e7eb;
           overflow: hidden;
-          flex-shrink: 0;
         }
 
         .footer-progress-fill {
@@ -3971,9 +6621,11 @@ export function StudentAddPanel() {
 
         .footer-actions {
           display: flex;
-          gap: 14px;
+          flex-wrap: wrap;
+          gap: 8px;
           align-items: center;
-          flex-shrink: 0;
+          flex: 0 1 auto;
+          min-width: 0;
         }
 
         .btn-discard {
@@ -3983,6 +6635,8 @@ export function StudentAddPanel() {
           cursor: pointer;
           font-size: 14px;
           padding: 8px 4px;
+          white-space: nowrap;
+          flex-shrink: 0;
         }
 
         .btn-discard:hover {
@@ -3999,6 +6653,59 @@ export function StudentAddPanel() {
           font-size: 14px;
           line-height: 1.2;
           text-decoration: none;
+        }
+
+        .btn-outline {
+          padding: 12px 20px;
+          border: 1px solid var(--brand);
+          border-radius: 14px;
+          background: transparent;
+          color: var(--brand);
+          cursor: pointer;
+          font-size: 14px;
+          font-weight: 500;
+          line-height: 1.2;
+          transition: background 140ms ease;
+        }
+
+        .btn-outline:hover:not(:disabled) {
+          background: rgba(108,60,225,.06);
+        }
+
+        .btn-outline:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
+
+        /* Pill buttons — e.g. Vision options */
+        .pill-btn-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-top: 4px;
+        }
+
+        .pill-btn {
+          border: 1px solid var(--border-mid, #d1d5db);
+          padding: 8px 16px;
+          border-radius: 999px;
+          background: transparent;
+          font-size: 13px;
+          font-family: inherit;
+          cursor: pointer;
+          color: #374151;
+          transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+        }
+
+        .pill-btn:hover {
+          border-color: var(--brand);
+          color: var(--brand);
+        }
+
+        .pill-btn-active {
+          background: var(--brand);
+          color: #fff;
+          border-color: var(--brand);
         }
 
         .btn-draft:hover {
@@ -4082,6 +6789,13 @@ export function StudentAddPanel() {
         .btn-save-cta:hover {
           background: #5a2ee0;
           border-color: #5a2ee0;
+        }
+
+        .btn-save-cta:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+          box-shadow: none;
+          pointer-events: none;
         }
 
         .btn-green {
@@ -4309,19 +7023,18 @@ export function StudentAddPanel() {
         }
 
         @media (max-width: 1024px) {
-          /* Wrap footer onto 2 rows so Progress bar + 3 buttons don't collide. */
+          /* Progress bar takes full first row; buttons move to second row */
           .enroll-footer {
-            flex-wrap: wrap;
             padding: 12px 16px;
           }
           .footer-progress-wrap {
-            min-width: 0;
-            max-width: 100%;
             flex: 1 1 100%;
+            max-width: 100%;
+            padding-right: 0;
           }
           .footer-actions {
-            flex: 0 0 auto;
-            margin-left: auto;
+            flex: 1 1 100%;
+            justify-content: flex-end;
           }
         }
 
@@ -4427,13 +7140,17 @@ export function StudentAddPanel() {
           .footer-actions {
             width: 100%;
             max-width: 100%;
+            flex: 1 1 100%;
           }
 
           .footer-actions {
             justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
           }
 
           .footer-progress-track {
+            min-width: 0;
             width: 100%;
           }
 
@@ -4441,6 +7158,721 @@ export function StudentAddPanel() {
             max-width: 100%;
             white-space: normal;
           }
+        }
+
+        .nav-group-heading {
+          font-size: 11px;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--text-3, #6b7280);
+          padding: 14px 12px 6px;
+          font-weight: 600;
+          list-style: none;
+        }
+
+        .nav-badge {
+          font-size: 9px;
+          font-weight: 700;
+          padding: 2px 6px;
+          border-radius: 4px;
+          margin-left: 8px;
+          letter-spacing: 0.05em;
+        }
+        .nav-badge-goi { background: #fef3c7; color: #92400e; }
+        .nav-badge-new { background: #dbeafe; color: #1e40af; }
+        .nav-badge-sensitive { background: #fee2e2; color: #991b1b; }
+
+        .apaar-tip {
+          background: #f3f4f6;
+          border-left: 3px solid var(--purple, #6c3ce1);
+          padding: 12px 16px;
+          border-radius: 6px;
+          margin-bottom: 20px;
+          font-size: 13px;
+          color: var(--text-2, #4b5563);
+        }
+        .apaar-tip code {
+          background: #fff;
+          padding: 2px 6px;
+          border-radius: 3px;
+          font-family: monospace;
+        }
+
+        .form-divider {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin: 28px 0 16px;
+        }
+        .form-divider::before, .form-divider::after {
+          content: '';
+          flex: 1;
+          height: 1px;
+          background: var(--border, #e5e7eb);
+        }
+        .form-divider span {
+          font-size: 11px;
+          letter-spacing: 0.08em;
+          color: var(--text-3, #6b7280);
+          font-weight: 600;
+        }
+
+        .encryption-disclosure {
+          background: #fef3c7;
+          border: 1px solid #f59e0b;
+          border-radius: 8px;
+          padding: 14px 18px;
+          margin-top: 20px;
+          font-size: 12px;
+          color: #78350f;
+          line-height: 1.6;
+        }
+
+        .toggle-switch {
+          position: relative;
+          display: inline-block;
+          width: 44px;
+          height: 24px;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+          position: absolute;
+          cursor: pointer;
+          inset: 0;
+          background: #cbd5e1;
+          transition: .25s;
+          border-radius: 999px;
+        }
+        .toggle-slider::before {
+          position: absolute;
+          content: '';
+          height: 18px;
+          width: 18px;
+          left: 3px;
+          bottom: 3px;
+          background: #fff;
+          transition: .25s;
+          border-radius: 50%;
+          box-shadow: 0 1px 3px rgba(0,0,0,.2);
+        }
+        .toggle-switch input:checked + .toggle-slider { background: var(--purple, #6c3ce1); }
+        .toggle-switch input:checked + .toggle-slider::before { transform: translateX(20px); }
+
+        .pwd-toggle-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 16px 20px;
+          border: 1px solid var(--border-mid, #d1d5db);
+          border-radius: 10px;
+          margin: 20px 0;
+        }
+        .pwd-toggle-label { font-weight: 600; color: var(--text-1, #1f2937); }
+        .pwd-toggle-hint { font-size: 12px; color: var(--text-3, #6b7280); margin-top: 2px; }
+
+        .disclosure-banner-green {
+          background: #d1fae5;
+          border: 1px solid #10b981;
+          color: #065f46;
+          padding: 12px 16px;
+          border-radius: 8px;
+          font-size: 13px;
+          margin-bottom: 20px;
+        }
+
+        .identity-marks-grid {
+          display: grid;
+          grid-template-columns: 200px 1fr;
+          gap: 24px;
+          margin-top: 20px;
+        }
+        .body-diagram {
+          background: #f9fafb;
+          border-radius: 12px;
+          padding: 16px;
+          text-align: center;
+        }
+        .diagram-hint { font-size: 11px; color: var(--text-3, #6b7280); margin-top: 8px; }
+        .marks-hint { font-size: 13px; color: var(--text-3, #6b7280); margin-bottom: 12px; }
+        .marks-list { min-width: 0; }
+        .btn-outline-sm {
+          padding: 6px 12px;
+          border: 1px solid var(--border-mid, #d1d5db);
+          background: #fff;
+          border-radius: 6px;
+          font-size: 13px;
+          cursor: pointer;
+        }
+        .btn-outline-sm:hover { background: #f3f4f6; }
+
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+        .adm-type-tooltip-wrap:hover .adm-type-tooltip-body { display: block !important; }
+
+        @media (max-width: 720px) {
+          .identity-marks-grid { grid-template-columns: 1fr; }
+        }
+
+        /* ===== Hero action buttons (Drafts / AI / PDF) ===== */
+        .hero-actions-row {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+        }
+        .hero-action-btn {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 10px 18px;
+          border-radius: 11px;
+          font-size: 13.5px;
+          font-weight: 600;
+          line-height: 1;
+          cursor: pointer;
+          transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+          letter-spacing: 0.1px;
+          border: 1px solid transparent;
+          backdrop-filter: blur(6px);
+        }
+        .hero-action-btn:hover { transform: translateY(-1px); }
+        .hero-action-btn:active { transform: translateY(0); }
+        .hero-action-btn svg { flex-shrink: 0; }
+        .hero-action-drafts {
+          background: rgba(255,255,255,0.85);
+          border-color: #e5e7eb;
+          color: #374151;
+        }
+        .hero-action-drafts:hover {
+          background: #fff;
+          border-color: #c7d2fe;
+          box-shadow: 0 4px 14px -4px rgba(99,102,241,0.25);
+        }
+        .hero-action-pdf {
+          background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%);
+          border-color: #ddd6fe;
+          color: #6c3ce1;
+        }
+        .hero-action-pdf:hover {
+          background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%);
+          border-color: #c4b5fd;
+          box-shadow: 0 6px 18px -6px rgba(108,60,225,0.35);
+        }
+        .hero-action-info {
+          background: linear-gradient(135deg, #ecfeff 0%, #cffafe 100%);
+          border-color: #a5f3fc;
+          color: #0e7490;
+        }
+        .hero-action-info:hover {
+          background: linear-gradient(135deg, #cffafe 0%, #a5f3fc 100%);
+          border-color: #67e8f9;
+          box-shadow: 0 4px 14px -4px rgba(8,145,178,0.3);
+        }
+        .hero-action-ai {
+          background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+          color: #fff;
+          border-color: transparent;
+          box-shadow: 0 4px 14px -3px rgba(139,92,246,0.45);
+        }
+        .hero-action-ai:hover {
+          box-shadow: 0 8px 22px -4px rgba(236,72,153,0.55);
+          background: linear-gradient(135deg, #7c3aed 0%, #db2777 100%);
+        }
+        .hero-action-pulse {
+          position: absolute;
+          top: 6px;
+          right: 6px;
+          width: 7px;
+          height: 7px;
+          background: #fff;
+          border-radius: 50%;
+          box-shadow: 0 0 0 0 rgba(255,255,255,0.85);
+          animation: aiPulse 2s infinite;
+        }
+        @keyframes aiPulse {
+          0% { box-shadow: 0 0 0 0 rgba(255,255,255,0.7); }
+          70% { box-shadow: 0 0 0 8px rgba(255,255,255,0); }
+          100% { box-shadow: 0 0 0 0 rgba(255,255,255,0); }
+        }
+        .hero-action-badge {
+          background: rgba(108,60,225,0.12);
+          color: #6c3ce1;
+          font-size: 10px;
+          font-weight: 700;
+          padding: 2px 6px;
+          border-radius: 999px;
+          margin-left: 2px;
+          min-width: 16px;
+          text-align: center;
+        }
+
+        /* ===== AI / Drafts modal shell ===== */
+        .ai-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.55);
+          backdrop-filter: blur(4px);
+          z-index: 9998;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 16px;
+          animation: aiFade 0.2s ease;
+        }
+        @keyframes aiFade { from { opacity: 0; } to { opacity: 1; } }
+        .ai-modal {
+          background: #fff;
+          border-radius: 16px;
+          width: 100%;
+          max-width: 600px;
+          max-height: 88vh;
+          display: flex;
+          flex-direction: column;
+          box-shadow: 0 30px 80px -20px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.04);
+          overflow: hidden;
+          animation: aiSlideUp 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        @keyframes aiSlideUp { from { opacity: 0; transform: translateY(12px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+        .ai-modal-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 12px;
+          padding: 18px 22px;
+          border-bottom: 1px solid #f1f5f9;
+          background: #fff;
+        }
+        .ai-modal-head-gradient {
+          background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+          border-bottom: none;
+          color: #fff;
+        }
+        .ai-modal-head-left {
+          display: flex;
+          gap: 12px;
+          align-items: center;
+        }
+        .ai-modal-icon {
+          width: 38px;
+          height: 38px;
+          border-radius: 10px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+        }
+        .ai-modal-icon-drafts {
+          background: linear-gradient(135deg, #ede9fe, #f5f3ff);
+          color: #6c3ce1;
+        }
+        .ai-modal-icon-ai {
+          background: rgba(255,255,255,0.22);
+          color: #fff;
+        }
+        .ai-modal-title {
+          margin: 0;
+          font-size: 16px;
+          font-weight: 700;
+          color: #0f172a;
+          line-height: 1.2;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .ai-modal-title-light { color: #fff; }
+        .ai-beta-pill {
+          background: rgba(255,255,255,0.22);
+          color: #fff;
+          font-size: 9px;
+          font-weight: 700;
+          padding: 2px 7px;
+          border-radius: 999px;
+          letter-spacing: 0.6px;
+        }
+        .ai-modal-sub {
+          margin: 3px 0 0;
+          font-size: 12.5px;
+          color: #64748b;
+          line-height: 1.4;
+        }
+        .ai-modal-sub-light { color: rgba(255,255,255,0.85); }
+
+        .ai-close {
+          background: rgba(0,0,0,0.04);
+          border: none;
+          width: 30px;
+          height: 30px;
+          border-radius: 8px;
+          color: #64748b;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          transition: background 0.15s;
+          flex-shrink: 0;
+        }
+        .ai-close:hover { background: rgba(0,0,0,0.08); color: #0f172a; }
+        .ai-close-light {
+          background: rgba(255,255,255,0.15);
+          color: #fff;
+        }
+        .ai-close-light:hover { background: rgba(255,255,255,0.25); color: #fff; }
+
+        .ai-toolbar {
+          padding: 12px 22px;
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          flex-wrap: wrap;
+          border-bottom: 1px solid #f1f5f9;
+          background: #fafafa;
+        }
+        .ai-search {
+          flex: 1;
+          min-width: 180px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: #fff;
+          border: 1px solid #e5e7eb;
+          border-radius: 9px;
+          padding: 7px 12px;
+          color: #94a3b8;
+          transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .ai-search:focus-within { border-color: #c4b5fd; box-shadow: 0 0 0 3px rgba(139,92,246,0.12); }
+        .ai-search input {
+          flex: 1;
+          border: none;
+          outline: none;
+          font-size: 13px;
+          color: #0f172a;
+          background: transparent;
+        }
+        .ai-sort { display: flex; gap: 4px; }
+        .ai-sort-pill {
+          padding: 6px 11px;
+          border-radius: 7px;
+          border: 1px solid transparent;
+          background: transparent;
+          font-size: 12px;
+          font-weight: 500;
+          color: #64748b;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+        .ai-sort-pill:hover { color: #0f172a; background: rgba(0,0,0,0.04); }
+        .ai-sort-pill.active {
+          background: #fff;
+          border-color: #ddd6fe;
+          color: #6c3ce1;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+
+        .ai-modal-body {
+          flex: 1;
+          overflow-y: auto;
+          padding: 14px 22px 20px;
+        }
+        .ai-no-match {
+          text-align: center;
+          color: #94a3b8;
+          font-size: 13px;
+          padding: 24px 0;
+        }
+
+        /* ===== Draft cards ===== */
+        .ai-draft-card {
+          display: flex;
+          gap: 12px;
+          padding: 12px;
+          border: 1px solid #e5e7eb;
+          border-radius: 12px;
+          margin-bottom: 10px;
+          background: #fff;
+          transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+        }
+        .ai-draft-card:hover {
+          border-color: #c7d2fe;
+          box-shadow: 0 6px 16px -8px rgba(108,60,225,0.2);
+          transform: translateY(-1px);
+        }
+        .ai-draft-avatar {
+          width: 42px;
+          height: 42px;
+          border-radius: 11px;
+          background: linear-gradient(135deg, #c4b5fd, #a78bfa);
+          color: #fff;
+          font-size: 14px;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          flex-shrink: 0;
+        }
+        .ai-draft-avatar[data-tone="high"] { background: linear-gradient(135deg, #34d399, #10b981); }
+        .ai-draft-avatar[data-tone="mid"] { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
+        .ai-draft-avatar[data-tone="low"] { background: linear-gradient(135deg, #cbd5e1, #94a3b8); }
+
+        .ai-draft-body { flex: 1; min-width: 0; }
+        .ai-draft-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+        .ai-draft-name {
+          font-size: 14px;
+          font-weight: 600;
+          color: #0f172a;
+        }
+        .ai-draft-chip {
+          background: #f1f5f9;
+          color: #475569;
+          font-size: 11px;
+          font-weight: 600;
+          padding: 2px 8px;
+          border-radius: 999px;
+        }
+        .ai-draft-meta {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 11.5px;
+          color: #94a3b8;
+          margin-top: 3px;
+        }
+        .ai-dot { width: 3px; height: 3px; background: #cbd5e1; border-radius: 50%; }
+        .ai-pct { font-weight: 600; }
+        .ai-pct-high { color: #059669; }
+        .ai-pct-mid { color: #d97706; }
+        .ai-pct-low { color: #64748b; }
+        .ai-progress-track {
+          margin-top: 7px;
+          height: 4px;
+          background: #f1f5f9;
+          border-radius: 999px;
+          overflow: hidden;
+        }
+        .ai-progress-bar { height: 100%; border-radius: 999px; transition: width 0.4s ease; }
+        .ai-progress-high { background: linear-gradient(90deg, #34d399, #10b981); }
+        .ai-progress-mid { background: linear-gradient(90deg, #fbbf24, #f59e0b); }
+        .ai-progress-low { background: linear-gradient(90deg, #cbd5e1, #94a3b8); }
+        .ai-progress-bar[data-pct="0"] { width: 0%; }
+        .ai-progress-bar[data-pct] { width: var(--ai-pct, 0%); }
+        .ai-draft-tip {
+          margin: 7px 0 0;
+          font-size: 12px;
+          color: #6366f1;
+          display: flex;
+          align-items: center;
+          gap: 5px;
+        }
+        .ai-draft-actions {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          flex-shrink: 0;
+        }
+        .ai-btn-primary {
+          padding: 7px 14px;
+          background: linear-gradient(135deg, #6c3ce1, #8b5cf6);
+          color: #fff;
+          border: none;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 12.5px;
+          font-weight: 600;
+          transition: transform 0.15s, box-shadow 0.15s;
+        }
+        .ai-btn-primary:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 6px 14px -4px rgba(108,60,225,0.45);
+        }
+        .ai-btn-ghost-danger {
+          padding: 6px;
+          width: 30px;
+          height: 30px;
+          background: #fff;
+          color: #dc2626;
+          border: 1px solid #fecaca;
+          border-radius: 7px;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          align-self: center;
+          transition: background 0.15s;
+        }
+        .ai-btn-ghost-danger:hover { background: #fef2f2; }
+
+        /* ===== Empty state ===== */
+        .ai-empty {
+          padding: 40px 22px;
+          text-align: center;
+        }
+        .ai-empty-illustration {
+          display: inline-flex;
+          padding: 18px;
+          background: linear-gradient(135deg, #f5f3ff, #ede9fe);
+          border-radius: 50%;
+          margin-bottom: 14px;
+        }
+        .ai-empty-title {
+          margin: 0 0 6px;
+          font-size: 16px;
+          color: #0f172a;
+        }
+        .ai-empty-text {
+          margin: 0 auto 16px;
+          max-width: 340px;
+          font-size: 13px;
+          color: #64748b;
+          line-height: 1.5;
+        }
+        .ai-cta-btn {
+          padding: 9px 22px;
+          background: linear-gradient(135deg, #6c3ce1, #8b5cf6);
+          color: #fff;
+          border: none;
+          border-radius: 9px;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+
+        /* ===== AI assistant — summary card + tips ===== */
+        .ai-summary-card {
+          margin: 16px 22px 0;
+          padding: 16px 18px;
+          background: linear-gradient(135deg, #faf5ff 0%, #fdf2f8 100%);
+          border-radius: 14px;
+          border: 1px solid #ede9fe;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+        }
+        .ai-summary-label {
+          margin: 0;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.6px;
+          color: #8b5cf6;
+          text-transform: uppercase;
+        }
+        .ai-summary-pct {
+          margin: 4px 0 2px;
+          font-size: 32px;
+          font-weight: 700;
+          color: #0f172a;
+          line-height: 1;
+        }
+        .ai-summary-hint {
+          margin: 0;
+          font-size: 12px;
+          color: #64748b;
+        }
+        .ai-summary-ring { flex-shrink: 0; }
+
+        .ai-section-label {
+          margin: 14px 0 10px;
+          font-size: 10.5px;
+          font-weight: 700;
+          letter-spacing: 0.8px;
+          color: #94a3b8;
+          text-transform: uppercase;
+        }
+        .ai-tip {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          padding: 12px 14px;
+          border-radius: 11px;
+          margin-bottom: 8px;
+          border: 1px solid transparent;
+          transition: background 0.15s;
+        }
+        .ai-tip-info { background: #f0f9ff; border-color: #e0f2fe; }
+        .ai-tip-warn { background: #fffbeb; border-color: #fef3c7; }
+        .ai-tip-success { background: #f0fdf4; border-color: #dcfce7; }
+        .ai-tip-icon {
+          font-size: 18px;
+          line-height: 1;
+          flex-shrink: 0;
+          padding-top: 1px;
+        }
+        .ai-tip-body { flex: 1; min-width: 0; }
+        .ai-tip-title {
+          margin: 0;
+          font-size: 13px;
+          font-weight: 600;
+          color: #0f172a;
+        }
+        .ai-tip-text {
+          margin: 3px 0 0;
+          font-size: 12.5px;
+          color: #475569;
+          line-height: 1.45;
+        }
+        .ai-tip-action {
+          background: rgba(255,255,255,0.7);
+          border: 1px solid rgba(0,0,0,0.06);
+          color: #6c3ce1;
+          font-size: 12px;
+          font-weight: 600;
+          padding: 6px 11px;
+          border-radius: 7px;
+          cursor: pointer;
+          flex-shrink: 0;
+          align-self: center;
+          transition: background 0.15s;
+        }
+        .ai-tip-action:hover { background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+
+        .ai-quickbar {
+          display: flex;
+          gap: 8px;
+          margin-top: 14px;
+          padding-top: 14px;
+          border-top: 1px solid #f1f5f9;
+        }
+        .ai-quick {
+          flex: 1;
+          padding: 9px 10px;
+          background: #fafafa;
+          border: 1px solid #e5e7eb;
+          border-radius: 9px;
+          font-size: 12.5px;
+          font-weight: 500;
+          color: #475569;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          transition: all 0.15s;
+        }
+        .ai-quick:hover {
+          background: #fff;
+          border-color: #c4b5fd;
+          color: #6c3ce1;
+          transform: translateY(-1px);
+        }
+        .ai-disclaimer {
+          margin: 14px 0 0;
+          font-size: 11px;
+          color: #94a3b8;
+          text-align: center;
+          line-height: 1.4;
+        }
+
+        @media (max-width: 600px) {
+          .hero-action-btn span:not(.hero-action-badge):not(.hero-action-pulse) { display: none; }
+          .hero-action-btn { padding: 8px 10px; }
+          .ai-quickbar { flex-direction: column; }
+          .ai-summary-card { flex-direction: column; align-items: flex-start; }
         }
       `}</style>
     </div>

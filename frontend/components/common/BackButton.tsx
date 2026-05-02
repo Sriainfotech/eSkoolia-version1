@@ -21,6 +21,17 @@ export function BackButton({ label = "Back", className = "" }: BackButtonProps) 
   }, []);
 
   const handleClick = () => {
+    // Allow other components to intercept navigation (e.g. unsaved-changes prompts)
+    if (typeof window !== "undefined") {
+      const guard = (window as unknown as { __navGuard?: (proceed: () => void) => boolean }).__navGuard;
+      if (typeof guard === "function") {
+        const blocked = guard(() => {
+          if (canGoBack) router.back();
+          else router.push("/dashboard");
+        });
+        if (blocked) return;
+      }
+    }
     if (canGoBack) {
       router.back();
     } else {

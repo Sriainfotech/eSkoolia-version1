@@ -71,8 +71,8 @@ type StudentSummaryResponse = {
   };
 };
 
-type SchoolClass = { id: number; name?: string; class_name?: string };
-type Section = { id: number; school_class: number; name?: string; section_name?: string };
+type SchoolClass = { id: number; name?: string; class_name?: string; total_students?: number; sections?: Array<{ id: number; name?: string; section_name?: string; student_count?: number }> };
+type Section = { id: number; school_class: number; name?: string; section_name?: string; student_count?: number };
 type StatusFilter = "all" | "active" | "inactive" | "archived" | "new" | "docs";
 
 async function apiGet<T>(path: string): Promise<T> {
@@ -207,10 +207,14 @@ export function StudentListPanel() {
   const [classSectionStudents, setClassSectionStudents] = useState<Map<string, StudentRow[]>>(new Map());
   const [classSectionLoading, setClassSectionLoading] = useState<Set<string>>(new Set());
   const [showWholeSchool, setShowWholeSchool] = useState(false);
-  const [drawerTab, setDrawerTab] = useState<"profile" | "academic" | "attendance" | "fees">("profile");
+  const [drawerTab, setDrawerTab] = useState<"profile" | "academic" | "attendance" | "fees" | "achievements">("profile");
   const [drawerAttendance, setDrawerAttendance] = useState<Array<{ id: number; attendance_date: string; status?: string; remarks?: string }>>([]);
   const [drawerAttendanceLoading, setDrawerAttendanceLoading] = useState(false);
   const [drawerAttendanceError, setDrawerAttendanceError] = useState("");
+  const [achievementsAiReview, setAchievementsAiReview] = useState("");
+  const [achievementsAiBusy, setAchievementsAiBusy] = useState(false);
+  const [achievementsAiError, setAchievementsAiError] = useState("");
+  const [achievementsAiEditing, setAchievementsAiEditing] = useState(false);
 
   const activeFilterCount = useMemo(() => {
     let n = 0;
@@ -538,8 +542,29 @@ export function StudentListPanel() {
           apiGet<ListApiResponse<SchoolClass>>("/api/v1/core/classes/?page_size=200"),
           apiGet<ListApiResponse<Section>>("/api/v1/core/sections/?page_size=500"),
         ]);
-        setClasses(classResult.status === "fulfilled" ? extractListData(classResult.value) : []);
-        setSections(sectionResult.status === "fulfilled" ? extractListData(sectionResult.value) : []);
+        const loadedSections = sectionResult.status === "fulfilled" ? extractListData(sectionResult.value) : [];
+        setSections(loadedSections);
+
+        if (classResult.status === "fulfilled") {
+          const loadedClasses = extractListData(classResult.value);
+          setClasses(loadedClasses);
+        } else {
+          // Classes API failed — log the error and derive stubs from sections
+          console.warn("[StudentList] Classes API failed:", classResult.reason);
+          if (loadedSections.length > 0) {
+            // Build minimal class stubs from unique school_class IDs found in sections
+            // so the accordion and dropdown still work. Names will be resolved lazily.
+            const uniqueClassIds = [...new Set(loadedSections.map((s) => s.school_class))].sort((a, b) => a - b);
+            // Try fetching each class individually as a fallback
+            const classFallbacks = await Promise.allSettled(
+              uniqueClassIds.map((id) => apiGet<SchoolClass>(`/api/v1/core/classes/${id}/`))
+            );
+            const resolvedClasses: SchoolClass[] = classFallbacks
+              .map((r, i) => r.status === "fulfilled" ? r.value : ({ id: uniqueClassIds[i], name: `Class ${uniqueClassIds[i]}` } as SchoolClass))
+              .filter(Boolean);
+            setClasses(resolvedClasses.sort((a, b) => a.id - b.id));
+          }
+        }
       } catch {
         setError("Unable to load lookup data.");
       } finally {
@@ -554,14 +579,8 @@ export function StudentListPanel() {
     const loadStats = async () => {
       try {
         setLoadingStats(true);
-        const summaryQuery = buildPaginationQuery(1, 1, {
-          search: debouncedSearch || undefined,
-          is_active: statusFilter === "active" ? true : statusFilter === "inactive" ? false : undefined,
-          include_deleted: statusFilter === "archived" ? "true" : undefined,
-          deleted_only: statusFilter === "archived" ? "true" : undefined,
-          current_class: classFilter || undefined,
-          current_section: sectionFilter || undefined,
-        });
+        // KPI cards always show global totals — not affected by current filters
+        const summaryQuery = buildPaginationQuery(1, 1, {});
         const payload = await apiGet<StudentSummaryResponse>(`/api/v1/students/students/summary/?${summaryQuery}`);
         const summary = payload.data || {};
         setTotalEnrolledCount(summary.total_count ?? 0);
@@ -584,7 +603,7 @@ export function StudentListPanel() {
 
     void loadStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, classFilter, sectionFilter, refreshTick]);
+  }, [refreshTick]);
 
   useEffect(() => {
     if (!filterApplied) return; // Only load when filter is applied
@@ -595,7 +614,7 @@ export function StudentListPanel() {
         const query = buildPaginationQuery(page, pageSize, {
           search: debouncedSearch || undefined,
           is_active: statusFilter === "active" ? true : statusFilter === "inactive" ? false : undefined,
-          include_deleted: statusFilter === "archived" ? "true" : undefined,
+          include_deleted: "true",
           deleted_only: statusFilter === "archived" ? "true" : undefined,
           current_class: classFilter || undefined,
           current_section: sectionFilter || undefined,
@@ -686,6 +705,9 @@ export function StudentListPanel() {
     setViewError("");
     setDrawerAttendance([]);
     setDrawerAttendanceError("");
+    setAchievementsAiReview("");
+    setAchievementsAiError("");
+    setAchievementsAiEditing(false);
   };
 
   // Lazily fetch attendance when its tab is opened
@@ -1312,14 +1334,7 @@ export function StudentListPanel() {
 
             {browsePanelOpen && (
               <div className="sl-browse-body">
-                {!filterApplied ? (
-                  <div className="sl-apply-cta">
-                    <svg viewBox="0 0 16 16" fill="none" stroke="#5b4fcf" strokeWidth="1.5" width="28" height="28" aria-hidden="true"><path d="M2 3h12l-4.5 6V14L6.5 12V9L2 3z"/></svg>
-                    <p className="sl-apply-cta-title">Set your filters and click <strong>Apply</strong></p>
-                    <p className="sl-apply-cta-sub">Students will load grouped by class &amp; section once you apply the filter.</p>
-                    <button type="button" className="sl-apply-btn" onClick={applyFilters}>Apply filters</button>
-                  </div>
-                ) : loadingMeta ? (
+                {loadingMeta ? (
                   <div className="sl-loading-row">Loading classes…</div>
                 ) : classes.length === 0 ? (
                   <div className="sl-empty">No classes configured.</div>
@@ -1380,6 +1395,8 @@ export function StudentListPanel() {
                     const docsPendingClsCount = allClsStudents.filter((r) => r.is_disabled).length;
                     const specialNeedsClsCount = allClsStudents.filter((r) => (r as { has_special_needs?: boolean }).has_special_needs).length;
                     const hasLoadedAny = clsSections.some((s) => classSectionStudents.has(`${cls.id}-${s.id}`));
+                    // Use API-supplied total_students before student rows are fetched
+                    const displayStudentCount = hasLoadedAny ? loadedStudentCount : (cls.total_students ?? 0);
                     const progressPct = loadedStudentCount > 0 ? Math.round((activeStudentCount / loadedStudentCount) * 100) : 0;
                     return (
                       <div key={cls.id} className={isOpen ? "sl-cls-acc open" : "sl-cls-acc"}>
@@ -1396,7 +1413,7 @@ export function StudentListPanel() {
                             {clsFullName && clsFullName !== clsLabel && <span className="sl-cls-full">{clsFullName}</span>}
                           </div>
                           <div className="sl-cls-badges">
-                            <span className="sl-badge p-blue">{pluralize(loadedStudentCount, "student")}</span>
+                            <span className="sl-badge p-blue">{pluralize(displayStudentCount, "student")}</span>
                             <span className="sl-badge p-green">{activeStudentCount} active</span>
                             <span className="sl-badge p-amber">{specialNeedsClsCount} special needs</span>
                             <span className="sl-badge p-red">{docsPendingClsCount} docs pending</span>
@@ -1733,6 +1750,7 @@ export function StudentListPanel() {
               <button type="button" className={drawerTab === "academic" ? "tab active" : "tab"} onClick={() => setDrawerTab("academic")}>Academic</button>
               <button type="button" className={drawerTab === "attendance" ? "tab active" : "tab"} onClick={() => setDrawerTab("attendance")}>Attendance</button>
               <button type="button" className={drawerTab === "fees" ? "tab active" : "tab"} onClick={() => setDrawerTab("fees")}>Fees</button>
+              <button type="button" className={drawerTab === "achievements" ? "tab active tab-achievements" : "tab tab-achievements"} onClick={() => setDrawerTab("achievements")}>🏆 Achievements</button>
             </div>
 
             <div className="drawer-body">
@@ -1830,6 +1848,215 @@ export function StudentListPanel() {
                   <p className="drawer-note">Fee module integration is coming soon.</p>
                 </div>
               )}
+
+              {drawerTab === "achievements" && (() => {
+                // Read all competitions from localStorage inspireHubStore
+                let allComps: Array<{id: string; name: string; date?: string; comp_type?: string; level?: string; results?: Array<{student_id?: number|string; position?: string; points?: number; ai_response?: string; personal_contribution?: string; _student?: {full_name?: string; class_name?: string}}>}> = [];
+                try {
+                  const raw = typeof window !== 'undefined' ? window.localStorage.getItem('inspirehub:competitions:v1') : null;
+                  if (raw) allComps = JSON.parse(raw);
+                } catch {}
+
+                const sid = viewStudent?.id;
+                // Collect this student's results across all finalized competitions
+                const myResults: Array<{comp: typeof allComps[0]; result: NonNullable<typeof allComps[0]['results']>[0]}> = [];
+                allComps.forEach(comp => {
+                  if (comp.status !== 'final') return;
+                  (comp.results || []).forEach(r => {
+                    const rid = String(r.student_id ?? '');
+                    if (rid && String(sid) === rid) {
+                      myResults.push({ comp, result: r });
+                    }
+                  });
+                });
+
+                const totalPts = myResults.reduce((s, x) => s + Number(x.result.points || 0), 0);
+                const medals = { '1st': 0, '2nd': 0, '3rd': 0 };
+                myResults.forEach(x => { const p = x.result.position as string; if (p in medals) medals[p as keyof typeof medals]++; });
+
+                const MEDAL_ICONS: Record<string, string> = { '1st': '🥇', '2nd': '🥈', '3rd': '🥉' };
+                const POS_COLOR: Record<string, string> = { '1st': '#d97706', '2nd': '#6b7280', '3rd': '#92400e', 'Participation': '#3b82f6', 'Consolation': '#8b5cf6', 'Not Participated': '#9ca3af' };
+
+                const generateAiReview = async () => {
+                  if (achievementsAiBusy) return;
+                  setAchievementsAiBusy(true);
+                  setAchievementsAiError('');
+                  try {
+                    const name = viewStudent ? `${viewStudent.first_name} ${viewStudent.last_name || ''}`.trim() : 'the student';
+                    const className = viewStudent?.current_class ? (classMap.get(viewStudent.current_class) || String(viewStudent.current_class)) : '';
+                    if (myResults.length === 0) {
+                      setAchievementsAiReview(`Performance Review\n\nCompliment: ${name} is a valued member of our school community.\n\nPerformance Summary: ${name} has not yet participated in any finalised competitions. Every big journey begins with a single step.\n\nEncouragement: We look forward to seeing ${name} shine on stage soon!\n\nPractical Tips: Look out for upcoming events. Try a beginner-friendly category. Cheer for classmates to build confidence.`);
+                    } else {
+                      const topComp = [...myResults].sort((a, b) => Number(b.result.points||0) - Number(a.result.points||0))[0];
+                      const eventsStr = myResults.map(x => `${x.comp.name} (${x.result.position || 'Participated'}${x.result.points ? ', '+x.result.points+' pts' : ''})`).join('; ');
+                      let text = '';
+                      try {
+                        const { competitionsApi } = await import('@/lib/competitionsApi');
+                        const payload = {
+                          items: [{
+                            student_id: sid,
+                            student_name: name,
+                            student_class: className,
+                            competition_name: topComp.comp.name,
+                            competition_type: topComp.comp.comp_type,
+                            competition_level: topComp.comp.level,
+                            position: topComp.result.position,
+                            points: topComp.result.points,
+                            personal_contribution: `Participated in ${myResults.length} event(s): ${eventsStr}. Total ${totalPts} points.`,
+                          }],
+                        };
+                        const data = await competitionsApi.generateReviews(payload);
+                        const first = data?.results?.[0] || data?.[0] || data;
+                        text = first?.review || first?.ai_response || first?.text || '';
+                      } catch {}
+                      if (!text) {
+                        const best = topComp.result.position;
+                        const medal = best === '1st' ? 'gold' : best === '2nd' ? 'silver' : best === '3rd' ? 'bronze' : 'recognition';
+                        text = `Performance Review\n\nCompliment: A remarkable showcase of talent, ${name}! Participating in ${myResults.length} competition${myResults.length>1?'s':''} and earning ${totalPts} point${totalPts!==1?'s':''} speaks volumes.\n\nPerformance Summary: ${name} has competed across ${myResults.length} event${myResults.length>1?'s':''}, achieving ${medal} in ${topComp.comp.name}. Consistent participation builds both skill and confidence.\n\nEncouragement: Keep this momentum going — every competition is a chance to grow!\n\nPractical Tips: Review your best performance. Set a specific goal for the next event. Mentor a junior student to deepen your own mastery.`;
+                      }
+                      setAchievementsAiReview(text);
+                    }
+                  } catch {
+                    setAchievementsAiError('Could not generate review. Try again.');
+                  } finally {
+                    setAchievementsAiBusy(false);
+                  }
+                };
+
+                return (
+                  <>
+                    {/* Stats row */}
+                    <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:12, marginTop:4 }}>
+                      {[
+                        { label:'Events', value: myResults.length, icon:'🎯' },
+                        { label:'Total Pts', value: totalPts, icon:'⭐' },
+                        { label:'Gold Medals', value: medals['1st'], icon:'🥇' },
+                      ].map(s => (
+                        <div key={s.label} style={{ background:'#f8f9ff', border:'1px solid #e8eaf6', borderRadius:10, padding:'10px 8px', textAlign:'center' }}>
+                          <div style={{ fontSize:20 }}>{s.icon}</div>
+                          <div style={{ fontWeight:700, fontSize:18, color:'#1a1d33', lineHeight:1.2 }}>{s.value}</div>
+                          <div style={{ fontSize:10, color:'#747896', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', marginTop:2 }}>{s.label}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Medals row if any */}
+                    {(medals['1st'] + medals['2nd'] + medals['3rd']) > 0 && (
+                      <div style={{ display:'flex', gap:6, marginBottom:12, flexWrap:'wrap' }}>
+                        {medals['1st'] > 0 && <span style={{ background:'#fef3c7', border:'1px solid #fde68a', borderRadius:6, padding:'3px 8px', fontSize:12, fontWeight:700, color:'#92400e' }}>🥇 {medals['1st']}× Gold</span>}
+                        {medals['2nd'] > 0 && <span style={{ background:'#f3f4f6', border:'1px solid #d1d5db', borderRadius:6, padding:'3px 8px', fontSize:12, fontWeight:700, color:'#374151' }}>🥈 {medals['2nd']}× Silver</span>}
+                        {medals['3rd'] > 0 && <span style={{ background:'#fdf2e9', border:'1px solid #f5c6a0', borderRadius:6, padding:'3px 8px', fontSize:12, fontWeight:700, color:'#7c3100' }}>🥉 {medals['3rd']}× Bronze</span>}
+                      </div>
+                    )}
+
+                    {/* Competition results list */}
+                    <div className="drawer-section">
+                      <p className="drawer-section-title">Competition results</p>
+                      {myResults.length === 0 ? (
+                        <div style={{ textAlign:'center', padding:'24px 12px', color:'#9ca3af' }}>
+                          <div style={{ fontSize:36, marginBottom:8 }}>🏆</div>
+                          <p style={{ margin:0, fontWeight:600, color:'#6b7280', fontSize:13 }}>Still needs to participate in any competition</p>
+                          <p style={{ margin:'4px 0 0', fontSize:12, fontStyle:'italic' }}>Results will appear here once competitions are finalised in InspireHub.</p>
+                        </div>
+                      ) : (
+                        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                          {myResults.map(({ comp, result }, i) => (
+                            <div key={i} style={{ background:'#fafafa', border:'1px solid #eceef6', borderRadius:10, padding:'10px 12px', display:'flex', alignItems:'flex-start', gap:10 }}>
+                              <div style={{ fontSize:22, lineHeight:1, marginTop:1, flexShrink:0 }}>{MEDAL_ICONS[result.position as string] || '🏅'}</div>
+                              <div style={{ flex:1, minWidth:0 }}>
+                                <div style={{ fontWeight:600, fontSize:13, color:'#1a1d33', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{comp.name}</div>
+                                <div style={{ display:'flex', gap:6, marginTop:4, flexWrap:'wrap', alignItems:'center' }}>
+                                  <span style={{ background: (POS_COLOR[result.position||''] || '#e5e7eb'), color:'#fff', borderRadius:4, padding:'1px 7px', fontSize:11, fontWeight:700 }}>{result.position || '–'}</span>
+                                  {result.points ? <span style={{ fontSize:11, color:'#6b7280' }}>⭐ {result.points} pts</span> : null}
+                                  {comp.date ? <span style={{ fontSize:11, color:'#9ca3af' }}>{new Date(comp.date).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}</span> : null}
+                                  {comp.comp_type ? <span style={{ fontSize:10, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.05em' }}>{comp.comp_type}</span> : null}
+                                </div>
+                                {result.personal_contribution && (
+                                  <div style={{ fontSize:11, color:'#6b7280', marginTop:4, fontStyle:'italic' }}>{result.personal_contribution}</div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* AI Performance Review */}
+                    <div className="drawer-section">
+                      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+                        <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:20, height:20, borderRadius:6, background:'linear-gradient(135deg,#7c3aed,#ec4899)', color:'#fff', fontSize:9, fontWeight:900 }}>AI</span>
+                        <span style={{ fontSize:12, fontWeight:700, color:'#374151' }}>Performance Review</span>
+                        {achievementsAiReview && (
+                          <button
+                            type="button"
+                            onClick={() => setAchievementsAiEditing(v => !v)}
+                            style={{ marginLeft:'auto', fontSize:11, fontWeight:700, color:'#6b7280', background:'#f3f4f6', border:'1px solid #e5e7eb', borderRadius:6, padding:'3px 9px', cursor:'pointer' }}
+                          >
+                            {achievementsAiEditing ? '👁 Preview' : '✏ Edit'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={generateAiReview}
+                          disabled={achievementsAiBusy}
+                          style={{ marginLeft: achievementsAiReview ? 4 : 'auto', display:'inline-flex', alignItems:'center', gap:5, padding:'5px 12px', background:'linear-gradient(135deg,#7c3aed,#ec4899)', color:'#fff', border:'none', borderRadius:8, fontSize:11.5, fontWeight:700, cursor: achievementsAiBusy ? 'not-allowed' : 'pointer', opacity: achievementsAiBusy ? 0.6 : 1, whiteSpace:'nowrap' }}
+                        >
+                          {achievementsAiBusy ? '◌ Generating…' : achievementsAiReview ? '✨ Regenerate' : '✨ Generate AI Review'}
+                        </button>
+                      </div>
+                      {achievementsAiError && (
+                        <p style={{ fontSize:12, color:'#b91c1c', background:'#fef2f2', border:'1px solid #fecaca', borderRadius:6, padding:'6px 10px', marginBottom:8 }}>⚠ {achievementsAiError}</p>
+                      )}
+                      {achievementsAiBusy && (
+                        <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:4 }}>
+                          {[0,1,2].map(i => <div key={i} style={{ height:36, borderRadius:8, background:'linear-gradient(90deg,#f1f5f9 0%,#e2e8f0 40%,#f1f5f9 80%)', backgroundSize:'800px 100%', animation:'inspireShimmer 1.4s linear infinite' }} />)}
+                        </div>
+                      )}
+                      {!achievementsAiBusy && achievementsAiReview && (
+                        achievementsAiEditing ? (
+                          <textarea
+                            value={achievementsAiReview}
+                            onChange={e => setAchievementsAiReview(e.target.value)}
+                            rows={8}
+                            style={{ width:'100%', borderRadius:8, border:'1px solid #e5e7eb', padding:'10px 12px', fontSize:12.5, color:'#374151', fontFamily:'Georgia,serif', lineHeight:1.7, resize:'vertical', outline:'none' }}
+                          />
+                        ) : (
+                          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                            {[
+                              { key: 'Compliment', icon: '💬', bg: '#fffbeb', border: '#fde68a', bar: '#f59e0b' },
+                              { key: 'Performance Summary', icon: '🎯', bg: '#f5f3ff', border: '#ddd6fe', bar: '#7c3aed' },
+                              { key: 'Encouragement', icon: '🚀', bg: '#f0fdf4', border: '#bbf7d0', bar: '#16a34a' },
+                              { key: 'Practical Tips', icon: '💡', bg: '#f0f9ff', border: '#bae6fd', bar: '#0284c7' },
+                            ].map(s => {
+                              const pattern = new RegExp(s.key.replace(/ /g, '\\s+') + '\\s*:', 'i');
+                              const matches = [...achievementsAiReview.matchAll(new RegExp('(' + ['Compliment','Performance Summary','Encouragement','Practical Tips'].map(h=>h.replace(/ /g,'\\s+')).join('|') + ')\\s*:', 'gi'))];
+                              const idx = matches.findIndex(m => new RegExp(s.key.replace(/ /g,'\\s+'), 'i').test(m[1]));
+                              if (idx < 0) return null;
+                              const start = matches[idx].index! + matches[idx][0].length;
+                              const end = idx + 1 < matches.length ? matches[idx+1].index! : achievementsAiReview.length;
+                              const body = achievementsAiReview.slice(start, end).trim();
+                              if (!body) return null;
+                              return (
+                                <div key={s.key} style={{ position:'relative', background:s.bg, border:`1px solid ${s.border}`, borderRadius:10, padding:'10px 10px 10px 14px', overflow:'hidden' }}>
+                                  <span style={{ position:'absolute', left:0, top:0, bottom:0, width:3, background:s.bar, borderRadius:'4px 0 0 4px' }} />
+                                  <div style={{ display:'flex', alignItems:'center', gap:5, marginBottom:4 }}>
+                                    <span style={{ fontSize:13 }}>{s.icon}</span>
+                                    <span style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', letterSpacing:'0.08em', color:'#374151' }}>{s.key}</span>
+                                  </div>
+                                  <p style={{ margin:0, fontSize:12.5, color:'#374151', lineHeight:1.7, fontFamily:'Georgia,serif' }}>{body}</p>
+                                </div>
+                              );
+                            }).filter(Boolean)}
+                            {!['Compliment','Performance Summary','Encouragement','Practical Tips'].some(h => new RegExp(h, 'i').test(achievementsAiReview)) && (
+                              <p style={{ fontSize:12.5, color:'#374151', lineHeight:1.7, whiteSpace:'pre-wrap', fontFamily:'Georgia,serif' }}>{achievementsAiReview}</p>
+                            )}
+                          </div>
+                        )
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
                 </>
               )}
             </div>
@@ -2281,6 +2508,11 @@ export function StudentListPanel() {
           border-top: 1px solid #ececf4;
           padding: 12px 14px 0;
           animation: sf-slide-in 0.15s ease;
+        }
+
+        @keyframes inspireShimmer {
+          0%   { background-position: -400px 0; }
+          100% { background-position:  400px 0; }
         }
 
         @keyframes sf-slide-in {
@@ -2890,9 +3122,22 @@ export function StudentListPanel() {
         .drawer-tabs {
           padding: 10px 18px;
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
+          grid-template-columns: repeat(5, minmax(0, 1fr));
           gap: 6px;
           border-bottom: 1px solid #eceef6;
+        }
+
+        .tab-achievements {
+          background: linear-gradient(135deg, #fef9c3, #fdf2e9) !important;
+          border-color: #fde68a !important;
+          color: #92400e !important;
+          font-weight: 600 !important;
+        }
+
+        .tab-achievements.active {
+          background: linear-gradient(135deg, #fef3c7, #fde8c8) !important;
+          border-color: #f59e0b !important;
+          color: #78350f !important;
         }
 
         .tab {
