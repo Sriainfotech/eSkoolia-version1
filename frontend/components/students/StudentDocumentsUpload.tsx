@@ -287,6 +287,7 @@ export function StudentDocumentsUpload({
   const actionLabel = (state: DocumentState) => {
     if (state.status === "uploading") return "⏳ Uploading…";
     if (state.status === "success") return "↩ Replace";
+    if (state.status === "error") return "↻ Retry / Replace";
     return "↑ Upload file";
   };
 
@@ -358,11 +359,13 @@ export function StudentDocumentsUpload({
                   ) : state.status === "error" ? (
                     <>
                       <p className="doc-status-bad">✗ Upload failed</p>
+                      {state.fileName && <p className="doc-status-filename">{state.fileName}</p>}
                       {state.error && <p className="doc-status-error-detail">{state.error}</p>}
                     </>
                   ) : state.status === "uploading" ? (
                     <>
                       <p className="doc-status-run">Uploading…</p>
+                      {state.fileName && <p className="doc-status-filename">{state.fileName}</p>}
                       <div className="upload-progress"><div className="upload-progress-bar" /></div>
                     </>
                   ) : (
@@ -378,13 +381,13 @@ export function StudentDocumentsUpload({
                 {state.status === "success" && state.url && (
                   <a href={state.url} target="_blank" rel="noopener noreferrer" className="doc-preview-link">Preview</a>
                 )}
-                {state.status === "success" && localFile && (
-                  <button type="button" className="doc-icon-btn" title="Preview" onClick={() => setPreviewEntry({ title: spec.title, fileObj: localFile })}>
+                {(state.status === "success" || state.status === "error") && localFile && (
+                  <button type="button" className="doc-icon-btn" title="Preview picked file" onClick={() => setPreviewEntry({ title: spec.title, fileObj: localFile })}>
                     👁️
                   </button>
                 )}
-                {state.status === "success" && (
-                  <button type="button" className="doc-icon-btn doc-icon-btn-danger" title="Delete" onClick={() => confirmDelete(spec.key, state.fileName || spec.title, false)}>
+                {(state.status === "success" || state.status === "error") && (
+                  <button type="button" className="doc-icon-btn doc-icon-btn-danger" title="Remove" onClick={() => confirmDelete(spec.key, state.fileName || spec.title, false)}>
                     🗑️
                   </button>
                 )}

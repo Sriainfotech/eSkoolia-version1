@@ -206,6 +206,16 @@ export function StudentListPanel() {
   const [activeSectionMap, setActiveSectionMap] = useState<Map<number, number>>(new Map());
   const [classSectionStudents, setClassSectionStudents] = useState<Map<string, StudentRow[]>>(new Map());
   const [classSectionLoading, setClassSectionLoading] = useState<Set<string>>(new Set());
+  // Per-section page state for the in-accordion student list pagination.
+  const [sectionPage, setSectionPage] = useState<Map<string, number>>(new Map());
+  const SECTION_PAGE_SIZE = 10;
+  const setSecPage = (key: string, p: number) => {
+    setSectionPage((prev) => {
+      const next = new Map(prev);
+      if (p <= 1) next.delete(key); else next.set(key, p);
+      return next;
+    });
+  };
   const [showWholeSchool, setShowWholeSchool] = useState(false);
   const [drawerTab, setDrawerTab] = useState<"profile" | "academic" | "attendance" | "fees" | "achievements">("profile");
   const [drawerAttendance, setDrawerAttendance] = useState<Array<{ id: number; attendance_date: string; status?: string; remarks?: string }>>([]);
@@ -451,7 +461,7 @@ export function StudentListPanel() {
         }
         setClassSectionLoading(allKeys);
 
-        const params: Record<string, unknown> = {
+        const params: Record<string, string | number | boolean | null | undefined> = {
           search: debouncedSearch || undefined,
           include_deleted: "true",
         };
@@ -797,10 +807,41 @@ export function StudentListPanel() {
     setRefreshTick((prev) => prev + 1);
   };
 
+  // Build a lookup of every student row currently visible in the page,
+  // including the accordion cache (`classSectionStudents`) and the
+  // filter-tab list (`students`). The accordion view never populates the
+  // `students` array, so bulk handlers must consult both pools.
+  const getSelectedRows = (): StudentRow[] => {
+    const map = new Map<number, StudentRow>();
+    classSectionStudents.forEach((rows) => rows.forEach((r) => map.set(r.id, r)));
+    students.forEach((r) => { if (!map.has(r.id)) map.set(r.id, r); });
+    return selectedIds
+      .map((id) => map.get(id))
+      .filter((r): r is StudentRow => !!r);
+  };
+
+  // Apply an in-place patch to a set of student ids in both `students` and
+  // every cached section list, so the UI updates immediately without
+  // waiting for the network refresh.
+  const patchRows = (
+    ids: number[],
+    patch: (row: StudentRow) => StudentRow,
+  ) => {
+    const idSet = new Set(ids);
+    setStudents((prev) => prev.map((row) => (idSet.has(row.id) ? patch(row) : row)));
+    setClassSectionStudents((prev) => {
+      const next = new Map<string, StudentRow[]>();
+      prev.forEach((rows, key) => {
+        next.set(key, rows.map((row) => (idSet.has(row.id) ? patch(row) : row)));
+      });
+      return next;
+    });
+  };
+
   const handleBulkActiveState = async (nextActive: boolean, reason: string = "") => {
     if (selectedIds.length === 0 || bulkBusy) return;
 
-    const selectedOnPage = students.filter((row) => selectedIds.includes(row.id));
+    const selectedOnPage = getSelectedRows();
     const actionable = selectedOnPage.filter((row) => !(row.is_deleted || row.status === "deleted") && row.is_active !== nextActive);
     const alreadyInState = selectedOnPage.filter((row) => !(row.is_deleted || row.status === "deleted") && row.is_active === nextActive);
     const archivedRows = selectedOnPage.filter((row) => row.is_deleted || row.status === "deleted");
@@ -824,18 +865,12 @@ export function StudentListPanel() {
           reason,
         });
       }
-      setStudents((prev) =>
-        prev.map((row) =>
-          actionable.some((item) => item.id === row.id)
-            ? {
-                ...row,
-                is_active: nextActive,
-                is_disabled: false,
-                status: nextActive ? "active" : "inactive",
-              }
-            : row,
-        ),
-      );
+      patchRows(actionable.map((r) => r.id), (row) => ({
+        ...row,
+        is_active: nextActive,
+        is_disabled: false,
+        status: nextActive ? "active" : "inactive",
+      }));
       const updatedCount = actionable.length;
       const alreadyCount = alreadyInState.length;
       const archivedCount = archivedRows.length;
@@ -884,7 +919,7 @@ export function StudentListPanel() {
       return;
     }
 
-    const selectedOnPage = students.filter((row) => selectedIds.includes(row.id));
+    const selectedOnPage = getSelectedRows();
     const actionable = selectedOnPage.filter((row) => !(row.is_deleted || row.status === "deleted"));
     const alreadyArchived = selectedOnPage.filter((row) => row.is_deleted || row.status === "deleted");
 
@@ -900,19 +935,13 @@ export function StudentListPanel() {
       for (const row of actionable) {
         await apiPost(`/api/v1/students/students/${row.id}/soft-delete/`, { reason });
       }
-      setStudents((prev) =>
-        prev.map((row) =>
-          actionable.some((item) => item.id === row.id)
-            ? {
-                ...row,
-                is_deleted: true,
-                is_active: false,
-                is_disabled: true,
-                status: "deleted",
-              }
-            : row,
-        ),
-      );
+      patchRows(actionable.map((r) => r.id), (row) => ({
+        ...row,
+        is_deleted: true,
+        is_active: false,
+        is_disabled: true,
+        status: "deleted",
+      }));
       const archivedNow = actionable.length;
       const alreadyCount = alreadyArchived.length;
       setSuccess(
@@ -937,7 +966,7 @@ export function StudentListPanel() {
       return;
     }
 
-    const selectedOnPage = students.filter((row) => selectedIds.includes(row.id));
+    const selectedOnPage = getSelectedRows();
     const actionable = selectedOnPage.filter((row) => row.is_deleted || row.status === "deleted");
     const alreadyActive = selectedOnPage.filter((row) => !(row.is_deleted || row.status === "deleted"));
 
@@ -953,19 +982,13 @@ export function StudentListPanel() {
       for (const row of actionable) {
         await apiPost(`/api/v1/students/students/${row.id}/restore/`);
       }
-      setStudents((prev) =>
-        prev.map((row) =>
-          actionable.some((item) => item.id === row.id)
-            ? {
-                ...row,
-                is_deleted: false,
-                is_active: true,
-                is_disabled: false,
-                status: "active",
-              }
-            : row,
-        ),
-      );
+      patchRows(actionable.map((r) => r.id), (row) => ({
+        ...row,
+        is_deleted: false,
+        is_active: true,
+        is_disabled: false,
+        status: "active",
+      }));
       const restoredCount = actionable.length;
       const alreadyCount = alreadyActive.length;
       setSuccess(
@@ -1467,6 +1490,14 @@ export function StudentListPanel() {
                                   // so editing status doesn't make a row disappear from the list.
                                   const secStudents = rawSecStudents;
                                   const secLabel = formatSectionLabel(String(sec.name || sec.section_name || ""), sec.id);
+                                  // ── Pagination (client-side) ────────────────────
+                                  const secTotal = secStudents ? secStudents.length : 0;
+                                  const secTotalPages = Math.max(1, Math.ceil(secTotal / SECTION_PAGE_SIZE));
+                                  const rawSecPage = sectionPage.get(secKey) ?? 1;
+                                  const secSafePage = Math.min(Math.max(1, rawSecPage), secTotalPages);
+                                  const secStartIdx = (secSafePage - 1) * SECTION_PAGE_SIZE;
+                                  const secEndIdx = Math.min(secStartIdx + SECTION_PAGE_SIZE, secTotal);
+                                  const secVisibleStudents = secStudents ? secStudents.slice(secStartIdx, secEndIdx) : [];
                                   return (
                                     <div key={sec.id} className="sl-sec-pane">
                                       {isLoadingSec ? (
@@ -1524,7 +1555,17 @@ export function StudentListPanel() {
 
                                                 {/* Bulk actions bar — appears when at least one student in this section is selected */}
                                                 {secSelectedIds.length > 0 ? (() => {
-                                                  const selectedRowsAll = students.filter((r) => selectedIds.includes(r.id));
+                                                  // Build a lookup across the whole accordion cache + the
+                                                  // (filter-tab) students list so we can resolve the
+                                                  // status of every selected row.
+                                                  const rowMap = new Map<number, StudentRow>();
+                                                  classSectionStudents.forEach((rows) => {
+                                                    rows.forEach((r) => rowMap.set(r.id, r));
+                                                  });
+                                                  students.forEach((r) => { if (!rowMap.has(r.id)) rowMap.set(r.id, r); });
+                                                  const selectedRowsAll = selectedIds
+                                                    .map((id) => rowMap.get(id))
+                                                    .filter((r): r is StudentRow => !!r);
                                                   const anyInactive = selectedRowsAll.some((r) => !r.is_active && !(r.is_deleted || r.status === "deleted"));
                                                   const anyActive = selectedRowsAll.some((r) => r.is_active && !(r.is_deleted || r.status === "deleted"));
                                                   return (
@@ -1626,7 +1667,7 @@ export function StudentListPanel() {
                                                 </tr>
                                               </thead>
                                               <tbody>
-                                                {secStudents.map((row) => {
+                                                {secVisibleStudents.map((row) => {
                                                   const isRowSelected = selectedIds.includes(row.id);
                                                   const isArchived = row.is_deleted || row.status === "deleted";
                                                   const rowCls = [isRowSelected ? "row-selected" : "", isArchived ? "row-archived" : ""].filter(Boolean).join(" ") || undefined;
@@ -1707,8 +1748,55 @@ export function StudentListPanel() {
 
                                           {/* Table footer */}
                                           <div className="sl-tbl-foot">
-                                            <span>{pluralize(secStudents.length, "student")} in {secLabel}</span>
-                                            <Link href="/students/add" className="sl-add-link">+ Add student</Link>
+                                            <span>
+                                              {secTotal === 0
+                                                ? `0 students in ${secLabel}`
+                                                : `${secStartIdx + 1}–${secEndIdx} of ${secTotal} students in ${secLabel}`}
+                                            </span>
+                                            <div className="sl-foot-right">
+                                              {secTotalPages > 1 && (
+                                                <div className="sl-pager" onClick={(e) => e.stopPropagation()}>
+                                                  <button
+                                                    type="button"
+                                                    className="sl-pager-btn"
+                                                    disabled={secSafePage <= 1}
+                                                    onClick={() => setSecPage(secKey, secSafePage - 1)}
+                                                    aria-label="Previous page"
+                                                  >‹</button>
+                                                  {(() => {
+                                                    const pages: (number | "…")[] = [];
+                                                    if (secTotalPages <= 7) {
+                                                      for (let i = 1; i <= secTotalPages; i++) pages.push(i);
+                                                    } else {
+                                                      pages.push(1);
+                                                      const left = Math.max(2, secSafePage - 1);
+                                                      const right = Math.min(secTotalPages - 1, secSafePage + 1);
+                                                      if (left > 2) pages.push("…");
+                                                      for (let p = left; p <= right; p++) pages.push(p);
+                                                      if (right < secTotalPages - 1) pages.push("…");
+                                                      pages.push(secTotalPages);
+                                                    }
+                                                    return pages.map((p, i) => p === "…"
+                                                      ? <span key={`e${i}`} className="sl-pager-ellipsis">…</span>
+                                                      : <button
+                                                          key={p}
+                                                          type="button"
+                                                          className={`sl-pager-btn${p === secSafePage ? " sl-pager-btn-active" : ""}`}
+                                                          onClick={() => setSecPage(secKey, p as number)}
+                                                          aria-current={p === secSafePage ? "page" : undefined}
+                                                        >{p}</button>);
+                                                  })()}
+                                                  <button
+                                                    type="button"
+                                                    className="sl-pager-btn"
+                                                    disabled={secSafePage >= secTotalPages}
+                                                    onClick={() => setSecPage(secKey, secSafePage + 1)}
+                                                    aria-label="Next page"
+                                                  >›</button>
+                                                </div>
+                                              )}
+                                              <Link href="/students/add" className="sl-add-link">+ Add student</Link>
+                                            </div>
                                           </div>
                                         </>
                                       )}
@@ -1851,7 +1939,7 @@ export function StudentListPanel() {
 
               {drawerTab === "achievements" && (() => {
                 // Read all competitions from localStorage inspireHubStore
-                let allComps: Array<{id: string; name: string; date?: string; comp_type?: string; level?: string; results?: Array<{student_id?: number|string; position?: string; points?: number; ai_response?: string; personal_contribution?: string; _student?: {full_name?: string; class_name?: string}}>}> = [];
+                let allComps: Array<{id: string; name: string; date?: string; comp_type?: string; level?: string; status?: string; results?: Array<{student_id?: number|string; position?: string; points?: number; ai_response?: string; personal_contribution?: string; _student?: {full_name?: string; class_name?: string}}>}> = [];
                 try {
                   const raw = typeof window !== 'undefined' ? window.localStorage.getItem('inspirehub:competitions:v1') : null;
                   if (raw) allComps = JSON.parse(raw);
@@ -4386,6 +4474,59 @@ export function StudentListPanel() {
           font-size: 12px;
           color: #9a9db4;
           gap: 12px;
+        }
+
+        .sl-foot-right {
+          display: inline-flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        /* Small pagination buttons inside accordion footer */
+        .sl-pager {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+        }
+        .sl-pager-btn {
+          min-width: 20px;
+          height: 20px;
+          padding: 0 5px;
+          font-size: 10.5px;
+          font-weight: 600;
+          line-height: 1;
+          color: #3a3a4a;
+          background: #fff;
+          border: 1px solid #e6e6ec;
+          border-radius: 5px;
+          cursor: pointer;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          transition: background 0.15s, color 0.15s, border-color 0.15s;
+        }
+        .sl-pager-btn:hover:not(:disabled) {
+          background: #f5f3fe;
+          border-color: #4f39f6;
+          color: #4f39f6;
+        }
+        .sl-pager-btn:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
+        .sl-pager-btn-active {
+          background: #4f39f6;
+          border-color: #4f39f6;
+          color: #fff;
+        }
+        .sl-pager-btn-active:hover {
+          background: #4f39f6;
+          color: #fff;
+        }
+        .sl-pager-ellipsis {
+          font-size: 10.5px;
+          color: #9a9db4;
+          padding: 0 2px;
         }
 
         .sl-add-link {

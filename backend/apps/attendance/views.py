@@ -27,6 +27,42 @@ from .serializers import (
 from .services import send_present_attendance_notifications
 
 
+def _parse_academic_year_start(value):
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    import re
+
+    match = re.match(r"^(\d{4})(?:-(\d{2}|\d{4}))?$", text)
+    if not match:
+        return None
+    start = int(match.group(1))
+    return start if 2000 <= start <= 2100 else None
+
+
+def _current_academic_year_start(today=None):
+    today = today or date.today()
+    return today.year if today.month >= 6 else today.year - 1
+
+
+def _validate_month_for_academic_year(month_int, academic_year):
+    """For the current academic year, allow months only up to current month.
+
+    Past academic years are allowed to query all 12 months.
+    """
+    if not academic_year:
+        return None
+    start = _parse_academic_year_start(academic_year)
+    if start is None:
+        return "academic_year must be in YYYY-YY or YYYY-YYYY format."
+
+    today = date.today()
+    if start == _current_academic_year_start(today) and month_int > today.month:
+        current_month_name = date(today.year, today.month, 1).strftime("%B")
+        return f"For current academic year, month cannot be after {current_month_name}."
+    return None
+
+
 class AttendanceTenantMixin:
     permission_classes = [permissions.IsAuthenticated]
 
@@ -58,6 +94,30 @@ class StudentAttendanceListCreateAPIView(AttendanceTenantMixin, APIView):
             queryset = queryset.filter(school_id=request.user.school_id)
 
         params = request.query_params
+        month_raw = params.get("month")
+        year_raw = params.get("year")
+        academic_year = params.get("academic_year")
+
+        month_int = None
+        if month_raw not in (None, ""):
+            try:
+                month_int = int(month_raw)
+            except (TypeError, ValueError):
+                return Response({"detail": "month must be numeric."}, status=status.HTTP_400_BAD_REQUEST)
+            if month_int < 1 or month_int > 12:
+                return Response({"detail": "month must be between 1 and 12."}, status=status.HTTP_400_BAD_REQUEST)
+            month_rule_error = _validate_month_for_academic_year(month_int, academic_year)
+            if month_rule_error:
+                return Response({"detail": month_rule_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        if year_raw not in (None, ""):
+            try:
+                year_int = int(year_raw)
+            except (TypeError, ValueError):
+                return Response({"detail": "year must be numeric."}, status=status.HTTP_400_BAD_REQUEST)
+            if year_int < 2000 or year_int > 2100:
+                return Response({"detail": "year must be a valid 4-digit year."}, status=status.HTTP_400_BAD_REQUEST)
+
         if params.get("class_id"):
             queryset = queryset.filter(class_id=params["class_id"])
         if params.get("section_id"):
@@ -565,6 +625,7 @@ class StudentAttendanceMonthlyReportAPIView(AttendanceTenantMixin, APIView):
         section_id = request.query_params.get("section_id")
         month = request.query_params.get("month")
         year = request.query_params.get("year")
+        academic_year = request.query_params.get("academic_year")
 
         if not class_id or not section_id or not month or not year:
             return Response(
@@ -594,6 +655,10 @@ class StudentAttendanceMonthlyReportAPIView(AttendanceTenantMixin, APIView):
                 {"detail": "year must be a valid 4-digit year."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        month_rule_error = _validate_month_for_academic_year(month_int, academic_year)
+        if month_rule_error:
+            return Response({"detail": month_rule_error}, status=status.HTTP_400_BAD_REQUEST)
 
         records = (
             StudentAttendance.objects.filter(
@@ -1198,9 +1263,29 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
         section_id = request.query_params.get("section_id")
         month = request.query_params.get("month")
         year = request.query_params.get("year")
+        academic_year = request.query_params.get("academic_year")
         date_value = request.query_params.get("date")
         date_from = request.query_params.get("date_from")
         date_to = request.query_params.get("date_to")
+
+        if month not in (None, ""):
+            try:
+                month_int = int(month)
+            except (TypeError, ValueError):
+                return Response({"detail": "month must be numeric."}, status=status.HTTP_400_BAD_REQUEST)
+            if month_int < 1 or month_int > 12:
+                return Response({"detail": "month must be between 1 and 12."}, status=status.HTTP_400_BAD_REQUEST)
+            month_rule_error = _validate_month_for_academic_year(month_int, academic_year)
+            if month_rule_error:
+                return Response({"detail": month_rule_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        if year not in (None, ""):
+            try:
+                year_int = int(year)
+            except (TypeError, ValueError):
+                return Response({"detail": "year must be numeric."}, status=status.HTTP_400_BAD_REQUEST)
+            if year_int < 2000 or year_int > 2100:
+                return Response({"detail": "year must be a valid 4-digit year."}, status=status.HTTP_400_BAD_REQUEST)
 
         queryset = StudentAttendance.objects.select_related("student").filter(**self.school_filter(request))
         if class_id:
@@ -1688,12 +1773,29 @@ class StudentAttendanceReportInsightsAPIView(AttendanceTenantMixin, APIView):
         section_id = request.query_params.get("section_id")
         month = request.query_params.get("month")
         year = request.query_params.get("year")
+        academic_year = request.query_params.get("academic_year")
         if not month or not year:
             return Response({"detail": "month and year are required."}, status=status.HTTP_400_BAD_REQUEST)
 
+        try:
+            month_int = int(month)
+            year_int = int(year)
+        except (TypeError, ValueError):
+            return Response({"detail": "month and year must be numeric."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if month_int < 1 or month_int > 12:
+            return Response({"detail": "month must be between 1 and 12."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if year_int < 2000 or year_int > 2100:
+            return Response({"detail": "year must be a valid 4-digit year."}, status=status.HTTP_400_BAD_REQUEST)
+
+        month_rule_error = _validate_month_for_academic_year(month_int, academic_year)
+        if month_rule_error:
+            return Response({"detail": month_rule_error}, status=status.HTTP_400_BAD_REQUEST)
+
         queryset = StudentAttendance.objects.filter(
-            attendance_date__month=month,
-            attendance_date__year=year,
+            attendance_date__month=month_int,
+            attendance_date__year=year_int,
             **self.school_filter(request),
         )
         if class_id:

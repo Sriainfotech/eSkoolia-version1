@@ -19,32 +19,41 @@ interface Props {
   group: ClassGroup;
   isOpen: boolean;
   isReadOnly?: boolean;
-  decisions: Record<number, RecordDecision>;
-  selectedIds: Set<number>;
+  decisions?: Record<number, RecordDecision>;
+  selectedIds?: Set<number>;
   onToggle: () => void;
-  onSelect: (recordId: number, checked: boolean) => void;
-  onSelectMany: (ids: number[], checked: boolean) => void;
-  onStatusChange: (recordId: number, status: RecordDecision['status']) => void;
-  onOpenNotPromoted: (record: PromotionRecord) => void;
-  onPromoteAll: (records: PromotionRecord[]) => void;
-  onNotPromotedAll: (records: PromotionRecord[]) => void;
-  onResetAll: (records: PromotionRecord[]) => void;
+  onSelect?: (recordId: number, checked: boolean) => void;
+  onSelectMany?: (ids: number[], checked: boolean) => void;
+  onStatusChange?: (recordId: number, status: RecordDecision['status']) => void;
+  onOpenNotPromoted?: (record: PromotionRecord) => void;
+  onPromoteAll?: (records: PromotionRecord[]) => void;
+  onNotPromotedAll?: (records: PromotionRecord[]) => void;
+  onResetAll?: (records: PromotionRecord[]) => void;
+  // additional props used by StudentPromotePanel
+  batchStatus?: string;
+  batchIsEditable?: boolean;
+  recordDecisions?: Record<number, unknown>;
+  aiLoadingId?: number | null;
+  onDecisionChange?: (...args: any[]) => void;
+  onAskAi?: (recordId: number) => void;
+  fieldStyle?: unknown;
+  renderStatusBadge?: (status: any) => React.ReactNode;
 }
 
 export default function ClassAccordionCard({
   group,
   isOpen,
   isReadOnly = false,
-  decisions,
-  selectedIds,
+  decisions = {},
+  selectedIds = new Set(),
   onToggle,
-  onSelect,
-  onSelectMany,
-  onStatusChange,
-  onOpenNotPromoted,
-  onPromoteAll,
-  onNotPromotedAll,
-  onResetAll,
+  onSelect = () => {},
+  onSelectMany = () => {},
+  onStatusChange = () => {},
+  onOpenNotPromoted = () => {},
+  onPromoteAll = () => {},
+  onNotPromotedAll = () => {},
+  onResetAll = () => {},
 }: Props) {
   const [activeKey, setActiveKey] = useState<string>(group.sections[0]?.key ?? '');
 

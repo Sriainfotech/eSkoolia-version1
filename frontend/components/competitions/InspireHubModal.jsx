@@ -509,10 +509,10 @@ function ConfirmNavDialog({ target, onCancel, onDiscard, onSave }) {
           </span>
           <div>
             <h3 className="text-[15px] font-extrabold text-slate-900 leading-tight">Leave Compose with unsaved work?</h3>
-            <p className="text-[11.5px] text-slate-500 mt-0.5">You're about to switch to <b className="text-slate-700">{labels[target] || target}</b>.</p>
+            <p className="text-[11.5px] text-slate-500 mt-0.5">You&apos;re about to switch to <b className="text-slate-700">{labels[target] || target}</b>.</p>
           </div>
         </div>
-        <p className="mt-3 text-[12.5px] text-slate-600">Save your progress as a draft so you can return later — or discard the changes you've just made.</p>
+        <p className="mt-3 text-[12.5px] text-slate-600">Save your progress as a draft so you can return later — or discard the changes you&apos;ve just made.</p>
         <div className="mt-4 flex items-center gap-2 justify-end flex-wrap">
           <button onClick={onCancel}  className="rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 px-3 py-1.5 text-[12px] font-bold">Stay here</button>
           <button onClick={onDiscard} className="rounded-lg border border-rose-200 bg-white text-rose-700 hover:bg-rose-50 px-3 py-1.5 text-[12px] font-bold">Discard &amp; go</button>

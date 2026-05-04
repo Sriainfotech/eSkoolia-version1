@@ -309,21 +309,24 @@ export function StudentPromotePanel() {
   }, [batch, smartSearch, smartStatus, smartClassId]);
 
   const groupedBatchRecords = useMemo(() => {
-    const map = new Map<string, { classId: number | null; classLabel: string; records: PromotionRecord[] }>();
+    const map = new Map<string, { classKey: string; classId: number | null; className: string; totalRecords: number; sections: Array<{ key: string; sectionId: number | null; sectionName: string; records: PromotionRecord[] }> }>();
     filteredBatchRecords.forEach((rec) => {
       const key = rec.from_class == null ? "unassigned" : String(rec.from_class);
       const existing = map.get(key);
       if (existing) {
-        existing.records.push(rec);
+        existing.sections[0].records.push(rec);
+        existing.totalRecords += 1;
       } else {
         map.set(key, {
+          classKey: key,
           classId: rec.from_class,
-          classLabel: rec.from_class_name || "Unassigned Class",
-          records: [rec],
+          className: rec.from_class_name || "Unassigned Class",
+          totalRecords: 1,
+          sections: [{ key, sectionId: null, sectionName: rec.from_class_name || "Unassigned", records: [rec] }],
         });
       }
     });
-    return Array.from(map.entries()).map(([key, value]) => ({ key, ...value }));
+    return Array.from(map.values()).map((g) => ({ ...g, key: g.classKey }));
   }, [filteredBatchRecords]);
 
   const batchClassOptions = useMemo(() => {

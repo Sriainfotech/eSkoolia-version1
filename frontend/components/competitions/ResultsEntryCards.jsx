@@ -654,7 +654,7 @@ function EmptyRoster({ studentsAvailable }) {
       <h4 className="mt-3 text-[14px] font-extrabold text-slate-900">No participants yet</h4>
       <p className="mt-1 text-[12px] text-slate-500">
         Use the search above to find a student by name or admission ID.
-        {studentsAvailable === 0 && <> The school roster isn't loaded — open InspireHub from a Student Groups page to access it.</>}
+        {studentsAvailable === 0 && <> The school roster isn&apos;t loaded — open InspireHub from a Student Groups page to access it.</>}
       </p>
     </div>
   );

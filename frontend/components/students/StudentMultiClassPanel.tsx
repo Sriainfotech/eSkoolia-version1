@@ -7,7 +7,14 @@ import { API_BASE_URL } from "@/lib/api";
 interface EnrolledStudent { name:string; admissionNo:string; rollNo:string; className:string; sectionName:string; academicYear:string; }
 interface AISuggestion { lang2:string; lang3:string; sport:string; art:string; }
 interface MockStudent { id:number; name:string; admNo:string; rollNo:string; lang2:string; lang3:string; sport:string; art:string; status:"done"|"partial"|"empty"; optionalSubjects?:string[]; }
-interface MockSection { id:number; letter:string; teacher:string; students:MockStudent[]; }
+interface MockSection {
+  id:number;
+  letter:string;
+  teacher:string;
+  students:MockStudent[];
+  studentTotal?:number;
+  studentPageSize?:number;
+}
 interface MockClass { id:number; label:string; sections:MockSection[]; }
 interface KpiStats { enrolled:number; assigned:number; partial:number; pending:number; }
 type Tab = "assign"|"filter"|"browse";
@@ -296,22 +303,58 @@ function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;def
   const [open,setOpen]=useState(!!defaultOpen);
   const [activeSecIdx,setActiveSecIdx]=useState(0);
   const [page,setPage]=useState(1);
-  const PAGE_SIZE=10;
-  const all=cls.sections.flatMap(sc=>sc.students);
-  const done=all.filter(x=>x.status==="done").length;
-  const pct=all.length>0?Math.round((done/all.length)*100):0;
+  // Per-section page cache: { [sectionId]: { [pageNumber]: students } }
+  const [pageCache,setPageCache]=useState<Record<number,Record<number,MockStudent[]>>>({});
+  const [pageLoading,setPageLoading]=useState(false);
+  const sectionTotal=(sec?:MockSection)=>sec?(sec.studentTotal??sec.students.length):0;
+  const allTotal=cls.sections.reduce((acc,sc)=>acc+sectionTotal(sc),0);
+  // For done/pending counts, fall back to whatever students are loaded.
+  const loadedAll=cls.sections.flatMap(sc=>sc.students);
+  const done=loadedAll.filter(x=>x.status==="done").length;
+  const pct=allTotal>0?Math.round((done/allTotal)*100):0;
   const subLabel=CLASS_SUB_LABELS[cls.label]??"Grade";
   void index;
 
   const activeSec=cls.sections[activeSecIdx]??cls.sections[0];
-  const totalRows=activeSec?activeSec.students.length:0;
+  const PAGE_SIZE=activeSec?.studentPageSize??10;
+  const totalRows=sectionTotal(activeSec);
   const totalPages=Math.max(1,Math.ceil(totalRows/PAGE_SIZE));
   const safePage=Math.min(page,totalPages);
   const startIdx=(safePage-1)*PAGE_SIZE;
-  const visibleStudents=activeSec?activeSec.students.slice(startIdx,startIdx+PAGE_SIZE):[];
 
-  // Reset page when the active section changes or when the dataset shrinks.
-  useEffect(()=>{setPage(1);},[activeSecIdx,cls.sections]);
+  // Resolve which students to render for the current page.
+  const cachedPage=activeSec?pageCache[activeSec.id]?.[safePage]:undefined;
+  const visibleStudents=cachedPage??(safePage===1?activeSec?.students??[]:[]);
+
+  // Reset page when the active section changes.
+  useEffect(()=>{setPage(1);},[activeSecIdx]);
+
+  // Fetch a section page from the backend on demand.
+  useEffect(()=>{
+    if(!open||!activeSec)return;
+    if(safePage===1)return; // page 1 is included in the tree response
+    if(pageCache[activeSec.id]?.[safePage])return;
+    let cancelled=false;
+    (async()=>{
+      try{
+        setPageLoading(true);
+        const token=typeof window!=="undefined"?localStorage.getItem("school_erp_access_token")??"":"";
+        const url=`${API_BASE_URL}/api/v1/students/students/section-students/?class_id=${cls.id}&section_id=${activeSec.id}&page=${safePage}&page_size=${PAGE_SIZE}`;
+        const res=await fetch(url,{headers:{Authorization:`Bearer ${token}`},cache:"no-store"});
+        if(!res.ok)return;
+        const data=await res.json();
+        if(cancelled)return;
+        setPageCache(prev=>({
+          ...prev,
+          [activeSec.id]:{...(prev[activeSec.id]||{}),[safePage]:data.students||[]},
+        }));
+      }catch{}finally{
+        if(!cancelled)setPageLoading(false);
+      }
+    })();
+    return()=>{cancelled=true;};
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[open,activeSec?.id,safePage,PAGE_SIZE,cls.id]);
 
   return (
     <div className={`${s.classAcc} ${open?s.classAccOpen:""}`}>
@@ -325,10 +368,10 @@ function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;def
           <span className={s.classSubLabel}>{subLabel}</span>
         </div>
         <div className={s.classPills}>
-          <span className={s.pill}>{all.length} students</span>
+          <span className={s.pill}>{allTotal} students</span>
           <span className={`${s.pill} ${s.pillGray}`}>{cls.sections.length} sections</span>
           {done>0&&<span className={`${s.pill} ${s.pillGreen}`}>{done} done</span>}
-          {(all.length-done)>0&&<span className={`${s.pill} ${s.pillAmber}`}>{all.length-done} pending</span>}
+          {(allTotal-done)>0&&<span className={`${s.pill} ${s.pillAmber}`}>{allTotal-done} pending</span>}
         </div>
         <div className={s.classHeadRight}>
           <div className={s.ringWrap}><Ring pct={pct} size={34}/></div>
@@ -344,10 +387,11 @@ function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;def
               {/* Horizontal section tabs */}
               <div className={s.secTabs}>
                 {cls.sections.map((sec,i)=>{
+                  const secCount=sectionTotal(sec);
                   const sdone=sec.students.filter(x=>x.status==="done").length;
                   const isActive=activeSecIdx===i;
-                  const isComplete=sec.students.length>0&&sdone===sec.students.length;
-                  const isPartial=sec.students.length>0&&sdone>0&&sdone<sec.students.length;
+                  const isComplete=secCount>0&&sdone===secCount;
+                  const isPartial=secCount>0&&sdone>0&&sdone<secCount;
                   let badgeCls=s.secTabBadge;
                   if(isComplete)badgeCls=`${s.secTabBadge} ${s.secTabBadgeGreen}`;
                   else if(isPartial)badgeCls=`${s.secTabBadge} ${s.secTabBadgeAmber}`;
@@ -357,7 +401,7 @@ function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;def
                       className={`${s.secTab} ${isActive?s.secTabActive:""}`}
                       onClick={e=>{e.stopPropagation();setActiveSecIdx(i);}}>
                       Section {sec.letter}
-                      <span className={badgeCls}>{sec.students.length}</span>
+                      <span className={badgeCls}>{secCount}</span>
                     </button>
                   );
                 })}
@@ -366,8 +410,12 @@ function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;def
               {activeSec&&(
                 <div className={s.tblWrap}>
                   <div className={s.tblHead}><span/><span>Student</span><span>Admission</span><span>Roll</span><span>Optional subjects</span><span/></div>
-                  {visibleStudents.map(st=><StudentRow key={st.id} student={st} classLabel={cls.label} onEdit={()=>onEdit(cls,st)}/>)}
-                  {activeSec.students.length===0&&(
+                  {pageLoading&&visibleStudents.length===0?(
+                    <div style={{padding:"16px 14px",fontSize:12,color:"var(--ink-ghost)",textAlign:"center"}}>Loading…</div>
+                  ):(
+                    visibleStudents.map(st=><StudentRow key={st.id} student={st} classLabel={cls.label} onEdit={()=>onEdit(cls,st)}/>)
+                  )}
+                  {totalRows===0&&!pageLoading&&(
                     <div style={{padding:"16px 14px",fontSize:12,color:"var(--ink-ghost)",textAlign:"center"}}>No students in this section.</div>
                   )}
                   <div className={s.tblFooter}>
@@ -561,10 +609,22 @@ export function StudentMultiClassPanel() {
     (async()=>{
       try{
         const token=typeof window!=="undefined"?localStorage.getItem("school_erp_access_token")??"":"";
-        const res=await fetch(`${API_BASE_URL}/api/v1/students/students/class-section-tree/`,{
+        const res=await fetch(`${API_BASE_URL}/api/v1/students/students/class-section-tree/?page_size=10`,{
           headers:{Authorization:`Bearer ${token}`},cache:"no-store"
         });
-        if(res.ok){const data=await res.json();setClassList(data);}
+        if(res.ok){
+          const data=await res.json();
+          // Normalise pagination metadata returned by backend.
+          const normalised=(Array.isArray(data)?data:[]).map((cl:any)=>({
+            ...cl,
+            sections:(cl.sections||[]).map((sec:any)=>({
+              ...sec,
+              studentTotal:typeof sec.student_total==="number"?sec.student_total:(sec.students?.length??0),
+              studentPageSize:typeof sec.student_page_size==="number"?sec.student_page_size:10,
+            })),
+          }));
+          setClassList(normalised);
+        }
       }catch{}finally{setClassListLoading(false);}
     })();
   },[]);

@@ -221,6 +221,7 @@ export default function StudentGroupPage() {
 
   const [savingSid,  setSavingSid]  = useState<number|null>(null)
   const [bulkSaving, setBulkSaving] = useState<number|null>(null)
+  const [clubAssignStudentId, setClubAssignStudentId] = useState<number|null>(null)
 
   const [toast,    setToast]   = useState('')
   const [toastOn,  setToastOn] = useState(false)
@@ -230,6 +231,16 @@ export default function StudentGroupPage() {
   const filterJumpReady = useRef(false)
   const houseListRef = useRef<HTMLDivElement | null>(null)
   const clubListRef = useRef<HTMLDivElement | null>(null)
+
+  const focusGroupRoster = useCallback((groupId: number, type: GroupType) => {
+    setOpenAccs((prev) => {
+      const next = new Set(prev)
+      next.add(groupId)
+      return next
+    })
+    const targetRef = type === 'HOUSE' ? houseListRef : clubListRef
+    targetRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [])
 
   const apiFetch = useCallback(async (path: string, init?: RequestInit) => {
     const url = new URL(path, 'http://local')
@@ -447,6 +458,9 @@ export default function StudentGroupPage() {
 
   const houses = groups.filter(g => g.type === 'HOUSE')
   const clubs  = groups.filter(g => g.type === 'CLUB')
+  const clubAssignStudent = clubAssignStudentId
+    ? students.find((s) => s.id === clubAssignStudentId) ?? null
+    : null
 
   // Always show all classes from the CLASSES constant so Nursery/LKG/UKG are always visible.
   // Section pills are derived from actual student data (they vary by school setup).
@@ -572,6 +586,11 @@ export default function StudentGroupPage() {
       await rStudents()
       showToast('Save failed - please try again')
     } finally { setSavingSid(null) }
+  }
+
+  async function assignFromClubPicker(studentId: number, groupId: number|null) {
+    await assignOne(studentId, groupId)
+    setClubAssignStudentId(null)
   }
 
   async function doBulk(groupId: number, targetGroupId: number) {
@@ -789,7 +808,8 @@ export default function StudentGroupPage() {
         {houses.map(h=>(
           <HCard key={h.id} g={h}
             onEdit={()=>{setEditTgt(h);setAGOpen(true)}}
-            onDelete={()=>{ void deleteGroup(h.id) }}/>
+            onDelete={()=>{ void deleteGroup(h.id) }}
+            onViewRoster={() => focusGroupRoster(h.id, 'HOUSE')}/>
         ))}
       </div>
 
@@ -803,7 +823,8 @@ export default function StudentGroupPage() {
         {clubs.map(c=>(
           <CCard key={c.id} g={c}
             onEdit={()=>{setEditTgt(c);setAGOpen(true)}}
-            onDelete={()=>{ void deleteGroup(c.id) }}/>
+            onDelete={()=>{ void deleteGroup(c.id) }}
+            onViewRoster={() => focusGroupRoster(c.id, 'CLUB')}/>
         ))}
         <div className="cc-ghost" onClick={()=>setACOpen(true)}>
           <div className="cc-ghost-icon">+</div>
@@ -979,6 +1000,7 @@ export default function StudentGroupPage() {
             onClearSel={()=>clearSel(h.id)}
             onBulkAssign={(tgt)=>{ void doBulk(h.id,tgt) }}
             onAssignOne={(sid,gid)=>{ void assignOne(sid,gid) }}
+            onOpenClubAssign={(sid)=>setClubAssignStudentId(sid)}
             bulkSaving={bulkSaving===h.id}
             savingSid={savingSid}
             allGroups={groups}
@@ -1007,12 +1029,24 @@ export default function StudentGroupPage() {
             onClearSel={()=>clearSel(c.id)}
             onBulkAssign={(tgt)=>{ void doBulk(c.id,tgt) }}
             onAssignOne={(sid,gid)=>{ void assignOne(sid,gid) }}
+            onOpenClubAssign={(sid)=>setClubAssignStudentId(sid)}
             bulkSaving={bulkSaving===c.id}
             savingSid={savingSid}
             allGroups={groups}
             showAI={false} onAIApply={()=>{}} onAIDismiss={()=>{}}/>
         ))}
       </div>
+
+      {clubAssignStudent&&(
+        <ClubAssignModal
+          student={clubAssignStudent}
+          clubs={clubs}
+          currentGroup={groups.find((g) => g.id === clubAssignStudent.currentGroupId) ?? null}
+          saving={savingSid === clubAssignStudent.id}
+          onAssign={(groupId)=>{ void assignFromClubPicker(clubAssignStudent.id, groupId) }}
+          onClose={()=>setClubAssignStudentId(null)}
+        />
+      )}
 
       {swOpen&&<SWModal method={swMethod} setMethod={setSWMethod} scope={swScope} setScope={setSWScope}
         preview={swPreview} loading={swLoading} onApply={()=>{ void applyDivide() }} onClose={()=>setSWOpen(false)}/>}
@@ -1028,7 +1062,7 @@ export default function StudentGroupPage() {
   )
 }
 
-function HCard({g,onEdit,onDelete}:{g:Group;onEdit():void;onDelete():void}) {
+function HCard({g,onEdit,onDelete,onViewRoster}:{g:Group;onEdit():void;onDelete():void;onViewRoster():void}) {
   const pct = Math.min(100,Math.round(g.studentCount/g.capacity*100))
   const desc = splitDescription(g.description)
   return (
@@ -1050,6 +1084,7 @@ function HCard({g,onEdit,onDelete}:{g:Group;onEdit():void;onDelete():void}) {
       <div className="hc-bot">
         <span style={{fontSize:11,color:'var(--light)'}}>{g.studentCount} student{g.studentCount!==1?'s':''} assigned</span>
         <div className="hact">
+          <button className="hbtn" style={{width:'auto',padding:'0 8px',fontSize:10,fontWeight:700}} onClick={onViewRoster} title="View students">View</button>
           <button className="hbtn" onClick={onEdit} title="Edit"><Ico.Edit/></button>
           <button className="hbtn danger" onClick={onDelete} title="Delete"><Ico.Trash/></button>
         </div>
@@ -1058,7 +1093,7 @@ function HCard({g,onEdit,onDelete}:{g:Group;onEdit():void;onDelete():void}) {
   )
 }
 
-function CCard({g,onEdit,onDelete}:{g:Group;onEdit():void;onDelete():void}) {
+function CCard({g,onEdit,onDelete,onViewRoster}:{g:Group;onEdit():void;onDelete():void;onViewRoster():void}) {
   const desc = splitDescription(g.description)
   return (
     <div className="cc">
@@ -1077,6 +1112,7 @@ function CCard({g,onEdit,onDelete}:{g:Group;onEdit():void;onDelete():void}) {
       <div className="cc-foot">
         <span className="cc-chip">{g.studentCount} / {g.capacity}</span>
         <div style={{display:'flex',gap:5}}>
+          <button className="cc-btn" style={{width:'auto',padding:'0 8px',fontSize:10,fontWeight:700}} onClick={onViewRoster} title="View students">View</button>
           <button className="cc-btn" onClick={onEdit} title="Edit"><Ico.Edit/></button>
           <button className="cc-btn danger" onClick={onDelete} title="Delete"><Ico.Trash/></button>
         </div>
@@ -1095,6 +1131,7 @@ interface AccProps {
   onClearSel():void
   onBulkAssign(targetGroupId:number):void
   onAssignOne(sid:number,gid:number|null):void
+  onOpenClubAssign(sid:number):void
   bulkSaving:boolean; savingSid:number|null
   allGroups:Group[]
   showAI:boolean; onAIApply():void; onAIDismiss():void
@@ -1109,6 +1146,27 @@ function Accordion(p:AccProps) {
   const hs = p.allGroups.filter(x=>x.type==='HOUSE')
   const cs = p.allGroups.filter(x=>x.type==='CLUB')
 
+  // Per-class-row pagination: key = `${groupId}-${cls}`, value = current page (1-based)
+  const CLASS_ROW_PAGE_SIZE = 10
+  const [classRowPages, setClassRowPages] = useState<Record<string, number>>({})
+  const getClassPage = (cls: string) => classRowPages[`${g.id}-${cls}`] ?? 1
+  const setClassPage = (cls: string, page: number) =>
+    setClassRowPages((prev) => ({ ...prev, [`${g.id}-${cls}`]: page }))
+
+  const classCounts = CLASSES.map((cls) => ({
+    cls,
+    count: gStudents.filter((s) => s.class === cls).length,
+  }))
+  const nonEmptyClassCounts = classCounts.filter((x) => x.count > 0)
+  const quickClassCounts = (nonEmptyClassCounts.length > 0 ? nonEmptyClassCounts : classCounts).slice(0, 3)
+  const moreClassCount = Math.max(0, (nonEmptyClassCounts.length > 0 ? nonEmptyClassCounts.length : classCounts.length) - quickClassCounts.length)
+
+  const openClassFromChip = (cls: string) => {
+    const rowKey = `${g.id}-${cls}`
+    if (!p.isOpen) p.onToggle()
+    if (!p.openCRs.has(rowKey)) p.onToggleCR(rowKey)
+  }
+
   return (
     <div className="acc">
       {p.showAI&&(
@@ -1122,7 +1180,7 @@ function Accordion(p:AccProps) {
       {hasSel&&(
         <div className="inline-bulk show">
           <span className="ib-chip">{p.selected.size} selected</span>
-          <span style={{fontSize:12,color:'var(--mid)'}}>-> Move to:</span>
+          <span style={{fontSize:12,color:'var(--mid)'}}>&rarr; Move to:</span>
           <select className="ib-sel" value={bulkTgt} onChange={e=>setBulkTgt(e.target.value)}>
             <option value="">Choose group...</option>
             <optgroup label="Houses">{hs.map(h=><option key={h.id} value={h.id}>{h.emoji} {h.name}</option>)}</optgroup>
@@ -1148,8 +1206,18 @@ function Accordion(p:AccProps) {
         </div>
         <div className="acc-right">
           <div className="acc-chips">
-            {['Nursery','Grade 5','Grade 10'].map(c=><span key={c} className="acc-chip">{c}</span>)}
-            <span className="acc-chip">+10</span>
+            {quickClassCounts.map((item)=>(
+              <button
+                key={item.cls}
+                type="button"
+                className="acc-chip"
+                title={`Open ${item.cls} (${item.count} students)`}
+                onClick={(e)=>{ e.stopPropagation(); openClassFromChip(item.cls) }}
+              >
+                {item.cls}
+              </button>
+            ))}
+            {moreClassCount > 0 && <span className="acc-chip">+{moreClassCount}</span>}
           </div>
           <div className={`acc-chevron${p.isOpen?' open':''}`}><Ico.ChevD/></div>
         </div>
@@ -1157,11 +1225,17 @@ function Accordion(p:AccProps) {
       {p.isOpen&&(
         <div className="acc-body open">
           {CLASSES.map((cls,ci)=>{
-            const ss   = gStudents.filter(s=>s.class===cls)
-            const crKey= `${g.id}-${cls}`
-            const crOpen=p.openCRs.has(crKey)
-            const empty= ss.length===0
-            const secs = [...new Set(ss.map(s=>s.section))].sort()
+            const ss      = gStudents.filter(s=>s.class===cls)
+            const crKey   = `${g.id}-${cls}`
+            const crOpen  = p.openCRs.has(crKey)
+            const empty   = ss.length===0
+            const secs    = [...new Set(ss.map(s=>s.section))].sort()
+            // Per-class pagination (client-side slice of already-loaded data)
+            const crPage       = getClassPage(cls)
+            const crTotalPages = Math.max(1, Math.ceil(ss.length / CLASS_ROW_PAGE_SIZE))
+            const crSafePage   = Math.max(1, Math.min(crPage, crTotalPages))
+            const crOffset     = (crSafePage - 1) * CLASS_ROW_PAGE_SIZE
+            const ssPage       = ss.slice(crOffset, crOffset + CLASS_ROW_PAGE_SIZE)
             return (
               <div key={cls} className="class-row">
                 <div className="class-row-hd"
@@ -1189,10 +1263,14 @@ function Accordion(p:AccProps) {
                             checked={ss.every(s=>p.selected.has(s.id))}
                             onChange={e=>p.onToggleCls(cls,e.target.checked)}/>
                         </th>
-                        <th>Student</th><th>Adm No.</th><th>Sec</th><th>Assign Group</th><th>AI Hint</th>
+                        <th>Student</th><th>Adm No.</th><th>Sec</th><th>Assign House</th><th>Assign Club</th><th>AI Hint</th>
                       </tr></thead>
                       <tbody>
-                        {ss.map(s=>(
+                        {ssPage.map(s=>{
+                          const activeGroup = p.allGroups.find((x) => x.id === s.currentGroupId) ?? null
+                          const currentHouse = activeGroup?.type === 'HOUSE' ? activeGroup : null
+                          const currentClub = activeGroup?.type === 'CLUB' ? activeGroup : null
+                          return (
                           <tr key={s.id} className={p.selected.has(s.id)?'sel':''}>
                             <td><input type="checkbox" style={{accentColor:'var(--teal)',cursor:'pointer'}}
                               checked={p.selected.has(s.id)}
@@ -1206,26 +1284,55 @@ function Accordion(p:AccProps) {
                             <td style={{fontSize:11,color:'var(--light)',fontFamily:'var(--font2)'}}>{s.admissionNo}</td>
                             <td><span className="cls-tag">Sec {s.section}</span></td>
                             <td>
-                              <div style={{display:'flex',alignItems:'center',gap:5}}>
-                                <select className={`grp-sel${s.currentGroupId?' hv':''}`}
-                                  value={s.currentGroupId??''}
+                              <div className="assign-cell">
+                                <select className={`grp-sel${currentHouse?' hv':''}`}
+                                  value={currentHouse?.id??''}
                                   disabled={p.savingSid===s.id}
                                   onChange={e=>p.onAssignOne(s.id,e.target.value?Number(e.target.value):null)}>
                                   <option value="">- Unassigned</option>
-                                  <optgroup label="Houses">{p.allGroups.filter(x=>x.type==='HOUSE').map(h=><option key={h.id} value={h.id}>{h.emoji} {h.name}</option>)}</optgroup>
-                                  <optgroup label="Clubs">{p.allGroups.filter(x=>x.type==='CLUB').map(c=><option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}</optgroup>
+                                  {hs.map(h=><option key={h.id} value={h.id}>{h.emoji} {h.name}</option>)}
                                 </select>
                                 {p.savingSid===s.id&&<Ico.Spin/>}
                               </div>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className={`club-assign-btn${currentClub?' active':''}`}
+                                disabled={p.savingSid===s.id}
+                                onClick={()=>p.onOpenClubAssign(s.id)}
+                              >
+                                {currentClub ? `${currentClub.emoji} ${currentClub.name}` : 'Assign Club'}
+                              </button>
                             </td>
                             <td>{s.aiHint
                               ?<span className="ai-hint"><span className="ai-p"/>{s.aiHint}</span>
                               :<span style={{fontSize:10,color:'var(--hint)'}}>-</span>}
                             </td>
                           </tr>
-                        ))}
+                        )})}
                       </tbody>
                     </table>
+                    {crTotalPages > 1 && (
+                      <div className="cr-pager">
+                        <span className="cr-pager-info">
+                          {crOffset + 1}–{Math.min(crOffset + CLASS_ROW_PAGE_SIZE, ss.length)} of {ss.length}
+                        </span>
+                        <div className="cr-pager-btns">
+                          <button
+                            className="cr-pager-btn"
+                            disabled={crSafePage <= 1}
+                            onClick={()=>setClassPage(cls, crSafePage - 1)}
+                          >‹ Prev</button>
+                          <span className="cr-pager-pages">{crSafePage} / {crTotalPages}</span>
+                          <button
+                            className="cr-pager-btn"
+                            disabled={crSafePage >= crTotalPages}
+                            onClick={()=>setClassPage(cls, crSafePage + 1)}
+                          >Next ›</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1233,6 +1340,75 @@ function Accordion(p:AccProps) {
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+function ClubAssignModal({
+  student,
+  clubs,
+  currentGroup,
+  saving,
+  onAssign,
+  onClose,
+}: {
+  student: Student
+  clubs: Group[]
+  currentGroup: Group | null
+  saving: boolean
+  onAssign(groupId: number | null): void
+  onClose(): void
+}) {
+  const currentClub = currentGroup?.type === 'CLUB' ? currentGroup : null
+  const currentHouse = currentGroup?.type === 'HOUSE' ? currentGroup : null
+
+  return (
+    <div className="modal-bd open" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Assign club">
+        <div className="mhd">
+          <div>
+            <div className="mt">Assign Club</div>
+            <div className="ms">{student.name} · {student.admissionNo} · {student.class}{student.section ? ` · Sec ${student.section}` : ''}</div>
+          </div>
+          <button className="mx" onClick={onClose}><Ico.X/></button>
+        </div>
+        <div className="mbody">
+          {currentHouse&&(
+            <div className="club-modal-note">
+              Current active assignment: {currentHouse.emoji} {currentHouse.name}. Choosing a club will replace it in the current setup.
+            </div>
+          )}
+          <div className="club-option-list">
+            {clubs.map((club) => {
+              const active = currentClub?.id === club.id
+              return (
+                <button
+                  key={club.id}
+                  type="button"
+                  className={`club-option${active ? ' active' : ''}`}
+                  disabled={saving}
+                  onClick={()=>onAssign(club.id)}
+                >
+                  <span className="club-option-emblem" style={{ background: club.bgColor, color: club.color }}>{club.emoji}</span>
+                  <span className="club-option-copy">
+                    <span className="club-option-name">{club.name}</span>
+                    <span className="club-option-meta">{club.studentCount} students assigned</span>
+                  </span>
+                  {active && <span className="club-option-state">Current</span>}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        <div className="mfoot">
+          {currentClub&&(
+            <button className="mbc club-clear-btn" disabled={saving} onClick={()=>onAssign(null)}>
+              Clear current club
+            </button>
+          )}
+          <button className="mbc" onClick={onClose}>Close</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -1292,7 +1468,7 @@ function SWModal({method,setMethod,scope,setScope,preview,loading,onApply,onClos
           )}
           {preview.length>0&&(
             <div className="divide-info">
-              <strong>{total} student{total!==1?'s':''}</strong> -> <strong>{preview.length} houses</strong>.
+              <strong>{total} student{total!==1?'s':''}</strong> &rarr; <strong>{preview.length} houses</strong>.
               Each house gets <strong>~{base}</strong> students{rem>0?` (${rem} house${rem>1?'s':''} get +1)`:' (perfectly even)'}.
               <br/><em style={{color:'var(--light)'}}>{desc[method]}</em>
             </div>

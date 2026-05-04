@@ -76,6 +76,8 @@ type StudentCreateResponse = {
   id?: number;
   message?: string;
   warning?: string;
+  admission_no?: string;
+  roll_no?: string;
   data?: {
     id?: number;
   };
@@ -728,7 +730,7 @@ export function StudentAddPanel() {
   const [consentOpen, setConsentOpen] = useState(false);
   const [draftsOpen, setDraftsOpen] = useState(false);
   const [consentOpenWithSettings, setConsentOpenWithSettings] = useState(false);
-  const [consentInitialAction, setConsentInitialAction] = useState<'upload-signed' | 'blank-form' | 'print-pdf' | null>(null);
+  const [consentInitialAction, setConsentInitialAction] = useState<'blank-form' | 'print-pdf' | null>(null);
   // Standalone "upload signed copy" flow — does NOT open the full ConsentForm modal first
   const signedUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [signedUploadFile, setSignedUploadFile] = useState<File | null>(null);
@@ -1032,16 +1034,21 @@ export function StudentAddPanel() {
     });
   }, [guardianId, guardians, guardianDrafts]);
 
-  // FIX 9: B-40 — pre-fill emergency contact from primary guardian when fields are empty
+  // FIX 9: B-40 — mirror primary guardian's name/phone into emergency fields
+  // until the user manually edits them (tracked via emergencyCopiedFromGuardian).
   useEffect(() => {
     const name = guardianDrafts[0]?.fullName?.trim() || "";
     const ph = guardianDrafts[0]?.phone?.trim() || "";
-    // Fill if empty OR if only 1 char was previously set (safeguard against partial fill)
-    if (name && (!emergencyName || emergencyName.length <= 1)) {
+    // Only mirror while the fields are still considered "copied" or empty.
+    // Once the user types into either emergency field, the flag is cleared
+    // and we stop overwriting their input.
+    const canMirrorName = emergencyCopiedFromGuardian || !emergencyName;
+    const canMirrorPhone = emergencyCopiedFromGuardian || !emergencyPhone;
+    if (name && canMirrorName && emergencyName !== name) {
       setEmergencyName(name);
       setEmergencyCopiedFromGuardian(true);
     }
-    if (ph && (!emergencyPhone || emergencyPhone.length <= 1)) {
+    if (ph && canMirrorPhone && emergencyPhone !== ph) {
       setEmergencyPhone(ph);
       setEmergencyCopiedFromGuardian(true);
     }
@@ -1104,7 +1111,40 @@ export function StudentAddPanel() {
       case 'academic': return !!(academicYearId && classId && (sectionId || sectionLater));
       case 'contact': return !!(phone.trim() && addressLine.trim() && stateName && city && pincode.trim());
       case 'guardians': return !!(guardianDrafts[0]?.fullName?.trim() && guardianDrafts[0]?.phone?.trim());
+      case 'apaar':
+        // Government identity: any one of the optional IDs filled is enough.
+        return !!(
+          aadhaarNo.trim() ||
+          pen.trim() ||
+          abcId.trim() ||
+          digiMobile.trim() ||
+          documents.aadhaar_card.url ||
+          documents.birth_certificate.url ||
+          documents.caste_certificate.url
+        );
       case 'documents': return consentChecked;
+      case 'medical':
+        // Medical & emergency: emergency contact is the meaningful signal.
+        return !!(emergencyName.trim() && emergencyPhone.trim());
+      case 'speciallyAbled':
+        // Specially abled is optional. Mark complete when user either declared
+        // not applicable (default isPwD=false) by filling no PwD data, OR
+        // provided at least one disability detail.
+        if (isPwD || isDisabled) {
+          return !!(disabilityTypes.length > 0 || udid.trim() || accommodations.length > 0);
+        }
+        return true;
+      case 'identityMarks':
+        // Complete when at least one mark is added or any physical identifier is set.
+        return !!(
+          identityMarks.length > 0 ||
+          eyeColour.trim() ||
+          hairColour.trim() ||
+          complexion.trim() ||
+          build.trim() ||
+          heightCm.trim() ||
+          weightKg.trim()
+        );
       default: return false;
     }
   };
@@ -1202,6 +1242,9 @@ export function StudentAddPanel() {
       medicalNotes,
       docBirthCertificate,
       docAadhaar,
+      guardianDrafts,
+      documents,
+      newlyCreatedStudentId,
     };
     // Backward-compat: still write single-draft key for auto-restore on reload
     window.localStorage.setItem(STUDENT_DRAFT_STORAGE_KEY, JSON.stringify(payload));
@@ -1270,6 +1313,32 @@ export function StudentAddPanel() {
       setMedicalNotes(String(draft.medicalNotes || ""));
       setDocBirthCertificate(Boolean(draft.docBirthCertificate));
       setDocAadhaar(Boolean(draft.docAadhaar));
+      // Restore multi-guardian drafts (added later than other fields, hence guarded).
+      if (Array.isArray(draft.guardianDrafts) && draft.guardianDrafts.length > 0) {
+        const restored = (draft.guardianDrafts as GuardianDraft[]).map((g, i) => ({
+          ...makeEmptyGuardianDraft(i === 0),
+          ...g,
+          isPrimary: i === 0 ? true : Boolean(g?.isPrimary),
+        }));
+        setGuardianDrafts(restored);
+        setGuardianCardErrors(restored.map(() => ({})));
+      }
+      // Restore previously-uploaded documents metadata so the cards keep
+      // showing the file name / preview link after a draft reload. The
+      // physical files remain on the server.
+      if (draft.documents && typeof draft.documents === 'object') {
+        const d = draft.documents as Partial<typeof documents>;
+        setDocuments((prev) => ({
+          birth_certificate: { ...prev.birth_certificate, ...(d.birth_certificate || {}) },
+          aadhaar_card: { ...prev.aadhaar_card, ...(d.aadhaar_card || {}) },
+          medical_information: { ...prev.medical_information, ...(d.medical_information || {}) },
+          caste_certificate: { ...prev.caste_certificate, ...(d.caste_certificate || {}) },
+          udid_card: { ...prev.udid_card, ...(d.udid_card || {}) },
+        }));
+      }
+      if (typeof draft.newlyCreatedStudentId === 'number') {
+        setNewlyCreatedStudentId(draft.newlyCreatedStudentId);
+      }
       setDraftSavedAt(typeof draft.savedAt === "number" ? draft.savedAt : Date.now());
       return true;
     } catch {
@@ -1319,6 +1388,29 @@ export function StudentAddPanel() {
     setMedicalNotes(String(draft.medicalNotes || ""));
     setDocBirthCertificate(Boolean(draft.docBirthCertificate));
     setDocAadhaar(Boolean(draft.docAadhaar));
+    // Restore multi-guardian drafts.
+    if (Array.isArray(draft.guardianDrafts) && draft.guardianDrafts.length > 0) {
+      const restored = (draft.guardianDrafts as GuardianDraft[]).map((g, i) => ({
+        ...makeEmptyGuardianDraft(i === 0),
+        ...g,
+        isPrimary: i === 0 ? true : Boolean(g?.isPrimary),
+      }));
+      setGuardianDrafts(restored);
+      setGuardianCardErrors(restored.map(() => ({})));
+    }
+    if (draft.documents && typeof draft.documents === 'object') {
+      const d = draft.documents as Partial<typeof documents>;
+      setDocuments((prev) => ({
+        birth_certificate: { ...prev.birth_certificate, ...(d.birth_certificate || {}) },
+        aadhaar_card: { ...prev.aadhaar_card, ...(d.aadhaar_card || {}) },
+        medical_information: { ...prev.medical_information, ...(d.medical_information || {}) },
+        caste_certificate: { ...prev.caste_certificate, ...(d.caste_certificate || {}) },
+        udid_card: { ...prev.udid_card, ...(d.udid_card || {}) },
+      }));
+    }
+    if (typeof draft.newlyCreatedStudentId === 'number') {
+      setNewlyCreatedStudentId(draft.newlyCreatedStudentId);
+    }
     setDraftSavedAt(typeof draft.savedAt === "number" ? draft.savedAt : Date.now());
     jumpToSection("identity");
   };
@@ -1396,6 +1488,51 @@ export function StudentAddPanel() {
     setIsDisabled(Boolean(data.is_disabled));
     setAdmissionChecked(true);
     setPinLookupMessage("");
+
+    // Hydrate the primary guardian draft immediately by fetching the
+    // linked guardian directly (rather than waiting for the school-wide
+    // guardian pagination, which can race / silently fail to populate the
+    // edit form and force the user to re-enter guardian details).
+    if (data.guardian) {
+      try {
+        const g = await apiGet<{
+          id: number;
+          full_name?: string;
+          relation?: string;
+          phone?: string;
+          email?: string;
+          occupation?: string;
+        }>(`/api/v1/students/guardians/${data.guardian}/`);
+        setGuardianDrafts((prev) => {
+          const base = prev.length > 0 ? prev : [makeEmptyGuardianDraft(true)];
+          const next = [...base];
+          next[0] = {
+            ...next[0],
+            isPrimary: true,
+            linkedExistingId: g.id,
+            fullName: g.full_name || "",
+            relation: g.relation || "Father",
+            phone: g.phone || "",
+            email: g.email || "",
+            occupation: g.occupation || "",
+          };
+          return next;
+        });
+        // Keep the school-wide cache in sync so the picker shows the linked
+        // guardian even before the paginated list finishes loading.
+        setGuardians((prev) => (prev.some((row) => row.id === g.id)
+          ? prev
+          : [...prev, {
+              id: g.id,
+              full_name: g.full_name || "",
+              relation: g.relation || "",
+              phone: g.phone || "",
+            } as Guardian]));
+      } catch {
+        // Fall back to the existing background hydration via the guardians
+        // pool. Don't surface this as an error — the form remains usable.
+      }
+    }
   };
 
   const updateStateCityMap = (nextState: string, nextCities: string[]) => {
@@ -1823,32 +1960,9 @@ export function StudentAddPanel() {
     }
   }, [stateName, motherTongue]);
 
-  useEffect(() => {
-    const primary = guardianDrafts[0];
-    if (!primary) return;
-    const name = primary.fullName?.trim() || "";
-    const ph = primary.phone?.trim() || "";
-    if (!emergencyName && !emergencyPhone && (name || ph)) {
-      setEmergencyName(name);
-      setEmergencyPhone(ph);
-      setEmergencyCopiedFromGuardian(true);
-    }
-  }, [guardianDrafts, emergencyName, emergencyPhone]);
-
-  // Phase C — runInferences: derive helpful defaults from class number
-  useEffect(() => {
-    if (!classId) return;
-    const cls = orderedClasses.find((c) => String(c.id) === classId);
-    const m = String(cls?.name || "").match(/\d+/);
-    const n = m ? Number(m[0]) : null;
-    if (n != null) {
-      const suggested: string[] = [];
-      if (n <= 5) suggested.push("bcg", "opv", "dpt", "mmr");
-      if (n >= 5 && n <= 8) suggested.push("tdap");
-      if (n >= 6) suggested.push("hpv");
-      setCheckedVaccinations((prev) => Array.from(new Set([...prev, ...suggested])));
-    }
-  }, [classId, orderedClasses]);
+  // Vaccinations are now strictly a user-driven choice — no auto-checking based on class.
+  // (Previously a class-number heuristic auto-ticked BCG/OPV/DPT/MMR/Tdap/HPV which
+  // surprised users and persisted on every class change.)
 
   // Phase D — APAAR formatting and mock verification
   useEffect(() => {
@@ -2108,6 +2222,30 @@ export function StudentAddPanel() {
     return () => { delete w.__navGuard; };
   }, [isFormDirty]);
 
+  // Silent debounced auto-save to localStorage. Writes the current form
+  // (including guardianDrafts and documents) ~700ms after the last edit.
+  // This guarantees that even if the user navigates away without using the
+  // unsaved-changes modal (e.g. closes the tab, or clicks Discard by mistake
+  // and then reopens), the most recent state is restored on next visit.
+  useEffect(() => {
+    if (isViewMode || isExistingStudentMode) return;
+    if (!isFormDirty) return;
+    if (typeof window === 'undefined') return;
+    const t = window.setTimeout(() => {
+      try { saveDraftSnapshot(); } catch { /* ignore quota / serialization errors */ }
+    }, 700);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    isFormDirty, isViewMode, isExistingStudentMode,
+    firstName, lastName, dateOfBirth, gender, customGender, bloodGroup,
+    phone, email, addressLine, city, district, stateName, pincode,
+    classId, sectionId, categoryId, guardianId, admissionNo, rollNo,
+    motherTongue, religion, nationality, admissionType, previousSchoolName,
+    rteCertificateNo, medicalNotes, consentChecked, isDisabled,
+    guardianDrafts, documents,
+  ]);
+
   const continuePendingNav = () => {
     const proceed = pendingNavRef.current;
     pendingNavRef.current = null;
@@ -2302,7 +2440,7 @@ export function StudentAddPanel() {
     for (const nav of NAV_ITEMS) {
       const hasErrorInSection = errorFields.some((field) => FIELD_SECTION_MAP[field] === nav.id);
       if (hasErrorInSection) {
-        targetSection = nav.id;
+        targetSection = nav.id as NavItemId;
         break;
       }
     }
@@ -2531,24 +2669,40 @@ export function StudentAddPanel() {
       nextErrors.other_mother_tongue = "Please specify language.";
     }
 
-    if (!nationality) {
-      nextErrors.nationality = "Nationality is required";
-    }
-    if (nationality === "Other" && !sanitizeText(otherNationality)) {
-      nextErrors.other_nationality = "Please specify nationality.";
-    }
+    // The following fields are collected at enrollment but are NOT persisted
+    // on the backend Student model (nationality, admission_type, consent,
+    // RTE certificate). When opening an existing student in edit mode they
+    // can't be prefilled, so re-asking the user for them blocks any small
+    // edit. Treat them as required only on initial enrollment.
+    if (!isEditMode) {
+      if (!nationality) {
+        nextErrors.nationality = "Nationality is required";
+      }
+      if (nationality === "Other" && !sanitizeText(otherNationality)) {
+        nextErrors.other_nationality = "Please specify nationality.";
+      }
 
-    if (admissionType === "RTE Quota" && !sanitizeText(rteCertificateNo)) {
-      nextErrors.rte_certificate = "RTE certificate number is required.";
-    }
+      if (admissionType === "RTE Quota" && !sanitizeText(rteCertificateNo)) {
+        nextErrors.rte_certificate = "RTE certificate number is required.";
+      }
 
-    if (!admissionType) nextErrors.admission_type = "Admission type is required";
+      if (!admissionType) nextErrors.admission_type = "Admission type is required";
+
+      if (!consentChecked) {
+        nextErrors.consent = "Guardian consent confirmation is required.";
+      }
+    } else {
+      // Still validate "Other" sub-fields if the user picked Other in this
+      // edit session (so we don't accept "Other" with a blank value).
+      if (nationality === "Other" && !sanitizeText(otherNationality)) {
+        nextErrors.other_nationality = "Please specify nationality.";
+      }
+      if (admissionType === "RTE Quota" && !sanitizeText(rteCertificateNo)) {
+        nextErrors.rte_certificate = "RTE certificate number is required.";
+      }
+    }
 
     if (aadhaarNo.trim() && !isValidAadhaar(aadhaarNo)) nextErrors.aadhaar = "Aadhaar must be exactly 12 digits (no repeated digits)";
-
-    if (!consentChecked) {
-      nextErrors.consent = "Guardian consent confirmation is required.";
-    }
 
     // Guardian check: validate the DRAFT state in the UI, not `guardianId`.
     // `guardianId` is a FK to a persisted Guardian record and only gets set
@@ -3045,13 +3199,16 @@ export function StudentAddPanel() {
     console.log("✅ File validation passed");
 
     // ============================================================
-    // STEP 2: UPDATE STATE - SET UPLOADING
+    // STEP 2: UPDATE STATE - SET UPLOADING (and capture filename now
+    // so the user immediately sees the file they picked, even if the
+    // server call later fails or is delayed by an auto-save round-trip).
     // ============================================================
     setDocuments((prev) => ({
       ...prev,
       [documentType]: {
         ...prev[documentType as keyof typeof prev],
         status: "uploading" as DocumentStatus,
+        fileName: file.name,
         error: null,
       },
     }));
@@ -3079,14 +3236,16 @@ export function StudentAddPanel() {
             ? "Please complete Academic section and select Class before uploading documents."
             : `Please complete required Identity fields first: ${missingFields.join(", ")}`;
           console.warn("❌ Identity fields incomplete:", missingFields);
-          
-          // Keep document cards stable and show a toast-driven validation message.
+
+          // Keep the picked file visible (status=error) so the user can
+          // either retry or replace it after fixing the missing fields.
           setDocuments((prev) => ({
             ...prev,
             [documentType]: {
               ...prev[documentType as keyof typeof prev],
-              status: "idle" as DocumentStatus,
-              error: null,
+              status: "error" as DocumentStatus,
+              fileName: file.name,
+              error: errorMsg,
             },
           }));
 
@@ -3102,14 +3261,16 @@ export function StudentAddPanel() {
           if (!effectiveStudentId) {
             // autoSaveStudentDraft has already surfaced the precise reason
             // (missing field, duplicate admission no, server error, etc.)
-            // via showToast. Bail out silently so we don't overwrite that
-            // helpful message with a generic "no student ID" warning.
+            // via showToast. Keep the picked file visible (status=error)
+            // so the user can fix the underlying issue and retry without
+            // having to re-pick the file.
             setDocuments((prev) => ({
               ...prev,
               [documentType]: {
                 ...prev[documentType as keyof typeof prev],
-                status: "idle" as DocumentStatus,
-                error: null,
+                status: "error" as DocumentStatus,
+                fileName: file.name,
+                error: "Student draft could not be saved. Fix the highlighted field and click Replace to retry.",
               },
             }));
             return;
@@ -3128,8 +3289,9 @@ export function StudentAddPanel() {
             ...prev,
             [documentType]: {
               ...prev[documentType as keyof typeof prev],
-              status: "idle" as DocumentStatus,
-              error: null,
+              status: "error" as DocumentStatus,
+              fileName: file.name,
+              error: errorMsg,
             },
           }));
 
@@ -3215,7 +3377,9 @@ export function StudentAddPanel() {
         fullError: err,
       });
 
-      // Update state to error
+      // Update state to error — keep the picked filename so the card
+      // continues to show what the user selected and they can retry or
+      // replace without re-opening the file picker from scratch.
       setDocuments((prev) => {
         const current = prev[documentType as keyof typeof prev];
         if (current.status === "success") {
@@ -3225,8 +3389,9 @@ export function StudentAddPanel() {
           ...prev,
           [documentType]: {
             ...current,
-            status: "idle" as DocumentStatus,
-            error: null,
+            status: "error" as DocumentStatus,
+            fileName: current.fileName || file.name,
+            error: errorMessage || "Upload failed. Please try again.",
           },
         };
       });
@@ -3458,6 +3623,8 @@ export function StudentAddPanel() {
           birth_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
           aadhaar_card: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
           medical_information: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+          caste_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+          udid_card: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
         });
         setNewlyCreatedStudentId(null);
         setError("");
@@ -5313,11 +5480,11 @@ export function StudentAddPanel() {
             pen,
             abcId,
             documents: {
-              birth_certificate: { status: documents.birth_certificate.status, fileName: documents.birth_certificate.fileName },
-              aadhaar_card: { status: documents.aadhaar_card.status, fileName: documents.aadhaar_card.fileName },
-              medical_information: { status: documents.medical_information.status, fileName: documents.medical_information.fileName },
-              caste_certificate: { status: documents.caste_certificate.status, fileName: documents.caste_certificate.fileName },
-              udid_card: { status: documents.udid_card.status, fileName: documents.udid_card.fileName },
+              birth_certificate: { status: documents.birth_certificate.status, fileName: documents.birth_certificate.fileName, url: documents.birth_certificate.url },
+              aadhaar_card: { status: documents.aadhaar_card.status, fileName: documents.aadhaar_card.fileName, url: documents.aadhaar_card.url },
+              medical_information: { status: documents.medical_information.status, fileName: documents.medical_information.fileName, url: documents.medical_information.url },
+              caste_certificate: { status: documents.caste_certificate.status, fileName: documents.caste_certificate.fileName, url: documents.caste_certificate.url },
+              udid_card: { status: documents.udid_card.status, fileName: documents.udid_card.fileName, url: documents.udid_card.url },
             },
             consentChecked,
             heightCm,

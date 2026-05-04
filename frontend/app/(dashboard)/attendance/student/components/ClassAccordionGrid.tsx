@@ -142,13 +142,18 @@ function SectionBody({ classId, sectionId, sectionSummary, students, loading, se
   const pct = students.length > 0
     ? Math.max(0, Math.min(100, Math.round(((attendedPresent + late) / students.length) * 100)))
     : 0;
-  const handleSignOutAll = () => { if (readOnly) return; const t = nowTime(); students.filter((s) => s.sign_in_time && !s.sign_out_time).forEach((s) => onSignOut(classId, sectionId, { ...s, sign_out_time: t })); };
+  const handleSignOutAll = () => {
+    if (readOnly) return;
+    students
+      .filter((s) => s.sign_in_time && !s.sign_out_time)
+      .forEach((s) => onSignOut(classId, sectionId, s));
+  };
   if (loading) return <div className="p-4 space-y-2">{[0,1,2,3].map((i) => <div key={i} className="h-10 rounded-lg bg-[#F0F0F5] animate-pulse" style={{ opacity: 1 - i * 0.15 }} />)}</div>;
   if (students.length === 0) return <div className="py-8 text-center text-sm text-[#9B9BAD]">No students found for this section.</div>;
   return (
     <div>
       <SectionInnerBar present={present} absent={absent} late={late} total={students.length} pct={pct} />
-      {!readOnly && selectedRows.size > 0 && <BulkActionBar count={selectedRows.size} onClear={() => onSelectionChange(key, new Set())} onMarkAll={(status) => onBulkMark(classId, sectionId, status)} onSignInAll={() => onBulkSignIn(classId, sectionId)} onSignOutAll={() => { const t = nowTime(); students.filter((s) => selectedRows.has(s.id) && s.sign_in_time && !s.sign_out_time).forEach((s) => onSignOut(classId, sectionId, { ...s, sign_out_time: t })); }} />}
+      {!readOnly && selectedRows.size > 0 && <BulkActionBar count={selectedRows.size} onClear={() => onSelectionChange(key, new Set())} onMarkAll={(status) => onBulkMark(classId, sectionId, status)} onSignInAll={() => onBulkSignIn(classId, sectionId)} onSignOutAll={() => { students.filter((s) => selectedRows.has(s.id) && s.sign_in_time && !s.sign_out_time).forEach((s) => onSignOut(classId, sectionId, s)); }} />}
       <AttendanceTable students={visible} loading={false} selectedIds={readOnly ? new Set<number>() : selectedRows} onSelect={readOnly ? () => {} : toggleOne} onSelectAll={readOnly ? () => {} : toggleAll} onToggleAbsent={readOnly ? () => {} : (s) => onToggleAbsent(classId, sectionId, s)} onToggleLunch={readOnly ? () => {} : (s) => onToggleLunch(classId, sectionId, s)} onSignIn={readOnly ? () => {} : (s) => onSignIn(classId, sectionId, s)} onSignOut={readOnly ? () => {} : (s) => onSignOut(classId, sectionId, s)} onViewNotes={(s) => onOpenNote(classId, sectionId, s, 'view')} onEditStatusPrompt={readOnly ? () => {} : (s) => onEditStatusPrompt(classId, sectionId, s)} onEditNote={(s) => onOpenNote(classId, sectionId, s, 'add')} onDeleteNote={(s) => onOpenNote(classId, sectionId, s, 'view')} />
       {readOnly ? (
         <div className="px-5 py-2.5 border-t border-[#F1F1F5] bg-[#FAFAFD] flex items-center gap-2">

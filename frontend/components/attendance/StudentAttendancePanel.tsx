@@ -144,6 +144,8 @@ export default function StudentAttendancePanel() {
   const [reportLoading, setReportLoading] = useState(false);
 
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const currentMonthNumber = useMemo(() => new Date().getMonth() + 1, []);
+  const currentYearNumber = useMemo(() => new Date().getFullYear(), []);
   const validAcademicYears = useMemo(
     () => years.filter((item) => /^(\d{4})(-\d{4})?$/.test(String(item.name || "").trim())),
     [years],
@@ -160,6 +162,19 @@ export default function StudentAttendancePanel() {
     const all = Array.from(new Set([new Date().getFullYear(), ...fromAcademicYears]));
     return all.sort((a, b) => b - a);
   }, [validAcademicYears]);
+
+  const availableReportMonths = useMemo(() => {
+    const selectedYear = Number(reportYear);
+    const maxMonth = Number.isFinite(selectedYear) && selectedYear === currentYearNumber ? currentMonthNumber : 12;
+    return Array.from({ length: maxMonth }, (_, i) => i + 1);
+  }, [reportYear, currentMonthNumber, currentYearNumber]);
+
+  useEffect(() => {
+    const selectedMonth = Number(reportMonth);
+    if (!availableReportMonths.includes(selectedMonth)) {
+      setReportMonth(String(availableReportMonths[availableReportMonths.length - 1]));
+    }
+  }, [availableReportMonths, reportMonth]);
 
   useEffect(() => {
     if (error) {
@@ -604,9 +619,9 @@ export default function StudentAttendancePanel() {
             <div style={{ fontWeight: 600, marginBottom: 10 }}>Monthly Attendance Report</div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
               <select value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} style={{ ...fieldStyle(), width: 140 }}>
-                {Array.from({ length: 12 }, (_, i) => (
-                  <option key={i + 1} value={i + 1}>
-                    {new Date(0, i).toLocaleString("default", { month: "long" })}
+                {availableReportMonths.map((month) => (
+                  <option key={month} value={month}>
+                    {new Date(0, month - 1).toLocaleString("default", { month: "long" })}
                   </option>
                 ))}
               </select>

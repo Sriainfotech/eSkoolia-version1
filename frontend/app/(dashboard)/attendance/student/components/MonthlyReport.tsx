@@ -72,6 +72,14 @@ const MONTHS = [
   { value: 10, label: 'October' }, { value: 11, label: 'November' }, { value: 12, label: 'December' },
 ];
 
+function parseAcademicYearStart(acadYear: string): number | null {
+  const raw = String(acadYear || '').trim();
+  const match = raw.match(/^(\d{4})(?:-(\d{2}|\d{4}))?$/);
+  if (!match) return null;
+  const start = Number(match[1]);
+  return Number.isFinite(start) ? start : null;
+}
+
 function getAcademicYears(): string[] {
   const yr = new Date().getFullYear();
   const years: string[] = [];
@@ -160,6 +168,7 @@ function downloadCSV(rows: string[][], filename: string) {
 
 export default function MonthlyReport({ selectedDate, classes }: MonthlyReportProps) {
   const todayDate = new Date();
+  const currentMonthNumber = todayDate.getMonth() + 1;
 
   // ── Pending filter state (dropdowns) ──────────────────────────
   const [pendingAcadYear, setPendingAcadYear] = useState<string>(() => {
@@ -192,6 +201,27 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
   const [downloading, setDownloading] = useState(false);
 
   const academicYears = useMemo(() => getAcademicYears(), []);
+  const currentAcademicYearStart = useMemo(() => {
+    const y = todayDate.getFullYear();
+    const m = todayDate.getMonth() + 1;
+    return m >= 6 ? y : y - 1;
+  }, [todayDate]);
+  const isCurrentAcademicYearSelected = useMemo(() => {
+    const selectedStart = parseAcademicYearStart(pendingAcadYear);
+    return selectedStart !== null && selectedStart === currentAcademicYearStart;
+  }, [pendingAcadYear, currentAcademicYearStart]);
+  const availableMonths = useMemo(
+    () => (isCurrentAcademicYearSelected
+      ? MONTHS.filter((m) => m.value <= currentMonthNumber)
+      : MONTHS),
+    [isCurrentAcademicYearSelected, currentMonthNumber],
+  );
+
+  useEffect(() => {
+    if (!availableMonths.some((m) => m.value === pendingMonth)) {
+      setPendingMonth(availableMonths[availableMonths.length - 1]?.value || currentMonthNumber);
+    }
+  }, [pendingMonth, availableMonths, currentMonthNumber]);
 
   const pendingSections = useMemo(() => {
     if (!pendingClassId) return [];
@@ -218,7 +248,8 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
       const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
       const classParam = filters.classId ? `&class_id=${filters.classId}` : '';
       const sectionParam = filters.classId && filters.sectionId ? `&section_id=${filters.sectionId}` : '';
-      const base = `month=${filters.month}&year=${filters.year}${classParam}${sectionParam}`;
+      const ayParam = filters.acadYear ? `&academic_year=${encodeURIComponent(filters.acadYear)}` : '';
+      const base = `month=${filters.month}&year=${filters.year}${classParam}${sectionParam}${ayParam}`;
 
       // Always fetch all daily records (paginated)
       const records = await fetchAllPages<DailyRecord>(
@@ -293,7 +324,8 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
       const headers = { Authorization: `Bearer ${token}` };
       const classParam = active.classId ? `&class_id=${active.classId}` : '';
       const sectionParam = active.classId && active.sectionId ? `&section_id=${active.sectionId}` : '';
-      const base = `month=${active.month}&year=${active.year}${classParam}${sectionParam}`;
+      const ayParam = active.acadYear ? `&academic_year=${encodeURIComponent(active.acadYear)}` : '';
+      const base = `month=${active.month}&year=${active.year}${classParam}${sectionParam}${ayParam}`;
 
       // Use the styled XLSX export (two sheets, color-coded, autofilter, summary).
       const exportRes = await fetch(
@@ -398,7 +430,7 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
               <label className="text-[9px] font-semibold text-[#9CA0AE] uppercase tracking-wide px-0.5">Month</label>
               <select value={pendingMonth} onChange={(e) => setPendingMonth(Number(e.target.value))}
                 className="h-8 px-2.5 text-[11px] font-medium bg-white border border-[#E6E6EC] rounded-lg text-[#0B0B14] outline-none cursor-pointer">
-                {MONTHS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                {availableMonths.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
             </div>
             {/* Class */}

@@ -249,6 +249,8 @@ export function StudentGroupPanel() {
 
   // ── Expanded class rows (nested accordion) ───────────────────────────────────
   const [expandedClassRows, setExpandedClassRows] = useState<Set<string>>(new Set());
+  const [classRowPageByGroup, setClassRowPageByGroup] = useState<Record<number, number>>({});
+  const classRowsPerPage = 5;
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   function listData<T>(value: ApiList<T>): T[] {
@@ -545,6 +547,7 @@ export function StudentGroupPanel() {
         next.delete(groupId);
       } else {
         next.add(groupId);
+        setClassRowPageByGroup((p) => ({ ...p, [groupId]: p[groupId] || 1 }));
         void loadGroupStudents(groupId);
       }
       return next;
@@ -819,12 +822,17 @@ export function StudentGroupPanel() {
   // ── Accordion helper ──────────────────────────────────────────────────────────
   const renderAccordionBody = (group: StudentGroup) => {
     const groupStudentList = allStudents.filter((s) => s.currentGroupId === group.id);
+    const classPage = classRowPageByGroup[group.id] ?? 1;
+    const totalClassPages = Math.max(1, Math.ceil(CLASS_LIST.length / classRowsPerPage));
+    const safeClassPage = Math.max(1, Math.min(totalClassPages, classPage));
+    const classStart = (safeClassPage - 1) * classRowsPerPage;
+    const visibleClassRows = CLASS_LIST.slice(classStart, classStart + classRowsPerPage);
     return (
       <div style={{ borderTop: "1px solid var(--border)" }}>
         {allStudentsLoading ? (
           <div style={{ padding: 24, textAlign: "center", fontSize: 13, color: "var(--light)" }}>Loading students…</div>
         ) : (
-          CLASS_LIST.map((cls) => {
+          visibleClassRows.map((cls) => {
             const classStudents = groupStudentList.filter((s) => s.class === cls.name);
             const rowKey = `${group.id}-${cls.seq}`;
             const isClassOpen = expandedClassRows.has(rowKey);
@@ -912,6 +920,60 @@ export function StudentGroupPanel() {
             );
           })
         )}
+        {!allStudentsLoading && (
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+            padding: "8px 12px",
+            borderTop: "1px solid var(--border)",
+            background: "#fafbfd",
+          }}>
+            <span style={{ fontSize: 11, color: "var(--light)" }}>
+              Classes {classStart + 1}-{Math.min(classStart + classRowsPerPage, CLASS_LIST.length)} of {CLASS_LIST.length}
+            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <button
+                type="button"
+                onClick={() => setClassRowPageByGroup((p) => ({ ...p, [group.id]: Math.max(1, safeClassPage - 1) }))}
+                disabled={safeClassPage <= 1}
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--white)",
+                  color: "var(--mid)",
+                  borderRadius: 6,
+                  padding: "3px 9px",
+                  fontSize: 11,
+                  cursor: safeClassPage <= 1 ? "not-allowed" : "pointer",
+                  opacity: safeClassPage <= 1 ? 0.55 : 1,
+                }}
+              >
+                Prev
+              </button>
+              <span style={{ fontSize: 11, color: "var(--mid)", minWidth: 56, textAlign: "center" }}>
+                {safeClassPage} / {totalClassPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setClassRowPageByGroup((p) => ({ ...p, [group.id]: Math.min(totalClassPages, safeClassPage + 1) }))}
+                disabled={safeClassPage >= totalClassPages}
+                style={{
+                  border: "1px solid var(--border)",
+                  background: "var(--white)",
+                  color: "var(--mid)",
+                  borderRadius: 6,
+                  padding: "3px 9px",
+                  fontSize: 11,
+                  cursor: safeClassPage >= totalClassPages ? "not-allowed" : "pointer",
+                  opacity: safeClassPage >= totalClassPages ? 0.55 : 1,
+                }}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -994,7 +1056,7 @@ export function StudentGroupPanel() {
       {/* ── Fixed Toast ──────────────────────────────────────────────── */}
       {toast && (
         <div style={{
-          position: "fixed", bottom: 24, right: 24, zIndex: 2000,
+          position: "fixed", top: 24, right: 24, zIndex: 2000,
           padding: "12px 18px", borderRadius: 10, fontSize: 13, fontWeight: 600,
           background: toast.type === "success" ? "#ecfdf5" : "#fef2f2",
           border: `1px solid ${toast.type === "success" ? "#a7f3d0" : "#fecaca"}`,

@@ -1033,7 +1033,7 @@ export function StudentCategoryManagerPanel() {
                               }}
                             />
                           </td>
-                          <td><strong>{row.name}</strong></td>
+                          <td><span className="category-name">{row.name}</span></td>
                           <td>{row.code || "-"}</td>
                           <td>{row.students_count || 0}</td>
                           <td>
@@ -1457,10 +1457,11 @@ export function StudentCategoryManagerPanel() {
         }
         .summary-card {
           background: var(--surface-bg);
-          border: 1px solid var(--surface-border);
-          border-radius: 14px;
-          padding: 16px;
+          border: 1px solid #e9edf5;
+          border-radius: 16px;
+          padding: 18px;
           min-height: 140px;
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
         }
         .summary-head {
           display: flex;
@@ -1483,9 +1484,9 @@ export function StudentCategoryManagerPanel() {
           margin: 0;
           font-size: 12px;
           text-transform: uppercase;
-          letter-spacing: 0.05em;
+          letter-spacing: 0.06em;
           color: var(--text-muted);
-          font-weight: 700;
+          font-weight: 600;
           font-family: "Inter", "Poppins", "Segoe UI", Arial, sans-serif;
         }
         .value {
@@ -1501,18 +1502,19 @@ export function StudentCategoryManagerPanel() {
         .meta {
           margin: 0;
           color: var(--text-muted);
-          font-size: 13px;
+          font-size: 12.5px;
+          line-height: 1.45;
           font-family: "Inter", "Poppins", "Segoe UI", Arial, sans-serif;
         }
         .bars {
           display: flex;
-          gap: 6px;
-          margin: 14px 0 10px;
-          height: 34px;
+          gap: 7px;
+          margin: 14px 0 12px;
+          height: 38px;
           align-items: flex-end;
-          border-radius: 10px;
-          background: #f2f1ff;
-          padding: 4px;
+          border-radius: 12px;
+          background: linear-gradient(180deg, #f7f6ff 0%, #f2f4fb 100%);
+          padding: 7px;
           min-width: 220px;
           transition: width 180ms ease;
         }
@@ -1535,16 +1537,25 @@ export function StudentCategoryManagerPanel() {
           display: block;
           height: 100%;
           border: none;
-          border-radius: 4px;
-          background: #d6d0ff;
-          min-width: 10px;
+          border-radius: 7px;
+          background: #d9ddff;
+          min-width: 12px;
           position: relative;
           cursor: pointer;
-          transition: all 140ms ease;
+          box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.45);
+          transition: transform 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+        }
+        .bar:nth-child(2n) {
+          background: #d2d8ff;
+        }
+        .bar:nth-child(3n) {
+          background: #ccd2ff;
         }
         .bar.is-top,
         .bar:hover {
-          background: #5b3df5;
+          background: linear-gradient(180deg, #6b5cff 0%, #5b3df5 100%);
+          box-shadow: 0 6px 12px rgba(91, 61, 245, 0.24);
+          transform: translateY(-1px);
         }
         .bar::after {
           content: attr(data-tip);
@@ -1565,30 +1576,30 @@ export function StudentCategoryManagerPanel() {
         .bar:hover::after {
           opacity: 1;
         }
-        .bar.bin-1 { width: 8%; }
-        .bar.bin-2 { width: 9%; }
-        .bar.bin-3 { width: 12%; }
-        .bar.bin-4 { width: 16%; }
-        .bar.bin-5 { width: 20%; }
-        .bar.bin-6 { width: 24%; }
-        .bar.bin-7 { width: 28%; }
-        .bar.bin-8 { width: 32%; }
-        .bar.bin-9 { width: 36%; }
-        .bar.bin-10 { width: 40%; }
-        .bar.bin-11 { width: 44%; }
-        .bar.bin-12 { width: 48%; }
-        .bar.bin-13 { width: 52%; }
-        .bar.bin-14 { width: 56%; }
-        .bar.bin-15 { width: 60%; }
-        .bar.bin-16 { width: 64%; }
-        .bar.bin-17 { width: 68%; }
-        .bar.bin-18 { width: 72%; }
-        .bar.bin-19 { width: 76%; }
-        .bar.bin-20 { width: 80%; }
-        .bar.bin-21 { width: 84%; }
-        .bar.bin-22 { width: 88%; }
-        .bar.bin-23 { width: 94%; }
-        .bar.bin-24 { width: 100%; }
+        .bar.bin-1 { width: 5%; }
+        .bar.bin-2 { width: 6%; }
+        .bar.bin-3 { width: 7%; }
+        .bar.bin-4 { width: 7.5%; }
+        .bar.bin-5 { width: 8%; }
+        .bar.bin-6 { width: 8.5%; }
+        .bar.bin-7 { width: 9%; }
+        .bar.bin-8 { width: 9.5%; }
+        .bar.bin-9 { width: 10%; }
+        .bar.bin-10 { width: 10.5%; }
+        .bar.bin-11 { width: 11%; }
+        .bar.bin-12 { width: 11.5%; }
+        .bar.bin-13 { width: 12%; }
+        .bar.bin-14 { width: 12.5%; }
+        .bar.bin-15 { width: 13%; }
+        .bar.bin-16 { width: 13.5%; }
+        .bar.bin-17 { width: 14%; }
+        .bar.bin-18 { width: 14.5%; }
+        .bar.bin-19 { width: 15%; }
+        .bar.bin-20 { width: 15.5%; }
+        .bar.bin-21 { width: 16%; }
+        .bar.bin-22 { width: 16.5%; }
+        .bar.bin-23 { width: 17%; }
+        .bar.bin-24 { width: 18%; }
         .empty-inline {
           color: #94a3b8;
           font-size: 12px;
@@ -1750,36 +1761,42 @@ export function StudentCategoryManagerPanel() {
         }
         .table thead th {
           text-align: left;
-          font-size: 12px;
-          color: var(--text-muted);
+          font-size: 11.5px;
+          color: #74839a;
           text-transform: uppercase;
-          letter-spacing: 0.04em;
-          padding: 12px 14px;
+          letter-spacing: 0.065em;
+          padding: 13px 16px;
           border-bottom: 1px solid var(--surface-border);
           font-family: "Inter", "Poppins", "Segoe UI", Arial, sans-serif;
+          font-weight: 600;
         }
         .table thead th.sortable {
           color: #5b3df5;
         }
         .table tbody td {
-          padding: 14px;
+          padding: 14px 16px;
           border-bottom: 1px solid var(--surface-border);
-          vertical-align: top;
-          font-size: 15px;
-          color: var(--text-primary);
+          vertical-align: middle;
+          font-size: 14px;
+          color: #475569;
           font-family: "Inter", "Poppins", "Segoe UI", Arial, sans-serif;
+          line-height: 1.5;
         }
-        .table tbody td strong {
+        .table tbody tr:hover td {
+          background: #fafcff;
+        }
+        .table tbody td .category-name {
           font-family: "Inter", "Poppins", "Segoe UI", Arial, sans-serif;
-          letter-spacing: 0.01em;
-          font-weight: 700;
+          letter-spacing: 0;
+          font-weight: 500;
           color: #0f172a;
         }
         .table tbody td:nth-child(3),
         .table tbody td:nth-child(4) {
           font-family: "Roboto Mono", "Consolas", monospace;
           font-variant-numeric: tabular-nums;
-          color: #1f2937;
+          color: #334155;
+          font-size: 13px;
         }
         .table tbody tr.selected td {
           background: #f5f3ff;
@@ -1792,31 +1809,36 @@ export function StudentCategoryManagerPanel() {
           align-items: center;
           gap: 6px;
           border-radius: 999px;
-          padding: 5px 10px;
-          font-size: 12px;
-          font-weight: 700;
-          border: none;
+          padding: 5px 11px;
+          font-size: 11.5px;
+          font-weight: 600;
+          border: 1px solid transparent;
           background: none;
           transition: all 0.2s ease;
+          letter-spacing: 0.01em;
         }
         .status.status-interactive {
           cursor: pointer;
         }
         .status.active {
-          background: #ecfdf3;
-          color: #047857;
+          background: #ecfdf5;
+          border-color: #bbf7d0;
+          color: #0f766e;
         }
         .status.active:hover {
-          background: #d1fae5;
+          background: #dcfce7;
+          border-color: #86efac;
           color: #065f46;
         }
         .status.inactive {
-          background: #f3f4f6;
-          color: #4b5563;
+          background: #f8fafc;
+          border-color: #e2e8f0;
+          color: #64748b;
         }
         .status.inactive:hover {
-          background: #e5e7eb;
-          color: #1f2937;
+          background: #f1f5f9;
+          border-color: #cbd5e1;
+          color: #334155;
         }
         .action-cell {
           text-align: center;

@@ -469,9 +469,8 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
             "first_name", "last_name"
         )
 
-        result = []
-        for st in qs:
-            result.append({
+        def _serialize(st):
+            return {
                 "id": st.id,
                 "name": f"{st.first_name} {st.last_name}".strip(),
                 "admissionNo": st.admission_no,
@@ -480,8 +479,35 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
                 "classIndex": st.current_class.numeric_order if st.current_class else 999,
                 "currentGroupId": st.student_group_id,
                 "gender": st.gender,
+            }
+
+        # Optional pagination: only activated when ?page= is present.
+        # Without it the response is the original flat array (backward-compatible).
+        raw_page = request.query_params.get("page")
+        if raw_page is not None:
+            try:
+                page = max(1, int(raw_page))
+            except (ValueError, TypeError):
+                page = 1
+            try:
+                page_size = max(1, min(int(request.query_params.get("page_size", 10)), 200))
+            except (ValueError, TypeError):
+                page_size = 10
+            total = qs.count()
+            total_pages = max(1, (total + page_size - 1) // page_size)
+            page = min(page, total_pages)
+            offset = (page - 1) * page_size
+            results = [_serialize(st) for st in qs[offset:offset + page_size]]
+            return Response({
+                "results": results,
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
             })
-        return Response(result)
+
+        # No ?page= — return full flat list (original behaviour)
+        return Response([_serialize(st) for st in qs])
 
     @action(detail=False, methods=["post"], url_path="assign")
     def assign(self, request):
@@ -1977,13 +2003,47 @@ class StudentViewSet(TenantScopedModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @staticmethod
+    def _serialize_assignment_student(st):
+        opt_subs = [
+            a.subject.name
+            for a in st.subject_assignments.all()
+            if a.is_optional
+        ]
+        count = len(opt_subs)
+        sstatus = "done" if count >= 4 else ("partial" if count > 0 else "empty")
+        return {
+            "id": st.id,
+            "name": f"{st.first_name} {st.last_name}".strip(),
+            "admNo": st.admission_no,
+            "rollNo": st.roll_no or "",
+            "lang2": opt_subs[0] if len(opt_subs) > 0 else "",
+            "lang3": opt_subs[1] if len(opt_subs) > 1 else "",
+            "sport": opt_subs[2] if len(opt_subs) > 2 else "",
+            "art":   opt_subs[3] if len(opt_subs) > 3 else "",
+            "optionalSubjects": opt_subs,
+            "status": sstatus,
+        }
+
     @action(detail=False, methods=["get"], url_path="class-section-tree")
     def class_section_tree(self, request):
-        """Return classes → sections → students tree with subject assignment data."""
-        from apps.core.models import Class, Section
+        """Return classes → sections → students tree with subject assignment data.
+
+        Per-section students are paginated. The first page (default 10 students)
+        is returned inline along with `student_total` so the frontend can render
+        page controls and lazily fetch additional pages via `section-students`.
+        """
+        from apps.core.models import Class
 
         user = request.user
         school_id = None if user.is_superuser else user.school_id
+
+        # Pagination params (per-section)
+        try:
+            page_size = int(request.query_params.get("page_size", 10) or 10)
+        except (TypeError, ValueError):
+            page_size = 10
+        page_size = max(1, min(page_size, 200))
 
         # Fetch all classes for this school
         cls_qs = Class.objects.all()
@@ -1991,13 +2051,15 @@ class StudentViewSet(TenantScopedModelViewSet):
             cls_qs = cls_qs.filter(school_id=school_id)
         cls_qs = cls_qs.prefetch_related("sections")
 
-        # Prefetch all students with their optional subject assignments
+        # Fetch all students with their optional subject assignments. We still
+        # load all students up-front because we need accurate per-section
+        # totals; only the first page is serialised for each section.
         student_qs = Student.objects.filter(
             is_deleted=False,
             current_class__isnull=False,
         ).select_related("current_class", "current_section").prefetch_related(
             "subject_assignments__subject"
-        )
+        ).order_by("roll_no", "first_name", "last_name")
         if school_id:
             student_qs = student_qs.filter(school_id=school_id)
 
@@ -2013,33 +2075,20 @@ class StudentViewSet(TenantScopedModelViewSet):
             sections_out = []
             for sec in cls.sections.all():
                 students_here = section_map.get((cls.id, sec.id), [])
-                students_out = []
-                for st in students_here:
-                    opt_subs = [
-                        a.subject.name
-                        for a in st.subject_assignments.all()
-                        if a.is_optional
-                    ]
-                    count = len(opt_subs)
-                    sstatus = "done" if count >= 4 else ("partial" if count > 0 else "empty")
-                    # Positionally map to L2/L3/SP/AR for display
-                    students_out.append({
-                        "id": st.id,
-                        "name": f"{st.first_name} {st.last_name}".strip(),
-                        "admNo": st.admission_no,
-                        "rollNo": st.roll_no or "",
-                        "lang2": opt_subs[0] if len(opt_subs) > 0 else "",
-                        "lang3": opt_subs[1] if len(opt_subs) > 1 else "",
-                        "sport": opt_subs[2] if len(opt_subs) > 2 else "",
-                        "art":   opt_subs[3] if len(opt_subs) > 3 else "",
-                        "optionalSubjects": opt_subs,
-                        "status": sstatus,
-                    })
+                total = len(students_here)
+                first_page = students_here[:page_size]
+                students_out = [
+                    self._serialize_assignment_student(st) for st in first_page
+                ]
                 sections_out.append({
                     "id": sec.id,
                     "letter": sec.name,
                     "teacher": "",
                     "students": students_out,
+                    "student_total": total,
+                    "student_page": 1,
+                    "student_page_size": page_size,
+                    "student_total_pages": max(1, (total + page_size - 1) // page_size),
                 })
             result.append({
                 "id": cls.id,
@@ -2048,6 +2097,68 @@ class StudentViewSet(TenantScopedModelViewSet):
             })
 
         return Response(result, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="section-students")
+    def section_students(self, request):
+        """Return a paginated slice of students for a single class/section.
+
+        Query params: class_id (required), section_id (required),
+        page (default 1), page_size (default 10, max 200).
+        """
+        user = request.user
+        school_id = None if user.is_superuser else user.school_id
+
+        try:
+            class_id = int(request.query_params.get("class_id") or 0)
+            section_id = int(request.query_params.get("section_id") or 0)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "class_id and section_id must be integers."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not class_id or not section_id:
+            return Response(
+                {"detail": "class_id and section_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            page = int(request.query_params.get("page", 1) or 1)
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            page_size = int(request.query_params.get("page_size", 10) or 10)
+        except (TypeError, ValueError):
+            page_size = 10
+        page = max(1, page)
+        page_size = max(1, min(page_size, 200))
+
+        qs = Student.objects.filter(
+            is_deleted=False,
+            current_class_id=class_id,
+            current_section_id=section_id,
+        ).select_related("current_class", "current_section").prefetch_related(
+            "subject_assignments__subject"
+        ).order_by("roll_no", "first_name", "last_name")
+        if school_id:
+            qs = qs.filter(school_id=school_id)
+
+        total = qs.count()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = min(page, total_pages)
+        offset = (page - 1) * page_size
+        students_out = [
+            self._serialize_assignment_student(st)
+            for st in qs[offset:offset + page_size]
+        ]
+
+        return Response({
+            "count": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "students": students_out,
+        }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["post"], url_path="bulk-import")
     def bulk_import(self, request):

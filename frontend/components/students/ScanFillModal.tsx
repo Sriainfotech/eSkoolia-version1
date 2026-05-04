@@ -60,25 +60,9 @@ const FIELD_LABEL_MAP: Record<string, string> = Object.fromEntries(
 );
 
 // ─── OCR extraction ───────────────────────────────────────────────────────────
-async function runOcr(
-  file: File,
-  onProgress: (p: number) => void
-): Promise<Record<string, string>> {
-  const Tesseract = await import("tesseract.js");
-  onProgress(10);
-  const worker = await Tesseract.createWorker("eng", 1, {
-    logger: (m: { status: string; progress?: number }) => {
-      if (m.status === "recognizing text" && m.progress)
-        onProgress(10 + Math.round(m.progress * 80));
-    },
-  });
-  const result = await worker.recognize(file);
-  await worker.terminate();
-  onProgress(95);
-
-  const text = result.data.text;
+// Maps an extracted plain-text blob to the form fields we want to autofill.
+function extractFieldsFromText(text: string): Record<string, string> {
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
-
   const findAfterLabel = (label: string): string => {
     const idx = lines.findIndex(l => l.toUpperCase().includes(label.toUpperCase()));
     if (idx >= 0 && idx + 1 < lines.length) {
@@ -86,9 +70,14 @@ async function runOcr(
       if (val && !val.toUpperCase().includes("SECTION") && !val.toUpperCase().includes("STUDENT"))
         return val;
     }
+    // Same-line "LABEL: VALUE" fallback.
+    const same = lines.find(l => l.toUpperCase().includes(label.toUpperCase()) && /[:\-]/.test(l));
+    if (same) {
+      const m = same.split(/[:\-]/).slice(1).join(":").trim();
+      if (m) return m;
+    }
     return "";
   };
-
   const raw: Record<string, string> = {
     firstName:          findAfterLabel("FIRST NAME"),
     lastName:           findAfterLabel("LAST NAME"),
@@ -112,9 +101,107 @@ async function runOcr(
     guardianOccupation: findAfterLabel("GUARDIAN OCCUPATION"),
     aadhaarNo:          findAfterLabel("AADHAAR"),
   };
-
   Object.keys(raw).forEach(k => { if (!raw[k]) delete raw[k]; });
   return raw;
+}
+
+// Extract text from a PDF file by rasterising each page (up to 5) and OCRing it.
+async function extractTextFromPdf(
+  file: File,
+  onProgress: (p: number) => void,
+): Promise<string> {
+  const pdfjs: typeof import("pdfjs-dist") = await import("pdfjs-dist");
+  // Worker setup — match the pattern used elsewhere (ConsentForm) and load
+  // the matching worker from the unpkg CDN. Avoids Next.js bundler quirks
+  // around the `?url` import suffix.
+  (pdfjs as any).GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjs.getDocument({ data: buf }).promise;
+  const Tesseract = await import("tesseract.js");
+  const worker = await Tesseract.createWorker("eng", 1, {});
+  const pages = Math.min(doc.numPages, 5);
+  let combined = "";
+  for (let i = 1; i <= pages; i++) {
+    const page = await doc.getPage(i);
+    // First try the embedded text layer — fast and accurate when present.
+    try {
+      const tc = await page.getTextContent();
+      const pageText = tc.items.map((it: any) => ("str" in it ? it.str : "")).join("\n");
+      if (pageText.trim().length > 30) {
+        combined += pageText + "\n";
+        onProgress(10 + Math.round((i / pages) * 80));
+        continue;
+      }
+    } catch { /* fall through to OCR */ }
+    // Fallback: rasterise and OCR the page.
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) continue;
+    await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
+    const result = await worker.recognize(canvas);
+    combined += result.data.text + "\n";
+    onProgress(10 + Math.round((i / pages) * 80));
+  }
+  await worker.terminate();
+  return combined;
+}
+
+// Extract text from a DOCX file using mammoth.
+async function extractTextFromDocx(file: File): Promise<string> {
+  // mammoth's browser bundle works in the browser without Node deps.
+  const mammoth: any = await import("mammoth/mammoth.browser.js");
+  const buf = await file.arrayBuffer();
+  const out = await (mammoth.extractRawText
+    ? mammoth.extractRawText({ arrayBuffer: buf })
+    : mammoth.default.extractRawText({ arrayBuffer: buf }));
+  return out?.value || "";
+}
+
+async function runOcr(
+  file: File,
+  onProgress: (p: number) => void
+): Promise<Record<string, string>> {
+  const name = (file.name || "").toLowerCase();
+  const type = (file.type || "").toLowerCase();
+  onProgress(10);
+
+  // PDF — rasterise pages and OCR (or read embedded text if available).
+  if (type === "application/pdf" || name.endsWith(".pdf")) {
+    const text = await extractTextFromPdf(file, onProgress);
+    onProgress(95);
+    return extractFieldsFromText(text);
+  }
+
+  // DOCX — direct text extraction (no OCR needed).
+  if (
+    type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+    name.endsWith(".docx")
+  ) {
+    const text = await extractTextFromDocx(file);
+    onProgress(90);
+    return extractFieldsFromText(text);
+  }
+
+  // Legacy .doc — not supported by mammoth in-browser; ask the user to convert.
+  if (type === "application/msword" || name.endsWith(".doc")) {
+    throw new Error(".doc (Word 97-2003) is not supported in-browser. Please save the file as .docx or PDF and try again.");
+  }
+
+  // Image — original tesseract path.
+  const Tesseract = await import("tesseract.js");
+  const worker = await Tesseract.createWorker("eng", 1, {
+    logger: (m: { status: string; progress?: number }) => {
+      if (m.status === "recognizing text" && m.progress)
+        onProgress(10 + Math.round(m.progress * 80));
+    },
+  });
+  const result = await worker.recognize(file);
+  await worker.terminate();
+  onProgress(95);
+  return extractFieldsFromText(result.data.text);
 }
 
 // ─── component ────────────────────────────────────────────────────────────────
@@ -223,7 +310,7 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
                   Drop the scanned form here
                 </p>
                 <p style={{ fontSize: 13, color: "#6b7280", marginBottom: 20 }}>
-                  Accepts JPEG, PNG, WEBP images — or use the button below
+                  Accepts JPEG, PNG, WEBP, PDF and DOCX — or use the button below
                 </p>
                 <button type="button"
                   style={{ padding: "10px 28px", background: "#6c3ce1", color: "#fff",
@@ -242,7 +329,7 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
                   ⚠ {ocrError}
                 </div>
               )}
-              <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif"
+              <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/msword,.doc"
                 style={{ display: "none" }}
                 onChange={e => { const f = e.target.files?.[0]; if (f) void handleFile(f); }} />
             </div>

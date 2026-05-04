@@ -57,18 +57,18 @@ export function SchoolHeaderSettings({ onClose }: SchoolHeaderSettingsProps) {
         </div>
         <p style={{ margin:'0 0 16px', fontSize:13, color:'#6b7280' }}>These details appear on all printed/downloaded enrollment forms.</p>
         {[
-          { key:'schoolName', label:'School Name', placeholder:'e.g. Sunshine Public School' },
-          { key:'schoolAddress', label:'School Address', placeholder:'Street, City, PIN' },
-          { key:'schoolPhone', label:'Phone', placeholder:'+91 XXXXX XXXXX' },
-          { key:'schoolEmail', label:'Email', placeholder:'admissions@school.in' },
-          { key:'logoUrl', label:'Logo URL', placeholder:'https://... (or leave blank for emoji 🏫)' },
-          { key:'principalName', label:'Principal Name', placeholder:'Full name' },
+          { key:'schoolName' as const, label:'School Name', placeholder:'e.g. Sunshine Public School' },
+          { key:'schoolAddress' as const, label:'School Address', placeholder:'Street, City, PIN' },
+          { key:'schoolPhone' as const, label:'Phone', placeholder:'+91 XXXXX XXXXX' },
+          { key:'schoolEmail' as const, label:'Email', placeholder:'admissions@school.in' },
+          { key:'logoUrl' as const, label:'Logo URL', placeholder:'https://... (or leave blank for emoji 🏫)' },
+          { key:'principalName' as const, label:'Principal Name', placeholder:'Full name' },
         ].map(({ key, label, placeholder }) => (
           <div key={key} style={{ marginBottom:12 }}>
             <label style={{ display:'block', fontSize:12, fontWeight:600, color:'#374151', marginBottom:4 }}>{label}</label>
             <input
               style={{ width:'100%', padding:'8px 10px', border:'1px solid #d1d5db', borderRadius:6, fontSize:13, boxSizing:'border-box' }}
-              value={(form as Record<string,string>)[key]}
+              value={form[key]}
               onChange={e => setForm(prev => ({ ...prev, [key]: e.target.value }))}
               placeholder={placeholder}
             />

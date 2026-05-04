@@ -8,17 +8,23 @@ export type SectionOption = { key: string; label: string };
 
 interface Props {
   classOptions: ClassOption[];
-  sectionOptions: SectionOption[];
-  classKey: string;
-  sectionKey: string;
-  status: StatusFilter;
-  search: string;
+  sectionOptions?: SectionOption[];
+  classKey?: string;
+  sectionKey?: string;
+  status?: StatusFilter;
+  search?: string;
+  // aliases used by StudentPromotePanel
+  smartSearch?: string;
+  smartStatus?: StatusFilter;
+  smartClassId?: string;
   onClassChange: (key: string) => void;
-  onSectionChange: (key: string) => void;
+  onSectionChange?: (key: string) => void;
   onStatusChange: (s: StatusFilter) => void;
   onSearchChange: (s: string) => void;
-  onSearchSubmit: () => void;
+  onSearchSubmit?: () => void;
   onReset: () => void;
+  fieldStyle?: unknown;
+  secondaryBtnStyle?: unknown;
 }
 
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
@@ -50,11 +56,14 @@ const XIco = () => (
 
 export default function PromoteSmartFilter({
   classOptions,
-  sectionOptions,
-  classKey,
-  sectionKey,
-  status,
-  search,
+  sectionOptions = [],
+  classKey: classKeyProp,
+  sectionKey: sectionKeyProp,
+  status: statusProp,
+  search: searchProp,
+  smartSearch,
+  smartStatus,
+  smartClassId,
   onClassChange,
   onSectionChange,
   onStatusChange,
@@ -62,6 +71,11 @@ export default function PromoteSmartFilter({
   onSearchSubmit,
   onReset,
 }: Props) {
+  const classKey = classKeyProp ?? smartClassId ?? 'all';
+  const sectionKey = sectionKeyProp ?? 'all';
+  const status = statusProp ?? smartStatus ?? 'all';
+  const search = searchProp ?? smartSearch ?? '';
+  const handleSectionChange = onSectionChange ?? (() => {});
   const [filterOpen, setFilterOpen] = useState(false);
 
   // Pending (uncommitted) filter state — applied on "Apply Filter"
@@ -81,7 +95,7 @@ export default function PromoteSmartFilter({
 
   const applyFilters = () => {
     if (pendingClass !== classKey) onClassChange(pendingClass);
-    if (pendingSection !== sectionKey) onSectionChange(pendingSection);
+    if (pendingSection !== sectionKey) handleSectionChange(pendingSection);
     if (pendingStatus !== status) onStatusChange(pendingStatus);
     setFilterOpen(false);
   };
@@ -99,13 +113,13 @@ export default function PromoteSmartFilter({
     }
     if (sectionKey !== 'all') {
       const s = sectionOptions.find((o) => o.key === sectionKey);
-      if (s) out.push({ key: 'section', label: `Sec ${s.label}`, clear: () => { setPendingSection('all'); onSectionChange('all'); } });
+      if (s) out.push({ key: 'section', label: `Sec ${s.label}`, clear: () => { setPendingSection('all'); handleSectionChange('all'); } });
     }
     if (status !== 'all') {
       out.push({ key: 'status', label: STATUS_LABEL[status], clear: () => { setPendingStatus('all'); onStatusChange('all'); } });
     }
     return out;
-  }, [search, classKey, sectionKey, status, classOptions, sectionOptions, onSearchChange, onSearchSubmit, onClassChange, onSectionChange, onStatusChange]);
+  }, [search, classKey, sectionKey, status, classOptions, sectionOptions, onSearchChange, onSearchSubmit, onClassChange, handleSectionChange, onStatusChange]);
 
   const pendingCount =
     (pendingClass !== 'all' ? 1 : 0) +
@@ -128,11 +142,11 @@ export default function PromoteSmartFilter({
           <input
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') onSearchSubmit(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') onSearchSubmit?.(); }}
             placeholder="Search student, admission no, class or section"
           />
           {search && (
-            <button className="sg-search-clear" onClick={() => { onSearchChange(''); onSearchSubmit(); }} aria-label="Clear search">
+            <button className="sg-search-clear" onClick={() => { onSearchChange(''); onSearchSubmit?.(); }} aria-label="Clear search">
               <XIco />
             </button>
           )}

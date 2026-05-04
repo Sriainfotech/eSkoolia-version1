@@ -60,7 +60,7 @@ export default function PromoteOverrideDialog({ record, previousRetentionReason,
               </svg>
             </span>
             <div>
-              <h3 className="text-[15px] font-semibold text-[#0B0B14] m-0">Override "Not Promoted" decision?</h3>
+              <h3 className="text-[15px] font-semibold text-[#0B0B14] m-0">Override &quot;Not Promoted&quot; decision?</h3>
               <p className="text-[12px] text-[#6B6B7B] mt-1 m-0">
                 <strong className="text-[#0B0B14]">{record.student_name}</strong> is currently marked as
                 <span className="mx-1 inline-flex items-center gap-1 rounded-full bg-[#FFF1F2] px-2 py-0.5 text-[10px] font-bold text-[#991B1B]">

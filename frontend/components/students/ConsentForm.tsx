@@ -102,11 +102,11 @@ export interface ConsentFormStudent {
   abcId?: string;
   // Documents (Step 6)
   documents?: {
-    birth_certificate?: { status: string; fileName: string; };
-    aadhaar_card?: { status: string; fileName: string; };
-    medical_information?: { status: string; fileName: string; };
-    caste_certificate?: { status: string; fileName: string; };
-    udid_card?: { status: string; fileName: string; };
+    birth_certificate?: { status: string; fileName: string; url?: string | null; };
+    aadhaar_card?: { status: string; fileName: string; url?: string | null; };
+    medical_information?: { status: string; fileName: string; url?: string | null; };
+    caste_certificate?: { status: string; fileName: string; url?: string | null; };
+    udid_card?: { status: string; fileName: string; url?: string | null; };
   };
   consentChecked?: boolean;
   // Medical (Step 7)
@@ -139,7 +139,7 @@ interface ConsentFormProps {
   student: ConsentFormStudent;
   openWithSettings?: boolean;
   onOcrApply?: (results: Record<string, string>) => void;
-  initialAction?: 'upload-signed' | 'blank-form' | 'scan-fill' | 'print-pdf' | null;
+  initialAction?: 'blank-form' | 'scan-fill' | 'print-pdf' | null;
 }
 
 const DOC_LABELS: Record<string, string> = {
@@ -173,8 +173,8 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
   const [inlineEditing, setInlineEditing] = useState(false);
   const [inlineHeader, setInlineHeader] = useState<SchoolHeaderData>(DEFAULT_HEADER);
   const modalRef = useRef<HTMLDivElement>(null);
+  const logoInputRef = useRef<HTMLInputElement>(null);
   const letterheadInputRef = useRef<HTMLInputElement>(null);
-  const signedFormInputRef = useRef<HTMLInputElement>(null);
   const ocrInputRef = useRef<HTMLInputElement>(null);
 
   // ——— New-window print helper ———
@@ -198,7 +198,7 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
     const clone = el.cloneNode(true) as HTMLElement;
     clone.querySelectorAll<HTMLElement>(
       '.cf-toolbar, .cf-settings-panel, .cf-ai-panel, .cf-inline-edit-trigger, ' +
-      '.cf-inline-actions, .cf-inline-edit-bar, .cf-upload-signed-bar, .no-print'
+      '.cf-inline-actions, .cf-inline-edit-bar, .no-print'
     ).forEach(n => n.remove());
 
     printWin.document.write(`<!DOCTYPE html>
@@ -212,7 +212,7 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
     html, body { margin: 0; padding: 0; background: #fff; }
     .cf-toolbar, .cf-settings-panel, .cf-ai-panel,
     .cf-inline-edit-trigger, .cf-inline-actions, .cf-inline-edit-bar,
-    .cf-upload-signed-bar, .no-print { display: none !important; }
+    .no-print { display: none !important; }
     .cf-modal {
       position: static !important; margin: 0 !important; max-width: 100% !important;
       width: 100% !important; box-shadow: none !important; border-radius: 0 !important;
@@ -233,12 +233,6 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
       printWin.close();
     }, 600);
   };
-
-  // ——— Signed consent form upload state ———
-  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'done' | 'error'>('idle');
-  const [uploadedFileUrl, setUploadedFileUrl] = useState<string>('');
-  const [uploadedFileName, setUploadedFileName] = useState<string>('');
-  const [uploadError, setUploadError] = useState<string>('');
 
   // ——— OCR / blank form state ———
   const [ocrStatus, setOcrStatus] = useState<'idle' | 'scanning' | 'done' | 'error'>('idle');
@@ -269,8 +263,6 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
     if (initialAction === 'blank-form') {
       // Download blank form (no admission number, with parent instructions and document checklist), then close.
       setTimeout(() => { downloadBlankForm({ blank: true }); onClose(); }, 50);
-    } else if (initialAction === 'upload-signed') {
-      setTimeout(() => { signedFormInputRef.current?.click(); }, 100);
     } else if (initialAction === 'scan-fill') {
       setTimeout(() => { setScanPickerOpen(true); }, 100);
     } else if (initialAction === 'print-pdf') {
@@ -316,40 +308,6 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
 
   const resetToDefault = () => {
     setSettingsForm(DEFAULT_HEADER);
-  };
-
-  const handleSignedFormUpload = async (file: File) => {
-    if (!student.studentId) {
-      setUploadError('Student must be saved before uploading a signed form.');
-      return;
-    }
-    setUploadStatus('uploading');
-    setUploadError('');
-    try {
-      const formData = new FormData();
-      formData.append('student_id', String(student.studentId));
-      formData.append('document_type', 'consent_form');
-      formData.append('title', `Signed Consent Form — ${student.firstName} ${student.lastName}`);
-      formData.append('file', file);
-
-      const res = await fetch('/api/students/documents/upload_document/', {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error((err as Record<string,string>).error || `Upload failed (${res.status})`);
-      }
-      const data = await res.json() as { file?: string; original_name?: string };
-      setUploadedFileUrl(data.file || '');
-      setUploadedFileName(file.name);
-      setUploadStatus('done');
-    } catch (e: unknown) {
-      setUploadError(e instanceof Error ? e.message : 'Upload failed. Please try again.');
-      setUploadStatus('error');
-    }
   };
 
   // ——— Blank form download ———
@@ -651,7 +609,7 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
         canvas.height = viewport.height;
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas 2D context unavailable');
-        await page.render({ canvasContext: ctx, viewport }).promise;
+        await page.render({ canvasContext: ctx, viewport, canvas }).promise;
         ocrSource = canvas;
         // Replace the PDF blob URL with a canvas image for the preview pane
         setOcrImageUrl(canvas.toDataURL('image/png'));
@@ -963,10 +921,10 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
                   { key: 'principalName', label: 'Principal Name *', placeholder: 'Full name for signature line' },
                   { key: 'affiliationNo',label: 'Affiliation / Reg No.', placeholder: 'CBSE / State board ref'  },
                   { key: 'schoolMotto',  label: 'Motto / Tagline',  placeholder: 'Shown under school name'      },
-                ] as Array<{key:string;label:string;placeholder:string;span?:number}>).map(({ key, label, placeholder, span }) => (
+                ] as Array<{key:'schoolName'|'schoolAddress'|'schoolPhone'|'schoolEmail'|'schoolWebsite'|'principalName'|'affiliationNo'|'schoolMotto';label:string;placeholder:string;span?:number}>).map(({ key, label, placeholder, span }) => (
                   <div key={key} className="cf-settings-field" style={span === 2 ? { gridColumn: '1 / -1' } : {}}>
                     <label className="cf-settings-label">{label}</label>
-                    <input className="cf-settings-input" value={(settingsForm as Record<string,string>)[key] ?? ''} onChange={e => setSettingsForm(prev => ({ ...prev, [key]: e.target.value }))} placeholder={placeholder} />
+                    <input className="cf-settings-input" value={settingsForm[key] ?? ''} onChange={e => setSettingsForm(prev => ({ ...prev, [key]: e.target.value }))} placeholder={placeholder} />
                   </div>
                 ))}
               </div>
@@ -1183,7 +1141,7 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
                 <div style={{ background: '#f5f3ff', border: '1px solid #ede9fe', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#6d28d9', lineHeight: 1.6 }}>
                   <strong>💡 Tips:</strong>
                   <ul style={{ margin: '6px 0 0 0', paddingLeft: 18 }}>
-                    <li>Use <code style={{ background: '#ede9fe', padding: '1px 4px', borderRadius: 3 }}>{'{studentName}'}</code> — it will be replaced with the student's full name when printed.</li>
+                    <li>Use <code style={{ background: '#ede9fe', padding: '1px 4px', borderRadius: 3 }}>{'{studentName}'}</code> — it will be replaced with the student&apos;s full name when printed.</li>
                     <li>You can add school-specific terms, fee policies, conduct clauses, or data privacy notices.</li>
                     <li>Changes are saved with your header settings and applied to all future printed forms.</li>
                   </ul>
@@ -1432,17 +1390,23 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
             {student.documents && Object.keys(student.documents).length > 0 ? (
               <table className="cf-table">
                 <tbody>
-                  {(Object.entries(student.documents) as Array<[string, { status: string; fileName: string }]>).map(([key, doc]) => (
-                    <tr key={key}>
-                      <th>{DOC_LABELS[key] || key}</th>
-                      <td>
-                        <span className={doc.status === 'success' ? 'cf-status-ok' : 'cf-status-pending'}>
-                          {doc.status === 'success' ? '✓ Submitted' : '○ Pending'}
-                        </span>
-                        {doc.status === 'success' && doc.fileName ? ` — ${doc.fileName}` : ''}
-                      </td>
-                    </tr>
-                  ))}
+                  {(Object.entries(student.documents) as Array<[string, { status?: string; fileName?: string; url?: string | null }]>).map(([key, doc]) => {
+                    // Treat as submitted when EITHER the status reports success
+                    // OR a fileName/url is present (covers async-state edge cases
+                    // where status hasn't propagated to this snapshot yet).
+                    const submitted = doc?.status === 'success' || !!doc?.fileName || !!doc?.url;
+                    return (
+                      <tr key={key}>
+                        <th>{DOC_LABELS[key] || key}</th>
+                        <td>
+                          <span className={submitted ? 'cf-status-ok' : 'cf-status-pending'}>
+                            {submitted ? '✓ Submitted' : '○ Pending'}
+                          </span>
+                          {submitted && doc?.fileName ? ` — ${doc.fileName}` : ''}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             ) : (
@@ -1561,73 +1525,6 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
             </div>
           </div>
 
-          {/* ——— Upload Signed Form footer (screen only) ——— */}
-          <div className="cf-upload-signed-bar no-print">
-            <input
-              ref={signedFormInputRef}
-              type="file"
-              accept="application/pdf,image/*"
-              style={{ display: 'none' }}
-              onChange={e => {
-                const file = e.target.files?.[0];
-                if (file) handleSignedFormUpload(file);
-                e.target.value = '';
-              }}
-            />
-
-            <div className="cf-upload-signed-left">
-              <div className="cf-upload-signed-icon">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-              </div>
-              <div>
-                <p className="cf-upload-signed-title">Upload signed copy</p>
-                <p className="cf-upload-signed-hint">
-                  {uploadStatus === 'done'
-                    ? `✓ Saved: ${uploadedFileName}`
-                    : 'Print this form → get it signed → upload the scanned PDF or photo here to save it permanently.'}
-                </p>
-              </div>
-            </div>
-
-            <div className="cf-upload-signed-right">
-              {uploadStatus === 'done' ? (
-                <>
-                  {uploadedFileUrl && (
-                    <a href={uploadedFileUrl} target="_blank" rel="noopener noreferrer" className="cf-upload-view-btn">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                      View saved
-                    </a>
-                  )}
-                  <button type="button" className="cf-upload-replace-btn" onClick={() => { setUploadStatus('idle'); setUploadedFileUrl(''); setUploadedFileName(''); signedFormInputRef.current?.click(); }}>Replace</button>
-                </>
-              ) : uploadStatus === 'uploading' ? (
-                <span className="cf-upload-spinner">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></path></svg>
-                  Uploading…
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="cf-upload-signed-btn"
-                  onClick={() => {
-                    if (!student.studentId) {
-                      setUploadError('Student record must be enrolled first before uploading a signed form.');
-                      return;
-                    }
-                    signedFormInputRef.current?.click();
-                  }}
-                  title={!student.studentId ? 'Enroll the student first' : 'Upload the scanned signed form'}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                  Upload signed form
-                </button>
-              )}
-            </div>
-
-            {uploadStatus === 'error' && (
-              <p className="cf-upload-error">⚠ {uploadError}</p>
-            )}
-          </div>
         </div>
       </div>
 
@@ -2837,116 +2734,6 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
         .cf-sig-block { display: flex; flex-direction: column; gap: 8px; }
         .cf-sig-line { height: 1px; background: #374151; }
         .cf-sig-label { margin: 0; font-size: 11px; color: #6b7280; text-align: center; }
-
-        /* ── Upload signed form footer ── */
-        .cf-upload-signed-bar {
-          margin: 24px 0 8px;
-          border: 1.5px dashed #c4b5fd;
-          border-radius: 12px;
-          background: linear-gradient(135deg, #faf5ff 0%, #f5f3ff 100%);
-          padding: 14px 18px;
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          flex-wrap: wrap;
-        }
-        .cf-upload-signed-left {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          flex: 1;
-          min-width: 0;
-        }
-        .cf-upload-signed-icon {
-          width: 38px;
-          height: 38px;
-          border-radius: 9px;
-          background: #ede9fe;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: #7c3aed;
-          flex-shrink: 0;
-        }
-        .cf-upload-signed-title {
-          margin: 0 0 2px;
-          font-size: 13px;
-          font-weight: 700;
-          color: #4c1d95;
-        }
-        .cf-upload-signed-hint {
-          margin: 0;
-          font-size: 11.5px;
-          color: #6d28d9;
-          opacity: 0.75;
-          line-height: 1.4;
-        }
-        .cf-upload-signed-right {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          flex-shrink: 0;
-        }
-        .cf-upload-signed-btn {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          padding: 9px 16px;
-          border-radius: 9px;
-          border: 1.5px solid #7c3aed;
-          background: #7c3aed;
-          color: #fff;
-          font-size: 13px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-        .cf-upload-signed-btn:hover { background: #6d28d9; border-color: #6d28d9; transform: translateY(-1px); box-shadow: 0 3px 10px rgba(124,58,237,0.3); }
-        .cf-upload-view-btn {
-          display: flex;
-          align-items: center;
-          gap: 5px;
-          padding: 7px 12px;
-          border-radius: 8px;
-          border: 1.5px solid #10b981;
-          background: #ecfdf5;
-          color: #065f46;
-          font-size: 12px;
-          font-weight: 600;
-          text-decoration: none;
-          cursor: pointer;
-          transition: all 0.15s;
-        }
-        .cf-upload-view-btn:hover { background: #d1fae5; }
-        .cf-upload-replace-btn {
-          padding: 7px 12px;
-          border-radius: 8px;
-          border: 1.5px solid #d1d5db;
-          background: #fff;
-          color: #374151;
-          font-size: 12px;
-          font-weight: 500;
-          cursor: pointer;
-        }
-        .cf-upload-replace-btn:hover { border-color: #7c3aed; color: #7c3aed; }
-        .cf-upload-spinner {
-          display: flex;
-          align-items: center;
-          gap: 7px;
-          font-size: 13px;
-          color: #7c3aed;
-          font-weight: 500;
-        }
-        .cf-upload-error {
-          width: 100%;
-          margin: 4px 0 0;
-          font-size: 12px;
-          color: #dc2626;
-          background: #fef2f2;
-          border: 1px solid #fecaca;
-          border-radius: 7px;
-          padding: 6px 10px;
-        }
 
       `}</style>
     </div>
