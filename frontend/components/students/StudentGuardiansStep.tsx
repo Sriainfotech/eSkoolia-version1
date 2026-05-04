@@ -62,6 +62,13 @@ export function StudentGuardiansStep({
 }: StudentGuardiansStepProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
+  // Inline confirmation card shown when a relation is already assigned to
+  // another guardian. Holds the pending change so the user can confirm/cancel.
+  const [relationConflict, setRelationConflict] = useState<{
+    clientId: string;
+    nextRel: string;
+    existingIdx: number;
+  } | null>(null);
 
   const updateDraft = (clientId: string, patch: Partial<GuardianDraft>) => {
     onDraftsChange(
@@ -261,7 +268,7 @@ export function StudentGuardiansStep({
                         const nextRel = e.target.value;
                         const norm = nextRel.trim().toLowerCase();
                         // Find any OTHER non-empty card already using this relation.
-                        const conflictIdx = drafts.findIndex((d, i) => {
+                        const conflictIdx = drafts.findIndex((d) => {
                           if (d.clientId === draft.clientId) return false;
                           const isFilled =
                             (d.fullName || "").trim() ||
@@ -271,10 +278,13 @@ export function StudentGuardiansStep({
                           return isFilled && (d.relation || "").trim().toLowerCase() === norm;
                         });
                         if (conflictIdx !== -1) {
-                          const proceed = window.confirm(
-                            `${nextRel} is already assigned to Guardian ${conflictIdx + 1}. Do you want to add another ${nextRel} as well? Click Cancel to pick a different relation instead.`,
-                          );
-                          if (!proceed) return; // keep previous selection
+                          // Surface a small confirmation card instead of window.confirm.
+                          setRelationConflict({
+                            clientId: draft.clientId,
+                            nextRel,
+                            existingIdx: conflictIdx,
+                          });
+                          return;
                         }
                         updateDraft(draft.clientId, { relation: nextRel });
                       }}
@@ -366,6 +376,48 @@ export function StudentGuardiansStep({
       {submitError ? <p className="gdn-submit-err">{submitError}</p> : null}
 
       {navButtonsSlot}
+
+      {/* Inline confirmation card for duplicate-relation selection */}
+      {relationConflict ? (
+        <div
+          className="gdn-conflict-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="gdn-conflict-title"
+          onClick={() => setRelationConflict(null)}
+        >
+          <div className="gdn-conflict-card" onClick={(e) => e.stopPropagation()}>
+            <div className="gdn-conflict-icon" aria-hidden="true">!</div>
+            <h4 id="gdn-conflict-title" className="gdn-conflict-title">
+              {relationConflict.nextRel} is already assigned
+            </h4>
+            <p className="gdn-conflict-text">
+              Guardian {relationConflict.existingIdx + 1} is already set as
+              <strong> {relationConflict.nextRel}</strong>. Add another
+              {" "}{relationConflict.nextRel} as well, or pick a different relation?
+            </p>
+            <div className="gdn-conflict-actions">
+              <button
+                type="button"
+                className="gdn-conflict-btn gdn-conflict-btn-ghost"
+                onClick={() => setRelationConflict(null)}
+              >
+                Pick different
+              </button>
+              <button
+                type="button"
+                className="gdn-conflict-btn gdn-conflict-btn-primary"
+                onClick={() => {
+                  updateDraft(relationConflict.clientId, { relation: relationConflict.nextRel });
+                  setRelationConflict(null);
+                }}
+              >
+                Add another {relationConflict.nextRel}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <style jsx>{`
         .gdn-shell {
@@ -796,6 +848,95 @@ export function StudentGuardiansStep({
           .gdn-picker-link-btn {
             width: 100%;
           }
+        }
+
+        /* Duplicate-relation confirmation card */
+        .gdn-conflict-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.45);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+          padding: 16px;
+          animation: gdnFadeIn 0.12s ease-out;
+        }
+        .gdn-conflict-card {
+          background: #ffffff;
+          border-radius: 14px;
+          box-shadow: 0 20px 48px rgba(15, 23, 42, 0.25);
+          width: 100%;
+          max-width: 380px;
+          padding: 22px 22px 18px;
+          text-align: left;
+          animation: gdnPopIn 0.14s ease-out;
+        }
+        .gdn-conflict-icon {
+          width: 36px;
+          height: 36px;
+          border-radius: 50%;
+          background: #fef3c7;
+          color: #b45309;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-weight: 700;
+          font-size: 18px;
+          margin-bottom: 10px;
+        }
+        .gdn-conflict-title {
+          margin: 0 0 6px;
+          font-size: 15px;
+          font-weight: 600;
+          color: #111827;
+        }
+        .gdn-conflict-text {
+          margin: 0 0 16px;
+          font-size: 13px;
+          color: #4b5563;
+          line-height: 1.5;
+        }
+        .gdn-conflict-text strong {
+          color: #111827;
+        }
+        .gdn-conflict-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 8px;
+        }
+        .gdn-conflict-btn {
+          padding: 8px 14px;
+          font-size: 13px;
+          font-weight: 600;
+          border-radius: 8px;
+          border: 1px solid transparent;
+          cursor: pointer;
+          transition: background 0.12s, color 0.12s, border-color 0.12s;
+        }
+        .gdn-conflict-btn-ghost {
+          background: #ffffff;
+          color: #374151;
+          border-color: #d1d5db;
+        }
+        .gdn-conflict-btn-ghost:hover {
+          background: #f3f4f6;
+          border-color: #9ca3af;
+        }
+        .gdn-conflict-btn-primary {
+          background: #4f39f6;
+          color: #ffffff;
+        }
+        .gdn-conflict-btn-primary:hover {
+          background: #3d2ed6;
+        }
+        @keyframes gdnFadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes gdnPopIn {
+          from { opacity: 0; transform: translateY(6px) scale(0.98); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
         }
       `}</style>
     </section>
