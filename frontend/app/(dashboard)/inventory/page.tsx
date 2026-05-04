@@ -25,6 +25,23 @@ export default function InventoryPage() {
 
   return (
     <div>
+      {/* Page header / breadcrumbs (matches the visual style used by other
+          dashboard pages such as students/list, finance, etc.) */}
+      <section className="sms-breadcrumb mb-20">
+        <div className="container-fluid">
+          <div className="student-page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 24px 0" }}>
+            <h1 className="student-page-title" style={{ margin: 0, fontSize: 22 }}>Inventory</h1>
+            <div className="student-page-crumbs" style={{ display: "flex", gap: 6, fontSize: 12, color: "var(--text-muted)" }}>
+              <span>Dashboard</span>
+              <span>/</span>
+              <span>Inventory</span>
+              <span>/</span>
+              <span style={{ color: "var(--primary)", textTransform: "capitalize" }}>{tabs.find((t) => t.id === activeTab)?.label || activeTab}</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Navigation Tabs */}
       <div
         style={{

@@ -734,7 +734,7 @@ export function StudentPromotePanel() {
       <section className="sms-breadcrumb mb-20">
         <div className="container-fluid">
           <div className="student-page-header">
-            <h1 className="student-page-title">Student Promote</h1>
+            <h1 className="student-page-title" style={{ margin: 0, fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontSize: '32px', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15, color: '#0f172a' }}>Student <em style={{ fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontStyle: 'italic', fontSize: '32px', fontWeight: 400, color: '#6c3ce1' }}>Promote</em></h1>
             <div className="student-page-crumbs">
               <span>Dashboard</span><span>/</span>
               <span>Student Information</span><span>/</span>

@@ -677,7 +677,7 @@ export function StudentMultiClassPanel() {
         </div>
         <div className={s.titleRow}>
           <div>
-            <h1 className={s.pageTitle}>Multi Subject <em>Assignment</em></h1>
+            <h1 className={s.pageTitle} style={{ margin: 0, fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontSize: '32px', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15, color: '#0f172a' }}>Multi Subject <em style={{ fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontStyle: 'italic', fontSize: '32px', fontWeight: 400, color: '#6c3ce1' }}>Assignment</em></h1>
             <p className={s.pageSubtitle}>One-time setup per student &mdash; locked until a change is requested</p>
           </div>
           <div className={s.kpiBlock}>
@@ -735,7 +735,7 @@ export function StudentMultiClassPanel() {
             {enrolled.name&&<span className={s.enrollChip}><LinkIcon/> From enrollment: {enrolled.name}</span>}
           </div>
           <div className={s.roGrid}>
-            {[{label:"Student Name",value:enrolled.name||"—",mono:false},{label:"Admission No.",value:enrolled.admissionNo||"—",mono:true},{label:"Roll No.",value:enrolled.rollNo||"—",mono:true},{label:"Class",value:enrolled.className||"—",mono:false},{label:"Section",value:enrolled.sectionName||"—",mono:false},{label:"Academic Year",value:enrolled.academicYear||"2025-26",mono:false}].map(f=>(
+            {[{label:"Student Name",value:enrolled.name||"—",mono:false},{label:"Admission No.",value:enrolled.admissionNo||"—",mono:true},{label:"Roll No.",value:enrolled.rollNo||"—",mono:true},{label:"Class",value:enrolled.className||"—",mono:false},{label:"Section",value:enrolled.sectionName||"—",mono:false},{label:"Academic Year",value:enrolled.academicYear||"2026-27",mono:false}].map(f=>(
               <div key={f.label} className={s.roField}><label>{f.label}</label><input readOnly value={f.value} className={`${s.roInput} ${f.mono?s.roInputMono:""}`}/></div>
             ))}
           </div>

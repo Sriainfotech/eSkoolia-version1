@@ -12,6 +12,9 @@ const SYNC_COLORS: Record<string, string> = {
   none: 'bg-[#E6E6EC]',
 };
 
+// Bug 12: tiny pluralize helper.
+const plural = (count: number, word: string) => `${count} ${count === 1 ? word : word + 's'}`;
+
 interface Props {
   cls: ClassInfo;
   isOpen: boolean;
@@ -126,11 +129,13 @@ export default function ClassAccordionCard({
         {/* Chips */}
         <div className="flex flex-wrap gap-1.5 ml-4 items-center">
           <span className="whitespace-nowrap flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FAFAFD] text-[#3A3A4A] border border-[#E6E6EC]">
-            {liveTotalStudents} students
+            {plural(liveTotalStudents, 'student')}
           </span>
-          <span className="whitespace-nowrap flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#E4F6ED] text-[#0A8C5A]">
-            {liveTotalPresent} present
-          </span>
+          {liveTotalStudents > 0 && (
+            <span className="whitespace-nowrap flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#E4F6ED] text-[#0A8C5A]">
+              {liveTotalPresent} present
+            </span>
+          )}
           {liveTotalAbsent > 0 && (
             <span className="whitespace-nowrap flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FCE8EE] text-[#C2264E]">
               {liveTotalAbsent} absent
@@ -142,17 +147,24 @@ export default function ClassAccordionCard({
             </span>
           )}
           <span className="whitespace-nowrap flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#F1F1F5] text-[#6B6B7B]">
-            {cls.sections.length} sections
+            {plural(cls.sections.length, 'section')}
           </span>
         </div>
 
         {/* Right group */}
         <div className="ml-auto flex items-center gap-2.5 flex-shrink-0">
-          <AttendanceRing pct={pct} />
-          <div className="flex flex-col">
-            <span className={`text-[11px] font-bold ${pctTextColor(pct)}`}>{pct}%</span>
-            <span className="text-[10px] text-[#9CA0AE]">today</span>
-          </div>
+          {liveTotalStudents === 0 ? (
+            // Bug 10: empty-enrollment state — no progress ring, no red 0%.
+            <span className="text-[11px] italic text-[#9CA0AE]">No students enrolled</span>
+          ) : (
+            <>
+              <AttendanceRing pct={pct} />
+              <div className="flex flex-col">
+                <span className={`text-[11px] font-bold ${pctTextColor(pct)}`}>{pct}%</span>
+                <span className="text-[10px] text-[#9CA0AE]">today</span>
+              </div>
+            </>
+          )}
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${SYNC_COLORS[cls.sync_status]}`} />
         </div>
       </div>

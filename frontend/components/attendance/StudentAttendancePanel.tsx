@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TopToast } from "@/components/common/TopToast";
+import { pluralize } from "@/lib/utils/pluralize";
 
 type AcademicYear = { id: number; name: string; is_current: boolean };
 type SchoolClass = { id: number; name: string };
@@ -86,7 +87,19 @@ function LegacyBreadcrumb({ title }: { title: string }) {
     <section className="sms-breadcrumb mb-20">
       <div className="container-fluid">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h1 style={{ margin: 0, fontSize: 24 }}>{title}</h1>
+          <h1 style={{ margin: 0, fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontSize: '32px', fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.15, color: '#0f172a' }}>
+            {(() => {
+              const parts = title.trim().split(/\s+/);
+              const last = parts.pop() || title;
+              const head = parts.join(' ');
+              return (
+                <>
+                  {head ? <>{head} </> : null}
+                  <span style={{ fontFamily: 'var(--font-playfair), Georgia, "Times New Roman", serif', fontStyle: 'italic', fontSize: '32px', fontWeight: 400, color: '#6c3ce1' }}>{last}</span>
+                </>
+              );
+            })()}
+          </h1>
           <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
             <span>Dashboard</span><span>/</span><span>Attendance</span><span>/</span><span>{title}</span>
           </div>
@@ -255,7 +268,7 @@ export default function StudentAttendancePanel() {
       setAttendance(init);
       setLoaded(true);
       setStudentsPage(1);
-      setSuccess(`Loaded ${(data.students || []).length} student records.`);
+      setSuccess(`Loaded ${pluralize((data.students || []).length, "student record")}.`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "";
       setError(message && message !== "401" ? message : "Failed to load students.");

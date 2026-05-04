@@ -214,8 +214,8 @@ function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, st
   });
   const allLoaded = filteredSections.flatMap((sec) => students[`${cls.id}-${sec.id}`] ?? []);
 
-  // Count "actually attended" students = present AND signed-in (issue #5).
-  const localAttended = allLoaded.filter((s) => s.status === 'present' && !!s.sign_in_time).length;
+  // Count present students from the locally-loaded sections (used when all
+  // sections are loaded for fully-accurate live counts).
   const localPresentMarked = allLoaded.filter((s) => s.status === 'present').length;
   const localAbsent = allLoaded.filter((s) => s.status === 'absent').length;
   const localLate = allLoaded.filter((s) => s.status === 'late').length;
@@ -225,23 +225,19 @@ function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, st
   const totalLate = allSectionsLoaded ? localLate : (cls.total_late ?? 0);
   const totalForPct = cls.total_students;
 
-  // Use signed-in count as the "attended" numerator when computing pct so that
-  // students marked present without a sign-in don't push it to 100%.
-  // Backend exposes `total_signed_in` (Present rows with sign_in_time set).
-  const backendAttended = (cls.total_signed_in ?? 0) + (cls.total_late ?? 0);
-  const attendedForPct = allSectionsLoaded ? (localAttended + localLate) : backendAttended;
+  // Issue #9: percentage and status must derive from the SAME counts shown in
+  // the badges, otherwise users see "3 present" alongside "0% / Attendance
+  // Needed". Use totalPresent (the value rendered) as the numerator.
   const rawPct = totalForPct > 0
-    ? Math.round((attendedForPct / totalForPct) * 100)
+    ? Math.round(((totalPresent + totalLate) / totalForPct) * 100)
     : 0;
   // Issue #6: never display impossible values.
   const attendancePct = Math.max(0, Math.min(100, rawPct));
 
-  // Attendance status badge logic — "complete" should mean every student has
-  // arrived (sign-in or late) or is absent, not merely that the row was marked.
+  // Attendance status badge logic — derive from the same numbers shown in the
+  // badges so the UI is internally consistent.
   const totalLoaded = cls.total_students;
-  const accountedFor = allSectionsLoaded
-    ? (localAttended + localLate + localAbsent)
-    : (backendAttended + (cls.total_absent ?? 0));
+  const accountedFor = totalPresent + totalLate + totalAbsent;
   const attendanceStatus: 'needed' | 'in_progress' | 'complete' | 'none' =
     totalLoaded === 0 ? 'none' :
     accountedFor === 0 ? 'needed' :
@@ -262,11 +258,11 @@ function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, st
           {cls.sub_label && <span className="text-[10px] text-[#9CA0AE] mt-0.5 whitespace-nowrap">{cls.sub_label}</span>}
         </div>
         <div className="flex flex-wrap gap-1.5 ml-2 items-center">
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FAFAFD] text-[#3A3A4A] border border-[#E6E6EC] whitespace-nowrap">{cls.total_students} students</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FAFAFD] text-[#3A3A4A] border border-[#E6E6EC] whitespace-nowrap">{cls.total_students} {cls.total_students === 1 ? 'student' : 'students'}</span>
           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#E4F6ED] text-[#0A8C5A] whitespace-nowrap">{totalPresent} present</span>
           {totalAbsent > 0 && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FCE8EE] text-[#C2264E] whitespace-nowrap">{totalAbsent} absent</span>}
           {totalLate > 0 && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FDF1DC] text-[#B4721B] whitespace-nowrap">{totalLate} late</span>}
-          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#F1F1F5] text-[#6B6B7B] whitespace-nowrap">{filteredSections.length} sections</span>
+          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#F1F1F5] text-[#6B6B7B] whitespace-nowrap">{filteredSections.length} {filteredSections.length === 1 ? 'section' : 'sections'}</span>
           {dateMode !== 'future' && attendanceStatus === 'needed' && (
             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#FCE8EE] text-[#C2264E] whitespace-nowrap">Attendance Needed</span>
           )}

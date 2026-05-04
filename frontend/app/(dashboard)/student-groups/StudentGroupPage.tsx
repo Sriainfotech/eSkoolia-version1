@@ -4,6 +4,8 @@ import React, {
   useState, useEffect, useRef, useCallback,
 } from 'react'
 import { apiRequestWithRefresh } from '@/lib/api-auth'
+import InspireHubButton from '@/components/competitions/InspireHubButton'
+import InspireHubModal from '@/components/competitions/InspireHubModal'
 
 type GroupType = 'HOUSE' | 'CLUB' | 'CUSTOM'
 
@@ -207,6 +209,7 @@ export default function StudentGroupPage() {
 
   const [swOpen,  setSWOpen]  = useState(false)
   const [agOpen,  setAGOpen]  = useState(false)
+  const [inspireOpen, setInspireOpen] = useState(false)
   const [acOpen,  setACOpen]  = useState(false)
   const [editTgt, setEditTgt] = useState<Group|null>(null)
   const [aiDismissed, setAIDismissed] = useState(false)
@@ -736,7 +739,28 @@ export default function StudentGroupPage() {
           <button className="btn-new" onClick={()=>{setEditTgt(null);setAGOpen(true)}}>
             <Ico.Plus /> Add Group
           </button>
+          <InspireHubButton onClick={() => setInspireOpen(true)} />
         </div>
+        <InspireHubModal
+          isOpen={inspireOpen}
+          onClose={() => setInspireOpen(false)}
+          houses={groups.filter(g => g.type === 'HOUSE').map(g => ({ id: String(g.id), name: g.name, emoji: g.emoji, color: g.color, bgColor: g.bgColor }))}
+          clubs={groups.filter(g => g.type === 'CLUB').map(g => ({ id: String(g.id), name: g.name, emoji: g.emoji, color: g.color, bgColor: g.bgColor }))}
+          students={students.map(s => {
+            const grp = groups.find(g => g.id === s.currentGroupId)
+            return {
+              id: s.id,
+              full_name: (s as any).fullName || (s as any).full_name || s.name || `Student ${s.id}`,
+              admission_no: s.admissionNo,
+              class_name: s.class,
+              section: s.section,
+              house_id:   grp?.type === 'HOUSE' ? String(grp.id) : null,
+              house_name: grp?.type === 'HOUSE' ? grp.name : null,
+              club_id:    grp?.type === 'CLUB' ? String(grp.id) : null,
+              club_name:  grp?.type === 'CLUB' ? grp.name : null,
+            }
+          })}
+        />
       </div>
 
       <div className="stats">

@@ -10,7 +10,7 @@ interface AttendanceFilterBarProps {
   onLevelChange: (level: LevelFilter) => void;
 }
 
-const ACADEMIC_YEARS = ['2025-26', '2024-25', '2023-24'];
+const ACADEMIC_YEARS = ['2026-27', '2025-26', '2024-25', '2023-24'];
 const LEVELS: { value: LevelFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'primary', label: 'Primary' },

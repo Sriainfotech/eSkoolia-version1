@@ -96,12 +96,25 @@ class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        from django.db.models import Count as DbCount
+        from django.db.models import Prefetch
+        from apps.core.models import Section as SectionModel
+
         user = self.request.user
-        qs = Class.objects.prefetch_related("sections").order_by("numeric_order", "name", "id")
+        # Annotate sections with student counts in a single DB aggregation query
+        sections_qs = SectionModel.objects.annotate(
+            _student_count=DbCount("students", filter=Q(students__is_active=True))
+        ).order_by("name")
+
+        qs = Class.objects.prefetch_related(
+            Prefetch("sections", queryset=sections_qs)
+        ).order_by("numeric_order", "name", "id")
+
         if user.is_superuser:
-            return qs
+            return qs.annotate(_total_students=DbCount("students", filter=Q(students__is_active=True)))
         if user.school_id:
-            return qs.filter(school_id=user.school_id)
+            qs = qs.filter(school_id=user.school_id)
+            return qs.annotate(_total_students=DbCount("students", filter=Q(students__is_active=True)))
         return qs.none()
 
     @action(detail=False, methods=["get"])

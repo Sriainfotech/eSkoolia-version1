@@ -380,6 +380,10 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
         if search:
             qs = qs.filter(name__icontains=search)
 
+        group_type = str(self.request.query_params.get("type") or "").strip().upper()
+        if group_type:
+            qs = qs.filter(type=group_type)
+
         if sort_by == "count":
             return qs.order_by("-students_count", "name")
 
@@ -707,6 +711,8 @@ class StudentViewSet(TenantScopedModelViewSet):
         "permanent_delete": "student_info.delete_student_record.view",
         "promote": "student_info.student_promote.view",
         "auto_assign_classes": "student_info.student_list.view",
+        "next_roll_no": "student_info.add_student.view",
+        "sections_summary": "student_info.add_student.view",
     }
 
     def get_serializer_class(self):
@@ -1225,34 +1231,41 @@ class StudentViewSet(TenantScopedModelViewSet):
     def next_admission_no(self, request):
         """Suggest the next admission number for the current school.
 
-        Strategy: take the maximum trailing-numeric portion of existing
-        ``admission_no`` values and increment by 1. If no numeric portion
-        is found, fall back to ``1``. Pads to at least 4 digits.
+        Format: ``ADM<YYYY><NNN>`` (10 chars total, e.g. ``ADM2026001``).
+        Strategy:
+          * Filter existing admission_no values matching the current year's
+            ``ADM<YYYY>`` prefix and find the maximum 3-digit suffix.
+          * Junky/legacy values that don't match the prefix are ignored, so a
+            stray ``2222222222`` row no longer poisons the next number.
+          * If no matching row exists yet for this year, start at ``001``.
         """
-        qs = self.get_queryset().values_list("admission_no", flat=True)
+        from datetime import date
+
+        year = date.today().year
+        prefix = f"ADM{year}"
+        qs = self.get_queryset().filter(admission_no__startswith=prefix).values_list(
+            "admission_no", flat=True
+        )
         max_num = 0
-        prefix = ""
         for value in qs:
             if not value:
                 continue
             text = str(value).strip()
-            match = re.search(r"(\D*)(\d+)$", text)
-            if not match:
+            suffix = text[len(prefix):]
+            if not suffix.isdigit():
                 continue
             try:
-                num = int(match.group(2))
+                num = int(suffix)
             except (TypeError, ValueError):
                 continue
             if num > max_num:
                 max_num = num
-                prefix = match.group(1) or ""
 
-        next_num = max_num + 1 if max_num >= 0 else 1
-        width = max(4, len(str(next_num)))
-        admission_no = f"{prefix}{str(next_num).zfill(width)}"
-        # Hard cap at 10 characters to match the UI input restriction.
-        if len(admission_no) > 10:
-            admission_no = admission_no[-10:]
+        next_num = max_num + 1
+        # Pad to at least 3 digits; widen automatically once sequence passes 999
+        # so we never have to truncate (truncation corrupts the prefix).
+        padding = max(3, len(str(next_num)))
+        admission_no = f"{prefix}{str(next_num).zfill(padding)}"
         return Response(
             {"success": True, "admission_no": admission_no},
             status=status.HTTP_200_OK,
@@ -1352,6 +1365,71 @@ class StudentViewSet(TenantScopedModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+    @action(detail=False, methods=["get"], url_path="next-roll-no")
+    def next_roll_no(self, request):
+        """Return the next available roll number for a class+section+academic_year combo."""
+        from apps.core.models import Section
+        import re as _re
+
+        class_id = str(request.query_params.get("class_id") or "").strip()
+        section_id = str(request.query_params.get("section_id") or "").strip()
+        academic_year_id = str(request.query_params.get("academic_year_id") or "").strip()
+
+        if not class_id.isdigit() or not section_id.isdigit() or not academic_year_id.isdigit():
+            return Response(
+                {"success": False, "message": "class_id, section_id, and academic_year_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        qs = self.get_queryset().filter(
+            current_class_id=int(class_id),
+            current_section_id=int(section_id),
+            academic_year_id=int(academic_year_id),
+            is_deleted=False,
+        )
+        roll_nos = []
+        for s in qs.values_list("roll_no", flat=True):
+            m = _re.fullmatch(r"\d+", str(s or "").strip())
+            if m:
+                roll_nos.append(int(m.group()))
+        next_no = (max(roll_nos) + 1) if roll_nos else 1
+        return Response({"success": True, "roll_no": str(next_no).zfill(3)})
+
+    @action(detail=False, methods=["get"], url_path="sections-summary")
+    def sections_summary(self, request):
+        """Return section capacity and enrollment count for a class+academic_year."""
+        from apps.core.models import Section
+
+        class_id = str(request.query_params.get("class_id") or "").strip()
+        academic_year_id = str(request.query_params.get("academic_year_id") or "").strip()
+
+        if not class_id.isdigit() or not academic_year_id.isdigit():
+            return Response(
+                {"success": False, "message": "class_id and academic_year_id are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+        sections_qs = Section.objects.filter(school_class_id=int(class_id))
+        if not user.is_superuser and getattr(user, "school_id", None):
+            sections_qs = sections_qs.filter(school_class__school_id=user.school_id)
+
+        result = []
+        for sec in sections_qs.order_by("name"):
+            count = self.get_queryset().filter(
+                current_class_id=int(class_id),
+                current_section_id=sec.id,
+                academic_year_id=int(academic_year_id),
+                is_deleted=False,
+            ).count()
+            result.append({
+                "section_id": sec.id,
+                "name": sec.name,
+                "count": count,
+                "capacity": getattr(sec, "capacity", None) or 35,
+            })
+        return Response({"success": True, "sections": result})
 
     @action(detail=False, methods=["post"], url_path="upload-photo", parser_classes=[MultiPartParser, FormParser])
     def upload_photo(self, request):

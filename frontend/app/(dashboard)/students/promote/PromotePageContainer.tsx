@@ -16,12 +16,35 @@ import { type SectionTabItem } from './components/PromoteSectionTabs';
 import { type RecordDecision } from './components/PromoteStudentTable';
 import ConfirmBatchModal from './components/ConfirmBatchModal';
 import NotPromotedDialog, { type RetentionReason } from './components/NotPromotedDialog';
+import PromoteOverrideDialog from './components/PromoteOverrideDialog';
 
 type ApiList<T> = T[] | { results?: T[] };
 type AcademicYear = { id: number; name: string; is_current?: boolean };
 
 function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
+}
+
+// Format a class name coming from the API. Numeric values like "1", "10" are
+// shown as "Grade 1", "Grade 10". Non-numeric values (Nursery, LKG, UKG, etc.)
+// are kept as-is. Falls back to "Unassigned".
+function formatClassLabel(raw: string | null | undefined): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return 'Unassigned';
+  if (/^\d+$/.test(s)) return `Grade ${s}`;
+  return s;
+}
+
+// Order classes the same way they would appear in a school timetable:
+// Nursery < LKG < UKG < Grade 1 < Grade 2 < ... < Grade 10 < everything else (A→Z).
+function classRank(label: string): number {
+  const l = label.toLowerCase().trim();
+  if (l === 'nursery' || l === 'pre-nursery' || l === 'pre nursery') return -3;
+  if (l === 'lkg') return -2;
+  if (l === 'ukg') return -1;
+  const m = l.match(/^grade\s+(\d+)$/i) ?? l.match(/^(\d+)$/);
+  if (m) return parseInt(m[1], 10);
+  return 9999;
 }
 
 function sanitize(s: string) {
@@ -75,6 +98,9 @@ export default function PromotePageContainer() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmingBatch, setConfirmingBatch] = useState(false);
   const [notPromotedTarget, setNotPromotedTarget] = useState<PromotionRecord | null>(null);
+  // Fix 3: When the user flips an already-"not_promoted" student back to "Promote",
+  // capture a reason for the override before persisting.
+  const [promoteOverrideTarget, setPromoteOverrideTarget] = useState<PromotionRecord | null>(null);
 
   // Toast / errors
   const [toast, setToast] = useState<Toast>(null);
@@ -154,10 +180,13 @@ export default function PromotePageContainer() {
     for (const r of batch.records) {
       const key = r.from_class == null ? 'unassigned' : String(r.from_class);
       if (!map.has(key)) {
-        map.set(key, { key, classLabel: r.from_class_name || 'Unassigned' });
+        map.set(key, { key, classLabel: formatClassLabel(r.from_class_name) });
       }
     }
-    return Array.from(map.values());
+    return Array.from(map.values()).sort((a, b) => {
+      const diff = classRank(a.classLabel) - classRank(b.classLabel);
+      return diff !== 0 ? diff : a.classLabel.localeCompare(b.classLabel);
+    });
   }, [batch]);
 
   const sectionOptions: SectionOption[] = useMemo(() => {
@@ -204,7 +233,7 @@ export default function PromotePageContainer() {
       if (!cg) {
         cg = {
           classId: r.from_class,
-          className: r.from_class_name || 'Unassigned',
+          className: formatClassLabel(r.from_class_name),
           sections: new Map(),
         };
         cmap.set(ckey, cg);
@@ -228,7 +257,10 @@ export default function PromotePageContainer() {
       className: v.className,
       totalRecords: Array.from(v.sections.values()).reduce((s, sec) => s + sec.records.length, 0),
       sections: Array.from(v.sections.values()).sort((a, b) => a.sectionName.localeCompare(b.sectionName)),
-    })).sort((a, b) => a.className.localeCompare(b.className));
+    })).sort((a, b) => {
+      const diff = classRank(a.className) - classRank(b.className);
+      return diff !== 0 ? diff : a.className.localeCompare(b.className);
+    });
   }, [filteredRecords]);
 
   // Auto-expand first group when batch loads / filters change to non-empty
@@ -290,8 +322,26 @@ export default function PromotePageContainer() {
 
   const handleStatusChange = useCallback((recordId: number, newStatus: RecordDecision['status']) => {
     if (newStatus === 'not_promoted') return; // handled via dialog
+    // Fix 3: changing FROM not_promoted TO promote requires an override reason.
+    if (newStatus === 'promote') {
+      const current = decisions[recordId]?.status;
+      if (current === 'not_promoted') {
+        const rec = batch?.records.find((r) => r.id === recordId);
+        if (rec) {
+          setPromoteOverrideTarget(rec);
+          return;
+        }
+      }
+    }
     updateDecisionLocal(recordId, { status: newStatus, retention_reason: '', notes: '' });
     void persistRecord(recordId, { status: newStatus, retention_reason: '', notes: '' });
+  }, [batch, decisions, updateDecisionLocal, persistRecord]);
+
+  const handlePromoteOverrideConfirm = useCallback(async (recordId: number, overrideNote: string) => {
+    updateDecisionLocal(recordId, { status: 'promote', retention_reason: '', notes: overrideNote });
+    await persistRecord(recordId, { status: 'promote', retention_reason: '', notes: overrideNote });
+    setPromoteOverrideTarget(null);
+    setToast({ tone: 'success', message: 'Override saved — student will be promoted.' });
   }, [updateDecisionLocal, persistRecord]);
 
   const handleOpenNotPromoted = useCallback((rec: PromotionRecord) => {
@@ -359,8 +409,25 @@ export default function PromotePageContainer() {
     }
   }, [batch]);
 
-  const handlePromoteAll = useCallback((records: PromotionRecord[]) => bulkApply(records, 'promote'), [bulkApply]);
-  const handleNotPromotedAll = useCallback((records: PromotionRecord[]) => bulkApply(records, 'skip'), [bulkApply]);
+  const handlePromoteAll = useCallback((records: PromotionRecord[]) => {
+    // Fix 2: "Promote All" must only touch students currently in "pending".
+    // Already-decided "not_promoted" students must not be silently flipped.
+    const eligible = records.filter((r) => (decisions[r.id]?.status ?? r.status) === 'pending');
+    if (eligible.length === 0) {
+      setToast({ tone: 'info', message: 'No pending students to promote in this section.' });
+      return;
+    }
+    bulkApply(eligible, 'promote');
+  }, [bulkApply, decisions]);
+  const handleNotPromotedAll = useCallback((records: PromotionRecord[]) => {
+    // Symmetric: only flip pending students; never overwrite an existing "promote" decision silently.
+    const eligible = records.filter((r) => (decisions[r.id]?.status ?? r.status) === 'pending');
+    if (eligible.length === 0) {
+      setToast({ tone: 'info', message: 'No pending students left in this section.' });
+      return;
+    }
+    bulkApply(eligible, 'skip');
+  }, [bulkApply, decisions]);
   const handleResetAll = useCallback((records: PromotionRecord[]) => bulkApply(records, 'reset'), [bulkApply]);
 
   // ---- Confirm batch ----
@@ -545,6 +612,15 @@ export default function PromotePageContainer() {
           initialAi={decisions[notPromotedTarget.id]?.ai_recommendation}
           onConfirm={handleNotPromotedConfirm}
           onCancel={() => setNotPromotedTarget(null)}
+        />
+      )}
+
+      {promoteOverrideTarget && (
+        <PromoteOverrideDialog
+          record={promoteOverrideTarget}
+          previousRetentionReason={decisions[promoteOverrideTarget.id]?.retention_reason}
+          onConfirm={handlePromoteOverrideConfirm}
+          onCancel={() => setPromoteOverrideTarget(null)}
         />
       )}
 
