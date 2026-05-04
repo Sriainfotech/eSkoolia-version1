@@ -132,6 +132,10 @@ class StudentAttendanceListCreateAPIView(AttendanceTenantMixin, APIView):
             queryset = queryset.filter(attendance_date__year=params["year"])
         if params.get("academic_year_id"):
             queryset = queryset.filter(academic_year_id=params["academic_year_id"])
+        if params.get("date_from"):
+            queryset = queryset.filter(attendance_date__gte=params["date_from"])
+        if params.get("date_to"):
+            queryset = queryset.filter(attendance_date__lte=params["date_to"])
 
         ordered_queryset = queryset.order_by("-attendance_date", "student_id")
         paginator = ApiPageNumberPagination()
@@ -423,7 +427,41 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
 
             note_map = data.get("note") or data.get("attendance_note") or {}
 
+            # ── Performance: batch-fetch all existing attendance rows for this
+            # (date, school) in ONE query instead of N per-student queries.
+            # Build a dict keyed by student_id → latest record.
+            existing_qs_all = (
+                StudentAttendance.objects
+                .filter(
+                    student_id__in=attendance_ids,
+                    attendance_date=data["date"],
+                    **school_scope,
+                )
+                .order_by("student_id", "-id")  # latest first per student
+            )
+            existing_map: dict = {}
+            for row in existing_qs_all:
+                if row.student_id not in existing_map:
+                    existing_map[row.student_id] = row
+
+            # Check for locked rows before touching anything
+            locked_students = [sid for sid, r in existing_map.items() if r.is_locked]
+            if locked_students:
+                return Response(
+                    {"success": False, "message": "Cannot update locked attendance. Only admin can override."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Batch-delete ALL existing rows for these students on this date
+            # (self-heals legacy duplicates that sneak past the NULL academic_year constraint)
+            # and batch-insert fresh ones — all inside one transaction.
             with transaction.atomic():
+                StudentAttendance.objects.filter(
+                    student_id__in=attendance_ids,
+                    attendance_date=data["date"],
+                    **school_scope,
+                ).delete()
+
                 for student_id in data["id"]:
                     if student_id not in student_map:
                         continue
@@ -436,22 +474,8 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                     existing_pickup_time = None
                     existing_pickup_by = ""
                     existing_note = ""
-                    # Snapshot the latest existing row's values so per-field
-                    # incremental updates (sign-in only, lunch only, note only)
-                    # preserve previously stored data when the caller omits
-                    # those keys. Order by -id so we pick the newest row even
-                    # if historical duplicates exist.
-                    existing_qs = StudentAttendance.objects.filter(
-                        student_id=student_id,
-                        attendance_date=data["date"],
-                        **school_scope,
-                    ).order_by("-id")
-                    existing = existing_qs.first()
-                    if existing and existing.is_locked:
-                        return Response(
-                            {"success": False, "message": "Cannot update locked attendance. Only admin can override."},
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
+                    # Use pre-fetched batch dict instead of per-student DB query
+                    existing = existing_map.get(student_id)
                     if existing:
                         existing_lunch = existing.lunch
                         existing_type = existing.attendance_type
@@ -459,14 +483,8 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                         existing_sign_in_time = existing.sign_in_time
                         existing_sign_out_time = existing.sign_out_time
                         existing_pickup_time = existing.pickup_time
-                        existing_pickup_by = existing.pickup_by
-                        existing_note = existing.notes
-                    # Delete ALL rows for this (student, date, school) — not just
-                    # one. The (school, academic_year, student, attendance_date)
-                    # unique constraint is bypassed when academic_year is NULL
-                    # (NULL != NULL in SQL), so legacy data may contain dupes.
-                    # Deleting them on every write self-heals the table.
-                    existing_qs.delete()
+                        existing_pickup_by = existing.pickup_by or ""
+                        existing_note = existing.notes or ""
 
                     attendance = StudentAttendance()
                     attendance.student_id = student_id
@@ -493,9 +511,9 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                         
                         # Keep previously stored reason when note is omitted in incremental updates.
                         note_text = existing_note if raw_note is None else (raw_note or "")
-                        if len(note_text) > 250:
+                        if len(note_text) > 1000:
                             return Response(
-                                {"success": False, "message": "Note cannot exceed 250 characters"},
+                                {"success": False, "message": "Notes too long (max 1000 characters across all notes)"},
                                 status=status.HTTP_400_BAD_REQUEST,
                             )
                         attendance.notes = note_text
@@ -1367,7 +1385,11 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
 
         class_ids = {r.class_id for r in rows_qs if r.class_id}
         section_ids = {r.section_id for r in rows_qs if r.section_id}
-        classes_map = {c.id: c.name for c in Class.objects.filter(id__in=class_ids)}
+        # Fetch classes with numeric_order so we can sort correctly (Grade 1 < Grade 2 … < Grade 10)
+        classes_qs = Class.objects.filter(id__in=class_ids)
+        classes_map = {c.id: c.name for c in classes_qs}
+        # Map class_id → numeric_order for proper sequential sorting
+        class_order_map = {c.id: (c.numeric_order, c.name) for c in classes_qs}
         sections_map = {s.id: s.name for s in Section.objects.filter(id__in=section_ids)}
 
         # School name
@@ -1555,18 +1577,15 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
         ws.row_dimensions[header_row_idx].height = 28
 
         # ---- Build data rows, grouped by class/section when multi-class ----
-        # Pre-sort: Date desc → Class → Section → Student Name
+        # Sort: Class (numeric_order) → Section name → Date ascending → Student Name
         def sort_key(att):
+            cls_order, cls_name = class_order_map.get(att.class_id or 0, (9999, ""))
+            sec_name = sections_map.get(att.section_id or 0, "")
             name = (
                 f"{att.student.first_name} {att.student.last_name}".strip().lower()
                 if att.student else ""
             )
-            return (
-                -att.attendance_date.toordinal(),
-                classes_map.get(att.class_id or 0, ""),
-                sections_map.get(att.section_id or 0, ""),
-                name,
-            )
+            return (cls_order, cls_name, sec_name, att.attendance_date.toordinal(), name)
         rows_sorted = sorted(rows_qs, key=sort_key)
 
         unique_classes = {r.class_id for r in rows_sorted}
@@ -1585,13 +1604,17 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
             if multi_class:
                 cls_n = classes_map.get(group_key[0] or 0, f"[ID: {group_key[0]}]")
                 sec_n = sections_map.get(group_key[1] or 0, f"[ID: {group_key[1]}]")
-                pres = sum(1 for a in group_list if a.attendance_type == "P")
+                # Count distinct students (not record count) for a meaningful label
+                distinct_students = len({a.student_id for a in group_list})
+                school_days = len({a.attendance_date for a in group_list})
+                pres = sum(1 for a in group_list if a.attendance_type in ("P", "L"))
                 absn = sum(1 for a in group_list if a.attendance_type == "A")
                 latn = sum(1 for a in group_list if a.attendance_type == "L")
-                tot = len({a.student_id for a in group_list})
+                att_pct = round((pres / len(group_list)) * 100) if group_list else 0
                 group_label = (
-                    f"Class: {cls_n} — Section: {sec_n}  |  Total Students: {tot}  |  "
-                    f"Present: {pres}  |  Absent: {absn}  |  Late: {latn}"
+                    f"  {cls_n}  —  Section {sec_n}  |  "
+                    f"{distinct_students} students  |  {school_days} school day(s)  |  "
+                    f"Present: {pres}  Absent: {absn}  Late: {latn}  |  Avg: {att_pct}%"
                 )
                 ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=last_col)
                 gc = ws.cell(row=current_row, column=1, value=group_label)
@@ -1647,10 +1670,11 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
                         cell.font = Font(name="Calibri", size=10, color=style["fg"])
                 current_row += 1
 
-        # AutoFilter + freeze panes
+        # AutoFilter + freeze panes — freeze header rows only (not columns) so
+        # users can freely scroll right without losing context.
         if current_row > header_row_idx + 1:
             ws.auto_filter.ref = f"A{header_row_idx}:{last_col_letter}{current_row - 1}"
-        ws.freeze_panes = f"C{header_row_idx + 1}"  # freeze header + S.No, Date
+        ws.freeze_panes = f"A{header_row_idx + 1}"  # freeze just the header rows
 
         # ---- Sheet 2: Summary ----
         ws2 = wb.create_sheet("Summary")
@@ -1700,7 +1724,11 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
         sum_row = 4
         sorted_keys = sorted(
             bucket.keys(),
-            key=lambda k: (classes_map.get(k[0] or 0, ""), sections_map.get(k[1] or 0, "")),
+            key=lambda k: (
+                class_order_map.get(k[0] or 0, (9999, ""))[0],
+                class_order_map.get(k[0] or 0, (9999, ""))[1],
+                sections_map.get(k[1] or 0, ""),
+            ),
         )
         tot_students = tot_p = tot_a = tot_l = tot_eso = 0
         for k in sorted_keys:
@@ -1805,7 +1833,21 @@ class StudentAttendanceReportInsightsAPIView(AttendanceTenantMixin, APIView):
 
         weekly = defaultdict(lambda: {"present": 0, "absent": 0, "late": 0})
         for att in queryset:
-            week = ((att.attendance_date.day - 1) // 7) + 1
+            # Use Sun-Sat calendar week to match the frontend's getWeekRanges() logic.
+            # Find the Sunday that starts this week, then count how many full Sun-Sat
+            # blocks from the 1st of the month have passed.
+            day = att.attendance_date.day
+            dow = att.attendance_date.weekday()  # Mon=0 … Sun=6
+            # Convert to Sun=0 … Sat=6
+            dow_sun = (dow + 1) % 7
+            # Day of the Sunday that started this week (may be < 1 if month starts mid-week)
+            week_start_day = day - dow_sun
+            # Find what day-of-month the first occurrence of that weekday-Sunday is
+            first_of_month_dow_sun = (att.attendance_date.replace(day=1).weekday() + 1) % 7
+            # Week index = how many Sunday starts have passed since start of month
+            # first week starts at day (1 - first_of_month_dow_sun) which may be ≤ 0
+            first_week_sunday = 1 - first_of_month_dow_sun  # may be ≤ 0 (previous month)
+            week = ((week_start_day - first_week_sunday) // 7) + 1
             if att.attendance_type == "P":
                 weekly[week]["present"] += 1
             elif att.attendance_type == "A":

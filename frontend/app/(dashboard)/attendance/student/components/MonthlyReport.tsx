@@ -50,6 +50,7 @@ interface WeekCard {
   absent: number;
   total: number;
   presentPct: number;
+  schoolDays: number; // distinct calendar dates that had any attendance record
 }
 
 interface ActiveFilters {
@@ -364,15 +365,10 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
   const weekRanges = useMemo(() => getWeekRanges(active.month, active.year), [active.month, active.year]);
 
   const weekCards: WeekCard[] = useMemo(() => {
+    // Always compute from raw dailyRecords using the frontend's own Sun-Sat week ranges.
+    // The backend `insights.weekly` uses a different week numbering (7-day blocks from day 1),
+    // so using it here would show data from the wrong date ranges in each week card.
     return weekRanges.map(({ week, label, dateRange, start, end }) => {
-      const apiWeek = insights.weekly.find((item) => item.week === week);
-      if (apiWeek) {
-        const present = (apiWeek.present ?? 0) + (apiWeek.late ?? 0);
-        const absent = apiWeek.absent ?? 0;
-        const total = present + absent;
-        return { week, label, dateRange, present, absent, total, presentPct: total > 0 ? Math.round((present / total) * 100) : 0 };
-      }
-
       const weekRecs = dailyRecords.filter((r) => {
         const day = new Date(`${r.attendance_date}T00:00:00`).getDate();
         return day >= start && day <= end;
@@ -380,9 +376,10 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
       const present = weekRecs.filter((r) => r.attendance_type === 'P' || r.attendance_type === 'L').length;
       const absent = weekRecs.filter((r) => r.attendance_type === 'A').length;
       const total = weekRecs.length;
-      return { week, label, dateRange, present, absent, total, presentPct: total > 0 ? Math.round((present / total) * 100) : 0 };
+      const schoolDays = new Set(weekRecs.map((r) => r.attendance_date)).size;
+      return { week, label, dateRange, present, absent, total, presentPct: total > 0 ? Math.round((present / total) * 100) : 0, schoolDays };
     });
-  }, [dailyRecords, insights.weekly, weekRanges]);
+  }, [dailyRecords, weekRanges]);
 
   const weeksWithData = weekCards.filter((w) => w.total > 0);
   const overallPresent = dailyRecords.filter((r) => r.attendance_type === 'P' || r.attendance_type === 'L').length;
@@ -527,12 +524,15 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
                       <div className="flex justify-center"><DonutRing pct={wk.presentPct} size={60} /></div>
                       <div className="space-y-1">
                         <div className="flex items-center justify-between text-[9px]">
+                          <span className="text-[#9CA0AE]">{wk.schoolDays} school {wk.schoolDays === 1 ? 'day' : 'days'}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[9px]">
                           <span className="text-[#6B6B7B] flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[#0A8C5A] inline-block" />Present</span>
-                          <span className="font-bold text-[#0A8C5A]">{wk.present} {wk.present === 1 ? 'day' : 'days'}</span>
+                          <span className="font-bold text-[#0A8C5A]">{wk.present} {wk.present === 1 ? 'student' : 'students'}</span>
                         </div>
                         <div className="flex items-center justify-between text-[9px]">
                           <span className="text-[#6B6B7B] flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-[#C2264E] inline-block" />Absent</span>
-                          <span className="font-bold text-[#C2264E]">{wk.absent} {wk.absent === 1 ? 'day' : 'days'}</span>
+                          <span className="font-bold text-[#C2264E]">{wk.absent} {wk.absent === 1 ? 'student' : 'students'}</span>
                         </div>
                       </div>
                     </>
@@ -553,7 +553,9 @@ export default function MonthlyReport({ selectedDate, classes }: MonthlyReportPr
                   <span className="text-[11px] font-bold text-[#4729F4]">Monthly</span>
                   <span className="text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-[#EDE9FE] text-[#4729F4]">Avg</span>
                 </div>
-                <p className="text-[9px] text-[#9CA0AE] -mt-1.5">{weeksWithData.length} wk{weeksWithData.length !== 1 ? 's' : ''} data</p>
+                <p className="text-[9px] text-[#9CA0AE] -mt-1.5">
+                  {weeksWithData.length} wk{weeksWithData.length !== 1 ? 's' : ''} · {new Set(dailyRecords.map(r => r.attendance_date)).size} school {new Set(dailyRecords.map(r => r.attendance_date)).size === 1 ? 'day' : 'days'}
+                </p>
                 {overallTotal > 0 ? (
                   <>
                     {/* Bug 8: donut centre and legend MUST share one source of truth (weighted average). */}

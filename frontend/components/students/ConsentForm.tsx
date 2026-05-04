@@ -102,11 +102,12 @@ export interface ConsentFormStudent {
   abcId?: string;
   // Documents (Step 6)
   documents?: {
-    birth_certificate?: { status: string; fileName: string; url?: string | null; };
-    aadhaar_card?: { status: string; fileName: string; url?: string | null; };
-    medical_information?: { status: string; fileName: string; url?: string | null; };
-    caste_certificate?: { status: string; fileName: string; url?: string | null; };
-    udid_card?: { status: string; fileName: string; url?: string | null; };
+    birth_certificate?: { status: string; fileName: string; };
+    aadhaar_card?: { status: string; fileName: string; };
+    medical_information?: { status: string; fileName: string; };
+    transfer_certificate?: { status: string; fileName: string; };
+    caste_certificate?: { status: string; fileName: string; };
+    udid_card?: { status: string; fileName: string; };
   };
   consentChecked?: boolean;
   // Medical (Step 7)
@@ -139,7 +140,7 @@ interface ConsentFormProps {
   student: ConsentFormStudent;
   openWithSettings?: boolean;
   onOcrApply?: (results: Record<string, string>) => void;
-  initialAction?: 'blank-form' | 'scan-fill' | 'print-pdf' | null;
+  initialAction?: 'upload-signed' | 'blank-form' | 'blank-form-digital' | 'blank-form-email' | 'blank-form-whatsapp' | 'scan-fill' | 'print-pdf' | null;
 }
 
 const DOC_LABELS: Record<string, string> = {
@@ -166,6 +167,7 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
   const [header, setHeader] = useState<SchoolHeaderData>(DEFAULT_HEADER);
   const [settingsForm, setSettingsForm] = useState<SchoolHeaderData>(DEFAULT_HEADER);
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [settingsErrors, setSettingsErrors] = useState<Record<string, string>>({});
   const [settingsTab, setSettingsTab] = useState<'identity' | 'layout' | 'import' | 'declaration'>('identity');
   const [hiddenSections, setHiddenSections] = useState<Set<string>>(new Set());
   const [accentColor, setAccentColor] = useState('#6c3ce1');
@@ -175,6 +177,7 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
   const modalRef = useRef<HTMLDivElement>(null);
   const logoInputRef = useRef<HTMLInputElement>(null);
   const letterheadInputRef = useRef<HTMLInputElement>(null);
+  const signedFormInputRef = useRef<HTMLInputElement>(null);
   const ocrInputRef = useRef<HTMLInputElement>(null);
 
   // ——— New-window print helper ———
@@ -198,7 +201,7 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
     const clone = el.cloneNode(true) as HTMLElement;
     clone.querySelectorAll<HTMLElement>(
       '.cf-toolbar, .cf-settings-panel, .cf-ai-panel, .cf-inline-edit-trigger, ' +
-      '.cf-inline-actions, .cf-inline-edit-bar, .no-print'
+      '.cf-inline-actions, .cf-inline-edit-bar, .cf-upload-signed-bar, .no-print'
     ).forEach(n => n.remove());
 
     printWin.document.write(`<!DOCTYPE html>
@@ -212,7 +215,7 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
     html, body { margin: 0; padding: 0; background: #fff; }
     .cf-toolbar, .cf-settings-panel, .cf-ai-panel,
     .cf-inline-edit-trigger, .cf-inline-actions, .cf-inline-edit-bar,
-    .no-print { display: none !important; }
+    .cf-upload-signed-bar, .no-print { display: none !important; }
     .cf-modal {
       position: static !important; margin: 0 !important; max-width: 100% !important;
       width: 100% !important; box-shadow: none !important; border-radius: 0 !important;
@@ -233,6 +236,12 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
       printWin.close();
     }, 600);
   };
+
+  // ——— Signed consent form upload state ———
+  const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'done' | 'error'>('idle');
+  const [uploadedFileUrl, setUploadedFileUrl] = useState<string>('');
+  const [uploadedFileName, setUploadedFileName] = useState<string>('');
+  const [uploadError, setUploadError] = useState<string>('');
 
   // ——— OCR / blank form state ———
   const [ocrStatus, setOcrStatus] = useState<'idle' | 'scanning' | 'done' | 'error'>('idle');
@@ -261,8 +270,38 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
   useEffect(() => {
     if (!initialAction) return;
     if (initialAction === 'blank-form') {
-      // Download blank form (no admission number, with parent instructions and document checklist), then close.
+      // Physical blank form — opens in new window and auto-prints
       setTimeout(() => { downloadBlankForm({ blank: true }); onClose(); }, 50);
+    } else if (initialAction === 'blank-form-digital') {
+      // Digital fillable form — opens in new window with input fields, no auto-print
+      setTimeout(() => { downloadBlankForm({ blank: true, digital: true }); onClose(); }, 50);
+    } else if (initialAction === 'blank-form-email') {
+      setTimeout(() => {
+        const liveHeader = downloadDigitalFormAsFile();
+        const schoolName = liveHeader.schoolName || 'Your School';
+        const schoolPhone = liveHeader.schoolPhone || '';
+        const schoolEmail = liveHeader.schoolEmail || '';
+        const subject = encodeURIComponent(`Student Admission Form — ${schoolName}`);
+        const body = encodeURIComponent(
+          `Dear Parent,\n\nPlease find the admission form from ${schoolName} attached to this email.\n\nHow to fill and return:\n1. Open the attached .html file in any web browser (Chrome, Safari, Firefox)\n2. Fill all fields by clicking / tapping and typing\n3. Click "💾 Save as PDF" at the top of the form\n4. In the print dialog, select "Save as PDF" as the destination\n5. Email the saved PDF back to: ${schoolEmail || 'the school admissions office'}\n\nFor queries, please call: ${schoolPhone || 'the school office'}\n\nWarm regards,\n${schoolName} Admissions Team\n\nNote: The form file (.html) has been downloaded to your computer. Please attach it to this email before sending.`
+        );
+        setTimeout(() => { window.location.href = `mailto:?subject=${subject}&body=${body}`; }, 800);
+        onClose();
+      }, 50);
+    } else if (initialAction === 'blank-form-whatsapp') {
+      setTimeout(() => {
+        const liveHeader = downloadDigitalFormAsFile();
+        const schoolName = liveHeader.schoolName || 'Your School';
+        const schoolPhone = liveHeader.schoolPhone || '';
+        const schoolEmail = liveHeader.schoolEmail || '';
+        const text = encodeURIComponent(
+          `Dear Parent 👋\n\n*Admission Form* from *${schoolName}* is ready for you to fill.\n\n📋 *How to fill:*\n1. Open the downloaded form file (.html) in your browser\n2. Fill all fields by tapping and typing\n3. Tap *"💾 Save as PDF"* at the top\n4. Send the PDF back to us\n\n📧 Email: ${schoolEmail || 'school office'}\n📞 Call: ${schoolPhone || 'school office'}\n\n_The form file has been downloaded to your device. Please share it along with this message._`
+        );
+        setTimeout(() => window.open(`https://wa.me/?text=${text}`, '_blank'), 800);
+        onClose();
+      }, 50);
+    } else if (initialAction === 'upload-signed') {
+      setTimeout(() => { signedFormInputRef.current?.click(); }, 100);
     } else if (initialAction === 'scan-fill') {
       setTimeout(() => { setScanPickerOpen(true); }, 100);
     } else if (initialAction === 'print-pdf') {
@@ -273,6 +312,16 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
   }, [initialAction]);
 
   const saveSettings = () => {
+    // Validate required fields before saving
+    const errors: Record<string, string> = {};
+    if (!settingsForm.schoolName.trim()) errors.schoolName = 'School name is required';
+    if (!settingsForm.principalName.trim()) errors.principalName = 'Principal name is required';
+    const phoneDigits = settingsForm.schoolPhone.replace(/\D/g, '');
+    const localPhone = phoneDigits.startsWith('91') ? phoneDigits.slice(2) : phoneDigits;
+    if (settingsForm.schoolPhone && !/^[6-9]\d{9}$/.test(localPhone)) errors.schoolPhone = 'Enter a valid 10-digit Indian mobile number';
+    if (settingsForm.schoolEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(settingsForm.schoolEmail.trim())) errors.schoolEmail = 'Enter a valid email address';
+    if (Object.keys(errors).length > 0) { setSettingsErrors(errors); return; }
+    setSettingsErrors({});
     localStorage.setItem(SCHOOL_HEADER_KEY, JSON.stringify(settingsForm));
     setHeader(settingsForm);
     setInlineHeader(settingsForm);
@@ -310,15 +359,52 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
     setSettingsForm(DEFAULT_HEADER);
   };
 
-  // ——— Blank form download ———
-  const downloadBlankForm = (opts?: { blank?: boolean }) => {
+  const handleSignedFormUpload = async (file: File) => {
+    if (!student.studentId) {
+      setUploadError('Student must be saved before uploading a signed form.');
+      return;
+    }
+    setUploadStatus('uploading');
+    setUploadError('');
+    try {
+      const formData = new FormData();
+      formData.append('student_id', String(student.studentId));
+      formData.append('document_type', 'consent_form');
+      formData.append('title', `Signed Consent Form — ${student.firstName} ${student.lastName}`);
+      formData.append('file', file);
+
+      const res = await fetch('/api/students/documents/upload_document/', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as Record<string,string>).error || `Upload failed (${res.status})`);
+      }
+      const data = await res.json() as { file?: string; original_name?: string };
+      setUploadedFileUrl(data.file || '');
+      setUploadedFileName(file.name);
+      setUploadStatus('done');
+    } catch (e: unknown) {
+      setUploadError(e instanceof Error ? e.message : 'Upload failed. Please try again.');
+      setUploadStatus('error');
+    }
+  };
+
+  // ——— Blank form: shared HTML builder ———
+  const buildBlankFormHtml = (opts?: { blank?: boolean; digital?: boolean }): string => {
     const blankMode = opts?.blank === true;
+    const digitalMode = opts?.digital === true;
+    const liveHeader = loadHeaderSettings();
+    const schoolName = liveHeader.schoolName || 'Your School';
+    const schoolAddress = liveHeader.schoolAddress || '';
+    const schoolPhone = liveHeader.schoolPhone || '';
+    const schoolEmail = liveHeader.schoolEmail || '';
+    const affiliationNo = liveHeader.affiliationNo || '';
     const admNo = blankMode ? 'TO BE ASSIGNED' : (student.admissionNo || 'PENDING');
-    const schoolName = header.schoolName || 'Your School';
-    const schoolAddress = header.schoolAddress || '';
-    const schoolPhone = header.schoolPhone || '';
-    const schoolEmail = header.schoolEmail || '';
-    const affiliationNo = header.affiliationNo || '';
+
     const fields = [
       { label: 'Student First Name', name: 'firstName', hint: 'As per Birth Certificate' },
       { label: 'Student Last Name', name: 'lastName', hint: '' },
@@ -345,49 +431,117 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
       { label: 'Previous School Name (if any)', name: 'previousSchool', hint: '' },
     ];
 
-    const fieldRows = fields.map(f => `
-      <tr>
-        <td class="f-label">${f.label}${f.hint ? `<span class="f-hint">${f.hint}</span>` : ''}</td>
-        <td class="f-box"><div class="write-box" data-field="${f.name}"></div></td>
-      </tr>
-    `).join('');
+    const mkField = (name: string, hint: string) => digitalMode
+      ? `<input type="text" class="digital-input" name="${name}" data-field="${name}" placeholder="${hint || 'Type here…'}" autocomplete="off" autocorrect="off" autocapitalize="words" spellcheck="false" />`
+      : `<div class="write-box" data-field="${name}"></div>`;
 
-    const html = `<!DOCTYPE html>
+    const mkRow = (label: string, name: string, hint: string) =>
+      `<tr><td class="f-label">${label}${hint ? `<span class="f-hint">${hint}</span>` : ''}</td><td class="f-box">${mkField(name, hint)}</td></tr>`;
+
+    const govIdFields = [
+      { label: 'Student Aadhaar Number', name: 'studentAadhaar', hint: '12-digit' },
+      { label: 'PEN (UDISE Student ID)', name: 'pen', hint: 'Alphanumeric' },
+      { label: 'ABC ID', name: 'abcId', hint: '12-digit Academic Bank of Credits ID' },
+      { label: 'Birth Certificate Number', name: 'birthCertNo', hint: 'As issued by municipal authority' },
+      { label: 'Caste Category', name: 'casteCategory', hint: 'GENERAL / OBC / SC / ST / OTHER' },
+    ];
+    const medFields = [
+      { label: 'Known Medical Conditions', name: 'medicalConditions', hint: 'e.g. Asthma, Diabetes (write NONE if none)' },
+      { label: 'Known Allergies', name: 'allergies', hint: 'e.g. Nuts, Penicillin (write NONE if none)' },
+      { label: 'Current Medications', name: 'currentMedications', hint: 'Name and dosage (write NONE if none)' },
+      { label: 'Treating Doctor Name', name: 'doctorName', hint: 'If any' },
+      { label: 'Treating Doctor Phone', name: 'doctorPhone', hint: '10-digit' },
+    ];
+    const emergFields = [
+      { label: 'Emergency Contact Name', name: 'emergencyContactName', hint: '' },
+      { label: 'Emergency Contact Relationship', name: 'emergencyContactRelation', hint: 'e.g. Uncle, Aunt, Family Friend' },
+      { label: 'Emergency Contact Mobile', name: 'emergencyContactMobile', hint: '10-digit' },
+    ];
+    const physFields = [
+      { label: 'Height (cm)', name: 'heightCm', hint: 'Approximate' },
+      { label: 'Weight (kg)', name: 'weightKg', hint: 'Approximate' },
+      { label: 'Identity Mark 1', name: 'identityMark1', hint: 'e.g. Mole on right cheek' },
+      { label: 'Identity Mark 2', name: 'identityMark2', hint: 'If any' },
+    ];
+    const pwdFields = [
+      { label: 'Disability Type', name: 'disabilityType', hint: 'Write NA if not applicable' },
+      { label: 'UDID Number', name: 'udidNumber', hint: 'Unique Disability ID (write NA if not applicable)' },
+      { label: 'Special Accommodations Required', name: 'specialAccommodations', hint: 'Write NA if not applicable' },
+    ];
+    const mkSection = (arr: { label: string; name: string; hint: string }[]) =>
+      arr.map(f => mkRow(f.label, f.name, f.hint)).join('');
+
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<title>Blank Intake Form — ${admNo}</title>
+${digitalMode ? '<meta name="viewport" content="width=device-width, initial-scale=1.0"/>' : ''}
+<title>${digitalMode ? 'Digital Fillable Form' : 'Blank Intake Form'} — ${admNo}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#111;font-size:12px;padding:24px}
-  .page{max-width:750px;margin:0 auto}
+  body{font-family:'Segoe UI',Arial,sans-serif;background:${digitalMode ? '#f8f7ff' : '#fff'};color:#111;font-size:12px;${digitalMode ? '' : 'padding:24px'}}
+  .page{max-width:750px;margin:${digitalMode ? '0 auto' : '0 auto'};${digitalMode ? 'padding:16px 16px 40px' : ''}}
   .top-bar{background:#1a0540;color:#fff;padding:10px 16px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center}
   .school-name{font-size:15px;font-weight:700;display:block}
   .school-meta{font-size:10px;color:#c4b5fd;display:block;margin-top:2px}
   .adm-badge{background:#f59e0b;color:#111;font-weight:800;font-size:13px;padding:4px 12px;border-radius:20px;letter-spacing:0.5px;white-space:nowrap;flex-shrink:0}
   .instruction-box{border:2.5px solid #dc2626;background:#fff5f5;padding:12px 16px;margin:12px 0;border-radius:6px}
-  .instruction-box h2{color:#dc2626;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px}
+  .instruction-box.digital{border-color:#0891b2;background:#ecfeff}
+  .instruction-box h2{color:#dc2626;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px}
+  .instruction-box.digital h2{color:#0e7490}
   .instruction-box ol{padding-left:20px;line-height:2}
   .instruction-box li{font-size:11.5px;color:#374151}
   .form-title{text-align:center;font-size:18px;font-weight:800;color:#1a0540;margin:14px 0 2px;text-transform:uppercase;letter-spacing:1px}
   .form-sub{text-align:center;font-size:11px;color:#6b7280;margin-bottom:12px}
   table{width:100%;border-collapse:collapse;margin-top:4px}
-  .f-label{width:38%;padding:7px 10px;background:#f8f7ff;border:1px solid #e5e7eb;font-weight:600;font-size:11.5px;vertical-align:top;color:#1f2937;line-height:1.4}
+  .f-label{width:38%;padding:7px 10px;background:#f8f7ff;border:1px solid #e5e7eb;font-weight:600;font-size:11.5px;vertical-align:middle;color:#1f2937;line-height:1.4}
   .f-hint{display:block;font-weight:400;color:#9ca3af;font-size:10px;margin-top:2px}
-  .f-box{padding:4px 6px;border:1px solid #e5e7eb;border-left:none}
+  .f-box{padding:${digitalMode ? '5px 6px' : '4px 6px'};border:1px solid #e5e7eb;border-left:none;vertical-align:middle}
   .write-box{height:32px;border:1.5px dashed #6c3ce1;border-radius:4px;background:#fafafe;width:100%}
+  .digital-input{width:100%;border:1.5px solid #d8b4fe;border-radius:5px;padding:8px 10px;font-size:13px;font-family:inherit;background:#fafafe;color:#111;outline:none;transition:border-color 0.15s,box-shadow 0.15s;-webkit-appearance:none;appearance:none}
+  .digital-input:focus{border-color:#6c3ce1;box-shadow:0 0 0 3px rgba(108,60,225,0.15);background:#fff}
   .section-head{background:#6c3ce1;color:#fff;font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:0.8px;padding:5px 10px;border-radius:3px;margin:12px 0 0}
   .sig-row{display:flex;gap:20px;margin-top:20px;padding-top:12px;border-top:1px solid #e5e7eb}
   .sig-block{flex:1;text-align:center}
-  .sig-line{border-bottom:1.5px solid #374151;height:36px;margin-bottom:4px}
+  .sig-line{border-bottom:1.5px solid #374151;height:${digitalMode ? '48px' : '36px'};margin-bottom:4px}
   .sig-label{font-size:10px;color:#6b7280}
-  .ocr-marker{display:none}
   .barcode-area{text-align:center;margin:10px 0}
   .barcode-text{font-family:monospace;font-size:9px;letter-spacing:3px;color:#6b7280}
-  @media print{body{padding:0}.page{max-width:100%}}
+  ${digitalMode ? `
+  .action-bar{position:sticky;top:0;z-index:100;background:#1a0540;color:#fff;padding:10px 20px;display:flex;align-items:center;gap:10px;box-shadow:0 2px 16px rgba(0,0,0,0.35);flex-wrap:wrap}
+  .action-bar .school-tag{font-size:13px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .btn-save-pdf{background:#f59e0b;color:#111;border:none;padding:9px 20px;border-radius:6px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+  .btn-clear-all{background:transparent;color:#c4b5fd;border:1px solid rgba(196,181,253,0.4);padding:9px 14px;border-radius:6px;font-size:12px;cursor:pointer;white-space:nowrap}
+  .return-box{background:#fef9c3;border:2px solid #fbbf24;padding:14px 18px;margin:20px 0 0;border-radius:8px}
+  .return-box h3{color:#92400e;font-size:13px;font-weight:800;margin-bottom:8px}
+  .return-box ol{padding-left:22px;line-height:2}
+  .return-box li{font-size:12px;color:#374151}
+  @media(max-width:600px){
+    .top-bar{flex-direction:column;align-items:flex-start;gap:8px}
+    .adm-badge{align-self:flex-start}
+    .f-label,.f-box{display:block;width:100%!important;border-right:1px solid #e5e7eb}
+    .f-label{border-bottom:none}
+    .f-box{border-left:1px solid #e5e7eb;border-top:none}
+    tr{display:block;border-bottom:1px solid #e5e7eb}
+    table{display:block}
+    .sig-row{flex-direction:column}
+    .action-bar .school-tag{flex-basis:100%}
+  }` : ''}
+  @media print{
+    body{padding:0;background:#fff}
+    .page{max-width:100%;padding:0;margin:0}
+    ${digitalMode ? `.action-bar,.no-print{display:none!important}
+    .digital-input{border:none;border-bottom:1px solid #374151;border-radius:0;background:transparent;padding:2px 4px;box-shadow:none;font-size:12px}
+    .page{padding:12px}` : ''}
+  }
 </style>
 </head>
 <body>
+${digitalMode ? `<div class="action-bar no-print">
+  <span class="school-tag">📚 ${schoolName} — Digital Admission Form</span>
+  <button class="btn-clear-all" onclick="if(confirm('Clear all typed data?')){document.querySelectorAll('.digital-input').forEach(function(i){i.value=''})}">🗑 Clear All</button>
+  <button class="btn-save-pdf" onclick="window.print()">💾 Save as PDF</button>
+</div>` : ''}
 <div class="page">
   <div class="top-bar">
     <div>
@@ -399,9 +553,17 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
     <span class="adm-badge">${blankMode ? 'BLANK COPY' : `ADM #${admNo}`}</span>
   </div>
 
-  <div class="instruction-box">
-    <h2>⚠ Important Instructions — Read Before Filling</h2>
+  <div class="instruction-box${digitalMode ? ' digital' : ''}">
+    <h2>${digitalMode ? '💻 How to Fill This Digital Form' : '⚠ Important Instructions — Read Before Filling'}</h2>
     <ol>
+      ${digitalMode ? `
+      <li>Click or tap any field and <strong>type your answer directly</strong></li>
+      <li>For <strong>Date of Birth</strong> use <strong>DD / MM / YYYY</strong> format (e.g. 14 / 03 / 2018)</li>
+      <li>Write <strong>NA</strong> for any field that does not apply — do not leave blank</li>
+      <li>When done, click the <strong>💾 Save as PDF</strong> button at the top of this page</li>
+      <li>In the print dialog, select <strong>"Save as PDF"</strong> as the destination / printer</li>
+      <li>Email or WhatsApp the saved PDF back to the school admission office</li>
+      ` : `
       <li><strong>Fill all fields in BLOCK LETTERS ONLY</strong> (e.g. JOHN, not John)</li>
       <li>Use <strong>black or dark blue ballpoint pen</strong> only — do not use pencil</li>
       <li>Do <strong>NOT</strong> fold, staple, or crease this form</li>
@@ -410,9 +572,11 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
       <li>For dates, use <strong>DD / MM / YYYY</strong> format (e.g. 14 / 03 / 2018)</li>
       <li>Scan or photograph the completed form clearly in <strong>good lighting</strong>, all 4 corners visible</li>
       <li>Submit the scanned form via the <em>Upload Signed</em> button in the system, or hand it back to the admission office</li>
+      `}
     </ol>
   </div>
-  ${blankMode ? `
+
+  ${blankMode && !digitalMode ? `
   <div class="instruction-box" style="border-color:#0891b2;background:#ecfeff">
     <h2 style="color:#0891b2">📋 Documents to Bring at Submission</h2>
     <ol>
@@ -432,137 +596,31 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
 
   <div class="form-title">Student Admission Intake Form</div>
   <div class="form-sub">${blankMode ? 'Admission No: <strong>To be assigned by school office</strong>' : `Admission No: <strong>${admNo}</strong>`} &nbsp;|&nbsp; For office use only — do not submit without school stamp</div>
-
-  <div class="barcode-area">
-    <div class="barcode-text">||||| ${blankMode ? 'BLANK-INTAKE-FORM' : `ADM-${admNo}`} INTAKE-FORM-V1 |||||</div>
-  </div>
+  <div class="barcode-area"><div class="barcode-text">||||| ${blankMode ? 'BLANK-INTAKE-FORM' : `ADM-${admNo}`} INTAKE-FORM-V1 |||||</div></div>
 
   <div class="section-head">Section A — Student Personal Details</div>
-  <table>
-    ${fields.slice(0, 8).map(f => `
-    <tr>
-      <td class="f-label">${f.label}${f.hint ? `<span class="f-hint">${f.hint}</span>` : ''}</td>
-      <td class="f-box"><div class="write-box" data-field="${f.name}"></div></td>
-    </tr>`).join('')}
-  </table>
+  <table>${fields.slice(0, 8).map(f => mkRow(f.label, f.name, f.hint)).join('')}</table>
 
-  <div class="section-head">Section B — Contact & Address</div>
-  <table>
-    ${fields.slice(8, 16).map(f => `
-    <tr>
-      <td class="f-label">${f.label}${f.hint ? `<span class="f-hint">${f.hint}</span>` : ''}</td>
-      <td class="f-box"><div class="write-box" data-field="${f.name}"></div></td>
-    </tr>`).join('')}
-  </table>
+  <div class="section-head">Section B — Contact &amp; Address</div>
+  <table>${fields.slice(8, 16).map(f => mkRow(f.label, f.name, f.hint)).join('')}</table>
 
   <div class="section-head">Section C — Parent / Guardian Details</div>
-  <table>
-    ${fields.slice(16).map(f => `
-    <tr>
-      <td class="f-label">${f.label}${f.hint ? `<span class="f-hint">${f.hint}</span>` : ''}</td>
-      <td class="f-box"><div class="write-box" data-field="${f.name}"></div></td>
-    </tr>`).join('')}
-  </table>
+  <table>${fields.slice(16).map(f => mkRow(f.label, f.name, f.hint)).join('')}</table>
 
   <div class="section-head">Section D — Government Identity</div>
-  <table>
-    <tr>
-      <td class="f-label">Student Aadhaar Number<span class="f-hint">12-digit</span></td>
-      <td class="f-box"><div class="write-box" data-field="studentAadhaar"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">PEN (UDISE Student ID)<span class="f-hint">Alphanumeric</span></td>
-      <td class="f-box"><div class="write-box" data-field="pen"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">ABC ID<span class="f-hint">12-digit Academic Bank of Credits ID</span></td>
-      <td class="f-box"><div class="write-box" data-field="abcId"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Birth Certificate Number<span class="f-hint">As issued by municipal authority</span></td>
-      <td class="f-box"><div class="write-box" data-field="birthCertNo"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Caste Category<span class="f-hint">GENERAL / OBC / SC / ST / OTHER</span></td>
-      <td class="f-box"><div class="write-box" data-field="casteCategory"></div></td>
-    </tr>
-  </table>
+  <table>${mkSection(govIdFields)}</table>
 
   <div class="section-head">Section E — Medical Information</div>
-  <table>
-    <tr>
-      <td class="f-label">Known Medical Conditions<span class="f-hint">e.g. Asthma, Diabetes (write NONE if none)</span></td>
-      <td class="f-box"><div class="write-box" data-field="medicalConditions"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Known Allergies<span class="f-hint">e.g. Nuts, Penicillin (write NONE if none)</span></td>
-      <td class="f-box"><div class="write-box" data-field="allergies"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Current Medications<span class="f-hint">Name and dosage (write NONE if none)</span></td>
-      <td class="f-box"><div class="write-box" data-field="currentMedications"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Treating Doctor Name<span class="f-hint">If any</span></td>
-      <td class="f-box"><div class="write-box" data-field="doctorName"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Treating Doctor Phone<span class="f-hint">10-digit</span></td>
-      <td class="f-box"><div class="write-box" data-field="doctorPhone"></div></td>
-    </tr>
-  </table>
+  <table>${mkSection(medFields)}</table>
 
   <div class="section-head">Section F — Emergency Contact</div>
-  <table>
-    <tr>
-      <td class="f-label">Emergency Contact Name<span class="f-hint"></span></td>
-      <td class="f-box"><div class="write-box" data-field="emergencyContactName"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Emergency Contact Relationship<span class="f-hint">e.g. Uncle, Aunt, Family Friend</span></td>
-      <td class="f-box"><div class="write-box" data-field="emergencyContactRelation"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Emergency Contact Mobile<span class="f-hint">10-digit</span></td>
-      <td class="f-box"><div class="write-box" data-field="emergencyContactMobile"></div></td>
-    </tr>
-  </table>
+  <table>${mkSection(emergFields)}</table>
 
   <div class="section-head">Section G — Physical Description (Identity Marks)</div>
-  <table>
-    <tr>
-      <td class="f-label">Height (cm)<span class="f-hint">Approximate</span></td>
-      <td class="f-box"><div class="write-box" data-field="heightCm"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Weight (kg)<span class="f-hint">Approximate</span></td>
-      <td class="f-box"><div class="write-box" data-field="weightKg"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Identity Mark 1<span class="f-hint">e.g. Mole on right cheek</span></td>
-      <td class="f-box"><div class="write-box" data-field="identityMark1"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Identity Mark 2<span class="f-hint">If any</span></td>
-      <td class="f-box"><div class="write-box" data-field="identityMark2"></div></td>
-    </tr>
-  </table>
+  <table>${mkSection(physFields)}</table>
 
   <div class="section-head">Section H — Specially Abled (if applicable)</div>
-  <table>
-    <tr>
-      <td class="f-label">Disability Type<span class="f-hint">Write NA if not applicable</span></td>
-      <td class="f-box"><div class="write-box" data-field="disabilityType"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">UDID Number<span class="f-hint">Unique Disability ID (write NA if not applicable)</span></td>
-      <td class="f-box"><div class="write-box" data-field="udidNumber"></div></td>
-    </tr>
-    <tr>
-      <td class="f-label">Special Accommodations Required<span class="f-hint">Write NA if not applicable</span></td>
-      <td class="f-box"><div class="write-box" data-field="specialAccommodations"></div></td>
-    </tr>
-  </table>
+  <table>${mkSection(pwdFields)}</table>
 
   <div class="section-head" style="margin-top:20px">Declaration &amp; Terms</div>
   <div style="font-size:11.5px;line-height:1.75;color:#374151;padding:10px 12px;background:#fafafa;border:1px solid #e5e7eb;border-radius:6px;margin-bottom:12px">
@@ -574,13 +632,45 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
     <div class="sig-block"><div class="sig-line"></div><div class="sig-label">Date</div></div>
     <div class="sig-block"><div class="sig-line"></div><div class="sig-label">School Stamp &amp; Signature</div></div>
   </div>
+
+  ${digitalMode ? `
+  <div class="return-box no-print" style="margin-top:24px">
+    <h3>📤 How to Return This Completed Form</h3>
+    <ol>
+      <li>Click the <strong>💾 Save as PDF</strong> button at the top of this page</li>
+      <li>In the print dialog, select <strong>"Save as PDF"</strong> as the printer / destination</li>
+      <li>Save the PDF file to your phone or computer</li>
+      <li>Email the PDF to: <strong>${schoolEmail || 'the school admissions office'}</strong>${schoolPhone ? ` or WhatsApp to: <strong>${schoolPhone}</strong>` : ''}</li>
+    </ol>
+  </div>` : ''}
 </div>
-<script>window.onload = () => { window.print(); }</script>
+${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</script>'}
 </body>
 </html>`;
+  };
 
+  // ——— Blank form: open in new window ———
+  const downloadBlankForm = (opts?: { blank?: boolean; digital?: boolean }) => {
+    const html = buildBlankFormHtml(opts);
     const win = window.open('', '_blank');
     if (win) { win.document.write(html); win.document.close(); }
+  };
+
+  // ——— Download digital form as a .html file so it can be shared as an email/WhatsApp attachment ———
+  const downloadDigitalFormAsFile = () => {
+    const liveHeader = loadHeaderSettings();
+    const schoolName = liveHeader.schoolName || 'School';
+    const html = buildBlankFormHtml({ blank: true, digital: true });
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Admission_Form_${schoolName.replace(/[^a-zA-Z0-9]/g, '_')}.html`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    return liveHeader;
   };
 
   // ——— OCR / Scan to auto-fill ———
@@ -588,95 +678,141 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
     setOcrStatus('scanning');
     setOcrProgress(5);
     setOcrResults({});
-    const url = URL.createObjectURL(file);
-    setOcrImageUrl(url);
+
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+    // Show a canvas preview for PDFs; blob URL for images
+    let previewUrl = '';
+
+    const extractFieldsFromText = (rawText: string): Record<string, string> => {
+      const lines = rawText.split('\n').map((l: string) => l.trim()).filter(Boolean);
+      const extracted: Record<string, string> = {};
+      const findAfterLabel = (label: string): string => {
+        const idx = lines.findIndex((l: string) => l.toUpperCase().includes(label.toUpperCase()));
+        if (idx >= 0 && idx + 1 < lines.length) {
+          const val = lines[idx + 1].replace(/^[-:_\s]+/, '').trim();
+          if (val && val.length > 0 && !val.toUpperCase().includes('SECTION') && !val.toUpperCase().includes('STUDENT')) return val;
+        }
+        // Also try same line after colon
+        if (idx >= 0) {
+          const m = lines[idx].match(/[:=]\s*(.+)$/);
+          if (m && m[1].trim().length > 0) return m[1].trim();
+        }
+        return '';
+      };
+      extracted.firstName = findAfterLabel('FIRST NAME') || findAfterLabel('STUDENT FIRST');
+      extracted.lastName = findAfterLabel('LAST NAME') || findAfterLabel('STUDENT LAST');
+      extracted.dateOfBirth = findAfterLabel('DATE OF BIRTH') || findAfterLabel('DOB');
+      extracted.gender = findAfterLabel('GENDER');
+      extracted.bloodGroup = findAfterLabel('BLOOD GROUP') || findAfterLabel('BLOOD');
+      extracted.religion = findAfterLabel('RELIGION');
+      extracted.nationality = findAfterLabel('NATIONALITY');
+      extracted.motherTongue = findAfterLabel('MOTHER TONGUE');
+      extracted.aadhaarNo = findAfterLabel('AADHAAR');
+      extracted.phone = findAfterLabel('MOBILE') || findAfterLabel('PHONE');
+      extracted.email = findAfterLabel('EMAIL');
+      extracted.addressLine = findAfterLabel('ADDRESS LINE') || findAfterLabel('ADDRESS');
+      extracted.city = findAfterLabel('CITY');
+      extracted.district = findAfterLabel('DISTRICT');
+      extracted.stateName = findAfterLabel('STATE');
+      extracted.pincode = findAfterLabel('PINCODE') || findAfterLabel('PIN CODE');
+      extracted.guardianName = findAfterLabel('GUARDIAN FULL NAME') || findAfterLabel('GUARDIAN NAME') || findAfterLabel('FATHER') || findAfterLabel('MOTHER');
+      extracted.guardianPhone = findAfterLabel('GUARDIAN MOBILE') || findAfterLabel('GUARDIAN PHONE');
+      extracted.guardianEmail = findAfterLabel('GUARDIAN EMAIL');
+      Object.keys(extracted).forEach(k => { if (!extracted[k]) delete extracted[k]; });
+      return extracted;
+    };
 
     try {
-      // For PDFs, render first page to a canvas using pdfjs-dist before OCR
-      let ocrSource: File | HTMLCanvasElement = file;
-      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+      if (isPdf) {
         const pdfjsLib = await import('pdfjs-dist');
-        // Use CDN worker to avoid Next.js bundling complications
         pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
         setOcrProgress(10);
         const arrayBuffer = await file.arrayBuffer();
         const pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
         const page = await pdfDoc.getPage(1);
-        // Scale 2x for better OCR accuracy
-        const viewport = page.getViewport({ scale: 2.0 });
+
+        // --- Path 1: Text layer extraction (digitally-filled PDFs) ---
+        setOcrProgress(20);
+        const textContent = await page.getTextContent();
+        const textItems = textContent.items as Array<{ str: string; transform?: number[] }>;
+        // Sort items top-to-bottom, left-to-right by y then x coordinate
+        textItems.sort((a, b) => {
+          const ay = a.transform ? -a.transform[5] : 0;
+          const by = b.transform ? -b.transform[5] : 0;
+          if (Math.abs(ay - by) > 5) return ay - by;
+          const ax = a.transform ? a.transform[4] : 0;
+          const bx = b.transform ? b.transform[4] : 0;
+          return ax - bx;
+        });
+        const pdfText = textItems.map(it => it.str).join('\n').trim();
+        const hasSubstantialText = pdfText.replace(/\s/g, '').length > 80;
+
+        // Always render page to canvas for preview
+        const viewport = page.getViewport({ scale: 1.5 });
         const canvas = document.createElement('canvas');
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas 2D context unavailable');
         await page.render({ canvasContext: ctx, viewport, canvas }).promise;
-        ocrSource = canvas;
-        // Replace the PDF blob URL with a canvas image for the preview pane
-        setOcrImageUrl(canvas.toDataURL('image/png'));
-        setOcrProgress(15);
-      }
+        previewUrl = canvas.toDataURL('image/png');
+        setOcrImageUrl(previewUrl);
+        setOcrProgress(45);
 
-      // Dynamically import Tesseract.js to avoid SSR issues
-      const Tesseract = await import('tesseract.js');
-      setOcrProgress(20);
-
-      const worker = await Tesseract.createWorker('eng', 1, {
-        logger: (m: { status: string; progress?: number }) => {
-          if (m.status === 'recognizing text' && m.progress) {
-            setOcrProgress(20 + Math.round(m.progress * 70));
-          }
-        },
-      });
-      const result = await worker.recognize(ocrSource);
-      await worker.terminate();
-      setOcrProgress(95);
-
-      const text = result.data.text;
-      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-
-      // Heuristic field extraction from block-letters text
-      const extracted: Record<string, string> = {};
-      const findAfterLabel = (label: string): string => {
-        const idx = lines.findIndex(l => l.toUpperCase().includes(label.toUpperCase()));
-        if (idx >= 0 && idx + 1 < lines.length) {
-          const val = lines[idx + 1].replace(/^[-:_\s]+/, '').trim();
-          if (val && val.length > 0 && !val.toUpperCase().includes('SECTION') && !val.toUpperCase().includes('STUDENT')) return val;
+        if (hasSubstantialText) {
+          // Digital PDF — extract from text layer directly (fast, accurate)
+          const extracted = extractFieldsFromText(pdfText);
+          setOcrResults(extracted);
+          setEditedOcrResults(extracted);
+          setOcrProgress(100);
+          setOcrStatus('done');
+          return;
         }
-        return '';
-      };
 
-      extracted.firstName = findAfterLabel('FIRST NAME');
-      extracted.lastName = findAfterLabel('LAST NAME');
-      extracted.dateOfBirth = findAfterLabel('DATE OF BIRTH');
-      extracted.gender = findAfterLabel('GENDER');
-      extracted.bloodGroup = findAfterLabel('BLOOD GROUP');
-      extracted.religion = findAfterLabel('RELIGION');
-      extracted.nationality = findAfterLabel('NATIONALITY');
-      extracted.motherTongue = findAfterLabel('MOTHER TONGUE');
-      extracted.aadhaarNo = findAfterLabel('AADHAAR');
-      extracted.phone = findAfterLabel('MOBILE');
-      extracted.email = findAfterLabel('EMAIL');
-      extracted.addressLine = findAfterLabel('ADDRESS LINE');
-      extracted.city = findAfterLabel('CITY');
-      extracted.district = findAfterLabel('DISTRICT');
-      extracted.stateName = findAfterLabel('STATE');
-      extracted.pincode = findAfterLabel('PINCODE');
-      extracted.guardianName = findAfterLabel('GUARDIAN FULL NAME');
-      extracted.guardianPhone = findAfterLabel('GUARDIAN MOBILE');
-      extracted.guardianEmail = findAfterLabel('GUARDIAN EMAIL');
+        // --- Path 2: Scanned PDF — fall through to Tesseract OCR on rendered canvas ---
+        setOcrProgress(50);
+        const Tesseract = await import('tesseract.js');
+        const worker = await Tesseract.createWorker('eng', 1, {
+          logger: (m: { status: string; progress?: number }) => {
+            if (m.status === 'recognizing text' && m.progress) {
+              setOcrProgress(50 + Math.round(m.progress * 45));
+            }
+          },
+        });
+        const result = await worker.recognize(canvas);
+        await worker.terminate();
+        const extracted = extractFieldsFromText(result.data.text);
+        setOcrResults(extracted);
+        setEditedOcrResults(extracted);
+        setOcrProgress(100);
+        setOcrStatus('done');
 
-      // Remove empty entries
-      Object.keys(extracted).forEach(k => { if (!extracted[k]) delete extracted[k]; });
-
-      setOcrResults(extracted);
-      setEditedOcrResults(extracted);
-      setOcrProgress(100);
-      setOcrStatus('done');
+      } else {
+        // --- Image file path ---
+        previewUrl = URL.createObjectURL(file);
+        setOcrImageUrl(previewUrl);
+        const Tesseract = await import('tesseract.js');
+        setOcrProgress(20);
+        const worker = await Tesseract.createWorker('eng', 1, {
+          logger: (m: { status: string; progress?: number }) => {
+            if (m.status === 'recognizing text' && m.progress) {
+              setOcrProgress(20 + Math.round(m.progress * 75));
+            }
+          },
+        });
+        const result = await worker.recognize(file);
+        await worker.terminate();
+        const extracted = extractFieldsFromText(result.data.text);
+        setOcrResults(extracted);
+        setEditedOcrResults(extracted);
+        setOcrProgress(100);
+        setOcrStatus('done');
+      }
     } catch (e) {
-      console.error('OCR error:', e);
+      console.error('Scan & Fill error:', e);
       setOcrStatus('error');
       setOcrProgress(0);
-      // Still open the modal so the user sees the error clearly
       setOcrModalOpen(true);
     }
   };
@@ -910,25 +1046,146 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
             </div>
 
             {/* ── Tab: School Info ── */}
-            {settingsTab === 'identity' && (
+            {settingsTab === 'identity' && (() => {
+              const titleCase = (s: string) => s.replace(/\b\w/g, c => c.toUpperCase());
+              const setErr = (field: string, msg: string) => setSettingsErrors(prev => ({ ...prev, [field]: msg }));
+              const clearErr = (field: string) => setSettingsErrors(prev => { const n = { ...prev }; delete n[field]; return n; });
+
+              return (
               <div className="cf-settings-grid">
-                {([
-                  { key: 'schoolName',    label: 'School Name *',    placeholder: 'e.g. Sunshine Public School', span: 2 },
-                  { key: 'schoolAddress', label: 'Address',          placeholder: 'Street, City, PIN',           span: 2 },
-                  { key: 'schoolPhone',   label: 'Phone',            placeholder: '+91 98765 43210'              },
-                  { key: 'schoolEmail',   label: 'Email',            placeholder: 'admissions@school.in'         },
-                  { key: 'schoolWebsite', label: 'Website',          placeholder: 'www.schoolname.in'            },
-                  { key: 'principalName', label: 'Principal Name *', placeholder: 'Full name for signature line' },
-                  { key: 'affiliationNo',label: 'Affiliation / Reg No.', placeholder: 'CBSE / State board ref'  },
-                  { key: 'schoolMotto',  label: 'Motto / Tagline',  placeholder: 'Shown under school name'      },
-                ] as Array<{key:'schoolName'|'schoolAddress'|'schoolPhone'|'schoolEmail'|'schoolWebsite'|'principalName'|'affiliationNo'|'schoolMotto';label:string;placeholder:string;span?:number}>).map(({ key, label, placeholder, span }) => (
-                  <div key={key} className="cf-settings-field" style={span === 2 ? { gridColumn: '1 / -1' } : {}}>
-                    <label className="cf-settings-label">{label}</label>
-                    <input className="cf-settings-input" value={settingsForm[key] ?? ''} onChange={e => setSettingsForm(prev => ({ ...prev, [key]: e.target.value }))} placeholder={placeholder} />
-                  </div>
-                ))}
+                {/* School Name */}
+                <div className="cf-settings-field" style={{ gridColumn: '1 / -1' }}>
+                  <label className="cf-settings-label">School Name *</label>
+                  <input
+                    className={`cf-settings-input${settingsErrors.schoolName ? ' cf-input-error' : ''}`}
+                    value={settingsForm.schoolName}
+                    placeholder="e.g. Sunshine Public School"
+                    onChange={e => setSettingsForm(prev => ({ ...prev, schoolName: titleCase(e.target.value) }))}
+                    onBlur={() => {
+                      if (!settingsForm.schoolName.trim()) setErr('schoolName', 'School name is required');
+                      else clearErr('schoolName');
+                    }}
+                  />
+                  {settingsErrors.schoolName && <span className="cf-inline-err">{settingsErrors.schoolName}</span>}
+                </div>
+
+                {/* Address */}
+                <div className="cf-settings-field" style={{ gridColumn: '1 / -1' }}>
+                  <label className="cf-settings-label">Address</label>
+                  <input
+                    className="cf-settings-input"
+                    value={settingsForm.schoolAddress}
+                    placeholder="Street, City, PIN"
+                    onChange={e => setSettingsForm(prev => ({ ...prev, schoolAddress: titleCase(e.target.value) }))}
+                  />
+                </div>
+
+                {/* Phone */}
+                <div className="cf-settings-field">
+                  <label className="cf-settings-label">Phone</label>
+                  <input
+                    className={`cf-settings-input${settingsErrors.schoolPhone ? ' cf-input-error' : ''}`}
+                    value={settingsForm.schoolPhone}
+                    placeholder="+91 98765 43210"
+                    onChange={e => {
+                      let v = e.target.value.replace(/[^\d\s+\-()]/g, '');
+                      if (v && !v.startsWith('+')) v = '+91 ' + v.replace(/^\+?91\s*/, '');
+                      setSettingsForm(prev => ({ ...prev, schoolPhone: v }));
+                    }}
+                    onBlur={() => {
+                      const digits = settingsForm.schoolPhone.replace(/\D/g, '');
+                      const local = digits.startsWith('91') ? digits.slice(2) : digits;
+                      if (settingsForm.schoolPhone && !/^[6-9]\d{9}$/.test(local)) {
+                        setErr('schoolPhone', 'Enter a valid 10-digit Indian mobile number');
+                      } else clearErr('schoolPhone');
+                    }}
+                  />
+                  {settingsErrors.schoolPhone && <span className="cf-inline-err">{settingsErrors.schoolPhone}</span>}
+                </div>
+
+                {/* Email */}
+                <div className="cf-settings-field">
+                  <label className="cf-settings-label">Email</label>
+                  <input
+                    className={`cf-settings-input${settingsErrors.schoolEmail ? ' cf-input-error' : ''}`}
+                    value={settingsForm.schoolEmail}
+                    placeholder="admissions@school.in"
+                    onChange={e => setSettingsForm(prev => ({ ...prev, schoolEmail: e.target.value.trim() }))}
+                    onBlur={() => {
+                      const e = settingsForm.schoolEmail.trim();
+                      if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) setErr('schoolEmail', 'Enter a valid email address');
+                      else clearErr('schoolEmail');
+                    }}
+                  />
+                  {settingsErrors.schoolEmail && <span className="cf-inline-err">{settingsErrors.schoolEmail}</span>}
+                </div>
+
+                {/* Website */}
+                <div className="cf-settings-field">
+                  <label className="cf-settings-label">Website</label>
+                  <input
+                    className="cf-settings-input"
+                    value={settingsForm.schoolWebsite}
+                    placeholder="www.schoolname.in"
+                    onChange={e => setSettingsForm(prev => ({ ...prev, schoolWebsite: e.target.value.trim() }))}
+                  />
+                </div>
+
+                {/* Principal Name */}
+                <div className="cf-settings-field">
+                  <label className="cf-settings-label">Principal Name *</label>
+                  <input
+                    className={`cf-settings-input${settingsErrors.principalName ? ' cf-input-error' : ''}`}
+                    value={settingsForm.principalName}
+                    placeholder="Full name for signature line"
+                    onChange={e => {
+                      const v = e.target.value.replace(/[^A-Za-z\s'.,-]/g, '');
+                      setSettingsForm(prev => ({ ...prev, principalName: v }));
+                    }}
+                    onBlur={() => {
+                      const v = settingsForm.principalName.trim();
+                      const tc = titleCase(v);
+                      if (tc !== settingsForm.principalName) setSettingsForm(prev => ({ ...prev, principalName: tc }));
+                      if (!v) setErr('principalName', 'Principal name is required');
+                      else clearErr('principalName');
+                    }}
+                  />
+                  {settingsErrors.principalName && <span className="cf-inline-err">{settingsErrors.principalName}</span>}
+                </div>
+
+                {/* Affiliation No */}
+                <div className="cf-settings-field">
+                  <label className="cf-settings-label">Affiliation / Reg No.</label>
+                  <input
+                    className={`cf-settings-input${settingsErrors.affiliationNo ? ' cf-input-error' : ''}`}
+                    value={settingsForm.affiliationNo}
+                    placeholder="CBSE / State board ref"
+                    onChange={e => {
+                      const v = e.target.value.replace(/[^A-Za-z0-9\s/\-]/g, '');
+                      setSettingsForm(prev => ({ ...prev, affiliationNo: v }));
+                    }}
+                    onBlur={() => {
+                      const v = settingsForm.affiliationNo.trim();
+                      if (v && !/^[A-Za-z0-9\s/\-]{3,30}$/.test(v)) setErr('affiliationNo', 'Enter a valid affiliation/registration number');
+                      else clearErr('affiliationNo');
+                    }}
+                  />
+                  {settingsErrors.affiliationNo && <span className="cf-inline-err">{settingsErrors.affiliationNo}</span>}
+                </div>
+
+                {/* Motto */}
+                <div className="cf-settings-field" style={{ gridColumn: '1 / -1' }}>
+                  <label className="cf-settings-label">Motto / Tagline</label>
+                  <input
+                    className="cf-settings-input"
+                    value={settingsForm.schoolMotto}
+                    placeholder="Shown under school name"
+                    onChange={e => setSettingsForm(prev => ({ ...prev, schoolMotto: e.target.value }))}
+                  />
+                </div>
               </div>
-            )}
+              );
+            })()}
 
             {/* ── Tab: Logo & Layout ── */}
             {settingsTab === 'layout' && (
@@ -1390,23 +1647,17 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
             {student.documents && Object.keys(student.documents).length > 0 ? (
               <table className="cf-table">
                 <tbody>
-                  {(Object.entries(student.documents) as Array<[string, { status?: string; fileName?: string; url?: string | null }]>).map(([key, doc]) => {
-                    // Treat as submitted when EITHER the status reports success
-                    // OR a fileName/url is present (covers async-state edge cases
-                    // where status hasn't propagated to this snapshot yet).
-                    const submitted = doc?.status === 'success' || !!doc?.fileName || !!doc?.url;
-                    return (
-                      <tr key={key}>
-                        <th>{DOC_LABELS[key] || key}</th>
-                        <td>
-                          <span className={submitted ? 'cf-status-ok' : 'cf-status-pending'}>
-                            {submitted ? '✓ Submitted' : '○ Pending'}
-                          </span>
-                          {submitted && doc?.fileName ? ` — ${doc.fileName}` : ''}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {(Object.entries(student.documents) as Array<[string, { status: string; fileName: string }]>).map(([key, doc]) => (
+                    <tr key={key}>
+                      <th>{DOC_LABELS[key] || key}</th>
+                      <td>
+                        <span className={doc.status === 'success' ? 'cf-status-ok' : 'cf-status-pending'}>
+                          {doc.status === 'success' ? '✓ Submitted' : '○ Pending'}
+                        </span>
+                        {doc.status === 'success' && doc.fileName ? ` — ${doc.fileName}` : ''}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             ) : (
@@ -1525,6 +1776,73 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
             </div>
           </div>
 
+          {/* ——— Upload Signed Form footer (screen only) ——— */}
+          <div className="cf-upload-signed-bar no-print">
+            <input
+              ref={signedFormInputRef}
+              type="file"
+              accept="application/pdf,image/*"
+              style={{ display: 'none' }}
+              onChange={e => {
+                const file = e.target.files?.[0];
+                if (file) handleSignedFormUpload(file);
+                e.target.value = '';
+              }}
+            />
+
+            <div className="cf-upload-signed-left">
+              <div className="cf-upload-signed-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+              </div>
+              <div>
+                <p className="cf-upload-signed-title">Upload signed copy</p>
+                <p className="cf-upload-signed-hint">
+                  {uploadStatus === 'done'
+                    ? `✓ Saved: ${uploadedFileName}`
+                    : 'Print this form → get it signed → upload the scanned PDF or photo here to save it permanently.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="cf-upload-signed-right">
+              {uploadStatus === 'done' ? (
+                <>
+                  {uploadedFileUrl && (
+                    <a href={uploadedFileUrl} target="_blank" rel="noopener noreferrer" className="cf-upload-view-btn">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      View saved
+                    </a>
+                  )}
+                  <button type="button" className="cf-upload-replace-btn" onClick={() => { setUploadStatus('idle'); setUploadedFileUrl(''); setUploadedFileName(''); signedFormInputRef.current?.click(); }}>Replace</button>
+                </>
+              ) : uploadStatus === 'uploading' ? (
+                <span className="cf-upload-spinner">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="2.5" strokeLinecap="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.8s" repeatCount="indefinite"/></path></svg>
+                  Uploading…
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="cf-upload-signed-btn"
+                  onClick={() => {
+                    if (!student.studentId) {
+                      setUploadError('Student record must be enrolled first before uploading a signed form.');
+                      return;
+                    }
+                    signedFormInputRef.current?.click();
+                  }}
+                  title={!student.studentId ? 'Enroll the student first' : 'Upload the scanned signed form'}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                  Upload signed form
+                </button>
+              )}
+            </div>
+
+            {uploadStatus === 'error' && (
+              <p className="cf-upload-error">⚠ {uploadError}</p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1535,7 +1853,7 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
           <div onClick={e => e.stopPropagation()} style={{ background:'#fff', borderRadius:14, padding:0, maxWidth:520, width:'100%', boxShadow:'0 24px 64px rgba(0,0,0,0.3)', overflow:'hidden' }}>
             <div style={{ background:'linear-gradient(135deg,#1e3a8a,#3b82f6)', padding:'18px 24px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
               <div>
-                <h3 style={{ margin:0, color:'#fff', fontSize:17, fontWeight:700 }}>📷 Scan &amp; Fill</h3>
+                <h3 style={{ margin:0, color:'#fff', fontSize:17, fontWeight:700 }}>📄 Scan &amp; Fill</h3>
                 <p style={{ margin:'4px 0 0', color:'rgba(255,255,255,0.8)', fontSize:12 }}>Upload a scanned filled form — we&apos;ll read it and pre-fill the enrollment fields</p>
               </div>
               <button type="button" onClick={() => setScanPickerOpen(false)} style={{ background:'rgba(255,255,255,0.2)', border:'none', color:'#fff', borderRadius:'50%', width:30, height:30, cursor:'pointer', fontSize:16, display:'flex', alignItems:'center', justifyContent:'center' }}>✕</button>
@@ -1545,8 +1863,8 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
                 onClick={() => scanFileInputRef.current?.click()}
                 onDragOver={e => { e.preventDefault(); }}
                 onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) { setScanPickerOpen(false); void handleOcrUpload(f).then(() => setOcrModalOpen(true)); } }}>
-                <div style={{ fontSize:40, marginBottom:10 }}>🖼️</div>
-                <p style={{ fontWeight:700, fontSize:15, color:'#1e40af', margin:'0 0 6px' }}>Click to select a scanned form</p>
+                <div style={{ fontSize:40, marginBottom:10 }}>📄</div>
+                <p style={{ fontWeight:700, fontSize:15, color:'#1e40af', margin:'0 0 6px' }}>Click to select a filled form</p>
                 <p style={{ fontSize:12, color:'#6b7280', margin:0 }}>Accepted: JPG, PNG, PDF &nbsp;·&nbsp; Max 20MB</p>
                 <p style={{ fontSize:11, color:'#9ca3af', marginTop:8 }}>Or drag &amp; drop the file here</p>
               </div>
@@ -1566,10 +1884,10 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
               <div style={{ marginTop:20, padding:'12px 16px', background:'#fef9c3', borderRadius:8, border:'1px solid #fde047' }}>
                 <p style={{ margin:0, fontSize:12, color:'#78350f', fontWeight:600 }}>📋 For best results:</p>
                 <ul style={{ margin:'6px 0 0', paddingLeft:18, fontSize:11.5, color:'#92400e', lineHeight:1.8 }}>
-                  <li>Photograph in good lighting — all 4 corners of the form visible</li>
-                  <li>Form must be filled in <strong>BLOCK LETTERS</strong> with dark pen</li>
-                  <li>Avoid shadows, folds, or glare on the form</li>
-                  <li>Scan at 300 DPI or higher for best accuracy</li>
+                  <li><strong>Digital PDF (typed on computer):</strong> highest accuracy — text extracted directly from the file</li>
+                  <li><strong>Scanned PDF or photo:</strong> fill in <strong>BLOCK LETTERS</strong> with dark pen; all 4 corners visible</li>
+                  <li>Avoid shadows, folds, or glare when photographing</li>
+                  <li>Scan at 300 DPI or higher for handwritten forms</li>
                 </ul>
               </div>
             </div>
@@ -1587,7 +1905,7 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
           <div style={{ background:'#fff', borderRadius:14, padding:'32px 40px', textAlign:'center', minWidth:300 }}>
             <div style={{ fontSize:32, marginBottom:12 }}>🔍</div>
             <p style={{ fontWeight:700, fontSize:16, color:'#111827', margin:'0 0 8px' }}>Scanning your form…</p>
-            <p style={{ fontSize:13, color:'#6b7280', margin:'0 0 16px' }}>Reading text from the image. This takes a few seconds.</p>
+            <p style={{ fontSize:13, color:'#6b7280', margin:'0 0 16px' }}>Extracting text from your document. This takes a few seconds.</p>
             <div style={{ background:'#e5e7eb', borderRadius:999, height:8, overflow:'hidden' }}>
               <div style={{ background:'#3b82f6', height:'100%', borderRadius:999, width:`${ocrProgress}%`, transition:'width 0.3s' }} />
             </div>
@@ -2305,6 +2623,9 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
           transition: border-color 0.15s, box-shadow 0.15s;
         }
         .cf-settings-input:focus { outline: none; border-color: #c4b5fd; box-shadow: 0 0 0 3px rgba(139,92,246,0.1); }
+        .cf-input-error { border-color: #ef4444 !important; }
+        .cf-input-error:focus { box-shadow: 0 0 0 3px rgba(239,68,68,0.15) !important; }
+        .cf-inline-err { display: block; color: #ef4444; font-size: 11.5px; margin-top: 3px; }
 
         .cf-settings-actions {
           display: flex;
@@ -2734,6 +3055,116 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
         .cf-sig-block { display: flex; flex-direction: column; gap: 8px; }
         .cf-sig-line { height: 1px; background: #374151; }
         .cf-sig-label { margin: 0; font-size: 11px; color: #6b7280; text-align: center; }
+
+        /* ── Upload signed form footer ── */
+        .cf-upload-signed-bar {
+          margin: 24px 0 8px;
+          border: 1.5px dashed #c4b5fd;
+          border-radius: 12px;
+          background: linear-gradient(135deg, #faf5ff 0%, #f5f3ff 100%);
+          padding: 14px 18px;
+          display: flex;
+          align-items: center;
+          gap: 14px;
+          flex-wrap: wrap;
+        }
+        .cf-upload-signed-left {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          flex: 1;
+          min-width: 0;
+        }
+        .cf-upload-signed-icon {
+          width: 38px;
+          height: 38px;
+          border-radius: 9px;
+          background: #ede9fe;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #7c3aed;
+          flex-shrink: 0;
+        }
+        .cf-upload-signed-title {
+          margin: 0 0 2px;
+          font-size: 13px;
+          font-weight: 700;
+          color: #4c1d95;
+        }
+        .cf-upload-signed-hint {
+          margin: 0;
+          font-size: 11.5px;
+          color: #6d28d9;
+          opacity: 0.75;
+          line-height: 1.4;
+        }
+        .cf-upload-signed-right {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-shrink: 0;
+        }
+        .cf-upload-signed-btn {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          padding: 9px 16px;
+          border-radius: 9px;
+          border: 1.5px solid #7c3aed;
+          background: #7c3aed;
+          color: #fff;
+          font-size: 13px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+        .cf-upload-signed-btn:hover { background: #6d28d9; border-color: #6d28d9; transform: translateY(-1px); box-shadow: 0 3px 10px rgba(124,58,237,0.3); }
+        .cf-upload-view-btn {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          padding: 7px 12px;
+          border-radius: 8px;
+          border: 1.5px solid #10b981;
+          background: #ecfdf5;
+          color: #065f46;
+          font-size: 12px;
+          font-weight: 600;
+          text-decoration: none;
+          cursor: pointer;
+          transition: all 0.15s;
+        }
+        .cf-upload-view-btn:hover { background: #d1fae5; }
+        .cf-upload-replace-btn {
+          padding: 7px 12px;
+          border-radius: 8px;
+          border: 1.5px solid #d1d5db;
+          background: #fff;
+          color: #374151;
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+        }
+        .cf-upload-replace-btn:hover { border-color: #7c3aed; color: #7c3aed; }
+        .cf-upload-spinner {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          font-size: 13px;
+          color: #7c3aed;
+          font-weight: 500;
+        }
+        .cf-upload-error {
+          width: 100%;
+          margin: 4px 0 0;
+          font-size: 12px;
+          color: #dc2626;
+          background: #fef2f2;
+          border: 1px solid #fecaca;
+          border-radius: 7px;
+          padding: 6px 10px;
+        }
 
       `}</style>
     </div>

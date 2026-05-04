@@ -559,6 +559,49 @@ class PromotionRecord(models.Model):
         return f"{self.student} - {self.get_status_display()}"
 
 
+class StudentClubMembership(models.Model):
+    """Through table allowing a student to belong to multiple clubs.
+
+    The legacy `Student.student_group` FK is kept exclusively for HOUSE
+    assignments (one house per student).  All CLUB memberships go through
+    this table so a student can join many clubs simultaneously.
+    """
+
+    ROLE_CHOICES = [
+        ("member", "Member"),
+        ("captain", "Captain"),
+        ("co_captain", "Co-Captain"),
+        ("secretary", "Secretary"),
+        ("treasurer", "Treasurer"),
+    ]
+
+    student = models.ForeignKey(
+        "students.Student",
+        on_delete=models.CASCADE,
+        related_name="club_memberships",
+    )
+    club = models.ForeignKey(
+        "students.StudentGroup",
+        on_delete=models.CASCADE,
+        related_name="memberships",
+        limit_choices_to={"type": "CLUB"},
+    )
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="member")
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "student_club_memberships"
+        ordering = ["club__name", "student__first_name", "student__last_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "club"], name="uq_student_club_membership"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.student} - {self.club.name}"
+
+
 class PromotionAuditLog(models.Model):
     batch = models.ForeignKey(PromotionBatch, on_delete=models.CASCADE, related_name="audit_logs")
     action = models.CharField(max_length=40)

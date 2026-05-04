@@ -465,9 +465,11 @@ export function StudentGuardiansStep({
                     }
                     onBlur={() => {
                       const v = draft.fullName.trim();
-                      if (!v) setCardError(idx, 'fullName', 'Guardian name is required');
-                      else if (v.length < 3) setCardError(idx, 'fullName', 'Name must be at least 3 characters');
-                      else if (!/^[A-Za-z\s''.,\-]+$/.test(v)) setCardError(idx, 'fullName', 'Name can only contain letters, spaces, and basic punctuation');
+                      const tc = v.replace(/\b\w/g, c => c.toUpperCase());
+                      if (tc !== draft.fullName) updateDraft(draft.clientId, { fullName: tc });
+                      if (!tc) setCardError(idx, 'fullName', 'Guardian name is required');
+                      else if (tc.length < 3) setCardError(idx, 'fullName', 'Name must be at least 3 characters');
+                      else if (!/^[A-Za-z\s''.,\-]+$/.test(tc)) setCardError(idx, 'fullName', 'Name can only contain letters, spaces, and basic punctuation');
                       else setCardError(idx, 'fullName', '');
                     }}
                     aria-describedby={`guardian_${idx}_fullName-error`}

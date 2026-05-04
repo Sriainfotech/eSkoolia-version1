@@ -121,9 +121,9 @@ function mapDjangoStudentToStudent(raw: DjangoStudent): Student {
     pickup_time: raw.pickup_time ?? null,
     pickup_by: raw.pickup_by ?? null,
     lunch: raw.lunch ?? false,
-    notes_count: raw.attendance_note ? 1 : 0,
+    notes_count: raw.attendance_note ? raw.attendance_note.split('|||').filter(Boolean).length : 0,
     notes: raw.attendance_note
-      ? [{ id: 'server-note', text: raw.attendance_note, created_at: '' }]
+      ? raw.attendance_note.split('|||').filter(Boolean).map((text, i) => ({ id: `server-note-${i}`, text: text.trim(), created_at: '' }))
       : [],
   };
 }

@@ -27,7 +27,7 @@ import ExportOptionsDialogHost, { exportOptionsDialog } from './components/Expor
 import { useCurrentAcademicYear } from '@/hooks/useCurrentAcademicYear';
 
 const LATE_RATIO_THRESHOLD = 0;
-const LATE_MINUTES_BUFFER = 20;
+const LATE_MINUTES_BUFFER = 30;
 
 function toMinutes(time: string): number | null {
   if (!/^\d{2}:\d{2}$/.test(time)) return null;
@@ -133,9 +133,11 @@ export default function StudentAttendancePage() {
     };
   }, [backendKpis, students, classes]);
 
-  // Open the first class (with sections) by default when classes load
+  // Open the first class (with sections) by default when classes load — only once
+  const hasAutoOpenedRef = useRef(false);
   useEffect(() => {
-    if (classes.length > 0) {
+    if (classes.length > 0 && !hasAutoOpenedRef.current) {
+      hasAutoOpenedRef.current = true;
       setOpenClasses((prev) => {
         if (prev.size === 0) {
           const firstWithSections = classes.find((c) => c.sections.length > 0);
@@ -377,10 +379,8 @@ export default function StudentAttendancePage() {
         },
         () => {
           pushToast(options?.successMessage ?? 'Attendance updated.', 'success');
-          // CHANGED (persistence): clear local optimistic overlay then refetch
-          // from the server so the displayed data is what was actually stored.
           clearStudentMeta(selectedDate, [student.id]);
-          loadSection(classId, sectionId, selectedDate);
+          // Optimistic update via updateStudent() already reflects the new state — no refetch needed
         },
         (msg) => {
           updateStudent(classId, sectionId, student, selectedDate);
@@ -388,7 +388,7 @@ export default function StudentAttendancePage() {
         },
       );
     },
-    [selectedDate, patchMark, updateStudent, pushToast, loadSection, clearStudentMeta],
+    [selectedDate, patchMark, updateStudent, pushToast, clearStudentMeta],
   );
 
   const getLateThresholdInfo = useCallback((classId: number, sectionId: number, student: Student, signInTime: string) => {
@@ -481,16 +481,16 @@ export default function StudentAttendancePage() {
       () => {
         pushToast('Lunch status updated.', 'success');
         clearStudentMeta(selectedDate, [student.id]);
-        loadSection(classId, sectionId, selectedDate);
+        // Optimistic update already reflects lunch change — no refetch needed
       },
       (msg) => {
         updateStudent(classId, sectionId, student, selectedDate);
         pushToast(msg || 'Failed to update lunch status.', 'error');
       },
     );
-  }, [selectedDate, patchMark, updateStudent, pushToast, loadSection, clearStudentMeta]);
+  }, [selectedDate, patchMark, updateStudent, pushToast, clearStudentMeta]);
 
-  const handleSignIn = useCallback((classId: number, sectionId: number, student: Student) => {
+  const handleSignIn= useCallback((classId: number, sectionId: number, student: Student) => {
     if (isReadOnly || student.status === 'absent' || student.sign_in_time) return;
     const now = currentTimeHHMM();
     const lateInfo = getLateThresholdInfo(classId, sectionId, student, now);
@@ -528,31 +528,30 @@ export default function StudentAttendancePage() {
       shortStayNote = note ?? null;
     }
 
-    // Issue #2: early pickup detection (vs. peer baseline). Uses centered dialog now.
+    // Early pickup detection: triggers when fewer than 5 students have signed out
+    // AND at least 1 student is still signed in (active in class).
     const key = `${classId}-${sectionId}`;
     const peers = students[key] ?? [];
-    const peerOuts = peers
-      .filter((s) => s.id !== student.id && s.sign_out_time)
-      .map((s) => toMinutes(s.sign_out_time as string))
-      .filter((v): v is number => v !== null);
-    const latestPeer = peerOuts.length > 0 ? Math.max(...peerOuts) : null;
-    const isEarly = outMins !== null && latestPeer !== null && (latestPeer - outMins) >= 20;
+    const signedOutCount = peers.filter((s) => s.id !== student.id && s.sign_out_time).length;
+    const stillSignedIn  = peers.filter((s) => s.id !== student.id && s.sign_in_time && !s.sign_out_time && s.status !== 'absent').length;
+    const isEarlyPickup  = signedOutCount < 5 && stillSignedIn > 0;
     let earlyReason: string | null = null;
-    if (isEarly) {
+    if (isEarlyPickup) {
       const { ok, note } = await confirmDialog({
-        title: 'Early pickup',
-        message: `${student.full_name} is being picked up ${latestPeer! - outMins!} minutes earlier than typical for the section. Please add a reason for the records.`,
+        title: 'Early pickup?',
+        message: `${student.full_name} is one of the first to leave — ${stillSignedIn} student${stillSignedIn !== 1 ? 's are' : ' is'} still in class. Is this an early pickup? If yes, please add a reason.`,
         tone: 'warn',
-        confirmLabel: 'Confirm sign-out',
-        noteLabel: 'Reason',
-        notePlaceholder: 'e.g. doctor appointment…',
-        noteRequired: true,
+        confirmLabel: 'Yes, early pickup',
+        cancelLabel: 'No, regular sign-out',
+        noteLabel: 'Reason for early pickup',
+        notePlaceholder: 'e.g. doctor appointment, family emergency…',
+        noteRequired: false,
       });
-      if (!ok) return;
-      earlyReason = (note ?? '').trim() || null;
-      if (!earlyReason) {
-        pushToast('A reason is required for early pickup.', 'error');
-        return;
+      if (!ok) {
+        // "No, regular sign-out" — proceed without reason
+        earlyReason = null;
+      } else {
+        earlyReason = (note ?? '').trim() || null;
       }
     }
 
@@ -590,14 +589,14 @@ export default function StudentAttendancePage() {
       () => {
         pushToast(combinedNoteText ? 'Sign-out saved with note.' : 'Sign-out saved.', 'success');
         clearStudentMeta(selectedDate, [student.id]);
-        loadSection(classId, sectionId, selectedDate);
+        // Optimistic update already reflects sign-out — no refetch needed
       },
       (msg) => {
         updateStudent(classId, sectionId, student, selectedDate);
         pushToast(msg || 'Failed to sign out.', 'error');
       },
     );
-  }, [isReadOnly, students, updateStudent, selectedDate, patchMark, pushToast, loadSection, clearStudentMeta]);
+  }, [isReadOnly, students, updateStudent, selectedDate, patchMark, pushToast, clearStudentMeta]);
 
   const handleBulkMark = useCallback((classId: number, sectionId: number, status: AttendanceStatus) => {
     const key = `${classId}-${sectionId}`;
@@ -634,12 +633,12 @@ export default function StudentAttendancePage() {
       (saved) => {
         pushToast(`${saved} attendance record(s) updated.`, 'success');
         clearStudentMeta(selectedDate, targets.map((t) => t.id));
-        loadSection(classId, sectionId, selectedDate);
+        // Optimistic update already reflects bulk mark — no refetch needed
       },
       () => pushToast('Failed to update attendance.', 'error'),
     );
     setSelectedRows((prev) => ({ ...prev, [key]: new Set() }));
-  }, [selectedRows, students, selectedDate, saveBulk, updateStudent, pushToast, loadSection, clearStudentMeta]);
+  }, [selectedRows, students, selectedDate, saveBulk, updateStudent, pushToast, clearStudentMeta]);
 
   const handleBulkSignIn = useCallback((classId: number, sectionId: number) => {
     const key = `${classId}-${sectionId}`;
@@ -665,11 +664,11 @@ export default function StudentAttendancePage() {
       (saved) => {
         pushToast(`${saved} sign-in record(s) saved.`, 'success');
         clearStudentMeta(selectedDate, targets.map((t) => t.id));
-        loadSection(classId, sectionId, selectedDate);
+        // Optimistic update already reflects sign-in — no refetch needed
       },
       () => pushToast('Failed to save bulk sign-in.', 'error'),
     );
-  }, [selectedRows, students, selectedDate, saveBulk, pushToast, updateStudent, loadSection, clearStudentMeta]);
+  }, [selectedRows, students, selectedDate, saveBulk, pushToast, updateStudent, clearStudentMeta]);
 
   const handleSave = useCallback((classId: number, sectionId: number) => {
     const key = `${classId}-${sectionId}`;
@@ -690,25 +689,21 @@ export default function StudentAttendancePage() {
     saveBulk(
       marks,
       (saved) => {
-        // Issue #9: close the accordion AND show a small success toast.
+        // Close the accordion and show toast — no full reload needed
         pushToast(`✓ Saved ${saved} attendance record(s).`, 'success');
         setOpenClasses((prev) => {
           const next = new Set(prev);
           next.delete(classId);
           return next;
         });
-        // Clear selections for this section.
         setSelectedRows((prev) => ({ ...prev, [`${classId}-${sectionId}`]: new Set() }));
-        // CHANGED (persistence): drop optimistic overlay and pull server truth
-        // so what's displayed equals what's actually persisted.
         clearStudentMeta(selectedDate, marks.map((m) => m.student_id));
-        loadSection(classId, sectionId, selectedDate);
-        // Refresh class-summary so accordion percentages reflect what was just saved.
+        // Only refresh class-summary counts (header percentages) — not the student list
         refreshClassSummary();
       },
       (msg) => pushToast(msg ? `Failed to save: ${msg}` : 'Failed to save attendance.', 'error'),
     );
-  }, [students, selectedDate, saveBulk, pushToast, refreshClassSummary, loadSection, clearStudentMeta]);
+  }, [students, selectedDate, saveBulk, pushToast, refreshClassSummary, clearStudentMeta]);
 
   const handleOpenNote = useCallback((classId: number, sectionId: number, student: Student, mode: 'add' | 'view' = 'add') => {
     // Issue #3: Add icon ALWAYS opens a fresh-note composer, View icon ALWAYS
@@ -724,57 +719,60 @@ export default function StudentAttendancePage() {
     if (!student) return;
     const newNote: StudentNote = { id: `note-${Date.now()}`, text: noteText, created_at: new Date().toISOString() };
     const updatedNotes = [...student.notes, newNote];
+    // absent_reason is the status-change reason (from AbsentNoteDialog/LateCommerDialog), not a note.
+    // Never overwrite it when adding a note.
     updateStudent(classId, sectionId, { ...student, notes: updatedNotes, notes_count: updatedNotes.length }, selectedDate);
+    // Combine all note texts with delimiter so backend persists all notes
+    const combinedNoteText = updatedNotes.map((n) => n.text).join('|||');
     patchMark(
       student.id,
-      { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: noteText },
+      { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: combinedNoteText },
       () => {
         pushToast('Note saved.', 'success');
-        clearStudentMeta(selectedDate, [student.id]);
-        loadSection(classId, sectionId, selectedDate);
+        // Don't reload section — optimistic state already has all notes correctly
       },
       (msg) => pushToast(msg || 'Failed to save note.', 'error'),
     );
     setNotesDialogState(null);
-  }, [students, selectedDate, patchMark, updateStudent, pushToast, loadSection, clearStudentMeta]);
+  }, [students, selectedDate, patchMark, updateStudent, pushToast]);
 
   const handleUpdateNote = useCallback((classId: number, sectionId: number, studentId: number, noteId: string, newText: string) => {
     const key = `${classId}-${sectionId}`;
     const student = students[key]?.find((s) => s.id === studentId);
     if (!student) return;
     const updatedNotes = student.notes.map((n) => n.id === noteId ? { ...n, text: newText } : n);
+    // absent_reason is the status-change reason, not a note — never overwrite it here.
     updateStudent(classId, sectionId, { ...student, notes: updatedNotes }, selectedDate);
-    const latest = updatedNotes[updatedNotes.length - 1];
+    const combinedNoteText = updatedNotes.map((n) => n.text).join('|||');
     patchMark(
       student.id,
-      { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: latest?.text ?? '' },
+      { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: combinedNoteText },
       () => {
         pushToast('Note updated.', 'success');
-        clearStudentMeta(selectedDate, [student.id]);
-        loadSection(classId, sectionId, selectedDate);
+        // Don't reload — optimistic state is correct
       },
       (msg) => pushToast(msg || 'Failed to update note.', 'error'),
     );
-  }, [students, selectedDate, patchMark, updateStudent, pushToast, loadSection, clearStudentMeta]);
+  }, [students, selectedDate, patchMark, updateStudent, pushToast]);
 
   const handleDeleteNote = useCallback((classId: number, sectionId: number, studentId: number, noteId: string) => {
     const key = `${classId}-${sectionId}`;
     const student = students[key]?.find((s) => s.id === studentId);
     if (!student) return;
     const updatedNotes = student.notes.filter((n) => n.id !== noteId);
+    // absent_reason is the status-change reason — never clear it when deleting a note.
     updateStudent(classId, sectionId, { ...student, notes: updatedNotes, notes_count: updatedNotes.length }, selectedDate);
-    const latest = updatedNotes[updatedNotes.length - 1];
+    const combinedNoteText = updatedNotes.map((n) => n.text).join('|||');
     patchMark(
       student.id,
-      { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: latest?.text ?? '' },
+      { student_id: student.id, date: selectedDate, class_id: classId, section_id: sectionId, note: combinedNoteText },
       () => {
         pushToast('Note deleted.', 'success');
-        clearStudentMeta(selectedDate, [student.id]);
-        loadSection(classId, sectionId, selectedDate);
+        // Don't reload — optimistic state is correct
       },
       (msg) => pushToast(msg || 'Failed to delete note.', 'error'),
     );
-  }, [students, selectedDate, patchMark, updateStudent, pushToast, loadSection, clearStudentMeta]);
+  }, [students, selectedDate, patchMark, updateStudent, pushToast]);
 
   const handleReset = useCallback(async (classId: number, sectionId: number) => {
     // Issue #9: Reset must wipe today's attendance state on the server too,

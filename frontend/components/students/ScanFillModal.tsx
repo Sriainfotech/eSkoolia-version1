@@ -59,10 +59,72 @@ const FIELD_LABEL_MAP: Record<string, string> = Object.fromEntries(
   FIELD_GROUPS.flatMap(g => g.fields.map(f => [f.key, f.label]))
 );
 
-// ─── OCR extraction ───────────────────────────────────────────────────────────
-// Maps an extracted plain-text blob to the form fields we want to autofill.
+// ─── typed errors for precise user-facing messages ───────────────────────────
+class ScanError extends Error {
+  constructor(
+    public readonly code:
+      | "file_type"
+      | "file_size"
+      | "pdf_corrupt"
+      | "pdf_protected"
+      | "pdf_empty"
+      | "pdf_render"
+      | "ocr_engine"
+      | "no_text",
+    message: string
+  ) {
+    super(message);
+    this.name = "ScanError";
+  }
+}
+
+const SCAN_ERROR_MESSAGES: Record<ScanError["code"], { title: string; detail: string; tip: string }> = {
+  file_type: {
+    title: "Unsupported file type",
+    detail: "Only PDF, JPG, PNG, and WEBP files are accepted.",
+    tip: "If the form was filled in Word or Excel, export it as a PDF first (File → Save As → PDF).",
+  },
+  file_size: {
+    title: "File is too large",
+    detail: "Maximum file size is 20 MB.",
+    tip: "Compress the PDF at smallpdf.com, or reduce image resolution before uploading.",
+  },
+  pdf_corrupt: {
+    title: "PDF could not be opened",
+    detail: "The file appears to be corrupted or incomplete.",
+    tip: "Try re-saving the PDF (Open in any PDF viewer → File → Print → Save as PDF) and upload again.",
+  },
+  pdf_protected: {
+    title: "PDF is password-protected",
+    detail: "This PDF has security restrictions that prevent reading its contents.",
+    tip: "Remove the password in Adobe Acrobat or any PDF viewer (usually under Document Properties → Security) and try again.",
+  },
+  pdf_empty: {
+    title: "PDF has no pages",
+    detail: "The uploaded PDF appears to be empty.",
+    tip: "Verify the file opens correctly in a PDF viewer, then try uploading again.",
+  },
+  pdf_render: {
+    title: "PDF page could not be rendered",
+    detail: "The browser could not draw this PDF page for scanning.",
+    tip: "Try refreshing the page and uploading again. If the problem persists, export the PDF to a JPG image and upload that instead.",
+  },
+  ocr_engine: {
+    title: "Text recognition failed",
+    detail: "The OCR engine could not process this file.",
+    tip: "Try again. If the error repeats, export the PDF as a JPG (using any PDF viewer's Print → Save as Image) and upload the image.",
+  },
+  no_text: {
+    title: "No form fields detected",
+    detail: "The file was read but no recognisable admission form fields were found.",
+    tip: "Ensure the uploaded file is the Eskoolia Admission Form. For handwritten or scanned forms, check that all text is clearly visible and written in BLOCK LETTERS.",
+  },
+};
+
+// ─── field extraction from text ──────────────────────────────────────────────
 function extractFieldsFromText(text: string): Record<string, string> {
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+
   const findAfterLabel = (label: string): string => {
     const idx = lines.findIndex(l => l.toUpperCase().includes(label.toUpperCase()));
     if (idx >= 0 && idx + 1 < lines.length) {
@@ -70,138 +132,175 @@ function extractFieldsFromText(text: string): Record<string, string> {
       if (val && !val.toUpperCase().includes("SECTION") && !val.toUpperCase().includes("STUDENT"))
         return val;
     }
-    // Same-line "LABEL: VALUE" fallback.
-    const same = lines.find(l => l.toUpperCase().includes(label.toUpperCase()) && /[:\-]/.test(l));
-    if (same) {
-      const m = same.split(/[:\-]/).slice(1).join(":").trim();
-      if (m) return m;
+    if (idx >= 0) {
+      const m = lines[idx].match(/[:=]\s*(.+)$/);
+      if (m && m[1].trim().length > 0) return m[1].trim();
     }
     return "";
   };
-  const raw: Record<string, string> = {
-    firstName:          findAfterLabel("FIRST NAME"),
-    lastName:           findAfterLabel("LAST NAME"),
-    dateOfBirth:        findAfterLabel("DATE OF BIRTH"),
-    gender:             findAfterLabel("GENDER"),
-    bloodGroup:         findAfterLabel("BLOOD GROUP"),
-    religion:           findAfterLabel("RELIGION"),
-    nationality:        findAfterLabel("NATIONALITY"),
-    motherTongue:       findAfterLabel("MOTHER TONGUE"),
-    phone:              findAfterLabel("MOBILE PHONE"),
-    email:              findAfterLabel("EMAIL"),
-    addressLine:        findAfterLabel("ADDRESS LINE"),
-    city:               findAfterLabel("CITY"),
-    district:           findAfterLabel("DISTRICT"),
-    stateName:          findAfterLabel("STATE"),
-    pincode:            findAfterLabel("PINCODE"),
-    guardianName:       findAfterLabel("GUARDIAN FULL NAME"),
-    guardianRelation:   findAfterLabel("RELATIONSHIP"),
-    guardianPhone:      findAfterLabel("GUARDIAN MOBILE"),
-    guardianEmail:      findAfterLabel("GUARDIAN EMAIL"),
-    guardianOccupation: findAfterLabel("GUARDIAN OCCUPATION"),
-    aadhaarNo:          findAfterLabel("AADHAAR"),
+
+  const pick = (...labels: string[]) => {
+    for (const lbl of labels) { const v = findAfterLabel(lbl); if (v) return v; }
+    return "";
   };
+
+  const raw: Record<string, string> = {
+    firstName:          pick("FIRST NAME", "GIVEN NAME"),
+    lastName:           pick("LAST NAME", "SURNAME"),
+    dateOfBirth:        pick("DATE OF BIRTH", "DOB", "D.O.B"),
+    gender:             pick("GENDER", "SEX"),
+    bloodGroup:         pick("BLOOD GROUP", "BLOOD TYPE"),
+    religion:           pick("RELIGION"),
+    nationality:        pick("NATIONALITY"),
+    motherTongue:       pick("MOTHER TONGUE"),
+    phone:              pick("MOBILE PHONE", "MOBILE", "PHONE"),
+    email:              pick("EMAIL"),
+    addressLine:        pick("ADDRESS LINE", "ADDRESS"),
+    city:               pick("CITY", "TOWN"),
+    district:           pick("DISTRICT"),
+    stateName:          pick("STATE"),
+    pincode:            pick("PINCODE", "PIN CODE", "POSTAL CODE"),
+    guardianName:       pick("GUARDIAN FULL NAME", "GUARDIAN NAME", "FATHER", "MOTHER"),
+    guardianRelation:   pick("RELATIONSHIP"),
+    guardianPhone:      pick("GUARDIAN MOBILE", "GUARDIAN PHONE"),
+    guardianEmail:      pick("GUARDIAN EMAIL"),
+    guardianOccupation: pick("GUARDIAN OCCUPATION"),
+    aadhaarNo:          pick("AADHAAR", "AADHAR", "UID"),
+  };
+
   Object.keys(raw).forEach(k => { if (!raw[k]) delete raw[k]; });
   return raw;
 }
 
-// Extract text from a PDF file by rasterising each page (up to 5) and OCRing it.
-async function extractTextFromPdf(
-  file: File,
-  onProgress: (p: number) => void,
-): Promise<string> {
-  const pdfjs: typeof import("pdfjs-dist") = await import("pdfjs-dist");
-  // Worker setup — match the pattern used elsewhere (ConsentForm) and load
-  // the matching worker from the unpkg CDN. Avoids Next.js bundler quirks
-  // around the `?url` import suffix.
-  (pdfjs as any).GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
-  const buf = await file.arrayBuffer();
-  const doc = await pdfjs.getDocument({ data: buf }).promise;
-  const Tesseract = await import("tesseract.js");
-  const worker = await Tesseract.createWorker("eng", 1, {});
-  const pages = Math.min(doc.numPages, 5);
-  let combined = "";
-  for (let i = 1; i <= pages; i++) {
-    const page = await doc.getPage(i);
-    // First try the embedded text layer — fast and accurate when present.
-    try {
-      const tc = await page.getTextContent();
-      const pageText = tc.items.map((it: any) => ("str" in it ? it.str : "")).join("\n");
-      if (pageText.trim().length > 30) {
-        combined += pageText + "\n";
-        onProgress(10 + Math.round((i / pages) * 80));
-        continue;
-      }
-    } catch { /* fall through to OCR */ }
-    // Fallback: rasterise and OCR the page.
-    const viewport = page.getViewport({ scale: 2 });
-    const canvas = document.createElement("canvas");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) continue;
-    await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
-    const result = await worker.recognize(canvas);
-    combined += result.data.text + "\n";
-    onProgress(10 + Math.round((i / pages) * 80));
-  }
-  await worker.terminate();
-  return combined;
-}
-
-// Extract text from a DOCX file using mammoth.
-async function extractTextFromDocx(file: File): Promise<string> {
-  // mammoth's browser bundle works in the browser without Node deps.
-  const mammoth: any = await import("mammoth/mammoth.browser.js");
-  const buf = await file.arrayBuffer();
-  const out = await (mammoth.extractRawText
-    ? mammoth.extractRawText({ arrayBuffer: buf })
-    : mammoth.default.extractRawText({ arrayBuffer: buf }));
-  return out?.value || "";
-}
+// ─── OCR extraction ───────────────────────────────────────────────────────────
+// Returns extracted fields + the mode used (for progress text)
+type ScanMode = "pdf-text" | "pdf-ocr" | "image-ocr";
 
 async function runOcr(
   file: File,
-  onProgress: (p: number) => void
+  onProgress: (p: number) => void,
+  onPreview?: (url: string) => void,
+  onMode?: (m: ScanMode) => void
 ): Promise<Record<string, string>> {
-  const name = (file.name || "").toLowerCase();
-  const type = (file.type || "").toLowerCase();
-  onProgress(10);
+  const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
 
-  // PDF — rasterise pages and OCR (or read embedded text if available).
-  if (type === "application/pdf" || name.endsWith(".pdf")) {
-    const text = await extractTextFromPdf(file, onProgress);
+  if (isPdf) {
+    let pdfjsLib: typeof import("pdfjs-dist");
+    try {
+      pdfjsLib = await import("pdfjs-dist");
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+    } catch {
+      throw new ScanError("pdf_corrupt", "pdfjs-dist failed to load");
+    }
+    onProgress(10);
+
+    const arrayBuffer = await file.arrayBuffer();
+    let pdfDoc: Awaited<ReturnType<typeof pdfjsLib.getDocument>["promise"]>;
+    try {
+      pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message.toLowerCase() : "";
+      if (msg.includes("password")) throw new ScanError("pdf_protected", "PDF is password protected");
+      throw new ScanError("pdf_corrupt", "Could not open PDF");
+    }
+
+    if (pdfDoc.numPages === 0) throw new ScanError("pdf_empty", "PDF has 0 pages");
+    onProgress(20);
+
+    // Try text layer first (digital/typed PDFs — fast & accurate)
+    let allText = "";
+    for (let pageNum = 1; pageNum <= Math.min(pdfDoc.numPages, 5); pageNum++) {
+      const page = await pdfDoc.getPage(pageNum);
+      const content = await page.getTextContent();
+      const sorted = [...content.items].sort((a, b) => {
+        const ay = (a as { transform: number[] }).transform[5];
+        const by = (b as { transform: number[] }).transform[5];
+        const ax = (a as { transform: number[] }).transform[4];
+        const bx = (b as { transform: number[] }).transform[4];
+        if (Math.abs(ay - by) > 5) return by - ay;
+        return ax - bx;
+      });
+      allText += sorted.map(item => (item as { str: string }).str).join("\n") + "\n";
+    }
+    onProgress(40);
+
+    // Render page 1 for preview
+    let canvas: HTMLCanvasElement;
+    try {
+      const page1 = await pdfDoc.getPage(1);
+      const vp = page1.getViewport({ scale: 1.5 });
+      canvas = document.createElement("canvas");
+      canvas.width = vp.width; canvas.height = vp.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new ScanError("pdf_render", "Canvas 2D context unavailable");
+      await page1.render({ canvasContext: ctx, viewport: vp, canvas }).promise;
+      onPreview?.(canvas.toDataURL("image/png"));
+    } catch (e) {
+      if (e instanceof ScanError) throw e;
+      throw new ScanError("pdf_render", "Failed to render PDF page");
+    }
+    onProgress(55);
+
+    if (allText.replace(/\s/g, "").length > 80) {
+      // Digital PDF — text layer is rich, no OCR needed
+      onMode?.("pdf-text");
+      onProgress(95);
+      return extractFieldsFromText(allText); // may be empty if PDF isn't the admission form — review step shows why
+    }
+
+    // Scanned PDF — fall back to Tesseract on rendered canvas
+    onMode?.("pdf-ocr");
+    let Tesseract: typeof import("tesseract.js");
+    try {
+      Tesseract = await import("tesseract.js");
+    } catch {
+      throw new ScanError("ocr_engine", "Tesseract.js failed to load");
+    }
+    const worker = await Tesseract.createWorker("eng", 1, {
+      logger: (m: { status: string; progress?: number }) => {
+        if (m.status === "recognizing text" && m.progress)
+          onProgress(55 + Math.round(m.progress * 40));
+      },
+    });
+    let ocrResult: { data: { text: string } };
+    try {
+      ocrResult = await worker.recognize(canvas!);
+    } catch {
+      await worker.terminate().catch(() => {});
+      throw new ScanError("ocr_engine", "Tesseract OCR recognition failed");
+    }
+    await worker.terminate();
     onProgress(95);
-    return extractFieldsFromText(text);
+    const scannedResult = extractFieldsFromText(ocrResult.data.text);
+    return scannedResult; // may be empty — review step will show the "no fields detected" message
   }
 
-  // DOCX — direct text extraction (no OCR needed).
-  if (
-    type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-    name.endsWith(".docx")
-  ) {
-    const text = await extractTextFromDocx(file);
-    onProgress(90);
-    return extractFieldsFromText(text);
+  // Image file (JPEG / PNG / WEBP)
+  onMode?.("image-ocr");
+  let Tesseract: typeof import("tesseract.js");
+  try {
+    Tesseract = await import("tesseract.js");
+  } catch {
+    throw new ScanError("ocr_engine", "Tesseract.js failed to load");
   }
-
-  // Legacy .doc — not supported by mammoth in-browser; ask the user to convert.
-  if (type === "application/msword" || name.endsWith(".doc")) {
-    throw new Error(".doc (Word 97-2003) is not supported in-browser. Please save the file as .docx or PDF and try again.");
-  }
-
-  // Image — original tesseract path.
-  const Tesseract = await import("tesseract.js");
+  onProgress(10);
   const worker = await Tesseract.createWorker("eng", 1, {
     logger: (m: { status: string; progress?: number }) => {
       if (m.status === "recognizing text" && m.progress)
         onProgress(10 + Math.round(m.progress * 80));
     },
   });
-  const result = await worker.recognize(file);
+  let ocrResult: { data: { text: string } };
+  try {
+    ocrResult = await worker.recognize(file);
+  } catch {
+    await worker.terminate().catch(() => {});
+    throw new ScanError("ocr_engine", "Tesseract OCR recognition failed");
+  }
   await worker.terminate();
   onProgress(95);
-  return extractFieldsFromText(result.data.text);
+  const imageResult = extractFieldsFromText(ocrResult.data.text);
+  return imageResult; // may be empty — review step will show the "no fields detected" message
 }
 
 // ─── component ────────────────────────────────────────────────────────────────
@@ -218,28 +317,57 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
   const [previewUrl, setPreviewUrl] = useState("");
   const [fileName, setFileName] = useState("");
   const [progress, setProgress] = useState(0);
-  const [ocrError, setOcrError] = useState("");
+  const [scanError, setScanError] = useState<ScanError | null>(null);
+  const [scanMode, setScanMode] = useState<ScanMode | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [dragging, setDragging] = useState(false);
+  const [showMissingPrompt, setShowMissingPrompt] = useState(false);
 
   const missingRequired = REQUIRED_KEYS.filter(k => !fields[k]?.trim());
   const filledCount = Object.values(fields).filter(v => v?.trim()).length;
 
+  const ACCEPTED_TYPES = new Set([
+    "application/pdf",
+    "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+  ]);
+  const MAX_SIZE_MB = 20;
+
   const handleFile = async (file: File) => {
-    setOcrError("");
+    setScanError(null);
     setFileName(file.name);
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
+
+    // ── File validation ──
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    const isPdf = file.type === "application/pdf" || ext === "pdf";
+    const isImage = file.type.startsWith("image/") || ["jpg","jpeg","png","webp","gif"].includes(ext);
+
+    if (!ACCEPTED_TYPES.has(file.type) && !isPdf && !isImage) {
+      setScanError(new ScanError("file_type", `Unsupported type: ${file.type || ext}`));
+      return;
+    }
+    if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+      const sizeMb = (file.size / 1024 / 1024).toFixed(1);
+      setScanError(new ScanError("file_size", `File is ${sizeMb} MB`));
+      return;
+    }
+
+    if (!isPdf) setPreviewUrl(URL.createObjectURL(file));
     setStep("scanning");
     setProgress(5);
+    setScanMode(null);
+    setShowMissingPrompt(false);
     try {
-      const extracted = await runOcr(file, setProgress);
+      const extracted = await runOcr(file, setProgress, setPreviewUrl, setScanMode);
       setFields(extracted);
       setProgress(100);
       setStep("review");
     } catch (e) {
       console.error(e);
-      setOcrError("OCR failed. The image may be unclear. Try a sharper scan.");
+      if (e instanceof ScanError) {
+        setScanError(e);
+      } else {
+        setScanError(new ScanError("pdf_corrupt", String(e)));
+      }
       setStep("pick");
     }
   };
@@ -252,8 +380,27 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
   };
 
   const handleApply = () => {
+    if (missingRequired.length > 0) {
+      setShowMissingPrompt(true);
+      return;
+    }
     onApply(fields);
     onClose();
+  };
+
+  const handleFillManually = () => {
+    // Apply whatever was successfully extracted — admin fills the rest in the enrollment form
+    onApply(fields);
+    onClose();
+  };
+
+  const handleScanAgain = () => {
+    setShowMissingPrompt(false);
+    setStep("pick");
+    setFields({});
+    setPreviewUrl("");
+    setFileName("");
+    setScanMode(null);
   };
 
   return (
@@ -278,7 +425,7 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
             </h2>
             <p style={{ margin: "3px 0 0", fontSize: 12, color: "#c4b5fd" }}>
               {step === "pick" && "Select or drop a scanned / photographed admission form"}
-              {step === "scanning" && `Scanning "${fileName}" with OCR…`}
+              {step === "scanning" && `Reading "${fileName}"…`}
               {step === "review" && `${filledCount} fields extracted. Review & correct before applying.`}
             </p>
           </div>
@@ -310,7 +457,7 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
                   Drop the scanned form here
                 </p>
                 <p style={{ fontSize: 13, color: "#6b7280", marginBottom: 20 }}>
-                  Accepts JPEG, PNG, WEBP, PDF and DOCX — or use the button below
+                  Accepts PDF (typed or scanned), JPEG, PNG, WEBP — or use the button below
                 </p>
                 <button type="button"
                   style={{ padding: "10px 28px", background: "#6c3ce1", color: "#fff",
@@ -322,14 +469,26 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
                   For best results: good lighting, all 4 corners visible, text in BLOCK LETTERS
                 </p>
               </div>
-              {ocrError && (
-                <div style={{ marginTop: 16, background: "#fef2f2", border: "1px solid #fecaca",
-                  borderRadius: 8, padding: "12px 16px", color: "#dc2626", fontSize: 13,
-                  maxWidth: 520, width: "100%", textAlign: "center" }}>
-                  ⚠ {ocrError}
-                </div>
-              )}
-              <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,.pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.docx,application/msword,.doc"
+              {scanError && (() => {
+                const info = SCAN_ERROR_MESSAGES[scanError.code];
+                return (
+                  <div style={{ marginTop: 16, background: "#fef2f2", border: "1.5px solid #fca5a5",
+                    borderRadius: 10, padding: "14px 18px", maxWidth: 520, width: "100%" }}>
+                    <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 13, color: "#dc2626" }}>
+                      ⚠ {info.title}
+                    </p>
+                    <p style={{ margin: "0 0 8px", fontSize: 12.5, color: "#7f1d1d" }}>
+                      {info.detail}
+                    </p>
+                    <p style={{ margin: 0, fontSize: 12, color: "#92400e",
+                      background: "#fffbeb", borderRadius: 6, padding: "7px 10px",
+                      border: "1px solid #fde68a" }}>
+                      💡 {info.tip}
+                    </p>
+                  </div>
+                );
+              })()}
+              <input ref={fileInputRef} type="file" accept="*/*"
                 style={{ display: "none" }}
                 onChange={e => { const f = e.target.files?.[0]; if (f) void handleFile(f); }} />
             </div>
@@ -354,7 +513,13 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
                   <div style={{ background: "#6c3ce1", height: "100%", width: `${progress}%`,
                     transition: "width 0.3s ease", borderRadius: 100 }} />
                 </div>
-                <p style={{ fontSize: 12, color: "#6b7280" }}>{progress}% — Extracting text with OCR…</p>
+                <p style={{ fontSize: 12, color: "#6b7280" }}>
+                  {progress}% —{" "}
+                  {scanMode === "pdf-text" && "Reading text layer from PDF…"}
+                  {scanMode === "pdf-ocr" && "Running OCR on scanned PDF…"}
+                  {scanMode === "image-ocr" && "Running OCR on image…"}
+                  {!scanMode && "Preparing file…"}
+                </p>
               </div>
             </div>
           )}
@@ -369,7 +534,7 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
                 alignItems: "center", padding: 16, gap: 10, overflowY: "auto" }}>
                 <p style={{ fontSize: 11, fontWeight: 600, color: "#6b7280",
                   textTransform: "uppercase", letterSpacing: "0.5px", margin: 0 }}>
-                  Original scan
+                  {scanMode === "pdf-text" ? "PDF preview" : "Original scan"}
                 </p>
                 <img src={previewUrl} alt="Scanned form"
                   style={{ width: "100%", borderRadius: 8, border: "1px solid #e5e7eb",
@@ -388,8 +553,12 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
               {/* Right — editable extracted form */}
               <div style={{ flex: 1, overflowY: "auto", padding: "16px 24px" }}>
                 <p style={{ fontSize: 13, color: "#6b7280", marginBottom: 16 }}>
-                  OCR extracted <strong style={{ color: "#111827" }}>{filledCount} fields</strong>.
-                  Correct any mistakes — values here will fill the enrollment form.
+                  {scanMode === "pdf-text"
+                    ? <><strong style={{ color: "#059669" }}>✓ Digital PDF</strong> — text read directly, {filledCount} fields extracted. No OCR was needed.</>
+                    : scanMode === "pdf-ocr"
+                    ? <><strong style={{ color: "#d97706" }}>Scanned PDF</strong> — OCR processed the scan, {filledCount} fields extracted. Review carefully for misreads.</>
+                    : <><strong style={{ color: "#d97706" }}>Image OCR</strong> — {filledCount} fields extracted. Correct any recognition errors below.</>
+                  }
                 </p>
 
                 {FIELD_GROUPS.map(group => (
@@ -442,32 +611,54 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
                   </div>
                 ))}
 
-                {/* Missing fields summary */}
-                {missingRequired.length > 0 && (
+                {/* Missing fields summary — compact inline indicator only; prompt appears on Apply */}
+                {missingRequired.length > 0 && !showMissingPrompt && (
                   <div style={{ marginTop: 8, background: "#fff5f5", border: "1px solid #fecaca",
-                    borderRadius: 8, padding: "12px 16px" }}>
-                    <p style={{ fontSize: 12, fontWeight: 700, color: "#dc2626", margin: "0 0 6px" }}>
-                      ⚠ {missingRequired.length} required field{missingRequired.length > 1 ? "s" : ""} still empty:
-                    </p>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                      {missingRequired.map(k => (
-                        <span key={k} style={{ background: "#fee2e2", color: "#dc2626",
-                          padding: "2px 8px", borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
-                          {FIELD_LABEL_MAP[k]}
-                        </span>
-                      ))}
+                    borderRadius: 8, padding: "10px 14px", display: "flex", alignItems: "flex-start", gap: 10 }}>
+                    <span style={{ fontSize: 18, lineHeight: 1 }}>⚠</span>
+                    <div style={{ flex: 1 }}>
+                      <p style={{ fontSize: 12, fontWeight: 700, color: "#dc2626", margin: "0 0 5px" }}>
+                        {missingRequired.length} required field{missingRequired.length > 1 ? "s" : ""} not found in the scan:
+                      </p>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 6 }}>
+                        {missingRequired.map(k => (
+                          <span key={k} style={{ background: "#fee2e2", color: "#b91c1c",
+                            padding: "2px 9px", borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                            {FIELD_LABEL_MAP[k]}
+                          </span>
+                        ))}
+                      </div>
+                      <p style={{ fontSize: 11, color: "#6b7280", margin: 0 }}>
+                        Click <strong>Apply to form</strong> below — you&apos;ll be asked whether to scan again or fill them manually.
+                      </p>
                     </div>
-                    <p style={{ fontSize: 11, color: "#6b7280", margin: "8px 0 0" }}>
-                      Fill these manually or apply now — you can edit them in the form.
-                    </p>
                   </div>
                 )}
 
                 {filledCount === 0 && (
                   <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8,
-                    padding: "14px 16px", textAlign: "center", color: "#92400e", fontSize: 13 }}>
-                    ⚠ No text could be extracted. Please ensure the scan has good lighting,
-                    all 4 corners are visible, and text is filled in BLOCK LETTERS.
+                    padding: "14px 16px", color: "#92400e", fontSize: 13 }}>
+                    <p style={{ margin: "0 0 8px", fontWeight: 700 }}>⚠ No fields could be extracted</p>
+                    {scanMode === "pdf-text" ? (
+                      <>
+                        <p style={{ margin: "0 0 6px" }}>The PDF text layer was read but no admission form fields were recognised. This can happen if:</p>
+                        <ul style={{ margin: "0 0 8px", paddingLeft: 18, lineHeight: 1.8 }}>
+                          <li>The uploaded file is not the Eskoolia Admission Form</li>
+                          <li>The form labels are in a language or format the extractor doesn&apos;t recognise</li>
+                        </ul>
+                        <p style={{ margin: 0 }}>💡 Try uploading the correct Eskoolia blank form filled with student details.</p>
+                      </>
+                    ) : (
+                      <>
+                        <p style={{ margin: "0 0 6px" }}>The image was scanned but no text was recognised. Common causes:</p>
+                        <ul style={{ margin: "0 0 8px", paddingLeft: 18, lineHeight: 1.8 }}>
+                          <li>Image is blurry, too dark, or has shadows / glare</li>
+                          <li>Form is not filled — text fields are blank</li>
+                          <li>Handwriting is too faint or not in BLOCK LETTERS</li>
+                        </ul>
+                        <p style={{ margin: 0 }}>💡 Retake the photo in good natural light with all 4 corners of the form visible.</p>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -477,30 +668,93 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
 
         {/* Footer */}
         {step === "review" && (
-          <div style={{ padding: "14px 24px", borderTop: "1px solid #e5e7eb",
-            background: "#f9fafb", borderRadius: "0 0 16px 16px",
-            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
-              <strong style={{ color: "#111827" }}>{filledCount}</strong> fields filled &nbsp;·&nbsp;
-              <strong style={{ color: missingRequired.length > 0 ? "#dc2626" : "#10b981" }}>
-                {missingRequired.length}</strong> required still empty
-            </span>
-            <div style={{ display: "flex", gap: 10 }}>
-              <button type="button" onClick={onClose}
-                style={{ padding: "9px 18px", background: "#fff", border: "1px solid #d1d5db",
-                  borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", color: "#374151" }}>
-                Cancel
-              </button>
-              <button type="button" onClick={handleApply}
-                style={{ padding: "9px 22px",
-                  background: missingRequired.length === 0 ? "#10b981" : "#6c3ce1",
-                  color: "#fff", border: "none", borderRadius: 8, fontSize: 13,
-                  fontWeight: 700, cursor: "pointer" }}>
-                {missingRequired.length === 0
-                  ? `✓ Apply all ${filledCount} fields to form`
-                  : `Apply to form (fill ${missingRequired.length} missing fields later)`}
-              </button>
-            </div>
+          <div style={{ borderTop: "1px solid #e5e7eb", borderRadius: "0 0 16px 16px", overflow: "hidden" }}>
+
+            {/* ── Missing fields decision prompt ── */}
+            {showMissingPrompt && (
+              <div style={{ background: "linear-gradient(135deg,#1a0540,#3b1d8a)", padding: "20px 28px" }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 16, marginBottom: 18 }}>
+                  <div style={{ fontSize: 28, lineHeight: 1, flexShrink: 0 }}>🔍</div>
+                  <div>
+                    <p style={{ margin: "0 0 4px", fontWeight: 700, fontSize: 14, color: "#fff" }}>
+                      {missingRequired.length} required field{missingRequired.length > 1 ? "s were" : " was"} not found in the scan
+                    </p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 8 }}>
+                      {missingRequired.map(k => (
+                        <span key={k} style={{ background: "rgba(254,202,202,0.25)", color: "#fca5a5",
+                          border: "1px solid rgba(254,202,202,0.4)",
+                          padding: "2px 9px", borderRadius: 12, fontSize: 11, fontWeight: 600 }}>
+                          {FIELD_LABEL_MAP[k]}
+                        </span>
+                      ))}
+                    </div>
+                    <p style={{ margin: 0, fontSize: 12, color: "#c4b5fd" }}>
+                      What would you like to do?
+                    </p>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button type="button" onClick={handleScanAgain}
+                    style={{ flex: 1, minWidth: 180, padding: "11px 16px",
+                      background: "rgba(255,255,255,0.12)", border: "1.5px solid rgba(255,255,255,0.3)",
+                      borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#fff",
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+                    <span style={{ fontSize: 16 }}>🔄</span>
+                    <span>
+                      <span style={{ display: "block" }}>Scan again</span>
+                      <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.75 }}>Upload a clearer version of the form</span>
+                    </span>
+                  </button>
+                  <button type="button" onClick={handleFillManually}
+                    style={{ flex: 1, minWidth: 180, padding: "11px 16px",
+                      background: "#10b981", border: "none",
+                      borderRadius: 9, fontSize: 13, fontWeight: 700, cursor: "pointer", color: "#fff",
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}>
+                    <span style={{ fontSize: 16 }}>✏️</span>
+                    <span>
+                      <span style={{ display: "block" }}>Apply &amp; fill manually</span>
+                      <span style={{ fontSize: 11, fontWeight: 400, opacity: 0.85 }}>
+                        Apply {filledCount} extracted field{filledCount !== 1 ? "s" : ""} · complete the rest in the form
+                      </span>
+                    </span>
+                  </button>
+                  <button type="button" onClick={() => setShowMissingPrompt(false)}
+                    style={{ padding: "11px 14px", background: "none",
+                      border: "1.5px solid rgba(255,255,255,0.2)", borderRadius: 9,
+                      fontSize: 12, cursor: "pointer", color: "rgba(255,255,255,0.6)" }}>
+                    ← Back to review
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Normal footer ── */}
+            {!showMissingPrompt && (
+              <div style={{ padding: "14px 24px", background: "#f9fafb",
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <span style={{ fontSize: 12, color: "#6b7280" }}>
+                  <strong style={{ color: "#111827" }}>{filledCount}</strong> fields filled &nbsp;·&nbsp;
+                  <strong style={{ color: missingRequired.length > 0 ? "#dc2626" : "#10b981" }}>
+                    {missingRequired.length}</strong> required still empty
+                </span>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button type="button" onClick={onClose}
+                    style={{ padding: "9px 18px", background: "#fff", border: "1px solid #d1d5db",
+                      borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: "pointer", color: "#374151" }}>
+                    Cancel
+                  </button>
+                  <button type="button" onClick={handleApply}
+                    style={{ padding: "9px 22px",
+                      background: missingRequired.length === 0 ? "#10b981" : "#6c3ce1",
+                      color: "#fff", border: "none", borderRadius: 8, fontSize: 13,
+                      fontWeight: 700, cursor: "pointer" }}>
+                    {missingRequired.length === 0
+                      ? `✓ Apply all ${filledCount} fields to form`
+                      : `Apply to form →`}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

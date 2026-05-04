@@ -46,6 +46,7 @@ export interface Student {
   absent_reason: string | null;
   arrival_time: string | null;
   is_late: boolean;
+  is_school_approved_late?: boolean;
   late_minutes: number;
   sign_in_time: string | null;
   sign_out_time: string | null;

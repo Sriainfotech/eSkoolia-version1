@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Manrope, Playfair_Display } from "next/font/google";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Spinner } from "@/components/common/Spinner";
 import { PaginationControls } from "@/components/common/PaginationControls";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
@@ -115,9 +115,15 @@ function fullName(row: StudentRow) {
 
 function formatDate(value?: string | null) {
   if (!value) return "-";
+  // Parse YYYY-MM-DD safely without timezone shift
+  const parts = String(value).slice(0, 10).split('-');
+  if (parts.length === 3) {
+    const [y, m, d] = parts;
+    return `${d}/${m}/${y}`;
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString();
+  return date.toLocaleDateString('en-GB'); // DD/MM/YYYY
 }
 
 function normalizeLabel(label: string, fallback: number) {
@@ -225,6 +231,29 @@ export function StudentListPanel() {
   const [achievementsAiBusy, setAchievementsAiBusy] = useState(false);
   const [achievementsAiError, setAchievementsAiError] = useState("");
   const [achievementsAiEditing, setAchievementsAiEditing] = useState(false);
+  // Club membership management in drawer
+  const [drawerStudentClubs, setDrawerStudentClubs] = useState<Array<{ clubId: number; name: string; emoji: string; color: string; bgColor: string; role: string }>>([]);
+  const [drawerAllClubs, setDrawerAllClubs] = useState<Array<{ id: number; name: string; emoji: string; color: string; bgColor: string }>>([]);
+  const [drawerClubsLoading, setDrawerClubsLoading] = useState(false);
+  const [clubAddOpen, setClubAddOpen] = useState(false);
+  const [clubAddTarget, setClubAddTarget] = useState("");
+  const [clubSaving, setClubSaving] = useState(false);
+  const [attViewYear, setAttViewYear] = useState(() => new Date().getFullYear());
+  const [attViewMonth, setAttViewMonth] = useState(() => new Date().getMonth());
+  const [attOpenOverall, setAttOpenOverall] = useState(true);
+  const [attOpenCalendar, setAttOpenCalendar] = useState(false);
+  const [attOpenIncidents, setAttOpenIncidents] = useState(false);
+  // Academic year start year for the attendance drawer (e.g. 2025 means 2025-26)
+  const [drawerAcYearStartYear, setDrawerAcYearStartYear] = useState(() => {
+    const now = new Date();
+    return now.getMonth() >= 5 ? now.getFullYear() : now.getFullYear() - 1;
+  });
+  // Build fetch URL for given student + academic year (June–May range)
+  const drawerAttFetchUrl = (studentId: number, acStartYear: number) => {
+    const from = `${acStartYear}-06-01`;
+    const to = `${acStartYear + 1}-05-31`;
+    return `/api/v1/attendance/student-attendance/?student_id=${studentId}&date_from=${from}&date_to=${to}&page_size=1000`;
+  };
 
   const activeFilterCount = useMemo(() => {
     let n = 0;
@@ -707,6 +736,10 @@ export function StudentListPanel() {
     setViewError("");
     setDrawerTab("profile");
     setViewDrawerOpen(true);
+    setDrawerAttendance([]); // reset on student change
+    // Reset academic year to current year when opening a new student
+    const now = new Date();
+    setDrawerAcYearStartYear(now.getMonth() >= 5 ? now.getFullYear() : now.getFullYear() - 1);
   };
 
   const closeViewDrawer = () => {
@@ -720,24 +753,34 @@ export function StudentListPanel() {
     setAchievementsAiEditing(false);
   };
 
-  // Lazily fetch attendance when its tab is opened
+  // Lazily fetch attendance when its tab is opened or academic year changes
   useEffect(() => {
     if (!viewDrawerOpen || drawerTab !== "attendance" || !viewStudentId) return;
-    if (drawerAttendance.length > 0 || drawerAttendanceLoading) return;
+    if (drawerAttendanceLoading) return;
     let cancelled = false;
     (async () => {
       setDrawerAttendanceLoading(true);
       setDrawerAttendanceError("");
       try {
-        const data = await apiGet<unknown>(`/api/v1/attendance/student-attendance/?student_id=${viewStudentId}`);
+        // Fetch academic year June–May range. Backend `attendance_type` is letter codes P/A/L.
+        const url = drawerAttFetchUrl(viewStudentId, drawerAcYearStartYear);
+        const data = await apiGet<unknown>(url);
         if (cancelled) return;
-        const list = Array.isArray(data)
+        const raw = Array.isArray(data)
           ? data
           : Array.isArray((data as { results?: unknown[] })?.results)
             ? (data as { results: unknown[] }).results
             : Array.isArray((data as { data?: unknown[] })?.data)
               ? (data as { data: unknown[] }).data
               : [];
+        // Normalise: backend field is `attendance_type` (letter codes P/A/L),
+        // map to full-word status so all downstream comparisons work
+        const ATT_TYPE_MAP: Record<string, string> = { P: 'present', A: 'absent', L: 'late', F: 'absent', H: 'holiday' };
+        const list = (raw as Record<string, unknown>[]).map(r => {
+          const rawType = String(r.attendance_type ?? r.status ?? '').toUpperCase();
+          const resolvedStatus = ATT_TYPE_MAP[rawType] ?? String(r.status ?? '').toLowerCase();
+          return { ...r, status: resolvedStatus };
+        });
         setDrawerAttendance(list as Array<{ id: number; attendance_date: string; status?: string; remarks?: string }>);
       } catch {
         if (!cancelled) setDrawerAttendanceError("Could not load attendance for this student.");
@@ -747,7 +790,7 @@ export function StudentListPanel() {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewDrawerOpen, drawerTab, viewStudentId]);
+  }, [viewDrawerOpen, drawerTab, viewStudentId, drawerAcYearStartYear]);
 
   const toggleStudentStatus = async (reason: string = "") => {
     if (!viewStudentId || !viewStudent || viewTogglingStatus) return;
@@ -1075,6 +1118,34 @@ export function StudentListPanel() {
     };
 
     void loadStudentDetail();
+  }, [viewDrawerOpen, viewStudentId]);
+
+  // Fetch student's club memberships + all available clubs when drawer opens
+  useEffect(() => {
+    if (!viewDrawerOpen || !viewStudentId) {
+      setDrawerStudentClubs([]);
+      return;
+    }
+    const loadClubs = async () => {
+      setDrawerClubsLoading(true);
+      try {
+        const [membershipRes, allClubsRes] = await Promise.all([
+          fetch(`/api/student-groups/student-clubs?studentId=${viewStudentId}`),
+          fetch('/api/student-groups?type=CLUB'),
+        ]);
+        if (membershipRes.ok) {
+          const data = await membershipRes.json() as Array<{ clubId: number; name: string; emoji: string; color: string; bgColor: string; role: string }>;
+          setDrawerStudentClubs(Array.isArray(data) ? data : []);
+        }
+        if (allClubsRes.ok) {
+          const all = await allClubsRes.json() as Array<{ id: number; name: string; emoji: string; color: string; bgColor: string; type?: string }>;
+          const clubs = Array.isArray(all) ? all.filter((g: any) => (g.type || '').toUpperCase() === 'CLUB') : [];
+          setDrawerAllClubs(clubs);
+        }
+      } catch { /* silent fail */ }
+      finally { setDrawerClubsLoading(false); }
+    };
+    void loadClubs();
   }, [viewDrawerOpen, viewStudentId]);
 
   useEffect(() => {
@@ -1672,7 +1743,7 @@ export function StudentListPanel() {
                                                   const isArchived = row.is_deleted || row.status === "deleted";
                                                   const rowCls = [isRowSelected ? "row-selected" : "", isArchived ? "row-archived" : ""].filter(Boolean).join(" ") || undefined;
                                                   return (
-                                                  <tr key={row.id} onClick={() => openViewDrawer(row)} style={{ cursor: "pointer" }} className={rowCls}>
+                                                  <tr key={row.id} onClick={() => openViewDrawer(row)} style={{ cursor: "pointer", borderLeft: row.is_disabled ? "3px solid #ef4444" : undefined }} className={rowCls}>
                                                     <td onClick={(e) => e.stopPropagation()} style={{ width: 36 }}>
                                                       <input
                                                         type="checkbox"
@@ -1838,7 +1909,7 @@ export function StudentListPanel() {
               <button type="button" className={drawerTab === "academic" ? "tab active" : "tab"} onClick={() => setDrawerTab("academic")}>Academic</button>
               <button type="button" className={drawerTab === "attendance" ? "tab active" : "tab"} onClick={() => setDrawerTab("attendance")}>Attendance</button>
               <button type="button" className={drawerTab === "fees" ? "tab active" : "tab"} onClick={() => setDrawerTab("fees")}>Fees</button>
-              <button type="button" className={drawerTab === "achievements" ? "tab active tab-achievements" : "tab tab-achievements"} onClick={() => setDrawerTab("achievements")}>🏆 Achievements</button>
+              <button type="button" className={drawerTab === "achievements" ? "tab active" : "tab"} onClick={() => setDrawerTab("achievements")}>Achievements</button>
             </div>
 
             <div className="drawer-body">
@@ -1889,46 +1960,338 @@ export function StudentListPanel() {
                 </div>
               )}
 
-              {drawerTab === "attendance" && (
-                <div className="drawer-section">
-                  <p className="drawer-section-title">Recent attendance</p>
-                  {drawerAttendanceLoading ? (
-                    <p className="drawer-note">Loading attendance…</p>
-                  ) : drawerAttendanceError ? (
-                    <p className="drawer-error">{drawerAttendanceError}</p>
-                  ) : drawerAttendance.length === 0 ? (
-                    <p className="drawer-note">No attendance records found for this student.</p>
-                  ) : (
-                    <>
-                      {(() => {
-                        const total = drawerAttendance.length;
-                        const present = drawerAttendance.filter((a) => (a.status || "").toLowerCase() === "present").length;
-                        const absent = drawerAttendance.filter((a) => (a.status || "").toLowerCase() === "absent").length;
-                        const late = drawerAttendance.filter((a) => (a.status || "").toLowerCase() === "late").length;
-                        const pct = total > 0 ? Math.round((present / total) * 100) : 0;
-                        return (
-                          <div className="drawer-row">
-                            <span>Summary</span>
-                            <strong>{present}/{total} present ({pct}%) · {absent} absent · {late} late</strong>
-                          </div>
-                        );
-                      })()}
-                      <div style={{ maxHeight: 240, overflowY: "auto", marginTop: 8 }}>
-                        {drawerAttendance.slice(0, 30).map((rec) => {
-                          const st = (rec.status || "").toLowerCase();
-                          const cls = st === "present" ? "status active" : st === "absent" ? "status inactive" : st === "late" ? "status pending" : "status archived";
-                          return (
-                            <div key={rec.id} className="drawer-row">
-                              <span>{formatDate(rec.attendance_date)}</span>
-                              <span className={cls}>{rec.status || "-"}</span>
-                            </div>
-                          );
-                        })}
+              {drawerTab === "attendance" && (() => {
+                const ATT_MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+                const attMap: Record<string, string> = {};
+                drawerAttendance.forEach(a => { attMap[a.attendance_date] = (a.status || '').toLowerCase(); });
+                const firstDay = new Date(attViewYear, attViewMonth, 1).getDay();
+                const daysInMonth = new Date(attViewYear, attViewMonth + 1, 0).getDate();
+                const startOffset = (firstDay + 6) % 7;
+                const monthPrefix = `${attViewYear}-${String(attViewMonth + 1).padStart(2, '0')}`;
+                const monthRecs = drawerAttendance.filter(a => a.attendance_date.startsWith(monthPrefix));
+                const mPresent = monthRecs.filter(a => (a.status || '').toLowerCase() === 'present').length;
+                const mAbsent = monthRecs.filter(a => (a.status || '').toLowerCase() === 'absent').length;
+                const mLate = monthRecs.filter(a => ['late', 'late_arrival'].includes((a.status || '').toLowerCase())).length;
+                const total = drawerAttendance.length;
+                const present = drawerAttendance.filter(a => (a.status || '').toLowerCase() === 'present').length;
+                const absent = drawerAttendance.filter(a => (a.status || '').toLowerCase() === 'absent').length;
+                const late = drawerAttendance.filter(a => ['late', 'late_arrival'].includes((a.status || '').toLowerCase())).length;
+                const pct = total > 0 ? Math.round((present / total) * 100) : 0;
+                const circumference = 2 * Math.PI * 24;
+                /* Build monthly data for ALL recorded months (not just last 6) */
+                const allMonthKeys = Array.from(new Set(drawerAttendance.map(a => a.attendance_date.slice(0, 7)))).sort();
+                const allMonthData = allMonthKeys.map(key => {
+                  const [y, m] = key.split('-').map(Number);
+                  const recs = drawerAttendance.filter(a => a.attendance_date.startsWith(key));
+                  const p = recs.filter(a => (a.status || '').toLowerCase() === 'present').length;
+                  return { label: ATT_MONTH_NAMES[m - 1], pct: recs.length > 0 ? Math.round((p / recs.length) * 100) : -1, key, year: y, monthIdx: m - 1, total: recs.length };
+                });
+                /* Full academic year for trend chart — Jun→May, driven by drawerAcYearStartYear */
+                const acYearStartYear = drawerAcYearStartYear;
+                const acYearEndYear = acYearStartYear + 1;
+                const acYearLabel = `${acYearStartYear}-${String(acYearEndYear).slice(-2)}`;
+                const acYearStart = `${acYearStartYear}-06`;
+                const acYearMonthData = Array.from({ length: 12 }, (_, i) => {
+                  // months: Jun(5)…May(4) of next year
+                  const mo = (5 + i) % 12; // 5=Jun,6=Jul,...,4=May
+                  const yr = mo >= 5 ? acYearStartYear : acYearEndYear;
+                  const prefix = `${yr}-${String(mo + 1).padStart(2, '0')}`;
+                  const recs = drawerAttendance.filter(a => a.attendance_date.startsWith(prefix));
+                  const p = recs.filter(a => (a.status || '').toLowerCase() === 'present').length;
+                  const isFuture = prefix > new Date().toISOString().slice(0, 7);
+                  return { label: ATT_MONTH_NAMES[mo], pct: recs.length > 0 ? Math.round((p / recs.length) * 100) : (isFuture ? -2 : -1), key: prefix, isFuture };
+                });
+                // Backwards-compat alias used below
+                const monthData = acYearMonthData;
+                const STATUS_STYLE: Record<string, { bg: string; color: string; dot: string }> = {
+                  present: { bg: '#f0fdf4', color: '#16a34a', dot: '#22c55e' },
+                  absent: { bg: '#fef2f2', color: '#dc2626', dot: '#ef4444' },
+                  late: { bg: '#fffbeb', color: '#d97706', dot: '#f59e0b' },
+                  late_arrival: { bg: '#fffbeb', color: '#d97706', dot: '#f59e0b' },
+                  early_pickup: { bg: '#f0f9ff', color: '#0284c7', dot: '#38bdf8' },
+                  early_departure: { bg: '#f0f9ff', color: '#0284c7', dot: '#38bdf8' },
+                  medical: { bg: '#fdf4ff', color: '#9333ea', dot: '#c084fc' },
+                  permission: { bg: '#f0f9ff', color: '#0369a1', dot: '#38bdf8' },
+                };
+                const INCIDENT_STATUS_SET = new Set(['absent', 'late', 'late_arrival', 'early_pickup', 'early_departure', 'medical', 'permission']);
+                const today = new Date().toISOString().split('T')[0];
+                const todayPrefix = today.slice(0, 7);
+                const canGoNext = new Date(attViewYear, attViewMonth + 1, 1) <= new Date();
+                /* All incident records grouped by month for the academic year, no future months */
+                const incidentMonths = allMonthData
+                  .filter(md => md.key >= acYearStart && md.key <= todayPrefix)
+                  .map(md => {
+                    const recs = drawerAttendance
+                      .filter(a => a.attendance_date.startsWith(md.key) && INCIDENT_STATUS_SET.has((a.status || '').toLowerCase()))
+                      .sort((a, b) => b.attendance_date.localeCompare(a.attendance_date));
+                    return { ...md, incidents: recs };
+                  })
+                  .filter(md => md.incidents.length > 0)
+                  .sort((a, b) => b.key.localeCompare(a.key));
+
+                const AccordionHeader = ({ title, open, onToggle, badge }: { title: string; open: boolean; onToggle: () => void; badge?: string }) => (
+                  <button type="button" onClick={onToggle} style={{
+                    width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    background: open ? '#f5f3ff' : '#f8f9ff', border: '1px solid', borderColor: open ? '#c4b5fd' : '#eceef6',
+                    borderRadius: open ? '10px 10px 0 0' : 10, padding: '10px 14px', cursor: 'pointer',
+                    transition: 'background 0.2s', userSelect: 'none',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: open ? '#4f39f6' : '#374151' }}>{title}</span>
+                      {badge && <span style={{ fontSize: 10, background: open ? '#ede9fe' : '#e5e7eb', color: open ? '#5b21b6' : '#6b7280', borderRadius: 20, padding: '1px 7px', fontWeight: 700 }}>{badge}</span>}
+                    </div>
+                    <span style={{ fontSize: 14, color: open ? '#4f39f6' : '#9ca3af', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s', lineHeight: 1 }}>▾</span>
+                  </button>
+                );
+
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {drawerAttendanceLoading ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 8 }}>
+                        <div style={{ height: 80, borderRadius: 12, background: 'linear-gradient(90deg,#e2e8f0 0%,#f1f5f9 40%,#e2e8f0 80%)', animation: 'inspireShimmer 1.4s linear infinite' }} />
+                        <div style={{ height: 60, borderRadius: 10, background: 'linear-gradient(90deg,#e2e8f0 0%,#f1f5f9 40%,#e2e8f0 80%)', animation: 'inspireShimmer 1.4s linear infinite' }} />
+                        <div style={{ height: 180, borderRadius: 10, background: 'linear-gradient(90deg,#e2e8f0 0%,#f1f5f9 40%,#e2e8f0 80%)', animation: 'inspireShimmer 1.4s linear infinite' }} />
+                        <p style={{ textAlign: 'center', fontSize: 12, color: '#9ca3af', margin: 0 }}>Loading attendance data…</p>
                       </div>
-                    </>
-                  )}
-                </div>
-              )}
+                    ) : drawerAttendanceError ? (
+                      <div style={{ textAlign: 'center', padding: '24px 12px' }}>
+                        <div style={{ fontSize: 32, marginBottom: 8 }}>⚠️</div>
+                        <p style={{ margin: 0, fontSize: 13, color: '#b91c1c', fontWeight: 600 }}>{drawerAttendanceError}</p>
+                        <p style={{ margin: '4px 0 0', fontSize: 12, color: '#9ca3af' }}>Check that the student has attendance records in the system.</p>
+                      </div>
+                    ) : (
+                      <>
+                        {/* ════ ACCORDION A: Overview & Trends ════ */}
+                        <div style={{ borderRadius: 10, overflow: 'hidden', boxShadow: attOpenOverall ? '0 2px 8px rgba(79,57,246,0.08)' : 'none' }}>
+                          {/* Academic year switcher row */}
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 2 }}>
+                            <button type="button" onClick={() => { setDrawerAcYearStartYear(y => y - 1); setDrawerAttendance([]); }}
+                              style={{ background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', fontSize: 13, color: '#374151', lineHeight: 1.5 }}>‹</button>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: '#374151', minWidth: 60, textAlign: 'center' }}>{acYearLabel}</span>
+                            <button type="button"
+                              onClick={() => {
+                                const currAcStart = new Date().getMonth() >= 5 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+                                if (drawerAcYearStartYear < currAcStart) { setDrawerAcYearStartYear(y => y + 1); setDrawerAttendance([]); }
+                              }}
+                              disabled={(new Date().getMonth() >= 5 ? new Date().getFullYear() : new Date().getFullYear() - 1) <= drawerAcYearStartYear}
+                              style={{ background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', fontSize: 13, color: '#374151', lineHeight: 1.5, opacity: (new Date().getMonth() >= 5 ? new Date().getFullYear() : new Date().getFullYear() - 1) <= drawerAcYearStartYear ? 0.4 : 1 }}>›</button>
+                          </div>
+                          <AccordionHeader title="Overview & Trends" open={attOpenOverall} onToggle={() => { setAttOpenOverall(o => !o); setAttOpenCalendar(false); setAttOpenIncidents(false); }} badge={total > 0 ? `${pct}%` : undefined} />
+                          {attOpenOverall && (
+                            <div style={{ border: '1px solid #c4b5fd', borderTop: 'none', borderRadius: '0 0 10px 10px', background: '#fff', padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                              {total > 0 ? (
+                                <>
+                                  {/* Professional attendance summary card */}
+                                  <div style={{ background: '#f8f9ff', border: '1px solid #e0e4f2', borderRadius: 12, padding: '14px 16px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+                                      <div>
+                                        <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#9ca3af', marginBottom: 2 }}>Overall Attendance</div>
+                                        <div style={{ fontSize: 22, fontWeight: 800, color: pct >= 90 ? '#16a34a' : pct >= 75 ? '#d97706' : '#dc2626', lineHeight: 1 }}>{pct}%</div>
+                                        <div style={{ fontSize: 10, color: '#9ca3af', marginTop: 3 }}>{total} school days recorded</div>
+                                      </div>
+                                      <div style={{ position: 'relative', width: 54, height: 54, flexShrink: 0 }}>
+                                        <svg width="54" height="54" viewBox="0 0 54 54">
+                                          <circle cx="27" cy="27" r="22" fill="none" stroke="#e5e7eb" strokeWidth="5" />
+                                          <circle cx="27" cy="27" r="22" fill="none"
+                                            stroke={pct >= 90 ? '#22c55e' : pct >= 75 ? '#f59e0b' : '#ef4444'}
+                                            strokeWidth="5" strokeLinecap="round"
+                                            strokeDasharray={`${2 * Math.PI * 22}`}
+                                            strokeDashoffset={`${2 * Math.PI * 22 * (1 - pct / 100)}`}
+                                            transform="rotate(-90 27 27)" style={{ transition: 'stroke-dashoffset 0.6s ease' }} />
+                                        </svg>
+                                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 11, color: pct >= 90 ? '#16a34a' : pct >= 75 ? '#d97706' : '#dc2626' }}>{pct}%</div>
+                                      </div>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6 }}>
+                                      {[
+                                        { label: 'Present', count: present, color: '#16a34a', bg: '#f0fdf4', border: '#bbf7d0' },
+                                        { label: 'Absent', count: absent, color: '#dc2626', bg: '#fef2f2', border: '#fecaca' },
+                                        { label: 'Late', count: late, color: '#d97706', bg: '#fffbeb', border: '#fde68a' },
+                                      ].map(s => (
+                                        <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.border}`, borderRadius: 8, padding: '6px 8px', textAlign: 'center' }}>
+                                          <div style={{ fontWeight: 800, fontSize: 16, color: s.color, lineHeight: 1 }}>{s.count}</div>
+                                          <div style={{ fontSize: 10, color: s.color, fontWeight: 600, marginTop: 2, opacity: 0.85 }}>{s.label}</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  {/* Academic year bar chart */}
+                                  {monthData.some(m => m.pct >= 0) && (
+                                    <div style={{ background: '#f8f9ff', border: '1px solid #eceef6', borderRadius: 10, padding: '10px 12px' }}>
+                                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#747896', marginBottom: 8 }}>Academic Year {acYearLabel} · click to navigate</div>
+                                      <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 56 }}>
+                                        {monthData.map(md => {
+                                          const barH = md.pct >= 0 ? Math.max(4, md.pct * 0.42) : 4;
+                                          const barColor = md.isFuture ? '#f3f4f6' : md.pct < 0 ? '#e5e7eb' : md.pct >= 90 ? '#22c55e' : md.pct >= 75 ? '#f59e0b' : '#ef4444';
+                                          const isActive = md.key === `${attViewYear}-${String(attViewMonth + 1).padStart(2, '0')}`;
+                                          return (
+                                            <div key={md.key} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, cursor: md.isFuture ? 'default' : 'pointer' }}
+                                              onClick={() => { if (!md.isFuture) { const [y, mo] = md.key.split('-').map(Number); setAttViewYear(y); setAttViewMonth(mo - 1); setAttOpenCalendar(true); setAttOpenOverall(false); setAttOpenIncidents(false); } }}>
+                                              <div style={{ fontSize: 8, color: isActive ? '#4f39f6' : '#9ca3af', fontWeight: isActive ? 800 : 600, minHeight: 12 }}>{!md.isFuture && md.pct >= 0 ? `${md.pct}%` : ''}</div>
+                                              <div style={{ width: '100%', background: barColor, borderRadius: '3px 3px 0 0', height: md.isFuture ? 3 : barH, outline: isActive ? '2px solid #4f39f6' : 'none', transition: 'height 0.4s ease' }} />
+                                              <div style={{ fontSize: 8, color: isActive ? '#4f39f6' : '#9ca3af', fontWeight: isActive ? 700 : 400 }}>{md.label}</div>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                      <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'center' }}>
+                                        {[{ color: '#22c55e', label: '≥90%' }, { color: '#f59e0b', label: '75–89%' }, { color: '#ef4444', label: '<75%' }, { color: '#e5e7eb', label: 'No data' }].map(l => (
+                                          <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                                            <div style={{ width: 8, height: 8, borderRadius: 2, background: l.color }} />
+                                            <span style={{ fontSize: 9, color: '#6b7280' }}>{l.label}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {/* Per-month summary table */}
+                                  {allMonthData.length > 0 && (
+                                    <div style={{ background: '#f8f9ff', border: '1px solid #eceef6', borderRadius: 10, overflow: 'hidden' }}>
+                                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#747896', padding: '8px 12px', borderBottom: '1px solid #eceef6' }}>Month-wise Summary</div>
+                                      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto auto', fontSize: 11, color: '#374151' }}>
+                                        {allMonthData.slice().reverse().map((md) => {
+                                          const pctColor = md.pct < 0 ? '#9ca3af' : md.pct >= 90 ? '#16a34a' : md.pct >= 75 ? '#d97706' : '#dc2626';
+                                          return (
+                                            <Fragment key={md.key}>
+                                              <div style={{ padding: '6px 12px', borderBottom: '1px solid #f1f5f9', fontWeight: 600, whiteSpace: 'nowrap' }}>{md.label} {md.year}</div>
+                                              <div style={{ padding: '6px 4px', borderBottom: '1px solid #f1f5f9' }}>
+                                                <div style={{ height: 6, borderRadius: 3, background: '#e5e7eb', overflow: 'hidden' }}>
+                                                  {md.pct >= 0 && <div style={{ height: '100%', width: `${md.pct}%`, background: pctColor, borderRadius: 3, transition: 'width 0.4s' }} />}
+                                                </div>
+                                              </div>
+                                              <div style={{ padding: '6px 8px', borderBottom: '1px solid #f1f5f9', fontWeight: 700, color: pctColor, textAlign: 'right', whiteSpace: 'nowrap' }}>{md.pct >= 0 ? `${md.pct}%` : '—'}</div>
+                                              <div style={{ padding: '6px 12px', borderBottom: '1px solid #f1f5f9', color: '#9ca3af', textAlign: 'right', fontSize: 10 }}>{md.total}d</div>
+                                            </Fragment>
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <div style={{ textAlign: 'center', padding: '24px 12px', color: '#9ca3af' }}>
+                                  <div style={{ fontSize: 36, marginBottom: 8 }}>📅</div>
+                                  <p style={{ margin: 0, fontWeight: 600, color: '#6b7280', fontSize: 13 }}>No attendance records found</p>
+                                  <p style={{ margin: '4px 0 0', fontSize: 12 }}>Records will appear once attendance is marked in the system.</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* ════ ACCORDION B: Monthly Calendar ════ */}
+                        <div style={{ borderRadius: 10, overflow: 'hidden', boxShadow: attOpenCalendar ? '0 2px 8px rgba(79,57,246,0.08)' : 'none' }}>
+                          <AccordionHeader title="Monthly Calendar" open={attOpenCalendar} onToggle={() => { setAttOpenCalendar(o => !o); setAttOpenOverall(false); setAttOpenIncidents(false); }} badge={`${ATT_MONTH_NAMES[attViewMonth]} ${attViewYear}`} />
+                          {attOpenCalendar && (
+                            <div style={{ border: '1px solid #c4b5fd', borderTop: 'none', borderRadius: '0 0 10px 10px', background: '#fff', overflow: 'hidden' }}>
+                              {/* Nav header */}
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 14px', background: '#f8f9ff', borderBottom: '1px solid #eceef6' }}>
+                                <button type="button" onClick={() => { const d = new Date(attViewYear, attViewMonth - 1, 1); setAttViewYear(d.getFullYear()); setAttViewMonth(d.getMonth()); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#4f39f6', fontSize: 18, lineHeight: 1, padding: '0 2px' }}>‹</button>
+                                <div style={{ fontWeight: 700, fontSize: 13, color: '#1a1d33' }}>{ATT_MONTH_NAMES[attViewMonth]} {attViewYear}</div>
+                                <button type="button" onClick={() => { const d = new Date(attViewYear, attViewMonth + 1, 1); setAttViewYear(d.getFullYear()); setAttViewMonth(d.getMonth()); }} disabled={!canGoNext} style={{ background: 'none', border: 'none', cursor: canGoNext ? 'pointer' : 'default', color: '#4f39f6', fontSize: 18, lineHeight: 1, padding: '0 2px', opacity: canGoNext ? 1 : 0.25 }}>›</button>
+                              </div>
+                              {/* Month mini-stats */}
+                              {monthRecs.length > 0 && (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', borderBottom: '1px solid #eceef6' }}>
+                                  {[{ label: 'Present', count: mPresent, color: '#16a34a', bg: '#f0fdf4' }, { label: 'Absent', count: mAbsent, color: '#dc2626', bg: '#fef2f2' }, { label: 'Late', count: mLate, color: '#d97706', bg: '#fffbeb' }].map((s, idx) => (
+                                    <div key={s.label} style={{ textAlign: 'center', padding: '7px 4px', background: s.bg, borderRight: idx < 2 ? '1px solid #eceef6' : 'none' }}>
+                                      <div style={{ fontWeight: 800, fontSize: 15, color: s.color, lineHeight: 1 }}>{s.count}</div>
+                                      <div style={{ fontSize: 10, color: s.color, opacity: 0.8, fontWeight: 600, marginTop: 2 }}>{s.label}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {/* Calendar grid */}
+                              <div style={{ padding: '10px 8px 12px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 2, marginBottom: 4 }}>
+                                  {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d, i) => (
+                                    <div key={i} style={{ textAlign: 'center', fontSize: 10, fontWeight: 700, color: i === 6 ? '#dc2626' : i === 5 ? '#9ca3af' : '#9ca3af', padding: '2px 0' }}>{d}</div>
+                                  ))}
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 2 }}>
+                                  {Array(startOffset).fill(null).map((_, i) => <div key={`e${i}`} />)}
+                                  {Array(daysInMonth).fill(null).map((_, i) => {
+                                    const day = i + 1;
+                                    const dateStr = `${attViewYear}-${String(attViewMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                                    const st = attMap[dateStr];
+                                    const sc = st ? (STATUS_STYLE[st] || null) : null;
+                                    const isToday = dateStr === today;
+                                    const isFuture = dateStr > today;
+                                    const colIdx = (startOffset + i) % 7;
+                                    const isSunday = colIdx === 6;
+                                    const isSaturday = colIdx === 5;
+                                    const isWeekend = isSaturday || isSunday;
+                                    return (
+                                      <div key={day} title={`${dateStr}${st ? ` — ${st}` : ''}`} style={{
+                                        aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        borderRadius: 5, fontSize: 10, fontWeight: isToday ? 800 : 500,
+                                        background: isToday ? '#4f39f6' : sc ? sc.bg : isFuture ? 'transparent' : isWeekend ? '#fafafa' : '#f3f4f6',
+                                        color: isToday ? '#fff' : sc ? sc.color : isFuture ? '#d1d5db' : isSunday ? '#dc2626' : isSaturday ? '#9ca3af' : '#9ca3af',
+                                        border: isToday ? '2px solid #4f39f6' : sc ? `1px solid ${sc.dot}50` : isSunday && !isFuture ? '1px solid #fecaca' : '1px solid transparent',
+                                      }}>{day}</div>
+                                    );
+                                  })}
+                                </div>
+                                <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+                                  {[{ color: '#22c55e', bg: '#f0fdf4', label: 'Present' }, { color: '#ef4444', bg: '#fef2f2', label: 'Absent' }, { color: '#f59e0b', bg: '#fffbeb', label: 'Late' }, { color: '#9ca3af', bg: '#f3f4f6', label: 'No data' }].map(l => (
+                                    <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                                      <div style={{ width: 10, height: 10, borderRadius: 3, background: l.bg, border: `1px solid ${l.color}60` }} />
+                                      <span style={{ fontSize: 9, color: '#6b7280' }}>{l.label}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* ════ ACCORDION C: Leave & Incident Log ════ */}
+                        <div style={{ borderRadius: 10, overflow: 'hidden', boxShadow: attOpenIncidents ? '0 2px 8px rgba(79,57,246,0.08)' : 'none' }}>
+                          <AccordionHeader title="Leave & Incident Log" open={attOpenIncidents} onToggle={() => { setAttOpenIncidents(o => !o); setAttOpenOverall(false); setAttOpenCalendar(false); }} badge={incidentMonths.reduce((s, m) => s + m.incidents.length, 0) > 0 ? String(incidentMonths.reduce((s, m) => s + m.incidents.length, 0)) : undefined} />
+                          {attOpenIncidents && (
+                            <div style={{ border: '1px solid #c4b5fd', borderTop: 'none', borderRadius: '0 0 10px 10px', background: '#fff', padding: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                              <p style={{ margin: 0, fontSize: 11, color: '#6b7280' }}>Absences, late arrivals, early pick-ups, medical & permission records for the current academic year.</p>
+                              {incidentMonths.length === 0 ? (
+                                <div style={{ textAlign: 'center', padding: '20px 12px' }}>
+                                  <div style={{ fontSize: 30, marginBottom: 6 }}>🌟</div>
+                                  <p style={{ margin: 0, fontWeight: 600, color: '#16a34a', fontSize: 13 }}>Perfect record this year!</p>
+                                  <p style={{ margin: '4px 0 0', fontSize: 12, color: '#9ca3af' }}>No absences or incidents recorded for the academic year.</p>
+                                </div>
+                              ) : incidentMonths.map(md => (
+                                <div key={md.key}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                    <div style={{ flex: 1, height: 1, background: '#e5e7eb' }} />
+                                    <span style={{ fontSize: 10, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{md.label} {md.year} · {md.incidents.length} record{md.incidents.length !== 1 ? 's' : ''}</span>
+                                    <div style={{ flex: 1, height: 1, background: '#e5e7eb' }} />
+                                  </div>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    {md.incidents.map(rec => {
+                                      const st = (rec.status || '').toLowerCase();
+                                      const c = STATUS_STYLE[st] || { bg: '#f3f4f6', color: '#6b7280', dot: '#9ca3af' };
+                                      const icon = st === 'absent' ? '❌' : st.includes('early') ? '🔔' : st === 'medical' ? '🏥' : st === 'permission' ? '📋' : '⏰';
+                                      const label = (rec.status || '').replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                                      return (
+                                        <div key={rec.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, background: c.bg, border: `1px solid ${c.dot}35`, borderRadius: 8, padding: '7px 10px' }}>
+                                          <span style={{ fontSize: 13, flexShrink: 0, marginTop: 1 }}>{icon}</span>
+                                          <div style={{ flex: 1, minWidth: 0 }}>
+                                            <div style={{ fontSize: 12, fontWeight: 700, color: c.color }}>{label}</div>
+                                            {rec.remarks && <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2, lineHeight: 1.4 }}>{rec.remarks}</div>}
+                                          </div>
+                                          <div style={{ fontSize: 11, color: '#9ca3af', whiteSpace: 'nowrap', flexShrink: 0, paddingTop: 1 }}>{formatDate(rec.attendance_date)}</div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
 
               {drawerTab === "fees" && (
                 <div className="drawer-section">
@@ -2012,55 +2375,141 @@ export function StudentListPanel() {
                 };
 
                 return (
-                  <>
-                    {/* Stats row */}
-                    <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:12, marginTop:4 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+                    {/* ── Clubs Section ── */}
+                    <div style={{ background: '#f5f0ff', border: '1px solid #e0d7f8', borderRadius: 10, padding: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                        <span style={{ fontSize: 16 }}>🏛️</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: '#5b21b6' }}>Club Memberships</span>
+                        <button type="button" onClick={() => { setClubAddOpen(v => !v); setClubAddTarget(''); }}
+                          style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, background: '#7c3aed', color: '#fff', border: 'none', borderRadius: 6, padding: '3px 10px', cursor: 'pointer' }}>
+                          + Add Club
+                        </button>
+                      </div>
+                      {clubAddOpen && (
+                        <div style={{ display: 'flex', gap: 6, marginBottom: 10, alignItems: 'center' }}>
+                          <select value={clubAddTarget} onChange={e => setClubAddTarget(e.target.value)}
+                            style={{ flex: 1, fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid #ddd6fe', background: '#fff' }}>
+                            <option value="">Choose a club…</option>
+                            {drawerAllClubs
+                              .filter(c => !drawerStudentClubs.some(m => m.clubId === c.id))
+                              .map(c => (
+                                <option key={c.id} value={c.id}>{c.emoji || '🏛️'} {c.name}</option>
+                              ))}
+                          </select>
+                          <button type="button" disabled={!clubAddTarget || clubSaving}
+                            onClick={async () => {
+                              if (!clubAddTarget || !viewStudentId) return;
+                              setClubSaving(true);
+                              try {
+                                const res = await fetch('/api/student-groups/club-assign', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ studentId: viewStudentId, clubId: Number(clubAddTarget) }),
+                                });
+                                if (res.ok) {
+                                  const club = drawerAllClubs.find(c => c.id === Number(clubAddTarget));
+                                  if (club) {
+                                    setDrawerStudentClubs(prev => [...prev, { clubId: club.id, name: club.name, emoji: club.emoji, color: club.color, bgColor: club.bgColor, role: 'member' }]);
+                                  }
+                                  setClubAddOpen(false);
+                                  setClubAddTarget('');
+                                }
+                              } catch { /* silent */ }
+                              finally { setClubSaving(false); }
+                            }}
+                            style={{ fontSize: 11, fontWeight: 700, background: clubAddTarget ? '#7c3aed' : '#e5e7eb', color: clubAddTarget ? '#fff' : '#9ca3af', border: 'none', borderRadius: 6, padding: '4px 12px', cursor: clubAddTarget ? 'pointer' : 'not-allowed', whiteSpace: 'nowrap' }}>
+                            {clubSaving ? '…' : 'Join'}
+                          </button>
+                          <button type="button" onClick={() => { setClubAddOpen(false); setClubAddTarget(''); }}
+                            style={{ fontSize: 11, fontWeight: 600, background: 'transparent', color: '#9ca3af', border: 'none', cursor: 'pointer', padding: '4px 6px' }}>✕</button>
+                        </div>
+                      )}
+                      {drawerClubsLoading ? (
+                        <div style={{ fontSize: 12, color: '#9ca3af', padding: '6px 0' }}>Loading clubs…</div>
+                      ) : drawerStudentClubs.length === 0 ? (
+                        <div style={{ fontSize: 12, color: '#9ca3af', padding: '6px 0', fontStyle: 'italic' }}>Not a member of any club yet.</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {drawerStudentClubs.map(m => (
+                            <div key={m.clubId} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: m.bgColor || '#f0effe', border: `1px solid ${m.color || '#7c3aed'}30`, borderRadius: 20, padding: '3px 10px 3px 8px', fontSize: 12 }}>
+                              <span>{m.emoji || '🏛️'}</span>
+                              <span style={{ fontWeight: 600, color: m.color || '#5b21b6' }}>{m.name}</span>
+                              {m.role && m.role !== 'member' && (
+                                <span style={{ fontSize: 10, color: m.color, background: `${m.color}20`, borderRadius: 8, padding: '1px 5px', fontWeight: 700 }}>{m.role}</span>
+                              )}
+                              <button type="button" title="Leave club"
+                                onClick={async () => {
+                                  if (!viewStudentId) return;
+                                  setClubSaving(true);
+                                  try {
+                                    const res = await fetch('/api/student-groups/club-remove', {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ studentId: viewStudentId, clubId: m.clubId }),
+                                    });
+                                    if (res.ok) {
+                                      setDrawerStudentClubs(prev => prev.filter(x => x.clubId !== m.clubId));
+                                    }
+                                  } catch { /* silent */ }
+                                  finally { setClubSaving(false); }
+                                }}
+                                style={{ fontSize: 10, color: '#9ca3af', background: 'none', border: 'none', cursor: 'pointer', padding: '0 0 0 2px', lineHeight: 1 }}>✕</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ── Stats row ── */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
                       {[
-                        { label:'Events', value: myResults.length, icon:'🎯' },
-                        { label:'Total Pts', value: totalPts, icon:'⭐' },
-                        { label:'Gold Medals', value: medals['1st'], icon:'🥇' },
+                        { label: 'Events', value: myResults.length, icon: '🎯', color: '#4f39f6', bg: '#f0effe' },
+                        { label: 'Total Pts', value: totalPts, icon: '⭐', color: '#d97706', bg: '#fffbeb' },
+                        { label: 'Gold Medals', value: medals['1st'], icon: '🥇', color: '#b45309', bg: '#fef3c7' },
                       ].map(s => (
-                        <div key={s.label} style={{ background:'#f8f9ff', border:'1px solid #e8eaf6', borderRadius:10, padding:'10px 8px', textAlign:'center' }}>
-                          <div style={{ fontSize:20 }}>{s.icon}</div>
-                          <div style={{ fontWeight:700, fontSize:18, color:'#1a1d33', lineHeight:1.2 }}>{s.value}</div>
-                          <div style={{ fontSize:10, color:'#747896', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', marginTop:2 }}>{s.label}</div>
+                        <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}25`, borderRadius: 10, padding: '10px 8px', textAlign: 'center' }}>
+                          <div style={{ fontSize: 18, lineHeight: 1, marginBottom: 2 }}>{s.icon}</div>
+                          <div style={{ fontWeight: 800, fontSize: 18, color: s.color, lineHeight: 1.1 }}>{s.value}</div>
+                          <div style={{ fontSize: 9, color: s.color, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 3, opacity: 0.75 }}>{s.label}</div>
                         </div>
                       ))}
                     </div>
 
-                    {/* Medals row if any */}
+                    {/* ── Medal badges ── */}
                     {(medals['1st'] + medals['2nd'] + medals['3rd']) > 0 && (
-                      <div style={{ display:'flex', gap:6, marginBottom:12, flexWrap:'wrap' }}>
-                        {medals['1st'] > 0 && <span style={{ background:'#fef3c7', border:'1px solid #fde68a', borderRadius:6, padding:'3px 8px', fontSize:12, fontWeight:700, color:'#92400e' }}>🥇 {medals['1st']}× Gold</span>}
-                        {medals['2nd'] > 0 && <span style={{ background:'#f3f4f6', border:'1px solid #d1d5db', borderRadius:6, padding:'3px 8px', fontSize:12, fontWeight:700, color:'#374151' }}>🥈 {medals['2nd']}× Silver</span>}
-                        {medals['3rd'] > 0 && <span style={{ background:'#fdf2e9', border:'1px solid #f5c6a0', borderRadius:6, padding:'3px 8px', fontSize:12, fontWeight:700, color:'#7c3100' }}>🥉 {medals['3rd']}× Bronze</span>}
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {medals['1st'] > 0 && <span style={{ background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 20, padding: '3px 10px', fontSize: 11, fontWeight: 700, color: '#92400e' }}>🥇 {medals['1st']}× Gold</span>}
+                        {medals['2nd'] > 0 && <span style={{ background: '#f3f4f6', border: '1px solid #d1d5db', borderRadius: 20, padding: '3px 10px', fontSize: 11, fontWeight: 700, color: '#374151' }}>🥈 {medals['2nd']}× Silver</span>}
+                        {medals['3rd'] > 0 && <span style={{ background: '#fdf2e9', border: '1px solid #f5c6a0', borderRadius: 20, padding: '3px 10px', fontSize: 11, fontWeight: 700, color: '#7c3100' }}>🥉 {medals['3rd']}× Bronze</span>}
                       </div>
                     )}
 
-                    {/* Competition results list */}
-                    <div className="drawer-section">
-                      <p className="drawer-section-title">Competition results</p>
+                    {/* ── Competition results ── */}
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#747896', marginBottom: 8 }}>Competition Results</div>
                       {myResults.length === 0 ? (
-                        <div style={{ textAlign:'center', padding:'24px 12px', color:'#9ca3af' }}>
-                          <div style={{ fontSize:36, marginBottom:8 }}>🏆</div>
-                          <p style={{ margin:0, fontWeight:600, color:'#6b7280', fontSize:13 }}>Still needs to participate in any competition</p>
-                          <p style={{ margin:'4px 0 0', fontSize:12, fontStyle:'italic' }}>Results will appear here once competitions are finalised in InspireHub.</p>
+                        <div style={{ textAlign: 'center', padding: '20px 12px', background: '#f8f9ff', borderRadius: 10, border: '1px solid #eceef6' }}>
+                          <div style={{ fontSize: 32, marginBottom: 6 }}>🏆</div>
+                          <p style={{ margin: 0, fontWeight: 600, color: '#6b7280', fontSize: 12 }}>No competition results yet</p>
+                          <p style={{ margin: '4px 0 0', fontSize: 11, color: '#9ca3af', fontStyle: 'italic' }}>Results appear once competitions are finalised in InspireHub.</p>
                         </div>
                       ) : (
-                        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                           {myResults.map(({ comp, result }, i) => (
-                            <div key={i} style={{ background:'#fafafa', border:'1px solid #eceef6', borderRadius:10, padding:'10px 12px', display:'flex', alignItems:'flex-start', gap:10 }}>
-                              <div style={{ fontSize:22, lineHeight:1, marginTop:1, flexShrink:0 }}>{MEDAL_ICONS[result.position as string] || '🏅'}</div>
-                              <div style={{ flex:1, minWidth:0 }}>
-                                <div style={{ fontWeight:600, fontSize:13, color:'#1a1d33', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{comp.name}</div>
-                                <div style={{ display:'flex', gap:6, marginTop:4, flexWrap:'wrap', alignItems:'center' }}>
-                                  <span style={{ background: (POS_COLOR[result.position||''] || '#e5e7eb'), color:'#fff', borderRadius:4, padding:'1px 7px', fontSize:11, fontWeight:700 }}>{result.position || '–'}</span>
-                                  {result.points ? <span style={{ fontSize:11, color:'#6b7280' }}>⭐ {result.points} pts</span> : null}
-                                  {comp.date ? <span style={{ fontSize:11, color:'#9ca3af' }}>{new Date(comp.date).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}</span> : null}
-                                  {comp.comp_type ? <span style={{ fontSize:10, color:'#9ca3af', textTransform:'uppercase', letterSpacing:'0.05em' }}>{comp.comp_type}</span> : null}
+                            <div key={i} style={{ background: '#fafafa', border: '1px solid #eceef6', borderRadius: 10, padding: '10px 12px', display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                              <div style={{ fontSize: 20, lineHeight: 1, marginTop: 2, flexShrink: 0 }}>{MEDAL_ICONS[result.position as string] || '🏅'}</div>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontWeight: 600, fontSize: 13, color: '#1a1d33', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{comp.name}</div>
+                                <div style={{ display: 'flex', gap: 5, marginTop: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                                  <span style={{ background: (POS_COLOR[result.position || ''] || '#6b7280'), color: '#fff', borderRadius: 20, padding: '1px 8px', fontSize: 10, fontWeight: 700 }}>{result.position || '–'}</span>
+                                  {result.points ? <span style={{ fontSize: 11, color: '#6b7280' }}>⭐ {result.points} pts</span> : null}
+                                  {comp.date ? <span style={{ fontSize: 11, color: '#9ca3af' }}>{new Date(comp.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span> : null}
+                                  {comp.comp_type ? <span style={{ fontSize: 10, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{comp.comp_type}</span> : null}
                                 </div>
                                 {result.personal_contribution && (
-                                  <div style={{ fontSize:11, color:'#6b7280', marginTop:4, fontStyle:'italic' }}>{result.personal_contribution}</div>
+                                  <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4, fontStyle: 'italic' }}>{result.personal_contribution}</div>
                                 )}
                               </div>
                             </div>
@@ -2069,80 +2518,68 @@ export function StudentListPanel() {
                       )}
                     </div>
 
-                    {/* AI Performance Review */}
-                    <div className="drawer-section">
-                      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
-                        <span style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:20, height:20, borderRadius:6, background:'linear-gradient(135deg,#7c3aed,#ec4899)', color:'#fff', fontSize:9, fontWeight:900 }}>AI</span>
-                        <span style={{ fontSize:12, fontWeight:700, color:'#374151' }}>Performance Review</span>
+                    {/* ── AI Performance Review ── */}
+                    <div style={{ background: '#fafafa', border: '1px solid #eceef6', borderRadius: 10, padding: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, borderRadius: 6, background: 'linear-gradient(135deg,#7c3aed,#ec4899)', color: '#fff', fontSize: 9, fontWeight: 900 }}>AI</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: '#374151' }}>Performance Review</span>
                         {achievementsAiReview && (
-                          <button
-                            type="button"
-                            onClick={() => setAchievementsAiEditing(v => !v)}
-                            style={{ marginLeft:'auto', fontSize:11, fontWeight:700, color:'#6b7280', background:'#f3f4f6', border:'1px solid #e5e7eb', borderRadius:6, padding:'3px 9px', cursor:'pointer' }}
-                          >
+                          <button type="button" onClick={() => setAchievementsAiEditing(v => !v)}
+                            style={{ marginLeft: 'auto', fontSize: 11, fontWeight: 700, color: '#6b7280', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 6, padding: '3px 9px', cursor: 'pointer' }}>
                             {achievementsAiEditing ? '👁 Preview' : '✏ Edit'}
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={generateAiReview}
-                          disabled={achievementsAiBusy}
-                          style={{ marginLeft: achievementsAiReview ? 4 : 'auto', display:'inline-flex', alignItems:'center', gap:5, padding:'5px 12px', background:'linear-gradient(135deg,#7c3aed,#ec4899)', color:'#fff', border:'none', borderRadius:8, fontSize:11.5, fontWeight:700, cursor: achievementsAiBusy ? 'not-allowed' : 'pointer', opacity: achievementsAiBusy ? 0.6 : 1, whiteSpace:'nowrap' }}
-                        >
+                        <button type="button" onClick={generateAiReview} disabled={achievementsAiBusy}
+                          style={{ marginLeft: achievementsAiReview ? 4 : 'auto', display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 12px', background: 'linear-gradient(135deg,#7c3aed,#ec4899)', color: '#fff', border: 'none', borderRadius: 8, fontSize: 11.5, fontWeight: 700, cursor: achievementsAiBusy ? 'not-allowed' : 'pointer', opacity: achievementsAiBusy ? 0.6 : 1, whiteSpace: 'nowrap' }}>
                           {achievementsAiBusy ? '◌ Generating…' : achievementsAiReview ? '✨ Regenerate' : '✨ Generate AI Review'}
                         </button>
                       </div>
                       {achievementsAiError && (
-                        <p style={{ fontSize:12, color:'#b91c1c', background:'#fef2f2', border:'1px solid #fecaca', borderRadius:6, padding:'6px 10px', marginBottom:8 }}>⚠ {achievementsAiError}</p>
+                        <p style={{ fontSize: 12, color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 6, padding: '6px 10px', marginBottom: 8, margin: '0 0 8px' }}>⚠ {achievementsAiError}</p>
                       )}
                       {achievementsAiBusy && (
-                        <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:4 }}>
-                          {[0,1,2].map(i => <div key={i} style={{ height:36, borderRadius:8, background:'linear-gradient(90deg,#f1f5f9 0%,#e2e8f0 40%,#f1f5f9 80%)', backgroundSize:'800px 100%', animation:'inspireShimmer 1.4s linear infinite' }} />)}
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {[0, 1, 2].map(i => <div key={i} style={{ height: 32, borderRadius: 8, background: 'linear-gradient(90deg,#f1f5f9 0%,#e2e8f0 40%,#f1f5f9 80%)', backgroundSize: '800px 100%', animation: 'inspireShimmer 1.4s linear infinite' }} />)}
                         </div>
                       )}
                       {!achievementsAiBusy && achievementsAiReview && (
                         achievementsAiEditing ? (
-                          <textarea
-                            value={achievementsAiReview}
-                            onChange={e => setAchievementsAiReview(e.target.value)}
-                            rows={8}
-                            style={{ width:'100%', borderRadius:8, border:'1px solid #e5e7eb', padding:'10px 12px', fontSize:12.5, color:'#374151', fontFamily:'Georgia,serif', lineHeight:1.7, resize:'vertical', outline:'none' }}
-                          />
+                          <textarea value={achievementsAiReview} onChange={e => setAchievementsAiReview(e.target.value)} rows={8}
+                            style={{ width: '100%', borderRadius: 8, border: '1px solid #e5e7eb', padding: '10px 12px', fontSize: 12.5, color: '#374151', fontFamily: 'Georgia,serif', lineHeight: 1.7, resize: 'vertical', outline: 'none', boxSizing: 'border-box' }} />
                         ) : (
-                          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                             {[
                               { key: 'Compliment', icon: '💬', bg: '#fffbeb', border: '#fde68a', bar: '#f59e0b' },
                               { key: 'Performance Summary', icon: '🎯', bg: '#f5f3ff', border: '#ddd6fe', bar: '#7c3aed' },
                               { key: 'Encouragement', icon: '🚀', bg: '#f0fdf4', border: '#bbf7d0', bar: '#16a34a' },
                               { key: 'Practical Tips', icon: '💡', bg: '#f0f9ff', border: '#bae6fd', bar: '#0284c7' },
                             ].map(s => {
-                              const pattern = new RegExp(s.key.replace(/ /g, '\\s+') + '\\s*:', 'i');
-                              const matches = [...achievementsAiReview.matchAll(new RegExp('(' + ['Compliment','Performance Summary','Encouragement','Practical Tips'].map(h=>h.replace(/ /g,'\\s+')).join('|') + ')\\s*:', 'gi'))];
-                              const idx = matches.findIndex(m => new RegExp(s.key.replace(/ /g,'\\s+'), 'i').test(m[1]));
+                              const matches = [...achievementsAiReview.matchAll(new RegExp('(' + ['Compliment', 'Performance Summary', 'Encouragement', 'Practical Tips'].map(h => h.replace(/ /g, '\\s+')).join('|') + ')\\s*:', 'gi'))];
+                              const idx = matches.findIndex(m => new RegExp(s.key.replace(/ /g, '\\s+'), 'i').test(m[1]));
                               if (idx < 0) return null;
                               const start = matches[idx].index! + matches[idx][0].length;
-                              const end = idx + 1 < matches.length ? matches[idx+1].index! : achievementsAiReview.length;
+                              const end = idx + 1 < matches.length ? matches[idx + 1].index! : achievementsAiReview.length;
                               const body = achievementsAiReview.slice(start, end).trim();
                               if (!body) return null;
                               return (
-                                <div key={s.key} style={{ position:'relative', background:s.bg, border:`1px solid ${s.border}`, borderRadius:10, padding:'10px 10px 10px 14px', overflow:'hidden' }}>
-                                  <span style={{ position:'absolute', left:0, top:0, bottom:0, width:3, background:s.bar, borderRadius:'4px 0 0 4px' }} />
-                                  <div style={{ display:'flex', alignItems:'center', gap:5, marginBottom:4 }}>
-                                    <span style={{ fontSize:13 }}>{s.icon}</span>
-                                    <span style={{ fontSize:10, fontWeight:800, textTransform:'uppercase', letterSpacing:'0.08em', color:'#374151' }}>{s.key}</span>
+                                <div key={s.key} style={{ position: 'relative', background: s.bg, border: `1px solid ${s.border}`, borderRadius: 10, padding: '10px 10px 10px 14px', overflow: 'hidden' }}>
+                                  <span style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 3, background: s.bar, borderRadius: '4px 0 0 4px' }} />
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
+                                    <span style={{ fontSize: 12 }}>{s.icon}</span>
+                                    <span style={{ fontSize: 10, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#374151' }}>{s.key}</span>
                                   </div>
-                                  <p style={{ margin:0, fontSize:12.5, color:'#374151', lineHeight:1.7, fontFamily:'Georgia,serif' }}>{body}</p>
+                                  <p style={{ margin: 0, fontSize: 12, color: '#374151', lineHeight: 1.7, fontFamily: 'Georgia,serif' }}>{body}</p>
                                 </div>
                               );
                             }).filter(Boolean)}
-                            {!['Compliment','Performance Summary','Encouragement','Practical Tips'].some(h => new RegExp(h, 'i').test(achievementsAiReview)) && (
-                              <p style={{ fontSize:12.5, color:'#374151', lineHeight:1.7, whiteSpace:'pre-wrap', fontFamily:'Georgia,serif' }}>{achievementsAiReview}</p>
+                            {!['Compliment', 'Performance Summary', 'Encouragement', 'Practical Tips'].some(h => new RegExp(h, 'i').test(achievementsAiReview)) && (
+                              <p style={{ fontSize: 12, color: '#374151', lineHeight: 1.7, whiteSpace: 'pre-wrap', fontFamily: 'Georgia,serif' }}>{achievementsAiReview}</p>
                             )}
                           </div>
                         )
                       )}
                     </div>
-                  </>
+                  </div>
                 );
               })()}
                 </>
@@ -3215,18 +3652,6 @@ export function StudentListPanel() {
           border-bottom: 1px solid #eceef6;
         }
 
-        .tab-achievements {
-          background: linear-gradient(135deg, #fef9c3, #fdf2e9) !important;
-          border-color: #fde68a !important;
-          color: #92400e !important;
-          font-weight: 600 !important;
-        }
-
-        .tab-achievements.active {
-          background: linear-gradient(135deg, #fef3c7, #fde8c8) !important;
-          border-color: #f59e0b !important;
-          color: #78350f !important;
-        }
 
         .tab {
           height: 30px;
@@ -3234,8 +3659,12 @@ export function StudentListPanel() {
           border-radius: 8px;
           background: #f8f9ff;
           color: #666b84;
-          font-size: 12px;
+          font-size: 11px;
           cursor: pointer;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          padding: 0 4px;
         }
 
         .tab.active {

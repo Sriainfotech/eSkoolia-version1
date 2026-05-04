@@ -233,8 +233,8 @@ export function useClasses(date: string) {
   }, []);
   useEffect(() => {
     if (!baseClasses.length) return;
-    // Seed immediately with base classes (0 counts) so UI renders fast
-    setClasses(baseClasses);
+    // Seed with base classes only if we have no data yet (avoid flashing 0 counts on refresh)
+    setClasses((prev) => prev.length === 0 ? baseClasses : prev);
     let cancelled = false;
     async function fetchSummary(token: string): Promise<void> {
       try {

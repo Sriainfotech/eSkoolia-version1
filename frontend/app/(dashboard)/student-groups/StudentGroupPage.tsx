@@ -28,7 +28,8 @@ interface Student {
   class: string
   section: string
   classIndex: number
-  currentGroupId: number | null
+  currentGroupId: number | null  // HOUSE FK (single group)
+  clubIds: number[]              // CLUB M2M (multiple clubs)
   aiHint: string | null
 }
 
@@ -213,6 +214,7 @@ export default function StudentGroupPage() {
   const [acOpen,  setACOpen]  = useState(false)
   const [editTgt, setEditTgt] = useState<Group|null>(null)
   const [aiDismissed, setAIDismissed] = useState(false)
+  const [clubModal, setClubModal] = useState<Group|null>(null)
 
   const [swMethod,  setSWMethod]  = useState<'random'|'alpha'|'classwise'|'gender'>('random')
   const [swScope,   setSWScope]   = useState<'unassigned'|'all'>('unassigned')
@@ -221,7 +223,6 @@ export default function StudentGroupPage() {
 
   const [savingSid,  setSavingSid]  = useState<number|null>(null)
   const [bulkSaving, setBulkSaving] = useState<number|null>(null)
-  const [clubAssignStudentId, setClubAssignStudentId] = useState<number|null>(null)
 
   const [toast,    setToast]   = useState('')
   const [toastOn,  setToastOn] = useState(false)
@@ -231,16 +232,6 @@ export default function StudentGroupPage() {
   const filterJumpReady = useRef(false)
   const houseListRef = useRef<HTMLDivElement | null>(null)
   const clubListRef = useRef<HTMLDivElement | null>(null)
-
-  const focusGroupRoster = useCallback((groupId: number, type: GroupType) => {
-    setOpenAccs((prev) => {
-      const next = new Set(prev)
-      next.add(groupId)
-      return next
-    })
-    const targetRef = type === 'HOUSE' ? houseListRef : clubListRef
-    targetRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, [])
 
   const apiFetch = useCallback(async (path: string, init?: RequestInit) => {
     const url = new URL(path, 'http://local')
@@ -340,6 +331,10 @@ export default function StudentGroupPage() {
     const full = s?.name || `${s?.first_name || ''} ${s?.last_name || ''}`.trim()
     const rawClass = String(s?.class || s?.class_name || '')
     const cls = normalizeClassName(rawClass) ?? (rawClass || '-')
+    // clubIds: from M2M field (array of numbers) — falls back to empty array
+    const rawClubIds: number[] = Array.isArray(s?.clubIds)
+      ? s.clubIds.map(Number).filter(Boolean)
+      : []
     return {
       id: Number(s?.id || 0),
       name: String(full || 'Student'),
@@ -348,6 +343,7 @@ export default function StudentGroupPage() {
       section: String(s?.section || '-'),
       classIndex: Number(s?.classIndex ?? s?.class_index ?? 99),
       currentGroupId: s?.currentGroupId ?? s?.current_group_id ?? s?.student_group ?? null,
+      clubIds: rawClubIds,
       aiHint: s?.aiHint ?? s?.ai_hint ?? null,
     }
   }
@@ -458,9 +454,6 @@ export default function StudentGroupPage() {
 
   const houses = groups.filter(g => g.type === 'HOUSE')
   const clubs  = groups.filter(g => g.type === 'CLUB')
-  const clubAssignStudent = clubAssignStudentId
-    ? students.find((s) => s.id === clubAssignStudentId) ?? null
-    : null
 
   // Always show all classes from the CLASSES constant so Nursery/LKG/UKG are always visible.
   // Section pills are derived from actual student data (they vary by school setup).
@@ -474,10 +467,13 @@ export default function StudentGroupPage() {
     return students.filter(s => {
       const query = quickSearch.trim().toLowerCase()
       const group = groups.find(x => x.id === s.currentGroupId)
+      // clubs the student belongs to (via M2M)
+      const studentClubs = clubs.filter(c => (s.clubIds || []).includes(c.id))
 
       // Text search
       if (query) {
-        const haystack = [s.name, s.admissionNo, s.class, s.section, group?.name || ''].join(' ').toLowerCase()
+        const clubNames = studentClubs.map(c => c.name).join(' ')
+        const haystack = [s.name, s.admissionNo, s.class, s.section, group?.name || '', clubNames].join(' ').toLowerCase()
         if (!haystack.includes(query)) return false
       }
 
@@ -487,18 +483,19 @@ export default function StudentGroupPage() {
       // Section filter (client-side)
       if (sf.sec.length && !sf.sec.includes(s.section)) return false
 
-      // Status filter (client-side): assigned = has a group, unassigned = no group
-      if (sf.status.toLowerCase() === 'assigned' && !s.currentGroupId) return false
-      if (sf.status.toLowerCase() === 'unassigned' && s.currentGroupId) return false
+      // Status filter (client-side): assigned = has a group or club, unassigned = no group AND no clubs
+      if (sf.status.toLowerCase() === 'assigned' && !s.currentGroupId && (s.clubIds || []).length === 0) return false
+      if (sf.status.toLowerCase() === 'unassigned' && (s.currentGroupId || (s.clubIds || []).length > 0)) return false
 
       // House filter (client-side)
       if (sf.house.length) {
         if (!group || !houses.find(h => h.id === group.id && sf.house.includes(h.name))) return false
       }
 
-      // Club filter (client-side)
+      // Club filter (client-side): student must belong to at least one filtered club
       if (sf.club.length) {
-        if (!group || !clubs.find(c => c.id === group.id && sf.club.includes(c.name))) return false
+        const hasClub = studentClubs.some(c => sf.club.includes(c.name))
+        if (!hasClub) return false
       }
 
       return true
@@ -564,33 +561,95 @@ export default function StudentGroupPage() {
     setSel(p => { const n=new Set(p[gid]||[]); checked?n.add(sid):n.delete(sid); return {...p,[gid]:n} })
   }
   function togCls(gid: number, cls: string, checked: boolean) {
-    const ids = fStudents().filter(s=>s.currentGroupId===gid&&s.class===cls).map(s=>s.id)
+    const grp = groups.find(g => g.id === gid)
+    const ids = grp?.type === 'CLUB'
+      ? fStudents().filter(s => (s.clubIds || []).includes(gid) && s.class === cls).map(s => s.id)
+      : fStudents().filter(s => s.currentGroupId === gid && s.class === cls).map(s => s.id)
     setSel(p => { const n=new Set(p[gid]||[]); ids.forEach(id=>checked?n.add(id):n.delete(id)); return {...p,[gid]:n} })
   }
   function clearSel(gid: number) { setSel(p=>({...p,[gid]:new Set()})) }
 
   async function assignOne(studentId: number, groupId: number|null) {
+    const grp = groupId ? groups.find(g => g.id === groupId) : null
+    const isClub = grp?.type === 'CLUB'
+
     setSavingSid(studentId)
-    setStudents(p => p.map(s => s.id===studentId ? {...s, currentGroupId:groupId} : s))
-    try {
-      const res = await apiFetch('/api/student-groups/assign', {
-        method: 'POST',
-        body: JSON.stringify({ studentId, groupId }),
-      })
-      if (!res.ok) throw new Error()
-      await rGroups()
-      const g = groups.find(x=>x.id===groupId)
-      const s = students.find(x=>x.id===studentId)
-      showToast(g ? `${s?.name} -> ${g.emoji} ${g.name}` : `${s?.name} unassigned`)
-    } catch {
-      await rStudents()
-      showToast('Save failed - please try again')
-    } finally { setSavingSid(null) }
+
+    if (isClub && groupId) {
+      // Club assignment: toggle M2M membership
+      const alreadyMember = students.find(s => s.id === studentId)?.clubIds.includes(groupId) ?? false
+      // Optimistic update
+      setStudents(p => p.map(s => {
+        if (s.id !== studentId) return s
+        return {
+          ...s,
+          clubIds: alreadyMember
+            ? s.clubIds.filter(id => id !== groupId)
+            : [...s.clubIds, groupId],
+        }
+      }))
+      try {
+        const res = await apiFetch('/api/student-groups/club-toggle', {
+          method: 'POST',
+          body: JSON.stringify({ studentId, clubId: groupId }),
+        })
+        if (!res.ok) throw new Error()
+        const data = await res.json() as { action: string; clubIds: number[] }
+        // Sync exact server state
+        setStudents(p => p.map(s => s.id === studentId ? { ...s, clubIds: data.clubIds || [] } : s))
+        await rGroups()
+        const s = students.find(x => x.id === studentId)
+        showToast(data.action === 'added'
+          ? `${s?.name} joined ${grp.emoji} ${grp.name}`
+          : `${s?.name} left ${grp.emoji} ${grp.name}`)
+      } catch {
+        await rStudents()
+        showToast('Save failed - please try again')
+      } finally { setSavingSid(null) }
+    } else {
+      // House assignment: single FK
+      setStudents(p => p.map(s => s.id === studentId ? {...s, currentGroupId: groupId} : s))
+      try {
+        const res = await apiFetch('/api/student-groups/assign', {
+          method: 'POST',
+          body: JSON.stringify({ studentId, groupId }),
+        })
+        if (!res.ok) throw new Error()
+        await rGroups()
+        const s = students.find(x => x.id === studentId)
+        showToast(grp ? `${s?.name} -> ${grp.emoji} ${grp.name}` : `${s?.name} unassigned`)
+      } catch {
+        await rStudents()
+        showToast('Save failed - please try again')
+      } finally { setSavingSid(null) }
+    }
   }
 
-  async function assignFromClubPicker(studentId: number, groupId: number|null) {
-    await assignOne(studentId, groupId)
-    setClubAssignStudentId(null)
+  async function bulkClubAdd(studentIds: number[], clubId: number) {
+    const grp = groups.find(g => g.id === clubId)
+    if (!grp) return
+    // Optimistic update: add clubId to each student's clubIds
+    setStudents(p => p.map(s =>
+      studentIds.includes(s.id) && !s.clubIds.includes(clubId)
+        ? { ...s, clubIds: [...s.clubIds, clubId] }
+        : s
+    ))
+    try {
+      await Promise.all(studentIds.map(sid =>
+        apiFetch('/api/student-groups/club-assign', {
+          method: 'POST',
+          body: JSON.stringify({ studentId: sid, clubId }),
+        })
+      ))
+      // Sync server state for all updated students
+      const refreshed = await apiFetch('/api/student-groups/students').then(r => r.json())
+      setStudents(asList<any>(refreshed).map(normalizeStudent))
+      await rGroups()
+      showToast(`${studentIds.length} student${studentIds.length !== 1 ? 's' : ''} added to ${grp.emoji} ${grp.name}`)
+    } catch {
+      await rStudents()
+      showToast('Some adds failed — please retry')
+    }
   }
 
   async function doBulk(groupId: number, targetGroupId: number) {
@@ -767,6 +826,7 @@ export default function StudentGroupPage() {
           clubs={groups.filter(g => g.type === 'CLUB').map(g => ({ id: String(g.id), name: g.name, emoji: g.emoji, color: g.color, bgColor: g.bgColor }))}
           students={students.map(s => {
             const grp = groups.find(g => g.id === s.currentGroupId)
+            const firstClub = clubs.find(c => (s.clubIds || []).includes(c.id))
             return {
               id: s.id,
               full_name: (s as any).fullName || (s as any).full_name || s.name || `Student ${s.id}`,
@@ -775,8 +835,8 @@ export default function StudentGroupPage() {
               section: s.section,
               house_id:   grp?.type === 'HOUSE' ? String(grp.id) : null,
               house_name: grp?.type === 'HOUSE' ? grp.name : null,
-              club_id:    grp?.type === 'CLUB' ? String(grp.id) : null,
-              club_name:  grp?.type === 'CLUB' ? grp.name : null,
+              club_id:    firstClub ? String(firstClub.id) : null,
+              club_name:  firstClub ? firstClub.name : null,
             }
           })}
         />
@@ -808,8 +868,7 @@ export default function StudentGroupPage() {
         {houses.map(h=>(
           <HCard key={h.id} g={h}
             onEdit={()=>{setEditTgt(h);setAGOpen(true)}}
-            onDelete={()=>{ void deleteGroup(h.id) }}
-            onViewRoster={() => focusGroupRoster(h.id, 'HOUSE')}/>
+            onDelete={()=>{ void deleteGroup(h.id) }}/>
         ))}
       </div>
 
@@ -823,8 +882,7 @@ export default function StudentGroupPage() {
         {clubs.map(c=>(
           <CCard key={c.id} g={c}
             onEdit={()=>{setEditTgt(c);setAGOpen(true)}}
-            onDelete={()=>{ void deleteGroup(c.id) }}
-            onViewRoster={() => focusGroupRoster(c.id, 'CLUB')}/>
+            onDelete={()=>{ void deleteGroup(c.id) }}/>
         ))}
         <div className="cc-ghost" onClick={()=>setACOpen(true)}>
           <div className="cc-ghost-icon">+</div>
@@ -960,6 +1018,7 @@ export default function StudentGroupPage() {
             <div className="sg-result-list">
               {filtered.map(s=>{
                 const grp = groups.find(g=>g.id===s.currentGroupId)
+                const studentClubs = clubs.filter(c=>(s.clubIds||[]).includes(c.id))
                 const av = AVATAR_COLORS[s.id % AVATAR_COLORS.length]
                 return (
                   <div key={s.id} className="sg-result-row">
@@ -968,11 +1027,17 @@ export default function StudentGroupPage() {
                       <div className="sg-result-name">{s.name}</div>
                       <div className="sg-result-meta">{s.admissionNo} · {s.class}{s.section&&s.section!=='-'?` · Sec ${s.section}`:''}</div>
                     </div>
-                    {grp?(
-                      <div className="sg-result-tag" style={{background:grp.bgColor,color:grp.color}}>{grp.emoji} {grp.name}</div>
-                    ):(
-                      <div className="sg-result-tag unassigned">Unassigned</div>
-                    )}
+                    <div style={{display:'flex',gap:4,flexWrap:'wrap',justifyContent:'flex-end'}}>
+                      {grp&&grp.type!=='CLUB'&&(
+                        <div className="sg-result-tag" style={{background:grp.bgColor,color:grp.color}}>{grp.emoji} {grp.name}</div>
+                      )}
+                      {studentClubs.map(c=>(
+                        <div key={c.id} className="sg-result-tag" style={{background:c.bgColor,color:c.color}}>{c.emoji} {c.name}</div>
+                      ))}
+                      {!grp&&studentClubs.length===0&&(
+                        <div className="sg-result-tag unassigned">Unassigned</div>
+                      )}
+                    </div>
                   </div>
                 )
               })}
@@ -1000,13 +1065,13 @@ export default function StudentGroupPage() {
             onClearSel={()=>clearSel(h.id)}
             onBulkAssign={(tgt)=>{ void doBulk(h.id,tgt) }}
             onAssignOne={(sid,gid)=>{ void assignOne(sid,gid) }}
-            onOpenClubAssign={(sid)=>setClubAssignStudentId(sid)}
             bulkSaving={bulkSaving===h.id}
             savingSid={savingSid}
             allGroups={groups}
             showAI={hi===0&&!aiDismissed&&(stats?.unassigned??0)>0}
             onAIApply={()=>{ void applyAI() }}
-            onAIDismiss={()=>setAIDismissed(true)}/>
+            onAIDismiss={()=>setAIDismissed(true)}
+            onOpenClubModal={setClubModal}/>
         ))}
       </div>
 
@@ -1029,23 +1094,22 @@ export default function StudentGroupPage() {
             onClearSel={()=>clearSel(c.id)}
             onBulkAssign={(tgt)=>{ void doBulk(c.id,tgt) }}
             onAssignOne={(sid,gid)=>{ void assignOne(sid,gid) }}
-            onOpenClubAssign={(sid)=>setClubAssignStudentId(sid)}
             bulkSaving={bulkSaving===c.id}
             savingSid={savingSid}
             allGroups={groups}
-            showAI={false} onAIApply={()=>{}} onAIDismiss={()=>{}}/>
+            showAI={false} onAIApply={()=>{}} onAIDismiss={()=>{}}
+            onOpenClubModal={setClubModal}/>
         ))}
       </div>
 
-      {clubAssignStudent&&(
-        <ClubAssignModal
-          student={clubAssignStudent}
-          clubs={clubs}
-          currentGroup={groups.find((g) => g.id === clubAssignStudent.currentGroupId) ?? null}
-          saving={savingSid === clubAssignStudent.id}
-          onAssign={(groupId)=>{ void assignFromClubPicker(clubAssignStudent.id, groupId) }}
-          onClose={()=>setClubAssignStudentId(null)}
-        />
+      {clubModal&&(
+        <ClubMembersModal
+          club={clubModal}
+          allStudents={students}
+          onAssignOne={(sid,gid)=>{ void assignOne(sid,gid) }}
+          onBulkAdd={(sids,gid)=>{ void bulkClubAdd(sids,gid) }}
+          savingSid={savingSid}
+          onClose={()=>setClubModal(null)}/>
       )}
 
       {swOpen&&<SWModal method={swMethod} setMethod={setSWMethod} scope={swScope} setScope={setSWScope}
@@ -1062,7 +1126,7 @@ export default function StudentGroupPage() {
   )
 }
 
-function HCard({g,onEdit,onDelete,onViewRoster}:{g:Group;onEdit():void;onDelete():void;onViewRoster():void}) {
+function HCard({g,onEdit,onDelete}:{g:Group;onEdit():void;onDelete():void}) {
   const pct = Math.min(100,Math.round(g.studentCount/g.capacity*100))
   const desc = splitDescription(g.description)
   return (
@@ -1084,7 +1148,6 @@ function HCard({g,onEdit,onDelete,onViewRoster}:{g:Group;onEdit():void;onDelete(
       <div className="hc-bot">
         <span style={{fontSize:11,color:'var(--light)'}}>{g.studentCount} student{g.studentCount!==1?'s':''} assigned</span>
         <div className="hact">
-          <button className="hbtn" style={{width:'auto',padding:'0 8px',fontSize:10,fontWeight:700}} onClick={onViewRoster} title="View students">View</button>
           <button className="hbtn" onClick={onEdit} title="Edit"><Ico.Edit/></button>
           <button className="hbtn danger" onClick={onDelete} title="Delete"><Ico.Trash/></button>
         </div>
@@ -1093,7 +1156,7 @@ function HCard({g,onEdit,onDelete,onViewRoster}:{g:Group;onEdit():void;onDelete(
   )
 }
 
-function CCard({g,onEdit,onDelete,onViewRoster}:{g:Group;onEdit():void;onDelete():void;onViewRoster():void}) {
+function CCard({g,onEdit,onDelete}:{g:Group;onEdit():void;onDelete():void}) {
   const desc = splitDescription(g.description)
   return (
     <div className="cc">
@@ -1112,7 +1175,6 @@ function CCard({g,onEdit,onDelete,onViewRoster}:{g:Group;onEdit():void;onDelete(
       <div className="cc-foot">
         <span className="cc-chip">{g.studentCount} / {g.capacity}</span>
         <div style={{display:'flex',gap:5}}>
-          <button className="cc-btn" style={{width:'auto',padding:'0 8px',fontSize:10,fontWeight:700}} onClick={onViewRoster} title="View students">View</button>
           <button className="cc-btn" onClick={onEdit} title="Edit"><Ico.Edit/></button>
           <button className="cc-btn danger" onClick={onDelete} title="Delete"><Ico.Trash/></button>
         </div>
@@ -1131,41 +1193,28 @@ interface AccProps {
   onClearSel():void
   onBulkAssign(targetGroupId:number):void
   onAssignOne(sid:number,gid:number|null):void
-  onOpenClubAssign(sid:number):void
   bulkSaving:boolean; savingSid:number|null
   allGroups:Group[]
   showAI:boolean; onAIApply():void; onAIDismiss():void
+  onOpenClubModal(g:Group):void
 }
 
 function Accordion(p:AccProps) {
   const {group:g, students} = p
-  const gStudents = students.filter(s=>s.currentGroupId===g.id)
-  const pct       = g.capacity?Math.min(100,Math.round(g.studentCount/g.capacity*100)):0
-  const hasSel    = p.selected.size>0
+  const isClub = g.type === 'CLUB'
+
+  // For houses: show only members. For clubs: show ALL students so admin can add/remove.
+  const houseMembers = students.filter(s => s.currentGroupId === g.id)
+  const memberIds    = new Set(students.filter(s => (s.clubIds||[]).includes(g.id)).map(s => s.id))
+  const displayStudents = isClub ? students : houseMembers
+
+  const pct    = g.capacity ? Math.min(100, Math.round(g.studentCount/g.capacity*100)) : 0
+  const hasSel = p.selected.size > 0
   const [bulkTgt, setBulkTgt] = useState<string>('')
   const hs = p.allGroups.filter(x=>x.type==='HOUSE')
   const cs = p.allGroups.filter(x=>x.type==='CLUB')
 
-  // Per-class-row pagination: key = `${groupId}-${cls}`, value = current page (1-based)
-  const CLASS_ROW_PAGE_SIZE = 10
-  const [classRowPages, setClassRowPages] = useState<Record<string, number>>({})
-  const getClassPage = (cls: string) => classRowPages[`${g.id}-${cls}`] ?? 1
-  const setClassPage = (cls: string, page: number) =>
-    setClassRowPages((prev) => ({ ...prev, [`${g.id}-${cls}`]: page }))
-
-  const classCounts = CLASSES.map((cls) => ({
-    cls,
-    count: gStudents.filter((s) => s.class === cls).length,
-  }))
-  const nonEmptyClassCounts = classCounts.filter((x) => x.count > 0)
-  const quickClassCounts = (nonEmptyClassCounts.length > 0 ? nonEmptyClassCounts : classCounts).slice(0, 3)
-  const moreClassCount = Math.max(0, (nonEmptyClassCounts.length > 0 ? nonEmptyClassCounts.length : classCounts.length) - quickClassCounts.length)
-
-  const openClassFromChip = (cls: string) => {
-    const rowKey = `${g.id}-${cls}`
-    if (!p.isOpen) p.onToggle()
-    if (!p.openCRs.has(rowKey)) p.onToggleCR(rowKey)
-  }
+  const memberCount = memberIds.size
 
   return (
     <div className="acc">
@@ -1177,14 +1226,13 @@ function Accordion(p:AccProps) {
           <button className="ai-x" onClick={p.onAIDismiss}><Ico.X/></button>
         </div>
       )}
-      {hasSel&&(
+      {!isClub&&hasSel&&(
         <div className="inline-bulk show">
           <span className="ib-chip">{p.selected.size} selected</span>
-          <span style={{fontSize:12,color:'var(--mid)'}}>&rarr; Move to:</span>
+          <span style={{fontSize:12,color:'var(--mid)'}}>-&gt; Move to:</span>
           <select className="ib-sel" value={bulkTgt} onChange={e=>setBulkTgt(e.target.value)}>
             <option value="">Choose group...</option>
-            <optgroup label="Houses">{hs.map(h=><option key={h.id} value={h.id}>{h.emoji} {h.name}</option>)}</optgroup>
-            <optgroup label="Clubs">{cs.map(c=><option key={c.id} value={c.id}>{c.emoji} {c.name}</option>)}</optgroup>
+            {hs.map(h=><option key={h.id} value={h.id}>{h.emoji} {h.name}</option>)}
           </select>
           <button className="ib-apply" disabled={!bulkTgt||p.bulkSaving}
             onClick={()=>bulkTgt&&p.onBulkAssign(Number(bulkTgt))}>
@@ -1199,43 +1247,69 @@ function Accordion(p:AccProps) {
         <div className="acc-info">
           <div className="acc-name">{g.name}</div>
           <div className="acc-meta">
-            <div className="acc-pct-bar"><div className="acc-pct-fill" style={{width:`${pct}%`,background:g.color}}/></div>
-            <span className="acc-pct-txt" style={{color:pct>=90?'var(--teal)':pct>=60?'var(--orange)':'var(--red)'}}>{pct}%</span>
-            <span className="acc-pending">{g.studentCount} students - Nursery - Grade 10</span>
+            {isClub ? (
+              <span className="acc-pending">
+                <span style={{fontWeight:600,color:g.color}}>{memberCount}</span> members
+                <span style={{color:'var(--hint)',marginLeft:6}}>· capacity {g.capacity}</span>
+              </span>
+            ) : (
+              <>
+                <div className="acc-pct-bar"><div className="acc-pct-fill" style={{width:`${pct}%`,background:g.color}}/></div>
+                <span className="acc-pct-txt" style={{color:pct>=90?'var(--teal)':pct>=60?'var(--orange)':'var(--red)'}}>{pct}%</span>
+                <span className="acc-pending">{g.studentCount} students</span>
+              </>
+            )}
           </div>
         </div>
         <div className="acc-right">
-          <div className="acc-chips">
-            {quickClassCounts.map((item)=>(
-              <button
-                key={item.cls}
-                type="button"
-                className="acc-chip"
-                title={`Open ${item.cls} (${item.count} students)`}
-                onClick={(e)=>{ e.stopPropagation(); openClassFromChip(item.cls) }}
-              >
-                {item.cls}
-              </button>
-            ))}
-            {moreClassCount > 0 && <span className="acc-chip">+{moreClassCount}</span>}
-          </div>
+          {isClub ? (
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',justifyContent:'flex-end',maxWidth:200}}>
+              {memberCount===0
+                ? <span className="acc-chip" style={{color:'var(--hint)',fontStyle:'italic'}}>No members yet</span>
+                : <span className="acc-chip" style={{background:g.bgColor,color:g.color}}>{memberCount} / {g.capacity} members</span>}
+            </div>
+          ) : (
+            <div className="acc-chips">
+              {['Nursery','Grade 5','Grade 10'].map(c=><span key={c} className="acc-chip">{c}</span>)}
+              <span className="acc-chip">+10</span>
+            </div>
+          )}
           <div className={`acc-chevron${p.isOpen?' open':''}`}><Ico.ChevD/></div>
         </div>
       </div>
+
       {p.isOpen&&(
         <div className="acc-body open">
+          {isClub && (
+            <div style={{padding:'10px 16px',background:'#f8f9fc',borderBottom:'1px solid #eee',display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}}>
+              <div style={{display:'flex',flexWrap:'wrap',gap:6,flex:1}}>
+                {memberCount === 0
+                  ? <span style={{fontSize:12,color:'var(--hint)',fontStyle:'italic'}}>No members yet — click Manage to add students</span>
+                  : students.filter(s=>(s.clubIds||[]).includes(g.id)).slice(0,12).map(s=>(
+                    <span key={s.id} style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:11,fontWeight:600,padding:'3px 8px 3px 4px',borderRadius:12,background:g.bgColor,color:g.color,border:`1px solid ${g.color}30`}}>
+                      <span style={{width:18,height:18,borderRadius:'50%',background:g.color,color:'#fff',display:'inline-flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:700,flexShrink:0}}>{initials(s.name)}</span>
+                      {s.name.split(' ')[0]}
+                      <button onClick={()=>p.onAssignOne(s.id,g.id)} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',color:'inherit',opacity:0.7}} title="Remove">
+                        <Ico.X/>
+                      </button>
+                    </span>
+                  ))}
+                {memberCount > 12 && <span style={{fontSize:11,color:'var(--mid)',padding:'3px 8px',borderRadius:12,background:'#eee'}}>+{memberCount-12} more</span>}
+              </div>
+              <button
+                onClick={()=>p.onOpenClubModal(g)}
+                style={{flexShrink:0,fontSize:12,fontWeight:700,padding:'6px 14px',borderRadius:8,border:`1.5px solid ${g.color}`,background:g.bgColor,color:g.color,cursor:'pointer',display:'flex',alignItems:'center',gap:5,whiteSpace:'nowrap'}}>
+                <Ico.Plus s={12}/> Manage Members
+              </button>
+            </div>
+          )}
           {CLASSES.map((cls,ci)=>{
-            const ss      = gStudents.filter(s=>s.class===cls)
-            const crKey   = `${g.id}-${cls}`
-            const crOpen  = p.openCRs.has(crKey)
-            const empty   = ss.length===0
-            const secs    = [...new Set(ss.map(s=>s.section))].sort()
-            // Per-class pagination (client-side slice of already-loaded data)
-            const crPage       = getClassPage(cls)
-            const crTotalPages = Math.max(1, Math.ceil(ss.length / CLASS_ROW_PAGE_SIZE))
-            const crSafePage   = Math.max(1, Math.min(crPage, crTotalPages))
-            const crOffset     = (crSafePage - 1) * CLASS_ROW_PAGE_SIZE
-            const ssPage       = ss.slice(crOffset, crOffset + CLASS_ROW_PAGE_SIZE)
+            const ss    = displayStudents.filter(s=>s.class===cls)
+            const crKey = `${g.id}-${cls}`
+            const crOpen= p.openCRs.has(crKey)
+            const empty = ss.length===0
+            const secs  = [...new Set(ss.map(s=>s.section))].sort()
+            const clsMembers = isClub ? ss.filter(s=>memberIds.has(s.id)).length : ss.length
             return (
               <div key={cls} className="class-row">
                 <div className="class-row-hd"
@@ -1244,94 +1318,87 @@ function Accordion(p:AccProps) {
                   <span className="cr-num">{String(ci+1).padStart(2,'0')}</span>
                   <span className="cr-name">{cls}</span>
                   <div className="cr-badges">
-                    <span className="cr-badge students">{ss.length} student{ss.length!==1?'s':''}</span>
-                    {secs.map(s=><span key={s} className="cr-badge secs">Sec {s}</span>)}
+                    {isClub ? (
+                      <>
+                        <span className="cr-badge students">{ss.length} student{ss.length!==1?'s':''}</span>
+                        {clsMembers > 0 && <span className="cr-badge" style={{background:g.bgColor,color:g.color,border:`1px solid ${g.color}40`}}>{clsMembers} in club</span>}
+                      </>
+                    ) : (
+                      <>
+                        <span className="cr-badge students">{ss.length} student{ss.length!==1?'s':''}</span>
+                        {secs.map(s=><span key={s} className="cr-badge secs">Sec {s}</span>)}
+                      </>
+                    )}
                   </div>
                   <div className="cr-prog">
-                    {!empty&&<div className="cr-bar"><div className="cr-fill" style={{width:'100%',background:g.color}}/></div>}
+                    {!empty&&!isClub&&<div className="cr-bar"><div className="cr-fill" style={{width:'100%',background:g.color}}/></div>}
+                    {!empty&&isClub&&clsMembers>0&&<div className="cr-bar"><div className="cr-fill" style={{width:`${Math.round(clsMembers/ss.length*100)}%`,background:g.color}}/></div>}
                   </div>
                   {empty
-                    ?<span style={{fontSize:10,color:'var(--hint)',marginLeft:'auto',paddingRight:4,fontStyle:'italic'}}>No students assigned</span>
+                    ?<span style={{fontSize:10,color:'var(--hint)',marginLeft:'auto',paddingRight:4,fontStyle:'italic'}}>No students</span>
                     :<span className={`cr-chevron${crOpen?' open':''}`}><Ico.ChevR/></span>}
                 </div>
                 {!empty&&crOpen&&(
                   <div className="cr-students open">
-                    <table className="stbl">
-                      <thead><tr>
-                        <th style={{width:32}}>
-                          <input type="checkbox" style={{accentColor:'var(--teal)',cursor:'pointer'}}
-                            checked={ss.every(s=>p.selected.has(s.id))}
-                            onChange={e=>p.onToggleCls(cls,e.target.checked)}/>
-                        </th>
-                        <th>Student</th><th>Adm No.</th><th>Sec</th><th>Assign House</th><th>Assign Club</th><th>AI Hint</th>
-                      </tr></thead>
-                      <tbody>
-                        {ssPage.map(s=>{
-                          const activeGroup = p.allGroups.find((x) => x.id === s.currentGroupId) ?? null
-                          const currentHouse = activeGroup?.type === 'HOUSE' ? activeGroup : null
-                          const currentClub = activeGroup?.type === 'CLUB' ? activeGroup : null
-                          return (
-                          <tr key={s.id} className={p.selected.has(s.id)?'sel':''}>
-                            <td><input type="checkbox" style={{accentColor:'var(--teal)',cursor:'pointer'}}
-                              checked={p.selected.has(s.id)}
-                              onChange={e=>p.onToggleRow(s.id,e.target.checked)}/></td>
-                            <td>
-                              <div className="s-cell">
-                                <div className="sav" style={{background:avatarColor(s.id)}}>{initials(s.name)}</div>
-                                <div><div className="s-name">{s.name}</div><div className="s-id">{s.admissionNo}</div></div>
-                              </div>
-                            </td>
-                            <td style={{fontSize:11,color:'var(--light)',fontFamily:'var(--font2)'}}>{s.admissionNo}</td>
-                            <td><span className="cls-tag">Sec {s.section}</span></td>
-                            <td>
-                              <div className="assign-cell">
-                                <select className={`grp-sel${currentHouse?' hv':''}`}
-                                  value={currentHouse?.id??''}
-                                  disabled={p.savingSid===s.id}
-                                  onChange={e=>p.onAssignOne(s.id,e.target.value?Number(e.target.value):null)}>
-                                  <option value="">- Unassigned</option>
-                                  {hs.map(h=><option key={h.id} value={h.id}>{h.emoji} {h.name}</option>)}
-                                </select>
-                                {p.savingSid===s.id&&<Ico.Spin/>}
-                              </div>
-                            </td>
-                            <td>
-                              <button
-                                type="button"
-                                className={`club-assign-btn${currentClub?' active':''}`}
-                                disabled={p.savingSid===s.id}
-                                onClick={()=>p.onOpenClubAssign(s.id)}
-                              >
-                                {currentClub ? `${currentClub.emoji} ${currentClub.name}` : 'Assign Club'}
+                    {isClub ? (
+                      <div style={{padding:'8px 12px',display:'flex',flexWrap:'wrap',gap:6}}>
+                        {ss.filter(s=>memberIds.has(s.id)).length === 0
+                          ? <span style={{fontSize:12,color:'var(--hint)',fontStyle:'italic',padding:'4px 0'}}>No members in this class — use Manage Members to add</span>
+                          : ss.filter(s=>memberIds.has(s.id)).map(s=>(
+                            <span key={s.id} style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:11,fontWeight:600,padding:'3px 8px 3px 4px',borderRadius:12,background:g.bgColor,color:g.color,border:`1px solid ${g.color}30`}}>
+                              <span style={{width:18,height:18,borderRadius:'50%',background:g.color,color:'#fff',display:'inline-flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:700,flexShrink:0}}>{initials(s.name)}</span>
+                              {s.name}
+                              <span style={{fontSize:10,color:'var(--light)'}}>· Sec {s.section}</span>
+                              <button onClick={()=>p.onAssignOne(s.id,g.id)} disabled={p.savingSid===s.id} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',color:'inherit',opacity:0.7}} title="Remove from club">
+                                {p.savingSid===s.id?<Ico.Spin/>:<Ico.X/>}
                               </button>
-                            </td>
-                            <td>{s.aiHint
-                              ?<span className="ai-hint"><span className="ai-p"/>{s.aiHint}</span>
-                              :<span style={{fontSize:10,color:'var(--hint)'}}>-</span>}
-                            </td>
-                          </tr>
-                        )})}
-                      </tbody>
-                    </table>
-                    {crTotalPages > 1 && (
-                      <div className="cr-pager">
-                        <span className="cr-pager-info">
-                          {crOffset + 1}–{Math.min(crOffset + CLASS_ROW_PAGE_SIZE, ss.length)} of {ss.length}
-                        </span>
-                        <div className="cr-pager-btns">
-                          <button
-                            className="cr-pager-btn"
-                            disabled={crSafePage <= 1}
-                            onClick={()=>setClassPage(cls, crSafePage - 1)}
-                          >‹ Prev</button>
-                          <span className="cr-pager-pages">{crSafePage} / {crTotalPages}</span>
-                          <button
-                            className="cr-pager-btn"
-                            disabled={crSafePage >= crTotalPages}
-                            onClick={()=>setClassPage(cls, crSafePage + 1)}
-                          >Next ›</button>
-                        </div>
+                            </span>
+                          ))}
                       </div>
+                    ) : (
+                      <table className="stbl">
+                        <thead><tr>
+                          <th style={{width:32}}>
+                            <input type="checkbox" style={{accentColor:'var(--teal)',cursor:'pointer'}}
+                              checked={ss.every(s=>p.selected.has(s.id))}
+                              onChange={e=>p.onToggleCls(cls,e.target.checked)}/>
+                          </th>
+                          <th>Student</th><th>Adm No.</th><th>Sec</th><th>Assign Group</th><th>AI Hint</th>
+                        </tr></thead>
+                        <tbody>
+                          {ss.map(s=>(
+                            <tr key={s.id} className={p.selected.has(s.id)?'sel':''}>
+                              <td><input type="checkbox" style={{accentColor:'var(--teal)',cursor:'pointer'}}
+                                checked={p.selected.has(s.id)}
+                                onChange={e=>p.onToggleRow(s.id,e.target.checked)}/></td>
+                              <td>
+                                <div className="s-cell">
+                                  <div className="sav" style={{background:avatarColor(s.id)}}>{initials(s.name)}</div>
+                                  <div><div className="s-name">{s.name}</div><div className="s-id">{s.admissionNo}</div></div>
+                                </div>
+                              </td>
+                              <td style={{fontSize:11,color:'var(--light)',fontFamily:'var(--font2)'}}>{s.admissionNo}</td>
+                              <td><span className="cls-tag">Sec {s.section}</span></td>
+                              <td>
+                                <div style={{display:'flex',alignItems:'center',gap:5}}>
+                                  <select className={`grp-sel${s.currentGroupId?' hv':''}`}
+                                    value={s.currentGroupId??''}
+                                    disabled={p.savingSid===s.id}
+                                    onChange={e=>p.onAssignOne(s.id,e.target.value?Number(e.target.value):null)}>
+                                    <option value="">- Unassigned</option>
+                                    {p.allGroups.filter(x=>x.type==='HOUSE').map(h=><option key={h.id} value={h.id}>{h.emoji} {h.name}</option>)}
+                                  </select>
+                                  {p.savingSid===s.id&&<Ico.Spin/>}
+                                </div>
+                              </td>
+                              <td>{s.aiHint
+                                ?<span className="ai-hint"><span className="ai-p"/>{s.aiHint}</span>
+                                :<span style={{fontSize:10,color:'var(--hint)'}}>-</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     )}
                   </div>
                 )}
@@ -1344,69 +1411,179 @@ function Accordion(p:AccProps) {
   )
 }
 
-function ClubAssignModal({
-  student,
-  clubs,
-  currentGroup,
-  saving,
-  onAssign,
-  onClose,
-}: {
-  student: Student
-  clubs: Group[]
-  currentGroup: Group | null
-  saving: boolean
-  onAssign(groupId: number | null): void
-  onClose(): void
+
+function ClubMembersModal({club,allStudents,onAssignOne,onBulkAdd,savingSid,onClose}:{
+  club:Group; allStudents:Student[]
+  onAssignOne(sid:number,gid:number):void
+  onBulkAdd(sids:number[],gid:number):void
+  savingSid:number|null; onClose():void
 }) {
-  const currentClub = currentGroup?.type === 'CLUB' ? currentGroup : null
-  const currentHouse = currentGroup?.type === 'HOUSE' ? currentGroup : null
+  const [search,    setSearch]    = useState('')
+  const [clsFilter, setClsFilter] = useState<string>('ALL')
+  const [pending,   setPending]   = useState<Set<number>>(new Set())
+  const [adding,    setAdding]    = useState(false)
+
+  const memberIds  = new Set(allStudents.filter(s=>(s.clubIds||[]).includes(club.id)).map(s=>s.id))
+  const members    = allStudents.filter(s=>memberIds.has(s.id))
+  const nonMembers = allStudents.filter(s=>!memberIds.has(s.id))
+
+  const classes = [...new Set(allStudents.map(s=>s.class))].sort((a,b)=>{
+    const ai=allStudents.find(x=>x.class===a)?.classIndex??99
+    const bi=allStudents.find(x=>x.class===b)?.classIndex??99
+    return ai-bi
+  })
+
+  const filtered = nonMembers.filter(s=>{
+    const matchCls = clsFilter==='ALL' || s.class===clsFilter
+    const q = search.toLowerCase()
+    const matchQ  = !q || s.name.toLowerCase().includes(q) || s.admissionNo.toLowerCase().includes(q)
+    return matchCls && matchQ
+  })
+
+  const byClass: Record<string,Student[]> = {}
+  filtered.forEach(s=>{ if(!byClass[s.class]) byClass[s.class]=[]; byClass[s.class].push(s) })
+
+  function togglePending(sid:number) {
+    setPending(p=>{ const n=new Set(p); n.has(sid)?n.delete(sid):n.add(sid); return n })
+  }
+  function selectClassAll(cls:string, checked:boolean) {
+    const ids=(byClass[cls]||[]).map(s=>s.id)
+    setPending(p=>{ const n=new Set(p); ids.forEach(id=>checked?n.add(id):n.delete(id)); return n })
+  }
+
+  async function handleBulkAdd() {
+    const ids = Array.from(pending)
+    if (!ids.length) return
+    setAdding(true)
+    onBulkAdd(ids, club.id)
+    setPending(new Set())
+    setAdding(false)
+  }
+
+  const clsTabStyle = (c:string):React.CSSProperties => ({
+    padding:'4px 10px',borderRadius:12,fontSize:11,fontWeight:600,border:'none',cursor:'pointer',
+    background: clsFilter===c ? club.color : '#eee',
+    color: clsFilter===c ? '#fff' : 'var(--mid)',
+    flexShrink:0,
+  })
 
   return (
-    <div className="modal-bd open" onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Assign club">
-        <div className="mhd">
-          <div>
-            <div className="mt">Assign Club</div>
-            <div className="ms">{student.name} · {student.admissionNo} · {student.class}{student.section ? ` · Sec ${student.section}` : ''}</div>
+    <div style={{position:'fixed',inset:0,zIndex:2000,display:'flex',alignItems:'stretch',justifyContent:'flex-end'}}>
+      {/* Backdrop */}
+      <div onClick={onClose} style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.35)'}}/>
+
+      {/* Drawer panel */}
+      <div style={{position:'relative',width:'min(680px,100vw)',background:'#fff',display:'flex',flexDirection:'column',boxShadow:'-4px 0 32px rgba(0,0,0,0.15)',zIndex:1}}>
+
+        {/* Header */}
+        <div style={{padding:'16px 20px',borderBottom:'1px solid #eee',display:'flex',alignItems:'center',gap:12,flexShrink:0}}>
+          <div style={{width:38,height:38,borderRadius:'50%',background:club.bgColor,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>{club.emoji}</div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700,fontSize:15,color:'var(--dark)'}}>{club.name}</div>
+            <div style={{fontSize:12,color:'var(--mid)'}}>{members.length} / {club.capacity} members · Use search or class tabs to find students</div>
           </div>
-          <button className="mx" onClick={onClose}><Ico.X/></button>
+          <button onClick={onClose} style={{background:'none',border:'none',cursor:'pointer',padding:4,color:'var(--mid)',borderRadius:6,display:'flex'}}><Ico.X/></button>
         </div>
-        <div className="mbody">
-          {currentHouse&&(
-            <div className="club-modal-note">
-              Current active assignment: {currentHouse.emoji} {currentHouse.name}. Choosing a club will replace it in the current setup.
+
+        {/* Current members strip */}
+        {members.length>0&&(
+          <div style={{padding:'10px 20px',borderBottom:'1px solid #eee',background:'#fafbfe',flexShrink:0}}>
+            <div style={{fontSize:11,fontWeight:700,color:'var(--mid)',marginBottom:6,textTransform:'uppercase',letterSpacing:0.5}}>Current Members ({members.length})</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
+              {members.map(s=>(
+                <span key={s.id} style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:11,fontWeight:600,padding:'3px 7px 3px 4px',borderRadius:11,background:club.bgColor,color:club.color,border:`1px solid ${club.color}30`}}>
+                  <span style={{width:16,height:16,borderRadius:'50%',background:club.color,color:'#fff',display:'inline-flex',alignItems:'center',justifyContent:'center',fontSize:8,fontWeight:700,flexShrink:0}}>{initials(s.name)}</span>
+                  {s.name.split(' ')[0]} <span style={{opacity:.7,fontSize:10}}>· {s.class} {s.section}</span>
+                  <button onClick={()=>onAssignOne(s.id,club.id)} disabled={savingSid===s.id} style={{background:'none',border:'none',cursor:'pointer',padding:0,display:'flex',color:'inherit',opacity:.7}} title="Remove">
+                    {savingSid===s.id?<Ico.Spin/>:<Ico.X/>}
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Search + class filter */}
+        <div style={{padding:'10px 20px',borderBottom:'1px solid #eee',flexShrink:0,display:'flex',flexDirection:'column',gap:8}}>
+          <input
+            type="text" value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search by name or admission no…"
+            style={{width:'100%',padding:'7px 12px',borderRadius:8,border:'1.5px solid #dde',fontSize:13,outline:'none',boxSizing:'border-box'}}
+          />
+          <div style={{display:'flex',gap:6,overflowX:'auto',paddingBottom:2}}>
+            <button style={clsTabStyle('ALL')} onClick={()=>setClsFilter('ALL')}>All Classes</button>
+            {classes.map(c=>(
+              <button key={c} style={clsTabStyle(c)} onClick={()=>setClsFilter(c)}>
+                {c} <span style={{opacity:.75}}>({(byClass[c]||[]).length})</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Student list (non-members) */}
+        <div style={{flex:1,overflowY:'auto',padding:'8px 0'}}>
+          {filtered.length===0&&(
+            <div style={{textAlign:'center',padding:'40px 20px',color:'var(--hint)',fontSize:13}}>
+              {search||clsFilter!=='ALL'?'No students match your filter.':'All students are already members!'}
             </div>
           )}
-          <div className="club-option-list">
-            {clubs.map((club) => {
-              const active = currentClub?.id === club.id
-              return (
-                <button
-                  key={club.id}
-                  type="button"
-                  className={`club-option${active ? ' active' : ''}`}
-                  disabled={saving}
-                  onClick={()=>onAssign(club.id)}
-                >
-                  <span className="club-option-emblem" style={{ background: club.bgColor, color: club.color }}>{club.emoji}</span>
-                  <span className="club-option-copy">
-                    <span className="club-option-name">{club.name}</span>
-                    <span className="club-option-meta">{club.studentCount} students assigned</span>
-                  </span>
-                  {active && <span className="club-option-state">Current</span>}
-                </button>
-              )
-            })}
-          </div>
+          {Object.entries(byClass).map(([cls,ss])=>(
+            <div key={cls}>
+              {/* Class group header */}
+              <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 20px',background:'#f5f6fa',borderTop:'1px solid #eee',borderBottom:'1px solid #eee',position:'sticky',top:0,zIndex:1}}>
+                <input type="checkbox"
+                  style={{accentColor:club.color,cursor:'pointer',width:14,height:14}}
+                  checked={ss.every(s=>pending.has(s.id))}
+                  onChange={e=>selectClassAll(cls,e.target.checked)}/>
+                <span style={{fontWeight:700,fontSize:12,color:'var(--dark)'}}>{cls}</span>
+                <span style={{fontSize:11,color:'var(--mid)'}}>— {ss.length} student{ss.length!==1?'s':''}</span>
+                <span style={{fontSize:11,color:club.color,marginLeft:'auto'}}>
+                  {ss.filter(s=>pending.has(s.id)).length>0&&`${ss.filter(s=>pending.has(s.id)).length} selected`}
+                </span>
+              </div>
+              {/* Student rows */}
+              {ss.map(s=>(
+                <label key={s.id} style={{display:'flex',alignItems:'center',gap:10,padding:'7px 20px',cursor:'pointer',borderBottom:'1px solid #f3f3f3',background:pending.has(s.id)?`${club.bgColor}70`:'transparent'}}>
+                  <input type="checkbox"
+                    style={{accentColor:club.color,cursor:'pointer',width:14,height:14,flexShrink:0}}
+                    checked={pending.has(s.id)}
+                    onChange={()=>togglePending(s.id)}/>
+                  <div style={{width:28,height:28,borderRadius:'50%',background:pending.has(s.id)?club.color:avatarColor(s.id),color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:700,flexShrink:0}}>{initials(s.name)}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:600,fontSize:13,color:'var(--dark)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.name}</div>
+                    <div style={{fontSize:11,color:'var(--light)'}}>{s.admissionNo} · {s.class} Sec {s.section}</div>
+                  </div>
+                  {(s.clubIds||[]).length>0&&(
+                    <div style={{display:'flex',gap:3,flexWrap:'wrap',justifyContent:'flex-end',maxWidth:120}}>
+                      {(s.clubIds||[]).slice(0,2).map(cid=>{
+                        const oc=allStudents.find(x=>x.id===s.id) // dummy; ideally we'd pass groups
+                        void oc; return null
+                      })}
+                      <span style={{fontSize:10,padding:'1px 6px',borderRadius:8,background:'#eee',color:'var(--mid)'}}>+{(s.clubIds||[]).length} club{(s.clubIds||[]).length!==1?'s':''}</span>
+                    </div>
+                  )}
+                </label>
+              ))}
+            </div>
+          ))}
         </div>
-        <div className="mfoot">
-          {currentClub&&(
-            <button className="mbc club-clear-btn" disabled={saving} onClick={()=>onAssign(null)}>
-              Clear current club
-            </button>
+
+        {/* Action bar */}
+        <div style={{padding:'12px 20px',borderTop:'1px solid #eee',background:'#fff',display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+          {pending.size>0&&(
+            <>
+              <span style={{fontSize:13,fontWeight:600,color:'var(--dark)',flex:1}}>{pending.size} student{pending.size!==1?'s':''} selected</span>
+              <button onClick={()=>setPending(new Set())} style={{fontSize:12,padding:'6px 12px',borderRadius:6,border:'1px solid #dde',background:'#fff',cursor:'pointer',color:'var(--mid)'}}>Clear</button>
+              <button onClick={()=>{ void handleBulkAdd() }} disabled={adding}
+                style={{fontSize:13,fontWeight:700,padding:'8px 20px',borderRadius:8,border:'none',background:club.color,color:'#fff',cursor:'pointer',display:'flex',alignItems:'center',gap:6}}>
+                {adding?<><Ico.Spin/> Adding…</>:<><Ico.Plus s={13}/> Add {pending.size} to {club.name}</>}
+              </button>
+            </>
           )}
-          <button className="mbc" onClick={onClose}>Close</button>
+          {pending.size===0&&(
+            <span style={{fontSize:12,color:'var(--hint)',flex:1}}>Select students above to add them to this club, or use the ✕ buttons to remove existing members.</span>
+          )}
+          <button onClick={onClose} style={{fontSize:12,padding:'6px 14px',borderRadius:6,border:'1px solid #dde',background:'#fff',cursor:'pointer',color:'var(--mid)',marginLeft:'auto'}}>Done</button>
         </div>
       </div>
     </div>
