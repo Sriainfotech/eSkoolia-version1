@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 
-const SETTINGS_KEY = 'eskoolia:school:header:v1';
+const SETTINGS_KEY = 'eskoolia:school:header:v2';
 
 export interface SchoolHeaderData {
   schoolName: string;

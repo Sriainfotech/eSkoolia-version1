@@ -94,9 +94,14 @@ export default function AttendanceTableRow({
                   RTE
                 </span>
               )}
-              {student.absent_reason && (
-                <span className="text-[9px] font-bold text-[#B4721B] bg-[#FDF1DC] px-1.5 py-px rounded whitespace-nowrap flex-shrink-0 truncate max-w-[80px]">
+              {student.absent_reason && (student.status === 'absent' || student.status === 'late') && (
+                <span className="text-[9px] font-bold text-[#B4721B] bg-[#FDF1DC] px-1.5 py-px rounded whitespace-nowrap flex-shrink-0 truncate max-w-[100px]">
                   {student.absent_reason}
+                </span>
+              )}
+              {student.is_school_approved_late && student.absent_reason && (
+                <span className="text-[9px] font-bold text-[#0A8C5A] bg-[#E4F6ED] px-1.5 py-px rounded whitespace-nowrap flex-shrink-0 truncate max-w-[120px]" title={student.absent_reason}>
+                  {student.absent_reason.replace(/^School approved:\s*/i, '') || 'Approved late'}
                 </span>
               )}
                 {showLateStatus && (
@@ -143,12 +148,17 @@ export default function AttendanceTableRow({
             className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold ${
               student.is_late
                 ? 'bg-[#FDF1DC] text-[#B4721B] border border-[#B4721B]/30'
-                : 'bg-[#F4F4F8] text-[#3A3A4A]'
+                : student.is_school_approved_late && student.late_minutes > 0
+                  ? 'bg-[#E4F6ED] text-[#0A8C5A] border border-[#0A8C5A]/30'
+                  : 'bg-[#F4F4F8] text-[#3A3A4A]'
             }`}
           >
             {student.arrival_time}
-            {student.is_late && (
+            {student.is_late && student.late_minutes > 0 && (
               <span className="text-[9px]">+{student.late_minutes}m</span>
+            )}
+            {!student.is_late && student.is_school_approved_late && student.late_minutes > 0 && (
+              <span className="text-[9px]" title="Approved late arrival">+{student.late_minutes}m ✓</span>
             )}
           </span>
         ) : (

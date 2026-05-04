@@ -46,6 +46,12 @@ export default function AttendanceTable({
 }: Props) {
   const allSelected = students.length > 0 && students.every((s) => selectedIds.has(s.id));
 
+  // Compute earliest sign-in time among non-absent students (used to show how late a late-comer is)
+  const signInMins = students
+    .filter((s) => s.status !== 'absent' && s.sign_in_time && /^\d{1,2}:\d{2}/.test(s.sign_in_time))
+    .map((s) => timeToMins(s.sign_in_time!.slice(0, 5)));
+  const earliestSignIn = signInMins.length > 0 ? Math.min(...signInMins) : null;
+
   // Compute late-by-average: students whose arrival is 15+ min after class average
   const arrivals = students
     .filter((s) => s.arrival_time && /^\d{1,2}:\d{2}$/.test(s.arrival_time))
@@ -117,10 +123,24 @@ export default function AttendanceTable({
               </td>
             </tr>
           ) : (
-            students.map((student) => (
+            students.map((student) => {
+              // Compute actual minutes late vs earliest sign-in.
+              // Applies to: explicitly late, and school-approved late (present but arrived late).
+              const isSchoolApprovedLate = Boolean(student.absent_reason?.startsWith('School approved:'));
+              const computedLateMinutes = (() => {
+                if (!student.is_late && student.status !== 'late' && !isSchoolApprovedLate) return student.late_minutes;
+                if (earliestSignIn === null || !student.sign_in_time) return student.late_minutes;
+                const studentMins = timeToMins(student.sign_in_time.slice(0, 5));
+                const diff = studentMins - earliestSignIn;
+                return diff > 0 ? diff : student.late_minutes;
+              })();
+              const enrichedStudent = (computedLateMinutes !== student.late_minutes || isSchoolApprovedLate)
+                ? { ...student, late_minutes: computedLateMinutes, is_school_approved_late: isSchoolApprovedLate }
+                : student;
+              return (
               <AttendanceTableRow
                 key={student.id}
-                student={student}
+                student={enrichedStudent}
                 isSelected={selectedIds.has(student.id)}
                 isLateByAverage={lateByAverageIds.has(student.id)}
                 readOnly={readOnly}
@@ -135,7 +155,8 @@ export default function AttendanceTable({
                 onEditNote={onEditNote}
                 onDeleteNote={onDeleteNote}
               />
-            ))
+              );
+            })
           )}
         </tbody>
       </table>

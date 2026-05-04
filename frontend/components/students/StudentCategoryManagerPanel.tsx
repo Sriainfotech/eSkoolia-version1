@@ -247,6 +247,7 @@ export function StudentCategoryManagerPanel() {
   const [confirmMode, setConfirmMode] = useState<"single" | "bulk">("single");
 
   const [openViewId, setOpenViewId] = useState<number | null>(null);
+  const [popoverRect, setPopoverRect] = useState<{ top: number; bottom: number; right: number } | null>(null);
   const [statusDrawerId, setStatusDrawerId] = useState<number | null>(null);
 
   // Delete/Deactivate Modal State
@@ -519,11 +520,13 @@ export function StudentCategoryManagerPanel() {
       if (!openViewId) return;
       if (viewPopoverRef.current?.contains(event.target as Node)) return;
       setOpenViewId(null);
+      setPopoverRect(null);
     };
 
     const onEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setOpenViewId(null);
+        setPopoverRect(null);
       }
     };
 
@@ -1048,14 +1051,23 @@ export function StudentCategoryManagerPanel() {
                           </td>
                           <td className="desc">{row.description || <span className="muted">No description</span>}</td>
                           <td className="action-cell">
-                            <div className="actions-wrap" ref={openViewId === row.id ? viewPopoverRef : null}>
+                            <div className="actions-wrap">
                             <div className="actions" aria-label={`Actions for ${row.name}`}>
                               <button
                                 type="button"
                                 className="action-btn view"
                                 title="View"
                                 aria-label={`View ${row.name}`}
-                                onClick={() => setOpenViewId((prev) => (prev === row.id ? null : row.id))}
+                                onClick={(e) => {
+                                  if (openViewId === row.id) {
+                                    setOpenViewId(null);
+                                    setPopoverRect(null);
+                                    return;
+                                  }
+                                  const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                                  setPopoverRect({ top: rect.bottom, bottom: rect.top, right: window.innerWidth - rect.right });
+                                  setOpenViewId(row.id);
+                                }}
                               >
                                 <Eye size={18} strokeWidth={2} />
                               </button>
@@ -1066,18 +1078,6 @@ export function StudentCategoryManagerPanel() {
                                 <Trash2 size={18} strokeWidth={2} />
                               </button>
                             </div>
-                              {openViewId === row.id ? (
-                                <div className="view-popover" role="dialog" aria-label={`Summary for ${row.name}`}>
-                                  <h5>Agentic Summary</h5>
-                                  <small className="view-popover-sub">Quick operational insights</small>
-                                  <div className="view-row"><span>Category</span><strong>{row.name}</strong></div>
-                                  <div className="view-row"><span>Students enrolled</span><strong>{row.students_count || 0}</strong></div>
-                                  <div className="view-row"><span>Share of total</span><strong>{shareOfTotal(row)}</strong></div>
-                                  <div className="view-row"><span>Rank by size</span><strong>#{rankBySize(row)}</strong></div>
-                                  <div className="view-row"><span>Used in modules</span><strong>Admissions, Fees, Reports</strong></div>
-                                  <p>{Number(row.students_count || 0) > 50 ? "High usage. Avoid renaming as it impacts reports." : "Moderate usage. You can edit safely with review."}</p>
-                                </div>
-                              ) : null}
                             </div>
                           </td>
                         </tr>
@@ -1108,6 +1108,42 @@ export function StudentCategoryManagerPanel() {
 
         </div>
       </section>
+
+      {/* ── Fixed-position Agentic Summary popover — renders outside the table so it never causes scroll ── */}
+      {openViewId !== null && popoverRect && (() => {
+        const viewRow = rows.find(r => r.id === openViewId);
+        if (!viewRow) return null;
+        const spaceBelow = window.innerHeight - popoverRect.top;
+        const openUp = spaceBelow < 260;
+        const style: React.CSSProperties = {
+          position: "fixed",
+          right: popoverRect.right,
+          width: "min(320px, 72vw)",
+          background: "#fff",
+          border: "1px solid #e5e7eb",
+          borderRadius: 15,
+          padding: "14px 14px 13px",
+          boxShadow: openUp ? "0 -8px 38px rgba(15,23,42,0.16)" : "0 18px 38px rgba(15,23,42,0.16)",
+          zIndex: 1200,
+          ...(openUp
+            ? { bottom: window.innerHeight - popoverRect.bottom + 6 }
+            : { top: popoverRect.top + 6 }),
+        };
+        return (
+          <div ref={viewPopoverRef} style={style} role="dialog" aria-label={`Summary for ${viewRow.name}`}>
+            <h5 style={{ margin: 0, color: "#111827", fontSize: 18, fontWeight: 500, lineHeight: 1.1, fontFamily: '"Playfair Display", Georgia, serif' }}>Agentic Summary</h5>
+            <small style={{ display: "block", margin: "3px 0 10px", color: "#64748b", fontSize: 11, letterSpacing: "0.02em" }}>Quick operational insights</small>
+            <div className="view-row"><span>Category</span><strong>{viewRow.name}</strong></div>
+            <div className="view-row"><span>Students enrolled</span><strong>{viewRow.students_count || 0}</strong></div>
+            <div className="view-row"><span>Share of total</span><strong>{shareOfTotal(viewRow)}</strong></div>
+            <div className="view-row"><span>Rank by size</span><strong>#{rankBySize(viewRow)}</strong></div>
+            <div className="view-row"><span>Used in modules</span><strong>Admissions, Fees, Reports</strong></div>
+            <p style={{ margin: "10px 0 0", color: "#374151", fontSize: 12, borderTop: "1px solid #e5e7eb", paddingTop: 10, lineHeight: 1.45 }}>
+              {Number(viewRow.students_count || 0) > 50 ? "High usage. Avoid renaming as it impacts reports." : "Moderate usage. You can edit safely with review."}
+            </p>
+          </div>
+        );
+      })()}
 
       {drawerOpen ? (
         <div className="drawer-overlay" onClick={() => setDrawerOpen(false)}>
@@ -1856,17 +1892,8 @@ export function StudentCategoryManagerPanel() {
           width: 18px;
           height: 18px;
         }
-        .view-popover {
-          position: absolute;
-          right: 0;
-          top: 36px;
-          width: min(320px, 72vw);
-          background: #fff;
-          border: 1px solid #e5e7eb;
-          border-radius: 15px;
-          padding: 14px 14px 13px;
-          box-shadow: 0 18px 38px rgba(15, 23, 42, 0.16);
-          z-index: 10;
+        .view-popover-positioned {
+          /* Positioning handled via inline style (position:fixed) — see JSX */
         }
         .view-popover h5 {
           margin: 0;

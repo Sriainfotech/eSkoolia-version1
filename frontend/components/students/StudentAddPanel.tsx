@@ -4,7 +4,7 @@ import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
-import { StudentDocumentsUpload, type DocumentType as DocumentTypeKey } from "./StudentDocumentsUpload";
+import { StudentDocumentsUpload, type DocumentType as DocumentTypeKey, type CustomDocMeta, type MarksheetMeta } from "./StudentDocumentsUpload";
 import { ConsentForm } from "./ConsentForm";
 import { ScanFillModal } from "./ScanFillModal";
 import {
@@ -684,7 +684,7 @@ export function StudentAddPanel() {
   const [landmark, setLandmark] = useState("");
   const [transportModes, setTransportModes] = useState<string[]>([]);
   const [transportCustom, setTransportCustom] = useState("");
-  const [showTransportAI, setShowTransportAI] = useState(false);
+
   const [city, setCity] = useState("");
   const [district, setDistrict] = useState("");
   const [stateName, setStateName] = useState("");
@@ -728,7 +728,8 @@ export function StudentAddPanel() {
   const [consentOpen, setConsentOpen] = useState(false);
   const [draftsOpen, setDraftsOpen] = useState(false);
   const [consentOpenWithSettings, setConsentOpenWithSettings] = useState(false);
-  const [consentInitialAction, setConsentInitialAction] = useState<'upload-signed' | 'blank-form' | 'print-pdf' | null>(null);
+  const [consentInitialAction, setConsentInitialAction] = useState<'upload-signed' | 'blank-form' | 'blank-form-digital' | 'blank-form-email' | 'blank-form-whatsapp' | 'print-pdf' | null>(null);
+  const [blankFormMenuOpen, setBlankFormMenuOpen] = useState(false);
   // Standalone "upload signed copy" flow — does NOT open the full ConsentForm modal first
   const signedUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [signedUploadFile, setSignedUploadFile] = useState<File | null>(null);
@@ -789,6 +790,7 @@ export function StudentAddPanel() {
   const [infoChecklistOpen, setInfoChecklistOpen] = useState(false);
   const [currentEnrolledCount, setCurrentEnrolledCount] = useState<string | null>(null);
   const [admissionNoEditable, setAdmissionNoEditable] = useState(false);
+  const [admissionConflict, setAdmissionConflict] = useState<{ id: number; name: string; class_name: string; section_name: string; is_draft?: boolean } | null>(null);
   const [dobDisplay, setDobDisplay] = useState("");
   const [classAgeWarning, setClassAgeWarning] = useState("");
   const [motherTongue, setMotherTongue] = useState("");
@@ -862,15 +864,20 @@ export function StudentAddPanel() {
     birth_certificate: DocumentState;
     aadhaar_card: DocumentState;
     medical_information: DocumentState;
+    transfer_certificate: DocumentState;
     caste_certificate: DocumentState;
     udid_card: DocumentState;
   }>({
     birth_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
     aadhaar_card: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
     medical_information: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+    transfer_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
     caste_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
     udid_card: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
   });
+
+  const [customDocsMeta, setCustomDocsMeta] = useState<CustomDocMeta[]>([]);
+  const [marksheetMeta, setMarksheetMeta] = useState<MarksheetMeta[]>([]);
 
   // Track last error toast ID to avoid duplicates
   const [lastErrorToastId, setLastErrorToastId] = useState<string | null>(null);
@@ -1165,8 +1172,11 @@ export function StudentAddPanel() {
     if (typeof window === "undefined") return;
     const payload = {
       savedAt: Date.now(),
+      maxReachedIdx,
+      activeNavSection,
       admissionNo,
       isManualEdit,
+      newlyCreatedStudentId,
       rollNo,
       firstName,
       lastName,
@@ -1202,6 +1212,9 @@ export function StudentAddPanel() {
       medicalNotes,
       docBirthCertificate,
       docAadhaar,
+      guardianDrafts: guardianDrafts.map(g => ({ ...g })),
+      customDocsMeta,
+      marksheetMeta,
     };
     // Backward-compat: still write single-draft key for auto-restore on reload
     window.localStorage.setItem(STUDENT_DRAFT_STORAGE_KEY, JSON.stringify(payload));
@@ -1232,6 +1245,10 @@ export function StudentAddPanel() {
       const draft = JSON.parse(raw) as Record<string, unknown>;
       setAdmissionNo(String(draft.admissionNo || ""));
       setIsManualEdit(Boolean(draft.isManualEdit));
+      // Restore draft student ID so document uploads reuse the existing record
+      if (typeof draft.newlyCreatedStudentId === "number" && draft.newlyCreatedStudentId > 0) {
+        setNewlyCreatedStudentId(draft.newlyCreatedStudentId);
+      }
       setRollNo(String(draft.rollNo || ""));
       setFirstName(String(draft.firstName || ""));
       setLastName(String(draft.lastName || ""));
@@ -1270,7 +1287,18 @@ export function StudentAddPanel() {
       setMedicalNotes(String(draft.medicalNotes || ""));
       setDocBirthCertificate(Boolean(draft.docBirthCertificate));
       setDocAadhaar(Boolean(draft.docAadhaar));
+      if (Array.isArray(draft.guardianDrafts) && draft.guardianDrafts.length > 0) {
+        setGuardianDrafts(draft.guardianDrafts as GuardianDraft[]);
+      }
+      if (Array.isArray(draft.customDocsMeta)) setCustomDocsMeta(draft.customDocsMeta as CustomDocMeta[]);
+      if (Array.isArray(draft.marksheetMeta)) setMarksheetMeta(draft.marksheetMeta as MarksheetMeta[]);
       setDraftSavedAt(typeof draft.savedAt === "number" ? draft.savedAt : Date.now());
+      // Restore navigation state so admin can freely jump between completed steps
+      const savedMaxIdx = typeof draft.maxReachedIdx === 'number' ? draft.maxReachedIdx : NAV_ITEMS.length - 2;
+      setMaxReachedIdx(savedMaxIdx);
+      const savedSection = typeof draft.activeNavSection === 'string' && NAV_ITEMS.some(n => n.id === draft.activeNavSection)
+        ? (draft.activeNavSection as string) : 'identity';
+      setTimeout(() => jumpToSection(savedSection), 0);
       return true;
     } catch {
       window.localStorage.removeItem(STUDENT_DRAFT_STORAGE_KEY);
@@ -1281,6 +1309,9 @@ export function StudentAddPanel() {
   const restoreDraftFromObject = (draft: Record<string, unknown>) => {
     setAdmissionNo(String(draft.admissionNo || ""));
     setIsManualEdit(Boolean(draft.isManualEdit));
+    if (typeof draft.newlyCreatedStudentId === "number" && draft.newlyCreatedStudentId > 0) {
+      setNewlyCreatedStudentId(draft.newlyCreatedStudentId);
+    }
     setRollNo(String(draft.rollNo || ""));
     setFirstName(String(draft.firstName || ""));
     setLastName(String(draft.lastName || ""));
@@ -1319,8 +1350,18 @@ export function StudentAddPanel() {
     setMedicalNotes(String(draft.medicalNotes || ""));
     setDocBirthCertificate(Boolean(draft.docBirthCertificate));
     setDocAadhaar(Boolean(draft.docAadhaar));
+    if (Array.isArray(draft.guardianDrafts) && draft.guardianDrafts.length > 0) {
+      setGuardianDrafts(draft.guardianDrafts as GuardianDraft[]);
+    }
+    if (Array.isArray(draft.customDocsMeta)) setCustomDocsMeta(draft.customDocsMeta as CustomDocMeta[]);
+    if (Array.isArray(draft.marksheetMeta)) setMarksheetMeta(draft.marksheetMeta as MarksheetMeta[]);
     setDraftSavedAt(typeof draft.savedAt === "number" ? draft.savedAt : Date.now());
-    jumpToSection("identity");
+    // Restore navigation state so admin can freely jump between completed steps
+    const savedMaxIdx = typeof draft.maxReachedIdx === 'number' ? draft.maxReachedIdx : NAV_ITEMS.length - 2;
+    setMaxReachedIdx(savedMaxIdx);
+    const savedSection = typeof draft.activeNavSection === 'string' && NAV_ITEMS.some(n => n.id === draft.activeNavSection)
+      ? (draft.activeNavSection as string) : 'identity';
+    setTimeout(() => jumpToSection(savedSection), 0);
   };
 
   const loadSectionsForClass = async (targetClassId: string) => {
@@ -1676,7 +1717,7 @@ export function StudentAddPanel() {
     setDobDisplay(formatDobDisplayFromISO(dateOfBirth));
   }, [dateOfBirth]);
 
-  const showToast = (message: string, type: "success" | "error" = "success", durationMs = 60000) => {
+  const showToast = (message: string, type: "success" | "error" = "success", durationMs = 4000) => {
     setToastType(type);
     setToastMessage(message);
 
@@ -1865,7 +1906,7 @@ export function StudentAddPanel() {
 
   useEffect(() => {
     if (!success) return;
-    showToast(success, "success", 60000);
+    showToast(success, "success", 4000);
   }, [success]);
 
   useEffect(() => {
@@ -2413,6 +2454,7 @@ export function StudentAddPanel() {
   const runAdmissionAvailabilityCheck = async (valueOverride?: string): Promise<boolean> => {
     const value = sanitizeText(typeof valueOverride === "string" ? valueOverride : admissionNo);
     setAdmissionChecked(false);
+    setAdmissionConflict(null);
     if (!value) {
       setSingleFieldError("admission_no", "Admission number is required");
       return false;
@@ -2426,13 +2468,19 @@ export function StudentAddPanel() {
       setCheckingAdmission(true);
       const query = new URLSearchParams({ admission_no: value });
       if (isEditMode && studentId) query.set("exclude_id", String(studentId));
-      const payload = await apiGet<{ exists: boolean }>(`/api/v1/students/students/check-admission-no/?${query.toString()}`);
+      const payload = await apiGet<{ exists: boolean; conflict_student?: { id: number; name: string; class_name: string; section_name: string; is_draft?: boolean } }>(`/api/v1/students/students/check-admission-no/?${query.toString()}`);
       if (payload.exists) {
-        setSingleFieldError("admission_no", "Admission number already exists");
+        const conflict = payload.conflict_student ?? null;
+        setAdmissionConflict(conflict);
+        const conflictDetail = conflict
+          ? ` Currently assigned to: ${conflict.name}${conflict.is_draft ? " (draft)" : ""}, ${conflict.class_name} – ${conflict.section_name}`
+          : "";
+        setSingleFieldError("admission_no", `Admission number already exists.${conflictDetail}`);
         setAdmissionChecked(false);
         return false;
       } else {
         setSingleFieldError("admission_no", "");
+        setAdmissionConflict(null);
         setAdmissionChecked(true);
         return true;
       }
@@ -2480,16 +2528,7 @@ export function StudentAddPanel() {
       } else {
         const age = (now.getTime() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
         if (age < 2) nextErrors.dob = "Student must be at least 2 years old";
-        const selectedClass = validClasses.find((item) => String(item.id) === classId);
-        const className = String(selectedClass?.name || "");
-        const classMatch = className.match(/\d+/);
-        const classNumber = classMatch ? Number(classMatch[0]) : null;
-        if (classNumber && CLASS_AGE_RULES[classNumber]) {
-          const [minAge, maxAge] = CLASS_AGE_RULES[classNumber];
-          if (age < minAge || age > maxAge) {
-            nextErrors.dob = `Expected age for selected class is ${minAge}-${maxAge} years`;
-          }
-        }
+        // Age-class mismatch is advisory only (shown as classAgeWarning inline, not a blocker)
       }
     }
 
@@ -3029,16 +3068,22 @@ export function StudentAddPanel() {
     const allowedTypes = [".pdf", ".jpg", ".jpeg", ".png"];
     const fileName = file.name.toLowerCase();
     if (!allowedTypes.some((ext) => fileName.endsWith(ext))) {
-      const errorMsg = "❌ Only PDF, JPG, JPEG, and PNG files are allowed.";
+      const errorMsg = "Only PDF, JPG, JPEG, and PNG files are allowed.";
       console.error("📋 File type validation failed:", errorMsg);
-      showToast(errorMsg, "error");
+      setDocuments((prev) => ({
+        ...prev,
+        [documentType]: { ...prev[documentType as keyof typeof prev], status: "error" as DocumentStatus, error: errorMsg },
+      }));
       return;
     }
 
     if (file.size > 5242880) {
-      const errorMsg = "❌ File size must be less than 5MB.";
+      const errorMsg = "File size must be less than 5MB.";
       console.error("📋 File size validation failed:", errorMsg);
-      showToast(errorMsg, "error");
+      setDocuments((prev) => ({
+        ...prev,
+        [documentType]: { ...prev[documentType as keyof typeof prev], status: "error" as DocumentStatus, error: errorMsg },
+      }));
       return;
     }
 
@@ -3215,7 +3260,11 @@ export function StudentAddPanel() {
         fullError: err,
       });
 
-      // Update state to error
+      // Update state to error with inline message
+      const displayError = errorMessage.startsWith("❌") || errorMessage.startsWith("⚠️")
+        ? errorMessage.replace(/^[❌⚠️]\s*/, "")
+        : errorMessage;
+
       setDocuments((prev) => {
         const current = prev[documentType as keyof typeof prev];
         if (current.status === "success") {
@@ -3225,23 +3274,19 @@ export function StudentAddPanel() {
           ...prev,
           [documentType]: {
             ...current,
-            status: "idle" as DocumentStatus,
-            error: null,
+            status: "error" as DocumentStatus,
+            error: displayError,
           },
         };
       });
 
-      // Show error toast
-      const displayError = errorMessage.startsWith("❌") || errorMessage.startsWith("⚠️") 
-        ? errorMessage 
-        : `❌ ${errorMessage}`;
-      
-      showToast(displayError, "error");
+      // Also show toast for visibility
+      showToast(`❌ ${displayError}`, "error");
     }
   };
 
   const handleDocumentPick = async (documentType: DocumentTypeKey, file: File) => {
-    console.log("📂 File selected for upload:", {
+    console.log("File selected for upload:", {
       documentType,
       fileName: file.name,
       fileSize: file.size,
@@ -3250,8 +3295,15 @@ export function StudentAddPanel() {
     try {
       await uploadDocumentFile(file, documentType);
     } catch (err) {
-      console.error("❌ Unexpected error in handleDocumentPick:", err);
+      console.error("Unexpected error in handleDocumentPick:", err);
     }
+  };
+
+  const handleDocumentDelete = (documentType: DocumentTypeKey) => {
+    setDocuments((prev) => ({
+      ...prev,
+      [documentType]: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+    }));
   };
 
   useEffect(() => {
@@ -3458,6 +3510,9 @@ export function StudentAddPanel() {
           birth_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
           aadhaar_card: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
           medical_information: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+          transfer_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+          caste_certificate: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
+          udid_card: { status: "idle", fileName: "", url: null, error: null, uploadedAt: null },
         });
         setNewlyCreatedStudentId(null);
         setError("");
@@ -3800,6 +3855,7 @@ export function StudentAddPanel() {
                       setAdmissionNo(e.target.value.slice(0, 12));
                       setIsManualEdit(true);
                       setAdmissionChecked(false);
+                      setAdmissionConflict(null);
                       setSingleFieldError("admission_no", "");
                     }}
                     onBlur={() => {
@@ -3817,6 +3873,13 @@ export function StudentAddPanel() {
                   <p className="help-text">Auto-generated. Click Edit to customize.</p>
                   {checkingAdmission ? <p className="status-info">Checking availability...</p> : null}
                   {fieldErrors.admission_no ? <span id="admission_no-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.admission_no}</span> : null}
+                  {admissionConflict && !fieldErrors.admission_no && (
+                    <div style={{ marginTop: 6, padding: '8px 12px', background: '#fef3c7', border: '1px solid #fbbf24', borderRadius: 8, fontSize: 13 }}>
+                      <span style={{ fontWeight: 600, color: '#92400e' }}>⚠ Already assigned to:</span>{" "}
+                      <span style={{ color: '#78350f' }}>{admissionConflict.name}{admissionConflict.is_draft ? " (draft)" : ""} — {admissionConflict.class_name}, {admissionConflict.section_name}</span>
+                    </div>
+                  )}
+                  {admissionChecked && !fieldErrors.admission_no ? <p className="status-info" style={{ color: '#16a34a' }}>✓ Admission number is available</p> : null}
                 </div>
 
                 <div className="field-wrapper">
@@ -3841,7 +3904,7 @@ export function StudentAddPanel() {
               </div>
 
               <div className="grid-3 mt-20">
-                <div className="field-wrapper"><label className="field-label">Date of birth <span className="req">*</span></label><input type="date" title="Date of birth" aria-describedby="dob-error" className={fieldErrors.dob ? "field-input error" : "field-input"} value={dateOfBirth} min={(() => { const d=new Date(); d.setFullYear(d.getFullYear()-25); return d.toISOString().slice(0,10); })()} max={maxDobIso} onChange={(e) => { setDateOfBirth(e.target.value); setSingleFieldError("dob", ""); }} onBlur={() => { if (dateOfBirth) { const dob = new Date(dateOfBirth); const now = new Date(); const ageyrs = (now.getTime()-dob.getTime())/(365.25*24*60*60*1000); if (ageyrs < 2) setSingleFieldError('dob','Student must be at least 2 years old'); else if (ageyrs > 25) setSingleFieldError('dob','Date of birth seems too old — please verify'); else setSingleFieldError('dob',''); } }} />{fieldErrors.dob ? <span id="dob-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.dob}</span> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Date of birth <span className="req">*</span></label><div style={{display:'flex',gap:6,alignItems:'center'}}><input type="text" placeholder="DD / MM / YYYY" maxLength={14} aria-describedby="dob-error" className={fieldErrors.dob ? "field-input error" : "field-input"} style={{letterSpacing:1,flex:1}} value={dobDisplay} onChange={(e) => { const raw = e.target.value.replace(/[^0-9]/g,''); const masked = toDobMask(raw); setDobDisplay(masked); const iso = parseDobMaskedToISO(masked); if (iso) { setDateOfBirth(iso); setSingleFieldError("dob",""); } }} onBlur={() => { if (dateOfBirth) { const dob = new Date(dateOfBirth); const now = new Date(); const ageyrs = (now.getTime()-dob.getTime())/(365.25*24*60*60*1000); if (ageyrs < 2) setSingleFieldError('dob','Student must be at least 2 years old'); else if (ageyrs > 25) setSingleFieldError('dob','Date of birth seems too old — please verify'); else setSingleFieldError('dob',''); } }} /><input type="date" title="Pick date" tabIndex={-1} style={{width:32,padding:0,border:'none',background:'transparent',cursor:'pointer',opacity:0.7}} value={dateOfBirth} min={(() => { const d=new Date(); d.setFullYear(d.getFullYear()-25); return d.toISOString().slice(0,10); })()} max={maxDobIso} onChange={(e) => { setDateOfBirth(e.target.value); setSingleFieldError("dob",""); }} /></div>{fieldErrors.dob ? <span id="dob-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.dob}</span> : null}</div>
                 <div className="field-wrapper"><label className="field-label">Gender <span className="req">*</span></label><select aria-describedby="gender-error" className={fieldErrors.gender ? "field-select error" : "field-select"} title="Gender" value={gender} onChange={(e) => { setGender(e.target.value); setSingleFieldError('gender', ''); }} onBlur={() => { if (!gender) setSingleFieldError('gender','Gender is required'); }}><option value="">Select</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select>{fieldErrors.gender ? <span id="gender-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.gender}</span> : null}</div>
                 <div className="field-wrapper"><label className="field-label">Blood group <span className="badge badge-optional">OPTIONAL</span></label><select className="field-select" title="Blood group" value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)}><option value="">Select</option>{"A+,A-,B+,B-,AB+,AB-,O+,O-".split(",").map((bg) => <option key={bg} value={bg}>{bg}</option>)}</select></div>
               </div>
@@ -3999,28 +4062,7 @@ export function StudentAddPanel() {
                         {mode}
                       </button>
                     ))}
-                    <button type="button" className="pill-btn" style={{ background: '#f3e8ff', color: '#7c3aed', border: '1px solid #ddd6fe' }}
-                      onClick={() => setShowTransportAI(v => !v)}>
-                      ✨ AI suggest
-                    </button>
                   </div>
-                  {showTransportAI && (
-                    <div style={{ marginTop: 8, padding: '10px 12px', background: '#faf5ff', borderRadius: 8, border: '1px solid #e9d5ff', fontSize: 13 }}>
-                      <p style={{ margin: '0 0 6px', fontWeight: 600, color: '#7c3aed' }}>🤖 AI Suggestion</p>
-                      <p style={{ margin: '0 0 8px', color: '#6b7280' }}>
-                        Based on the address ({city || 'this area'}), common transport options include School bus, Auto-rickshaw, and Private vehicle.
-                      </p>
-                      <div style={{ display: 'flex', gap: 6 }}>
-                        {['School bus', 'Auto-rickshaw', 'Private vehicle'].filter(m => !transportModes.includes(m)).map(mode => (
-                          <button key={mode} type="button"
-                            className="pill-btn"
-                            onClick={() => { setTransportModes(prev => [...prev, mode]); setShowTransportAI(false); }}>
-                            + {mode}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                   <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
                     <input className="field-input" style={{ flex: 1 }} value={transportCustom} onChange={(e) => setTransportCustom(e.target.value)} placeholder="Custom transport mode…" />
                     <button type="button" className="btn-outline" style={{ padding: '6px 12px', fontSize: 12, whiteSpace: 'nowrap' }}
@@ -4219,12 +4261,17 @@ export function StudentAddPanel() {
             <StudentDocumentsUpload
               documents={documents}
               onPickFile={handleDocumentPick}
+              onDeleteFile={handleDocumentDelete}
               consentChecked={consentChecked}
               onConsentChange={setConsentChecked}
               consentError={fieldErrors.consent}
               sectionCounter={getSectionCounter("documents")}
               categoryName={validCategories.find((c) => String(c.id) === categoryId)?.name}
               isPwD={isPwD}
+              initialCustomDocs={customDocsMeta}
+              initialMarksheets={marksheetMeta}
+              onCustomDocsMetaChange={setCustomDocsMeta}
+              onMarksheetMetaChange={setMarksheetMeta}
               navButtonsSlot={renderSectionNavButtons("documents")}
             />
             </div>
@@ -4632,11 +4679,47 @@ export function StudentAddPanel() {
               }}>
               📎 Upload signed
             </button>
-            <button type="button" className="btn-outline" style={{ fontSize: 11, padding: '6px 10px', background: '#fffbeb', color: '#92400e', borderColor: '#fcd34d' }}
-              title="Download a blank intake form for parents to fill manually"
-              onClick={() => { setConsentOpenWithSettings(false); setConsentInitialAction('blank-form'); setConsentOpen(true); }}>
-              📄 Blank form
-            </button>
+            <div style={{ position: 'relative', display: 'inline-block' }}>
+              <button type="button"
+                className="btn-outline"
+                style={{ fontSize: 11, padding: '6px 10px', background: '#fffbeb', color: '#92400e', borderColor: '#fcd34d' }}
+                title="Blank intake form options"
+                onClick={() => setBlankFormMenuOpen(v => !v)}>
+                📄 Blank form ▾
+              </button>
+              {blankFormMenuOpen && (
+                <div
+                  style={{ position: 'absolute', bottom: '100%', left: 0, marginBottom: 6, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 28px rgba(0,0,0,0.14)', zIndex: 9999, minWidth: 220, overflow: 'hidden' }}
+                  onMouseLeave={() => setBlankFormMenuOpen(false)}>
+                  <div style={{ padding: '8px 14px 6px', fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #f3f4f6' }}>Blank Form Options</div>
+                  {([
+                    { action: 'blank-form' as const, icon: '🖨', label: 'Download for physical fill', sub: 'Print & fill with pen' },
+                    { action: 'blank-form-digital' as const, icon: '💻', label: 'Open digital form', sub: 'Fill in browser, save as PDF' },
+                    { action: 'blank-form-email' as const, icon: '📧', label: 'Share via Email', sub: 'Downloads form + opens email' },
+                    { action: 'blank-form-whatsapp' as const, icon: '💬', label: 'Share via WhatsApp', sub: 'Downloads form + opens WhatsApp' },
+                  ] as const).map(item => (
+                    <button
+                      key={item.action}
+                      type="button"
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 14px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = '#f8f7ff')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'none')}
+                      onClick={() => {
+                        setBlankFormMenuOpen(false);
+                        setConsentOpenWithSettings(false);
+                        setConsentInitialAction(item.action);
+                        setConsentOpen(true);
+                      }}>
+                      <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
+                      <span>
+                        <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#111827' }}>{item.label}</span>
+                        <span style={{ display: 'block', fontSize: 10, color: '#6b7280' }}>{item.sub}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button type="button" className="btn-outline" style={{ fontSize: 11, padding: '6px 10px', background: '#eff6ff', color: '#1e40af', borderColor: '#93c5fd' }}
               title="Upload a scanned filled form to auto-fill fields via OCR"
               onClick={() => setScanFillOpen(true)}>
@@ -5120,8 +5203,16 @@ export function StudentAddPanel() {
       )}
 
       {toastMessage ? (
-        <div className={toastType === "success" ? "save-toast save-toast-success" : "save-toast save-toast-error"} role="status" aria-live="polite">
+        <div
+          className={toastType === "success" ? "save-toast save-toast-success" : "save-toast save-toast-error"}
+          role="status"
+          aria-live="polite"
+          title="Click to dismiss"
+          onClick={() => { setToastMessage(""); if (toastTimerRef.current) { window.clearTimeout(toastTimerRef.current); toastTimerRef.current = null; } }}
+          style={{ cursor: "pointer" }}
+        >
           {toastMessage}
+          <span style={{ marginLeft: 10, opacity: 0.6, fontSize: 12, fontWeight: 700 }}>✕</span>
         </div>
       ) : null}
 
@@ -5316,6 +5407,7 @@ export function StudentAddPanel() {
               birth_certificate: { status: documents.birth_certificate.status, fileName: documents.birth_certificate.fileName },
               aadhaar_card: { status: documents.aadhaar_card.status, fileName: documents.aadhaar_card.fileName },
               medical_information: { status: documents.medical_information.status, fileName: documents.medical_information.fileName },
+              transfer_certificate: { status: documents.transfer_certificate.status, fileName: documents.transfer_certificate.fileName },
               caste_certificate: { status: documents.caste_certificate.status, fileName: documents.caste_certificate.fileName },
               udid_card: { status: documents.udid_card.status, fileName: documents.udid_card.fileName },
             },
@@ -5457,14 +5549,12 @@ export function StudentAddPanel() {
               }
 
               const computeDraftStats = (data: Record<string, unknown>) => {
-                const fields = [
-                  data.firstName, data.lastName, data.dateOfBirth, data.gender,
-                  data.admissionNo, data.classId, data.sectionId || data.sectionLater,
-                  data.phone, data.addressLine, data.pincode,
-                  Array.isArray(data.guardianDrafts) && (data.guardianDrafts as unknown[]).length > 0,
-                ];
-                const filled = fields.filter(v => v && String(v).trim() !== '').length;
-                const pct = Math.round((filled / fields.length) * 100);
+                // Use maxReachedIdx (same as form progress) so card % matches what user sees on resume
+                const savedMaxIdx = typeof data.maxReachedIdx === 'number' ? data.maxReachedIdx : -1;
+                const totalSteps = NAV_ITEMS.length - 1; // exclude review
+                const pct = savedMaxIdx >= 0
+                  ? Math.min(99, Math.round(((savedMaxIdx + 1) / totalSteps) * 100))
+                  : 0;
                 const missing: string[] = [];
                 if (!data.firstName || !data.lastName) missing.push('Name');
                 if (!data.dateOfBirth) missing.push('DOB');
@@ -5523,11 +5613,13 @@ export function StudentAddPanel() {
                       const name = [draft.firstName, draft.lastName].filter(Boolean).join(' ') || 'Unnamed draft';
                       const initials = (draft.firstName?.[0] || '?').toUpperCase() + (draft.lastName?.[0] || '').toUpperCase();
                       const { pct, missing } = draft.stats;
-                      const tone = pct >= 80 ? 'high' : pct >= 40 ? 'mid' : 'low';
-                      const smartTip = pct >= 80
-                        ? 'Almost done — just one click to finish!'
-                        : pct >= 40
+                      const tone = pct >= 78 ? 'high' : pct >= 44 ? 'mid' : 'low';
+                      const smartTip = pct >= 89
+                        ? 'Almost there — just the final review left!'
+                        : pct >= 55
                         ? `Good progress. Still missing: ${missing.slice(0, 2).join(', ')}.`
+                        : missing.length > 0
+                        ? `Getting started — still need: ${missing.slice(0, 2).join(', ')}.`
                         : 'Just getting started — load to continue.';
                       return (
                         <div key={draft.id} className="ai-draft-card">

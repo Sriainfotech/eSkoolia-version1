@@ -28,7 +28,7 @@ class StudentAttendance(models.Model):
     section_id = models.PositiveIntegerField(null=True, blank=True, help_text="Legacy section_id parity")
     attendance_date = models.DateField()
     attendance_type = models.CharField(max_length=1, choices=ATTENDANCE_TYPE_CHOICES)
-    notes = models.TextField(blank=True, default="", max_length=250)
+    notes = models.TextField(blank=True, default="", max_length=1000)
     arrival_time = models.TimeField(null=True, blank=True)
     sign_in_time = models.TimeField(null=True, blank=True)
     sign_out_time = models.TimeField(null=True, blank=True)

@@ -34,6 +34,9 @@ function normalizeStudent(s: RawStudent) {
     section: s.section || "-",
     classIndex: Number(s.classIndex ?? s.class_index ?? 99),
     currentGroupId: s.currentGroupId ?? s.current_group_id ?? s.student_group ?? null,
+    clubIds: Array.isArray((s as any).clubIds)
+      ? (s as any).clubIds.map(Number).filter(Boolean)
+      : [],
     aiHint: s.aiHint ?? s.ai_hint ?? null,
   };
 }

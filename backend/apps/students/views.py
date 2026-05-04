@@ -27,6 +27,7 @@ from .models import (
     PromotionRecord,
     Student,
     StudentCategory,
+    StudentClubMembership,
     StudentDocument,
     StudentGroup,
     StudentMultiClassRecord,
@@ -469,6 +470,18 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
             "first_name", "last_name"
         )
 
+        student_ids = [st.id for st in qs]
+
+        # Fetch all club memberships for these students in one query (avoid N+1)
+        memberships = StudentClubMembership.objects.filter(
+            student_id__in=student_ids
+        ).values("student_id", "club_id", "role")
+        # Build dict: student_id -> list of {clubId, role}
+        from collections import defaultdict as _dd
+        club_map = _dd(list)
+        for m in memberships:
+            club_map[m["student_id"]].append({"clubId": m["club_id"], "role": m["role"]})
+
         result = []
         for st in qs:
             result.append({
@@ -478,7 +491,9 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
                 "class": st.current_class.name if st.current_class else "",
                 "section": st.current_section.name if st.current_section else "",
                 "classIndex": st.current_class.numeric_order if st.current_class else 999,
-                "currentGroupId": st.student_group_id,
+                "currentGroupId": st.student_group_id,  # HOUSE assignment (single FK)
+                "clubIds": [m["clubId"] for m in club_map[st.id]],  # CLUB memberships (M2M)
+                "clubMemberships": club_map[st.id],  # includes role
                 "gender": st.gender,
             })
         return Response(result)
@@ -538,6 +553,212 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
             assigned = qs.update(student_group=group)
 
         return Response({"assigned": assigned})
+
+    # ------------------------------------------------------------------
+    # CLUB membership endpoints (M2M — a student can join many clubs)
+    # ------------------------------------------------------------------
+
+    @action(detail=False, methods=["post"], url_path="club-toggle")
+    def club_toggle(self, request):
+        """Add or remove a student from a club (toggle).
+
+        Body: { studentId, clubId, role? }
+        Returns: { studentId, clubId, action: "added"|"removed", clubIds: [...] }
+        """
+        school_id = self._school_id()
+        student_id = request.data.get("studentId")
+        club_id = request.data.get("clubId")
+        role = request.data.get("role", "member")
+
+        if not student_id or not club_id:
+            return Response({"error": "studentId and clubId are required"}, status=400)
+
+        student_qs = Student.objects.filter(id=student_id, is_deleted=False)
+        if school_id:
+            student_qs = student_qs.filter(school_id=school_id)
+        student = student_qs.first()
+        if not student:
+            return Response({"error": "Student not found"}, status=404)
+
+        club_qs = StudentGroup.objects.filter(id=club_id, type="CLUB")
+        if school_id:
+            club_qs = club_qs.filter(school_id=school_id)
+        club = club_qs.first()
+        if not club:
+            return Response({"error": "Club not found"}, status=404)
+
+        membership = StudentClubMembership.objects.filter(student=student, club=club).first()
+        if membership:
+            membership.delete()
+            action_taken = "removed"
+        else:
+            StudentClubMembership.objects.create(student=student, club=club, role=role)
+            action_taken = "added"
+
+        club_ids = list(
+            StudentClubMembership.objects.filter(student=student).values_list("club_id", flat=True)
+        )
+        return Response({
+            "studentId": student.id,
+            "clubId": club.id,
+            "action": action_taken,
+            "clubIds": club_ids,
+        })
+
+    @action(detail=False, methods=["post"], url_path="club-assign")
+    def club_assign(self, request):
+        """Add a student to a club (idempotent — no error if already a member).
+
+        Body: { studentId, clubId, role? }
+        """
+        school_id = self._school_id()
+        student_id = request.data.get("studentId")
+        club_id = request.data.get("clubId")
+        role = request.data.get("role", "member")
+
+        if not student_id or not club_id:
+            return Response({"error": "studentId and clubId are required"}, status=400)
+
+        student_qs = Student.objects.filter(id=student_id, is_deleted=False)
+        if school_id:
+            student_qs = student_qs.filter(school_id=school_id)
+        student = student_qs.first()
+        if not student:
+            return Response({"error": "Student not found"}, status=404)
+
+        club_qs = StudentGroup.objects.filter(id=club_id, type="CLUB")
+        if school_id:
+            club_qs = club_qs.filter(school_id=school_id)
+        club = club_qs.first()
+        if not club:
+            return Response({"error": "Club not found"}, status=404)
+
+        membership, created = StudentClubMembership.objects.get_or_create(
+            student=student, club=club, defaults={"role": role}
+        )
+        if not created and membership.role != role:
+            membership.role = role
+            membership.save(update_fields=["role"])
+
+        club_ids = list(
+            StudentClubMembership.objects.filter(student=student).values_list("club_id", flat=True)
+        )
+        return Response({
+            "studentId": student.id,
+            "clubId": club.id,
+            "role": membership.role,
+            "created": created,
+            "clubIds": club_ids,
+        })
+
+    @action(detail=False, methods=["post"], url_path="club-remove")
+    def club_remove(self, request):
+        """Remove a student from a club.
+
+        Body: { studentId, clubId }
+        """
+        school_id = self._school_id()
+        student_id = request.data.get("studentId")
+        club_id = request.data.get("clubId")
+
+        if not student_id or not club_id:
+            return Response({"error": "studentId and clubId are required"}, status=400)
+
+        deleted, _ = StudentClubMembership.objects.filter(
+            student_id=student_id,
+            club_id=club_id,
+        ).delete()
+
+        club_ids = list(
+            StudentClubMembership.objects.filter(student_id=student_id).values_list("club_id", flat=True)
+        )
+        return Response({"studentId": student_id, "clubId": club_id, "removed": deleted > 0, "clubIds": club_ids})
+
+    @action(detail=False, methods=["get"], url_path="club-members")
+    def club_members(self, request):
+        """List all members of a specific club.
+
+        Query params: clubId (required), class (optional), section (optional)
+        Returns list of student objects with their role in the club.
+        """
+        school_id = self._school_id()
+        club_id = request.query_params.get("clubId")
+        class_name = request.query_params.get("class")
+        section_name = request.query_params.get("section")
+
+        if not club_id:
+            return Response({"error": "clubId is required"}, status=400)
+
+        club_qs = StudentGroup.objects.filter(id=club_id, type="CLUB")
+        if school_id:
+            club_qs = club_qs.filter(school_id=school_id)
+        if not club_qs.exists():
+            return Response({"error": "Club not found"}, status=404)
+
+        memberships_qs = StudentClubMembership.objects.filter(
+            club_id=club_id
+        ).select_related(
+            "student", "student__current_class", "student__current_section"
+        )
+        if school_id:
+            memberships_qs = memberships_qs.filter(student__school_id=school_id)
+        if class_name:
+            memberships_qs = memberships_qs.filter(student__current_class__name=class_name)
+        if section_name:
+            memberships_qs = memberships_qs.filter(student__current_section__name=section_name)
+
+        memberships_qs = memberships_qs.order_by(
+            "student__current_class__numeric_order",
+            "student__current_section__name",
+            "student__first_name",
+            "student__last_name",
+        )
+
+        result = []
+        for m in memberships_qs:
+            st = m.student
+            result.append({
+                "id": st.id,
+                "name": f"{st.first_name} {st.last_name}".strip(),
+                "admissionNo": st.admission_no,
+                "class": st.current_class.name if st.current_class else "",
+                "section": st.current_section.name if st.current_section else "",
+                "classIndex": st.current_class.numeric_order if st.current_class else 999,
+                "role": m.role,
+                "joinedAt": m.joined_at.isoformat() if m.joined_at else None,
+                "clubId": int(club_id),
+            })
+        return Response(result)
+
+    @action(detail=False, methods=["get"], url_path="student-clubs")
+    def student_clubs(self, request):
+        """Return all clubs a given student belongs to.
+
+        Query params: studentId (required)
+        """
+        school_id = self._school_id()
+        student_id = request.query_params.get("studentId")
+        if not student_id:
+            return Response({"error": "studentId is required"}, status=400)
+
+        memberships_qs = StudentClubMembership.objects.filter(
+            student_id=student_id
+        ).select_related("club")
+        if school_id:
+            memberships_qs = memberships_qs.filter(club__school_id=school_id)
+
+        result = []
+        for m in memberships_qs.order_by("club__name"):
+            result.append({
+                "clubId": m.club_id,
+                "name": m.club.name,
+                "emoji": m.club.emoji or "",
+                "color": m.club.color or "#2980b9",
+                "bgColor": m.club.bg_color or "#e8f4fd",
+                "role": m.role,
+                "joinedAt": m.joined_at.isoformat() if m.joined_at else None,
+            })
+        return Response(result)
 
     @action(detail=False, methods=["get"], url_path="sortwell-preview")
     def sortwell_preview(self, request):
@@ -1301,10 +1522,24 @@ class StudentViewSet(TenantScopedModelViewSet):
             queryset = queryset.exclude(id=int(exclude_id))
 
         exists = queryset.exists()
+        conflict_student = None
+        if exists:
+            student = queryset.select_related("current_class", "current_section").first()
+            if student:
+                class_name = str(student.current_class) if student.current_class else "—"
+                section_name = str(student.current_section) if student.current_section else "—"
+                conflict_student = {
+                    "id": student.id,
+                    "name": f"{student.first_name} {student.last_name}".strip(),
+                    "class_name": class_name,
+                    "section_name": section_name,
+                    "is_draft": getattr(student, "is_draft", False),
+                }
         return Response(
             {
                 "success": True,
                 "exists": exists,
+                "conflict_student": conflict_student,
                 "message": "Admission number already exists." if exists else "Admission number is available.",
             },
             status=status.HTTP_200_OK,
