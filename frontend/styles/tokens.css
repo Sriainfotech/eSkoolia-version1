@@ -1,0 +1,40 @@
+/* ─── Eskoolia Design Tokens ─── */
+:root {
+  /* Brand */
+  --pu: #6D4AFF;
+  --pu-soft: #EEEAFF;
+  --pu-deep: #4F35CC;
+
+  /* Ink (text) */
+  --ink-1: #15172A;
+  --ink-2: #5B5E72;
+  --ink-3: #9A9DB0;
+
+  /* Surfaces */
+  --bg-0: #FAFAFB;
+  --bg-1: #FFFFFF;
+  --bg-2: #F5F5FB;
+  --bd:   #E8E8EE;
+
+  /* Status */
+  --ok:   #22C55E;
+  --warn: #F59E0B;
+  --err:  #E0463A;
+
+  /* Shadows */
+  --sh-1: 0 1px 2px rgba(15,18,34,0.04);
+  --sh-2: 0 4px 12px -4px rgba(15,18,34,0.08);
+  --sh-3: 0 14px 32px -10px rgba(14,16,32,0.18);
+  --sh-bot: 0 18px 50px -18px rgba(15,18,34,0.28);
+}
+
+[data-theme="dark"] {
+  --ink-1: #F5F5FB;
+  --ink-2: #9A9DB0;
+  --ink-3: #5B5E72;
+  --bg-0: #0E1020;
+  --bg-1: #15172A;
+  --bg-2: #1F2138;
+  --bd:   #2A2D44;
+  --pu-soft: rgba(124,91,255,0.16);
+}

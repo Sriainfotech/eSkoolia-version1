@@ -21,7 +21,7 @@ type StudentRow = {
 
 type AttendanceEntry = {
   student_id: number;
-  attendance_type: string;
+  attendance_type: string | null;
   notes: string;
 };
 
@@ -186,7 +186,7 @@ export default function StudentAttendanceCreatePanel() {
       (data.students || []).forEach((s) => {
         init[s.id] = {
           student_id: s.id,
-          attendance_type: s.attendance_type ?? "P",
+          attendance_type: s.attendance_type ?? null,
           notes: s.attendance_note ?? "",
         };
       });
@@ -283,7 +283,7 @@ export default function StudentAttendanceCreatePanel() {
           date: attendanceDate,
           id: students.map((s) => s.id),
           attendance: Object.fromEntries(
-            Object.values(attendance).map((a) => [String(a.student_id), a.attendance_type])
+            Object.values(attendance).filter((a) => a.attendance_type !== null).map((a) => [String(a.student_id), a.attendance_type])
           ),
           note: Object.fromEntries(
             Object.values(attendance).map((a) => [String(a.student_id), a.notes])
@@ -458,7 +458,7 @@ export default function StudentAttendanceCreatePanel() {
                   <tbody>
                     {paginatedStudents.map((student) => {
                       const entry = attendance[student.id];
-                      const curType = entry?.attendance_type ?? "P";
+                      const curType = entry?.attendance_type ?? null;
                       return (
                         <tr key={student.id} style={{ background: "white" }}>
                           <td style={{ padding: 8, borderBottom: "1px solid var(--line)", fontSize: 13 }}>{student.admission_no}</td>

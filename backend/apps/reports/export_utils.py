@@ -4,12 +4,10 @@ from typing import Iterable, Sequence
 
 from django.http import HttpResponse
 
-
 def _safe_cell(value):
     if value is None:
         return ""
     return value
-
 
 def export_csv(rows: Iterable[dict], columns: Sequence[tuple[str, str]], filename: str) -> HttpResponse:
     stream = StringIO()
@@ -21,7 +19,6 @@ def export_csv(rows: Iterable[dict], columns: Sequence[tuple[str, str]], filenam
     response = HttpResponse(stream.getvalue(), content_type="text/csv")
     response["Content-Disposition"] = f'attachment; filename="{filename}.csv"'
     return response
-
 
 def export_excel(rows: Iterable[dict], columns: Sequence[tuple[str, str]], filename: str) -> HttpResponse:
     try:
@@ -47,7 +44,6 @@ def export_excel(rows: Iterable[dict], columns: Sequence[tuple[str, str]], filen
     )
     response["Content-Disposition"] = f'attachment; filename="{filename}.xlsx"'
     return response
-
 
 def export_pdf(rows: Iterable[dict], columns: Sequence[tuple[str, str]], filename: str, title: str) -> HttpResponse:
     try:
@@ -84,13 +80,12 @@ def export_pdf(rows: Iterable[dict], columns: Sequence[tuple[str, str]], filenam
     )
 
     story = [Paragraph(title, styles["Heading2"]), Spacer(1, 12), table]
-    document.build(story)
+    
     output.seek(0)
 
     response = HttpResponse(output.getvalue(), content_type="application/pdf")
     response["Content-Disposition"] = f'attachment; filename="{filename}.pdf"'
     return response
-
 
 def build_export_response(
     export_format: str,

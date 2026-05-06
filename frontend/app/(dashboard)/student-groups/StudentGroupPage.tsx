@@ -197,6 +197,7 @@ export default function StudentGroupPage() {
   const [students, setStudents] = useState<Student[]>([])
   const [stats,    setStats]    = useState<Stats | null>(null)
   const [loading,  setLoading]  = useState(true)
+  const [studentsLoading, setStudentsLoading] = useState(true)
 
   const [sf, setSF] = useState<FilterState>({ cls:[], sec:[], house:[], club:[], status:'' })
   const [pendingSF, setPendingSF] = useState<FilterState>({ cls:[], sec:[], house:[], club:[], status:'' })
@@ -361,15 +362,19 @@ export default function StudentGroupPage() {
   }
 
   const loadAll = useCallback(async () => {
-    const [g, s, st] = await Promise.all([
+    // Load groups + stats first — fast, small payloads. Show the page immediately.
+    const [g, st] = await Promise.all([
       apiFetch('/api/student-groups').then(r => r.json()),
-      apiFetch('/api/student-groups/students').then(r => r.json()),
       apiFetch('/api/student-groups/stats').then(r => r.json()),
     ])
     setGroups(asList<any>(g).map(normalizeGroup))
-    setStudents(asList<any>(s).map(normalizeStudent))
     setStats(normalizeStats(st))
-    setLoading(false)
+    setLoading(false)   // ← page renders now, accordions show skeleton for students
+
+    // Load students in background — largest payload, non-blocking
+    const s = await apiFetch('/api/student-groups/students').then(r => r.json())
+    setStudents(asList<any>(s).map(normalizeStudent))
+    setStudentsLoading(false)
   }, [apiFetch])
 
   const rGroups = async () => {
@@ -463,44 +468,33 @@ export default function StudentGroupPage() {
     [students]
   )
 
-  function fStudents() {
+  const filtered = React.useMemo(() => {
+    // Build group lookup map once (O(1) per student instead of O(m) find)
+    const groupById = new Map(groups.map(g => [g.id, g]))
     return students.filter(s => {
       const query = quickSearch.trim().toLowerCase()
-      const group = groups.find(x => x.id === s.currentGroupId)
-      // clubs the student belongs to (via M2M)
+      const group = groupById.get(s.currentGroupId ?? -1)
       const studentClubs = clubs.filter(c => (s.clubIds || []).includes(c.id))
 
-      // Text search
       if (query) {
         const clubNames = studentClubs.map(c => c.name).join(' ')
         const haystack = [s.name, s.admissionNo, s.class, s.section, group?.name || '', clubNames].join(' ').toLowerCase()
         if (!haystack.includes(query)) return false
       }
-
-      // Class filter (client-side)
       if (sf.cls.length && !sf.cls.includes(s.class)) return false
-
-      // Section filter (client-side)
       if (sf.sec.length && !sf.sec.includes(s.section)) return false
-
-      // Status filter (client-side): assigned = has a group or club, unassigned = no group AND no clubs
       if (sf.status.toLowerCase() === 'assigned' && !s.currentGroupId && (s.clubIds || []).length === 0) return false
       if (sf.status.toLowerCase() === 'unassigned' && (s.currentGroupId || (s.clubIds || []).length > 0)) return false
-
-      // House filter (client-side)
       if (sf.house.length) {
         if (!group || !houses.find(h => h.id === group.id && sf.house.includes(h.name))) return false
       }
-
-      // Club filter (client-side): student must belong to at least one filtered club
       if (sf.club.length) {
         const hasClub = studentClubs.some(c => sf.club.includes(c.name))
         if (!hasClub) return false
       }
-
       return true
     })
-  }
+  }, [students, groups, clubs, houses, sf, quickSearch])
 
   function showToast(msg: string) {
     setToast(msg)
@@ -790,12 +784,12 @@ export default function StudentGroupPage() {
 
   if (loading) return <Skeleton />
 
-  const filtered = fStudents()
-
   return (
     <>
       <style>{`@keyframes sgSpin{to{transform:rotate(360deg)}}`}</style>
 
+      <div className="sg-page-outer">
+      <div className="sg-page-card">
       <div className="ph">
         <div>
           <div className="ph-pre">Student Information</div>
@@ -1054,6 +1048,11 @@ export default function StudentGroupPage() {
             School Houses
             <span className="acc-section-sub" style={{fontWeight:400,marginLeft:4}}>- filtered results shown immediately after selection</span>
           </div>
+          {studentsLoading && (
+            <span style={{fontSize:11,color:'var(--ink-3)',display:'flex',alignItems:'center',gap:5}}>
+              <Ico.Spin/>Loading students…
+            </span>
+          )}
         </div>
         {houses.map((h,hi)=>(
           <Accordion key={h.id} group={h} students={filtered}
@@ -1122,6 +1121,8 @@ export default function StudentGroupPage() {
       <div className={`toast${toastOn?' show':''}`}>
         <div className="t-dot"/><span>{toast}</span>
       </div>
+      </div>{/* sg-page-card */}
+      </div>{/* sg-page-outer */}
     </>
   )
 }

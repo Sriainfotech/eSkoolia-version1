@@ -1,6 +1,5 @@
 from django.db import models
 
-
 ATTENDANCE_TYPE_CHOICES = [
     ("P", "Present"),
     ("A", "Absent"),
@@ -8,7 +7,6 @@ ATTENDANCE_TYPE_CHOICES = [
     ("F", "Half Day"),
     ("H", "Holiday"),
 ]
-
 
 class StudentAttendance(models.Model):
     """
@@ -64,7 +62,6 @@ class StudentAttendance(models.Model):
     def __str__(self):
         return f"{self.student_id} | {self.attendance_date} | {self.attendance_type}"
 
-
 class StudentAttendanceBulk(models.Model):
     """
     Parity with legacy StudentAttendanceBulk temp table used by bulk import flow.
@@ -84,7 +81,6 @@ class StudentAttendanceBulk(models.Model):
     class Meta:
         db_table = "student_attendance_bulk"
         ordering = ["-attendance_date", "student_id"]
-
 
 class SubjectAttendance(models.Model):
     """

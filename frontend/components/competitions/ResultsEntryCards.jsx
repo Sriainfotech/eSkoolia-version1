@@ -257,7 +257,10 @@ export default function ResultsEntryCards({ competition, students = [], results,
       const ra = a.position ? RANK[a.position] : 99;
       const rb = b.position ? RANK[b.position] : 99;
       if (ra !== rb) return ra - rb;
-      return (a._student?.full_name || '').localeCompare(b._student?.full_name || '');
+      const nameCmp = (a._student?.full_name || '').localeCompare(b._student?.full_name || '');
+      if (nameCmp !== 0) return nameCmp;
+      // Stable tie-break by insertion index so same-name students never swap cards mid-edit
+      return a._idx - b._idx;
     });
     return list;
   }, [results]);
@@ -490,7 +493,6 @@ export default function ResultsEntryCards({ competition, students = [], results,
           </p>
         );
       })()}
-      </>)}
 
       {/* === Step 4 — Other Outcomes (collapsed until Step 3 has at least one podium award) === */}
       <OtherOutcomesSection
@@ -510,6 +512,7 @@ export default function ResultsEntryCards({ competition, students = [], results,
         onChange={onChange}
         competition={competition}
       />
+      </>)}
 
       {/* Confetti mini-pop */}
       {confetti && <ConfettiPop x={confetti.x} y={confetti.y} key={confetti.ts} />}

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Manrope, Playfair_Display } from "next/font/google";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Spinner } from "@/components/common/Spinner";
@@ -173,11 +174,17 @@ function resolveGuardianPhone(row: StudentRow) {
 }
 
 export function StudentListPanel() {
+  const searchParams = useSearchParams();
   const { page, pageSize, setPage, setPageSize } = usePersistentPagination("students.list", 1, 25);
   const [students, setStudents] = useState<StudentRow[]>([]);
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(() => searchParams?.get('search') ?? "");
+  const [highlightId] = useState<number | null>(() => {
+    const v = searchParams?.get('highlight');
+    return v ? Number(v) : null;
+  });
+  const highlightRef = useRef<HTMLDivElement | null>(null);
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [classFilter, setClassFilter] = useState("");
@@ -566,6 +573,18 @@ export function StudentListPanel() {
     }, 250);
     return () => window.clearTimeout(timer);
   }, [search]);
+
+  // Auto-open drawer for highlighted student from bot navigation
+  useEffect(() => {
+    if (!highlightId || students.length === 0) return;
+    const match = students.find(s => s.id === highlightId);
+    if (match) {
+      openViewDrawer(match);
+      // Scroll the highlighted row into view
+      setTimeout(() => highlightRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 200);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, students]);
 
   useEffect(() => {
     if (sectionFilter && !filteredSections.some((item) => String(item.id) === sectionFilter)) {

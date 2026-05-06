@@ -99,7 +99,7 @@ export function FeesGroupPanel() {
     setError("");
     try {
       const query = buildPaginationQuery(targetPage, targetPageSize, { search: search.trim() || undefined });
-      const data = await apiRequestWithRefresh<ListApiResponse<FeesGroup>>(`/api/v1/fees/fees-groups/?${query}`);
+      const data = await apiRequestWithRefresh<ListApiResponse<FeesGroup>>(`/api/v1/fees/groups/?${query}`);
       const items = extractListData(data);
       const meta = extractPaginationMeta(data);
       setFeesGroups(items);
@@ -181,7 +181,7 @@ export function FeesGroupPanel() {
       };
 
       const isUpdate = editingId !== null;
-      await apiRequestWithRefresh(`/api/v1/fees/fees-groups/${isUpdate ? `${editingId}/` : ""}`, {
+      await apiRequestWithRefresh(`/api/v1/fees/groups/${isUpdate ? `${editingId}/` : ""}`, {
         method: isUpdate ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -214,7 +214,7 @@ export function FeesGroupPanel() {
       setDeletingId(id);
       setError("");
       setSuccess("");
-      await apiRequestWithRefresh(`/api/v1/fees/fees-groups/${id}/`, { method: "DELETE" });
+      await apiRequestWithRefresh(`/api/v1/fees/groups/${id}/`, { method: "DELETE" });
       if (editingId === id) resetForm();
       setSuccess("Fees group deleted successfully.");
       const nextRows = feesGroups.filter((row) => row.id !== id);

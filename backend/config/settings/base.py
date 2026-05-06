@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "apps.behaviour",
     "apps.chat",
     "apps.communication",
+    "apps.competitions",
     "apps.reports",
 ]
 

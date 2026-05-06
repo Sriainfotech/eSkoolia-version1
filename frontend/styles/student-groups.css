@@ -15,6 +15,8 @@ html{scroll-behavior:auto!important;}
 }
 
 .content{padding:22px 24px 56px;font-family:var(--font);}
+.sg-page-outer{padding:8px;}
+.sg-page-card{background:#f8f8fc;border:1px solid var(--border);border-radius:16px;padding:18px;}
 .ph{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px;}
 .ph-pre{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--teal);margin-bottom:3px;}
 .ph-title{font-family:var(--font-playfair),"Playfair Display",Georgia,serif;font-size:32px;font-weight:700;line-height:1.15;color:#0f172a;letter-spacing:-.02em;margin:0;}

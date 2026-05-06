@@ -40,7 +40,7 @@ type StudentRow = {
 
 type AttendanceEntry = {
   student_id: number;
-  attendance_type: string;
+  attendance_type: string | null;
   notes: string;
 };
 
@@ -91,16 +91,17 @@ function formatClock(value: string): string {
   return `${normalized}:${String(min).padStart(2, "0")} ${period}`;
 }
 
-function defaultUiRow(index: number, type: string): UiRow {
-  const late = index % 5 === 1;
+function defaultUiRow(index: number, type: string | null): UiRow {
   const isAbsent = type === "A";
+  const isLate = type === "L";
+  const isMarked = type !== null;
   return {
-    arrivalTime: late ? "08:14" : "08:00",
-    signInTime: isAbsent ? "" : late ? "08:14" : "08:20",
+    arrivalTime: isMarked && !isAbsent ? (isLate ? "08:14" : "08:00") : "",
+    signInTime: isMarked && !isAbsent ? (isLate ? "08:14" : "08:20") : "",
     signOutTime: "",
-    pickupTime: "17:00",
-    lunchTaken: !isAbsent,
-    lateMinutes: late ? 14 : 0,
+    pickupTime: isMarked && !isAbsent ? "17:00" : "",
+    lunchTaken: isMarked && !isAbsent,
+    lateMinutes: isLate ? 14 : 0,
   };
 }
 
@@ -232,7 +233,7 @@ export default function StudentAttendancePremiumPanel() {
       const nextUi: Record<number, UiRow> = {};
 
       rows.forEach((row, idx) => {
-        const type = row.attendance_type ?? "P";
+        const type = row.attendance_type ?? null;
         nextAttendance[row.id] = {
           student_id: row.id,
           attendance_type: type,
@@ -267,7 +268,7 @@ export default function StudentAttendancePremiumPanel() {
         academic_year_id: academicYearId ? Number(academicYearId) : null,
         date: attendanceDate,
         id: students.map((row) => row.id),
-        attendance: Object.fromEntries(Object.values(attendance).map((entry) => [String(entry.student_id), entry.attendance_type])),
+        attendance: Object.fromEntries(Object.values(attendance).filter((entry) => entry.attendance_type !== null).map((entry) => [String(entry.student_id), entry.attendance_type])),
         note: Object.fromEntries(Object.values(attendance).map((entry) => [String(entry.student_id), entry.notes])),
       });
       setDirty(false);
@@ -298,14 +299,14 @@ export default function StudentAttendancePremiumPanel() {
   };
 
   const setUiRow = (studentId: number, patch: Partial<UiRow>) => {
-    setUiRows((prev) => ({ ...prev, [studentId]: { ...(prev[studentId] || defaultUiRow(0, "P")), ...patch } }));
+    setUiRows((prev) => ({ ...prev, [studentId]: { ...(prev[studentId] || defaultUiRow(0, null)), ...patch } }));
     setDirty(true);
   };
 
   const filteredStudents = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     return students.filter((row) => {
-      const type = attendance[row.id]?.attendance_type ?? "P";
+      const type = attendance[row.id]?.attendance_type ?? null;
       const risk = riskMap[row.id] ?? 100;
       const matchesSearch =
         !query ||
@@ -322,11 +323,11 @@ export default function StudentAttendancePremiumPanel() {
   }, [attendance, riskMap, searchQuery, statusFilter, students]);
 
   const presentCount = useMemo(() => students.filter((row) => {
-    const type = attendance[row.id]?.attendance_type ?? "P";
+    const type = attendance[row.id]?.attendance_type ?? null;
     return type === "P" || type === "L" || type === "F";
   }).length, [attendance, students]);
-  const absentCount = useMemo(() => students.filter((row) => (attendance[row.id]?.attendance_type ?? "P") === "A").length, [attendance, students]);
-  const lateCount = useMemo(() => students.filter((row) => (attendance[row.id]?.attendance_type ?? "P") === "L").length, [attendance, students]);
+  const absentCount = useMemo(() => students.filter((row) => (attendance[row.id]?.attendance_type ?? null) === "A").length, [attendance, students]);
+  const lateCount = useMemo(() => students.filter((row) => (attendance[row.id]?.attendance_type ?? null) === "L").length, [attendance, students]);
   const riskCount = useMemo(() => students.filter((row) => (riskMap[row.id] ?? 100) < 75).length, [riskMap, students]);
   const presentPercent = students.length ? ((presentCount / students.length) * 100).toFixed(1) : "0.0";
 
@@ -645,7 +646,7 @@ export default function StudentAttendancePremiumPanel() {
                   ) : visibleStudents.length ? (
                     visibleStudents.map((student, index) => {
                       const entry = attendance[student.id];
-                      const type = entry?.attendance_type ?? "P";
+                      const type = entry?.attendance_type ?? null;
                       const absent = type === "A";
                       const late = type === "L";
                       const risk = riskMap[student.id] ?? 100;
@@ -669,7 +670,7 @@ export default function StudentAttendancePremiumPanel() {
                             </div>
                           </td>
                           <td className="border-b border-[#E5E7EB] px-3 py-3">
-                            <button type="button" title={absent ? "Mark present" : "Mark absent"} className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${absent ? "bg-rose-600" : "bg-slate-200"}`} onClick={() => setType(student.id, absent ? "P" : "A")}>
+                            <button type="button" title={absent ? "Mark present" : type === null ? "Mark present" : "Mark absent"} className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${absent ? "bg-rose-600" : type === null ? "bg-slate-200" : "bg-emerald-500"}`} onClick={() => setType(student.id, (type === "P" || type === "L" || type === "F") ? "A" : "P")}>
                               <span className={`inline-flex h-4 w-4 rounded-full bg-white transition ${absent ? "translate-x-6" : "translate-x-1"}`} />
                             </button>
                           </td>
@@ -728,14 +729,14 @@ export default function StudentAttendancePremiumPanel() {
             <div className="mt-3 space-y-3 md:hidden">
               {visibleStudents.map((student, index) => {
                 const entry = attendance[student.id];
-                const type = entry?.attendance_type ?? "P";
+                const type = entry?.attendance_type ?? null;
                 const absent = type === "A";
                 const ui = uiRows[student.id] || defaultUiRow(index, type);
                 return (
                   <article key={`mobile-${student.id}`} className={`rounded-xl border border-[#E5E7EB] p-3 ${absent ? "bg-rose-50/70" : "bg-white"}`}>
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-semibold text-[#111827]">{fullName(student)}</p>
-                      <button type="button" title={absent ? "Mark present" : "Mark absent"} className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${absent ? "bg-rose-600" : "bg-slate-200"}`} onClick={() => setType(student.id, absent ? "P" : "A")}>
+                      <button type="button" title={absent ? "Mark present" : type === null ? "Mark present" : "Mark absent"} className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${absent ? "bg-rose-600" : type === null ? "bg-slate-200" : "bg-emerald-500"}`} onClick={() => setType(student.id, (type === "P" || type === "L" || type === "F") ? "A" : "P")}>
                         <span className={`inline-flex h-4 w-4 rounded-full bg-white transition ${absent ? "translate-x-6" : "translate-x-1"}`} />
                       </button>
                     </div>

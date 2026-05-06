@@ -26,7 +26,6 @@ from .serializers import (
 )
 from .services import send_present_attendance_notifications
 
-
 def _parse_academic_year_start(value):
     if value in (None, ""):
         return None
@@ -39,11 +38,9 @@ def _parse_academic_year_start(value):
     start = int(match.group(1))
     return start if 2000 <= start <= 2100 else None
 
-
 def _current_academic_year_start(today=None):
     today = today or date.today()
     return today.year if today.month >= 6 else today.year - 1
-
 
 def _validate_month_for_academic_year(month_int, academic_year):
     """For the current academic year, allow months only up to current month.
@@ -61,7 +58,6 @@ def _validate_month_for_academic_year(month_int, academic_year):
         current_month_name = date(today.year, today.month, 1).strftime("%B")
         return f"For current academic year, month cannot be after {current_month_name}."
     return None
-
 
 class AttendanceTenantMixin:
     permission_classes = [permissions.IsAuthenticated]
@@ -83,7 +79,6 @@ class AttendanceTenantMixin:
 
     def school_filter(self, request):
         return {} if request.user.is_superuser else {"school_id": request.user.school_id}
-
 
 class StudentAttendanceListCreateAPIView(AttendanceTenantMixin, APIView):
     def get(self, request):
@@ -157,7 +152,6 @@ class StudentAttendanceListCreateAPIView(AttendanceTenantMixin, APIView):
             )
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-
 class StudentAttendanceRetrieveUpdateDeleteAPIView(AttendanceTenantMixin, APIView):
     def get_object(self, request, pk):
         queryset = StudentAttendance.objects.all()
@@ -188,7 +182,6 @@ class StudentAttendanceRetrieveUpdateDeleteAPIView(AttendanceTenantMixin, APIVie
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-
 class StudentAttendanceIndexAPIView(AttendanceTenantMixin, APIView):
     """Parity with PHP index(): returns classes used in the criteria form."""
 
@@ -198,7 +191,6 @@ class StudentAttendanceIndexAPIView(AttendanceTenantMixin, APIView):
             {"id": c.id, "class_name": c.name}
             for c in classes
         ])
-
 
 class StudentSearchAPIView(AttendanceTenantMixin, APIView):
     """Parity with PHP studentSearch() with enhanced validation."""
@@ -326,7 +318,6 @@ class StudentSearchAPIView(AttendanceTenantMixin, APIView):
             )
 
         return Response(response_data)
-
 
 class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
     """Parity with PHP studentAttendanceStore() with enhanced validation."""
@@ -503,7 +494,13 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                                 {"success": False, "message": "Invalid attendance status"},
                                 status=status.HTTP_400_BAD_REQUEST,
                             )
-                        attendance.attendance_type = raw_type or existing_type or "P"
+                        if raw_type:
+                            attendance.attendance_type = raw_type
+                        elif existing_type:
+                            attendance.attendance_type = existing_type
+                        else:
+                            # Student not explicitly marked — skip creating a blank record
+                            continue
 
                         raw_note = note_map.get(str(student_id))
                         if raw_note is None:
@@ -585,7 +582,6 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-
 class StudentAttendanceHolidayAPIView(AttendanceTenantMixin, APIView):
     """Parity with PHP studentAttendanceHoliday()."""
 
@@ -635,7 +631,6 @@ class StudentAttendanceHolidayAPIView(AttendanceTenantMixin, APIView):
                     existing.delete()
 
         return Response({"status": "ok"}, status=status.HTTP_200_OK)
-
 
 class StudentAttendanceMonthlyReportAPIView(AttendanceTenantMixin, APIView):
     def get(self, request):
@@ -716,7 +711,6 @@ class StudentAttendanceMonthlyReportAPIView(AttendanceTenantMixin, APIView):
             return paginator.get_paginated_response(page)
         return Response(result)
 
-
 class StudentAttendanceImportAPIView(AttendanceTenantMixin, APIView):
     """Parity with PHP studentAttendanceImport() for criteria/form data."""
 
@@ -727,7 +721,6 @@ class StudentAttendanceImportAPIView(AttendanceTenantMixin, APIView):
                 "classes": [{"id": c.id, "class_name": c.name} for c in classes],
             }
         )
-
 
 class StudentAttendanceDownloadSampleAPIView(AttendanceTenantMixin, APIView):
     """Parity with PHP downloadStudentAtendanceFile()."""
@@ -769,7 +762,6 @@ class StudentAttendanceDownloadSampleAPIView(AttendanceTenantMixin, APIView):
         )
         response["Content-Disposition"] = 'attachment; filename="student_attendance_sheet.xlsx"'
         return response
-
 
 class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
     """Parity with PHP studentAttendanceBulkStore()."""
@@ -1100,7 +1092,6 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
                 status=status.HTTP_200_OK,
             )
 
-
 class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
     """Returns per-class attendance breakdown for a given date."""
 
@@ -1196,7 +1187,6 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
 
         return Response({"date": date_str, "classes": result})
 
-
 class StudentAttendanceDailySummaryAPIView(AttendanceTenantMixin, APIView):
     """Returns aggregated attendance counts for a given date (school-wide)."""
 
@@ -1245,7 +1235,6 @@ class StudentAttendanceDailySummaryAPIView(AttendanceTenantMixin, APIView):
             "late": late,
             "unmarked": unmarked,
         })
-
 
 class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
     """Exports attendance rows in CSV/XLSX format.
@@ -1791,7 +1780,6 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
         )
         response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
-
 
 class StudentAttendanceReportInsightsAPIView(AttendanceTenantMixin, APIView):
     """Weekly and reason insights used by richer attendance reports."""

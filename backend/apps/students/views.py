@@ -61,9 +61,7 @@ from .serializers import (
     StudentTransferHistorySerializer,
 )
 
-
 logger = logging.getLogger(__name__)
-
 
 class TenantScopedModelViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
@@ -124,7 +122,6 @@ class TenantScopedModelViewSet(viewsets.ModelViewSet):
             return super().partial_update(request, *args, **kwargs)
         except IntegrityError:
             raise ValidationError({"detail": "Duplicate value violates a uniqueness constraint."})
-
 
 class StudentCategoryViewSet(TenantScopedModelViewSet):
     model = StudentCategory
@@ -354,7 +351,6 @@ class StudentCategoryViewSet(TenantScopedModelViewSet):
             status=status.HTTP_200_OK,
         )
 
-
 class StudentGroupViewSet(TenantScopedModelViewSet):
     model = StudentGroup
     serializer_class = StudentGroupSerializer
@@ -470,17 +466,19 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
             "first_name", "last_name"
         )
 
-        student_ids = [st.id for st in qs]
+        # Evaluate queryset once into a list — avoids double-hit on the DB
+        student_list = list(qs)
+        student_ids = [st.id for st in student_list]
 
         # Fetch all club memberships for these students in one query (avoid N+1)
-        memberships = StudentClubMembership.objects.filter(
-            student_id__in=student_ids
-        ).values("student_id", "club_id", "role")
-        # Build dict: student_id -> list of {clubId, role}
         from collections import defaultdict as _dd
         club_map = _dd(list)
-        for m in memberships:
-            club_map[m["student_id"]].append({"clubId": m["club_id"], "role": m["role"]})
+        if student_ids:
+            memberships = StudentClubMembership.objects.filter(
+                student_id__in=student_ids
+            ).values("student_id", "club_id", "role")
+            for m in memberships:
+                club_map[m["student_id"]].append({"clubId": m["club_id"], "role": m["role"]})
 
         def _serialize(st):
             return {
@@ -508,11 +506,11 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
                 page_size = max(1, min(int(request.query_params.get("page_size", 10)), 200))
             except (ValueError, TypeError):
                 page_size = 10
-            total = qs.count()
+            total = len(student_list)
             total_pages = max(1, (total + page_size - 1) // page_size)
             page = min(page, total_pages)
             offset = (page - 1) * page_size
-            results = [_serialize(st) for st in qs[offset:offset + page_size]]
+            results = [_serialize(st) for st in student_list[offset:offset + page_size]]
             return Response({
                 "results": results,
                 "total": total,
@@ -522,7 +520,7 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
             })
 
         # No ?page= — return full flat list (original behaviour)
-        return Response([_serialize(st) for st in qs])
+        return Response([_serialize(st) for st in student_list])
 
     @action(detail=False, methods=["post"], url_path="assign")
     def assign(self, request):
@@ -929,13 +927,11 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
             status=status.HTTP_200_OK,
         )
 
-
 class GuardianViewSet(TenantScopedModelViewSet):
     model = Guardian
     serializer_class = GuardianSerializer
     pagination_class = ApiPageNumberPagination
     permission_codes = {"*": "student_info.add_student.view"}
-
 
 class StudentViewSet(TenantScopedModelViewSet):
     model = Student
@@ -1071,12 +1067,18 @@ class StudentViewSet(TenantScopedModelViewSet):
         elif is_active_param in {"0", "false", "no"}:
             qs = qs.filter(is_active=False)
         if search:
-            qs = qs.filter(
+            parts = search.strip().split()
+            q = (
                 Q(first_name__icontains=search)
                 | Q(last_name__icontains=search)
                 | Q(admission_no__icontains=search)
                 | Q(roll_no__icontains=search)
             )
+            if len(parts) >= 2:
+                # "Vamshi Yadav" → first_name=Vamshi, last_name=Yadav (and reversed)
+                q |= Q(first_name__icontains=parts[0]) & Q(last_name__icontains=parts[-1])
+                q |= Q(first_name__icontains=parts[-1]) & Q(last_name__icontains=parts[0])
+            qs = qs.filter(q)
 
         if user.is_superuser:
             return qs
@@ -2449,7 +2451,6 @@ class StudentViewSet(TenantScopedModelViewSet):
             status=status.HTTP_200_OK,
         )
 
-
 class StudentDocumentViewSet(TenantScopedModelViewSet):
     serializer_class = StudentDocumentSerializer
     model = StudentDocument
@@ -2590,7 +2591,6 @@ class StudentTransferHistoryViewSet(TenantScopedModelViewSet):
         if user.school_id:
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
-
 
 class PromotionBatchViewSet(TenantScopedModelViewSet):
     serializer_class = PromotionBatchSerializer
@@ -3022,7 +3022,6 @@ class PromotionBatchViewSet(TenantScopedModelViewSet):
         )
         return Response(self.get_serializer(batch).data)
 
-
 class PromotionAuditLogViewSet(TenantScopedModelViewSet):
     serializer_class = PromotionAuditLogSerializer
     model = PromotionAuditLog
@@ -3036,7 +3035,6 @@ class PromotionAuditLogViewSet(TenantScopedModelViewSet):
         if user.school_id:
             return qs.filter(batch__school_id=user.school_id)
         return qs.none()
-
 
 class StudentPromotionHistoryViewSet(TenantScopedModelViewSet):
     serializer_class = StudentPromotionHistorySerializer
@@ -3060,7 +3058,6 @@ class StudentPromotionHistoryViewSet(TenantScopedModelViewSet):
         if user.school_id:
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
-
 
 class StudentMultiClassRecordViewSet(TenantScopedModelViewSet):
     serializer_class = StudentMultiClassRecordSerializer
@@ -3172,7 +3169,6 @@ class StudentMultiClassRecordViewSet(TenantScopedModelViewSet):
             many=True,
         ).data
         return Response({"student_id": student.id, "records": response_data}, status=status.HTTP_200_OK)
-
 
 class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
     serializer_class = StudentSubjectAssignmentSerializer
@@ -3442,7 +3438,6 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-
 class StudentRecordAuditViewSet(TenantScopedModelViewSet):
     serializer_class = StudentRecordAuditSerializer
     model = StudentRecordAudit
@@ -3480,4 +3475,3 @@ class StudentRecordAuditViewSet(TenantScopedModelViewSet):
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
-

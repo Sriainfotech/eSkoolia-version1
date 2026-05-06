@@ -4,13 +4,7 @@
 .root {
   font-family: "Plus Jakarta Sans", sans-serif;
   font-size: 14px;
-  min-height: 100vh;
-  background: #f8f7f4;
-  background-image: radial-gradient(
-    900px 500px at 100% 0%,
-    #edeae0,
-    transparent 60%
-  );
+  padding: 8px;
   --bg: #f8f7f4;
   --surface: #ffffff;
   --ink: #19162c;
@@ -31,6 +25,14 @@
   --tag-sp: #a0264a;
   --tag-ar: #5231b5;
   --tag-err: #b3261e;
+}
+
+/* ─── Page Card ────────────────────────────── */
+.pageCard {
+  background: #f8f8fc;
+  border: 1px solid #e8e3d8;
+  border-radius: 16px;
+  overflow: hidden;
 }
 /* enforce font family on all child elements for consistency */
 .root *, .root *::before, .root *::after {

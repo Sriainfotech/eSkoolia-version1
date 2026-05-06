@@ -1,10 +1,9 @@
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
-
 class QueryParamJWTAuthentication(JWTAuthentication):
     """
     Extends JWTAuthentication to also accept a JWT via ?token= query param.
-    Used for CSV download endpoints opened via window.open() where custom
+    Used for CSV download endpoints opened via  where custom
     headers cannot be sent.
     """
 

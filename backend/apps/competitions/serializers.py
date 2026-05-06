@@ -16,19 +16,19 @@ class ClubSerializer(serializers.ModelSerializer):
 
 
 class TeamSerializer(serializers.ModelSerializer):
-    member_ids = serializers.PrimaryKeyRelatedField(
-        many=True, write_only=True, required=False, source="members", queryset=None,
-    )
-
     class Meta:
         model = Team
         fields = ["id", "competition", "name", "members", "member_ids"]
         read_only_fields = ["members"]
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def get_fields(self):
+        fields = super().get_fields()
         from apps.students.models import Student
-        self.fields["member_ids"].child_relation.queryset = Student.objects.all()
+        fields["member_ids"] = serializers.PrimaryKeyRelatedField(
+            many=True, write_only=True, required=False, source="members",
+            queryset=Student.objects.all(),
+        )
+        return fields
 
 
 class CompetitionSerializer(serializers.ModelSerializer):

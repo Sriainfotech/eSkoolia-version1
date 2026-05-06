@@ -726,6 +726,7 @@ export function StudentMultiClassPanel() {
 
   return (
     <div className={s.root}>
+      <div className={s.pageCard}>
       {/* Header */}
       <div className={s.pageHeader}>
         <div className={s.breadcrumb}>
@@ -917,6 +918,7 @@ export function StudentMultiClassPanel() {
         const newStatus:MockStudent["status"]=optCount>=4?"done":optCount>0?"partial":"empty";
         setClassList(prev=>prev.map(cl=>({...cl,sections:cl.sections.map(sec=>({...sec,students:sec.students.map(st=>st.id===studentId?{...st,...saved,status:newStatus}:st)}))})));
       }}/>}
+      </div>{/* pageCard */}
     </div>
   );
 }
