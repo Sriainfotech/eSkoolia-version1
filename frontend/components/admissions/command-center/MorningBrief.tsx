@@ -9,6 +9,7 @@ interface Props {
   data: MorningBriefData;
   onCardClick: (stage: StageTab) => void;
   isLoading?: boolean;
+  priorityText?: string;
 }
 
 const fadeUp = {
@@ -56,7 +57,7 @@ const CARDS: {
   { key: "decisionsPending",label: "Decisions Pending",  stage: "pending", accent: "text-red-600",    bg: "bg-red-50",     border: "border-red-100",    icon: "⚖️" },
 ];
 
-export function MorningBrief({ data, onCardClick, isLoading }: Props) {
+export function MorningBrief({ data, onCardClick, isLoading, priorityText }: Props) {
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === "undefined") return false;
     return localStorage.getItem("acc_brief_collapsed") === "1";
@@ -125,6 +126,19 @@ export function MorningBrief({ data, onCardClick, isLoading }: Props) {
                     </motion.button>
                   ))}
             </motion.div>
+
+            {/* Priority Narrative — smart one-liner derived from data */}
+            {!isLoading && priorityText && (
+              <motion.div
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3, duration: 0.25 }}
+                className="mx-4 mb-4 flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-2.5"
+              >
+                <span className="text-base flex-shrink-0">⚡</span>
+                <p className="text-xs font-medium text-indigo-700 leading-tight">{priorityText}</p>
+              </motion.div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

@@ -43,6 +43,36 @@ function getSourceStyle(sourceName: string): string {
   return "bg-gray-50 text-gray-700 border border-gray-200";
 }
 
+// ── T4: Parent sentiment detection (client-side, zero API cost) ───────────────
+type SentimentSignal = { emoji: string; label: string; color: string };
+
+function detectSentiment(note: string | null | undefined): SentimentSignal | null {
+  const n = (note || "").toLowerCase();
+  if (/rude|angry|upset|complain|threaten|difficult|aggressive/.test(n))
+    return { emoji: "🔴", label: "Difficult", color: "#dc2626" };
+  if (/fee|expensive|costly|afford|budget|price|cheap|discount/.test(n))
+    return { emoji: "💰", label: "Fee sensitive", color: "#d97706" };
+  if (/busy|no time|call back|not now|tied up|later/.test(n))
+    return { emoji: "⏰", label: "Busy", color: "#7c3aed" };
+  const qCount = (n.match(/\?/g) || []).length;
+  if (qCount >= 2 || /curriculum|syllabus|ratio|extracurricular/.test(n))
+    return { emoji: "❓", label: "FAQ heavy", color: "#0891b2" };
+  return null;
+}
+
+// ── T8: Next Best Action chip ─────────────────────────────────────────────────
+function nextBestAction(inq: ApiInquiry, today: string): { label: string; color: string; bg: string } | null {
+  const overdue = inq.next_follow_up_date != null && inq.next_follow_up_date < today;
+  const dueToday = inq.next_follow_up_date === today;
+  if (inq.status === "enrolled" || inq.status === "declined") return null;
+  if (overdue) return { label: "📞 Call now", color: "#991b1b", bg: "#fee2e2" };
+  if (dueToday && inq.status === "visited") return { label: "⚖️ Ask for decision", color: "#92400e", bg: "#fef3c7" };
+  if (dueToday) return { label: "💬 Follow up today", color: "#1e40af", bg: "#dbeafe" };
+  if (inq.status === "new") return { label: "👋 First contact", color: "#065f46", bg: "#d1fae5" };
+  if (inq.status === "visited") return { label: "⚖️ Await decision", color: "#5b21b6", bg: "#ede9fe" };
+  return null;
+}
+
 /** Age of this inquiry in days since it was submitted (query_date) */
 function inquiryAge(inquiry: ApiInquiry, today: string): number {
   const ref = inquiry.query_date;
@@ -83,6 +113,8 @@ export function ApplicationRow({
   const age = inquiryAge(inq, today);
   const ageColor =
     age <= 2 ? "text-gray-500" : age <= 7 ? "text-amber-600 font-semibold" : "text-red-600 font-semibold";
+  const sentiment = detectSentiment(inq.note);
+  const nba = nextBestAction(inq, today);
 
   // Overdue left border — draws attention on rows that haven't been actioned
   const isOverdue = inq.next_follow_up_date != null && inq.next_follow_up_date < today && inq.status !== "enrolled" && inq.status !== "declined";
@@ -140,7 +172,16 @@ export function ApplicationRow({
             {initials}
           </div>
           <div>
-            <div className="text-sm font-semibold text-gray-900 leading-tight">{inq.full_name}</div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-sm font-semibold text-gray-900 leading-tight">{inq.full_name}</span>
+              {sentiment && (
+                <span
+                  title={sentiment.label}
+                  className="text-xs leading-none"
+                  aria-label={sentiment.label}
+                >{sentiment.emoji}</span>
+              )}
+            </div>
             <div className="text-xs text-gray-400">{inq.phone}</div>
           </div>
         </div>
@@ -204,21 +245,30 @@ export function ApplicationRow({
         </div>
       </td>
 
-      {/* Follow-up */}
+      {/* Follow-up + Next Best Action (T8) */}
       <td className="px-3 py-2.5">
-        {inq.next_follow_up_date ? (
-          inq.next_follow_up_date < today ? (
-            <span className="text-xs font-semibold text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
-              Overdue {overdueDays}d
-            </span>
-          ) : inq.next_follow_up_date === today ? (
-            <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">Today</span>
+        <div className="flex flex-col gap-1">
+          {inq.next_follow_up_date ? (
+            inq.next_follow_up_date < today ? (
+              <span className="text-xs font-semibold text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+                Overdue {overdueDays}d
+              </span>
+            ) : inq.next_follow_up_date === today ? (
+              <span className="text-xs font-semibold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">Today</span>
+            ) : (
+              <span className="text-xs text-gray-500">{formatDate(inq.next_follow_up_date)}</span>
+            )
           ) : (
-            <span className="text-xs text-gray-500">{formatDate(inq.next_follow_up_date)}</span>
-          )
-        ) : (
-          <span className="text-xs text-gray-300">–</span>
-        )}
+            <span className="text-xs text-gray-300">–</span>
+          )}
+          {nba && (
+            <span
+              className="text-xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap"
+              style={{ color: nba.color, background: nba.bg }}
+              title="Next Best Action"
+            >{nba.label}</span>
+          )}
+        </div>
       </td>
 
       {/* Counsellor */}

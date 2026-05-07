@@ -353,10 +353,12 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
             {/* Sticky Notes trigger */}
             <NoteTrigger />
 
-            {/* Module manager — always visible on md+ */}
-            <div className="hidden md:block">
-              <ModuleManager />
-            </div>
+            {/* Module manager — home page only */}
+            {isHome && (
+              <div className="hidden md:block">
+                <ModuleManager />
+              </div>
+            )}
 
             {/* Widget manager — home page only */}
             {isHome && (
