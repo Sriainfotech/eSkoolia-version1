@@ -73,7 +73,7 @@ export default function AIMessageComposer({ lead, channel = "whatsapp", onClose,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-      });
+      }) as Response;
       if (!res.ok) throw new Error("Send failed");
       onSent?.();
       onClose();
