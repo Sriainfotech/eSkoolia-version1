@@ -221,6 +221,15 @@ function CardMenu({
   );
 }
 
+type PortfolioFilter = "all" | "active" | "overdue" | "almost-full";
+
+const PORTFOLIO_FILTERS: { key: PortfolioFilter; label: string }[] = [
+  { key: "all",         label: "All" },
+  { key: "active",      label: "Has Applications" },
+  { key: "overdue",     label: "Overdue" },
+  { key: "almost-full", label: "Almost Full" },
+];
+
 export function ClassPortfolioGrid({ classes, selectedClassId, onSelectClass, onClassesUpdated, isLoading }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [hiddenIds, setHiddenIds] = useState<Set<number>>(() => {
@@ -231,6 +240,7 @@ export function ClassPortfolioGrid({ classes, selectedClassId, onSelectClass, on
   });
   const [showManage, setShowManage] = useState(false);
   const [editingClass, setEditingClass] = useState<ClassConfig | null>(null);
+  const [portfolioFilter, setPortfolioFilter] = useState<PortfolioFilter>("all");
 
   const persistHidden = (ids: Set<number>) => {
     localStorage.setItem(HIDDEN_KEY, JSON.stringify([...ids]));
@@ -253,6 +263,22 @@ export function ClassPortfolioGrid({ classes, selectedClassId, onSelectClass, on
 
   const visibleClasses = classes.filter((c) => !hiddenIds.has(c.id));
   const hiddenClasses = classes.filter((c) => hiddenIds.has(c.id));
+
+  /** Apply quick-filter to visible classes */
+  const filteredClasses = visibleClasses.filter((c) => {
+    if (portfolioFilter === "active")      return c.pipelineCount > 0;
+    if (portfolioFilter === "overdue")     return c.overdueCount > 0;
+    if (portfolioFilter === "almost-full") return c.capacity > 0 && c.enrolledCount / c.capacity >= 0.7;
+    return true;
+  });
+
+  /** Counts for filter pill badges */
+  const filterCounts: Record<PortfolioFilter, number> = {
+    all:         visibleClasses.length,
+    active:      visibleClasses.filter((c) => c.pipelineCount > 0).length,
+    overdue:     visibleClasses.filter((c) => c.overdueCount > 0).length,
+    "almost-full": visibleClasses.filter((c) => c.capacity > 0 && c.enrolledCount / c.capacity >= 0.7).length,
+  };
 
   const allPipeline = visibleClasses.reduce((s, c) => s + c.pipelineCount, 0);
   const allEnrolled = visibleClasses.reduce((s, c) => s + c.enrolledCount, 0);
@@ -284,6 +310,37 @@ export function ClassPortfolioGrid({ classes, selectedClassId, onSelectClass, on
 
       {!collapsed && (
         <>
+          {/* Quick filter pills */}
+          {!isLoading && (
+            <div className="flex items-center gap-2 px-4 pb-3 flex-wrap">
+              {PORTFOLIO_FILTERS.map((f) => {
+                const isActive = portfolioFilter === f.key;
+                const count = filterCounts[f.key];
+                return (
+                  <button
+                    key={f.key}
+                    onClick={() => setPortfolioFilter(f.key)}
+                    className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1 rounded-full border transition-all ${
+                      isActive
+                        ? "bg-indigo-600 text-white border-indigo-600 shadow-sm"
+                        : "bg-white text-gray-500 border-gray-200 hover:border-indigo-300 hover:text-indigo-600"
+                    }`}
+                  >
+                    {f.label}
+                    <span className={`inline-flex items-center justify-center min-w-[16px] h-4 text-[10px] font-bold rounded-full px-1 ${
+                      isActive ? "bg-white/25 text-white" : "bg-gray-100 text-gray-500"
+                    }`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+              {portfolioFilter !== "all" && filteredClasses.length === 0 && (
+                <span className="text-xs text-gray-400 ml-1">No classes match this filter</span>
+              )}
+            </div>
+          )}
+
           {isLoading ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 px-4 pb-4">
               {Array.from({ length: 6 }).map((_, i) => (
@@ -318,7 +375,7 @@ export function ClassPortfolioGrid({ classes, selectedClassId, onSelectClass, on
                 </motion.button>
 
                 {/* Per-class cards */}
-                {visibleClasses.map((cls) => {
+                {filteredClasses.map((cls) => {
                   const pct = cls.capacity > 0 ? Math.min(100, Math.round((cls.enrolledCount / cls.capacity) * 100)) : 0;
                   const isSelected = selectedClassId === cls.id;
                   return (

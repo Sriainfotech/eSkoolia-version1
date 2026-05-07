@@ -11,6 +11,7 @@ const MODULE_KEYWORDS = [
 export type Intent =
   | { kind: 'navigate'; path: string; label: string }
   | { kind: 'student-lookup'; query: string }
+  | { kind: 'enquiry-lookup'; query: string }
   | { kind: 'parent-qa'; topic: string; raw: string }
   | { kind: 'planner-task'; day: string; time: string; title: string; raw: string }
   | { kind: 'compose-message'; topic: string; raw: string }
@@ -69,7 +70,20 @@ export function parseIntent(q: string): Intent {
     return { kind: 'compose-message', topic: composeMatch[3] || norm, raw: norm };
   }
 
-  // 4. Student lookup: starts with a lookup verb OR looks like a proper name
+  // 4. Enquiry lookup: "find enquiry Mehta", "enquiry for Priya", "admission enquiry Arjun"
+  //    Must come before student-lookup since "admission" is in MODULE_KEYWORDS
+  const hasEnquiryKw = /enquir|inquir/i.test(norm);
+  if (hasEnquiryKw) {
+    const enquiryQuery = norm
+      .replace(/^(find|search|lookup|show|get|look up)\s+/i, '')
+      .replace(/admission\s+/i, '')
+      .replace(/enquir[y]?\s*(for\s+)?/i, '')
+      .replace(/inquir[y]?\s*(for\s+)?/i, '')
+      .trim();
+    if (enquiryQuery.length >= 2) return { kind: 'enquiry-lookup', query: enquiryQuery };
+  }
+
+  // 5. Student lookup: starts with a lookup verb OR looks like a proper name
   //    and doesn't contain module keywords
   const hasModuleKw = MODULE_KEYWORDS.some(k => norm.includes(k));
   const lookupVerb = /^(find|search|lookup|show|who is|get)\s+/i.test(norm);

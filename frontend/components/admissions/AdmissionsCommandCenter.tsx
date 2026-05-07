@@ -9,6 +9,7 @@ import type { ApiInquiry, ApiSchoolClass, ApiAdminSetup, ApiList, ClassConfig, D
 import { MorningBrief } from "./command-center/MorningBrief";
 import { ClassPortfolioGrid } from "./command-center/ClassPortfolioGrid";
 import { ClassWorkspace } from "./command-center/ClassWorkspace";
+import AIMessageComposer from "./AIMessageComposer";
 
 function listData<T>(value: ApiList<T> | undefined | null): T[] {
   if (!value) return [];
@@ -27,8 +28,68 @@ function initialDrawerForm(today: string): DrawerForm {
   return { full_name: "", phone: "", email: "", school_class: "", no_of_child: "1", source: "", reference: "", query_date: today, next_follow_up_date: today, assigned: "", description: "", active_status: "1", note: "", child_name: "", child_dob: "", child_gender: "", parent_occupation: "", previous_school: "", reason_for_change: "", budget_range: "", preferred_contact_time: "", sibling_count: "0", specific_requirements: "", relationship: "", alternate_phone: "", home_area: "", has_sibling_enrolled: "", sibling_name: "", sibling_class_name: "", referred_by: "", preferred_visit_date: tomorrow, preferred_visit_time: "" };
 }
 
+type ParentType = "difficult" | "busy" | "fee_sensitive" | "faq_heavy" | "standard";
+
+function detectParentType(note: string | null | undefined): ParentType {
+  const n = (note || "").toLowerCase();
+  if (/rude|angry|upset|complain|threaten|difficult|aggressive|shout/.test(n)) return "difficult";
+  if (/busy|no time|call back|call me later|not now|tied up|in a meeting/.test(n)) return "busy";
+  if (/fee|expensive|costly|afford|budget|price|cheap|discount|scholarship/.test(n)) return "fee_sensitive";
+  const qCount = (n.match(/\?/g) || []).length;
+  if (qCount >= 2 || /curriculum|syllabus|ratio|extracurricular|how many|what about|is there/.test(n)) return "faq_heavy";
+  return "standard";
+}
+
 function generateCallScript(inq: ApiInquiry) {
   const grade = inq.class_name_resolved || "the grade";
+  const first = inq.full_name.split(" ")[0] || "the parent";
+  const parentType = detectParentType(inq.note);
+
+  if (parentType === "difficult") {
+    return [
+      { tip: `[Goal] De-escalate first — do NOT push enrollment on this call`, type: "goal" as const },
+      { tip: `[Opener] "Hello ${first}, I'm calling personally to address your concerns."`, type: "insight" as const },
+      { tip: `[Listen] Let them speak fully without interruption — say "I understand" and "That's valid."`, type: "insight" as const },
+      { tip: `[Empathy] "I completely understand your frustration. Let me personally ensure this is resolved."`, type: "question" as const },
+      { tip: `[Offer] Offer a direct callback with the Head of Admissions within 24 hours`, type: "objection" as const },
+      { tip: `[Close] "Can I schedule a call with our Admissions Head tomorrow at a time that suits you?"`, type: "goal" as const },
+    ];
+  }
+
+  if (parentType === "busy") {
+    return [
+      { tip: `[Goal] Land a visit commitment in under 60 seconds — no small talk`, type: "goal" as const },
+      { tip: `[Opener] "Hi ${first}, just 30 seconds — I know you're busy. We have a seat opening in ${grade}."`, type: "insight" as const },
+      { tip: `[Pitch] One sentence: "Top faculty, strong results, safe campus — your child deserves this."`, type: "insight" as const },
+      { tip: `[Ask] "Can we do a 20-minute visit this Saturday? I'll keep it brief and to the point."`, type: "question" as const },
+      { tip: `[If no] "I'll WhatsApp you a 1-minute video tour. What time is best to send it?"`, type: "objection" as const },
+      { tip: `[After call] Text them immediately to confirm the slot before they forget`, type: "goal" as const },
+    ];
+  }
+
+  if (parentType === "fee_sensitive") {
+    return [
+      { tip: `[Goal] Reframe value before touching numbers — never lead with fees`, type: "goal" as const },
+      { tip: `[Opener] "Hello ${first}, before we talk fees — let me share what makes us truly worth it."`, type: "insight" as const },
+      { tip: `[Value] Highlight outcomes: board results, alumni success, co-curricular achievements`, type: "insight" as const },
+      { tip: `[Flex] "We have quarterly payment options and limited merit scholarships available."`, type: "question" as const },
+      { tip: `[Compare] "Many parents find fees comparable to private tuition + school separately."`, type: "objection" as const },
+      { tip: `[Close] Invite for campus visit: "Come see the facilities — the investment will make sense."`, type: "goal" as const },
+    ];
+  }
+
+  if (parentType === "faq_heavy") {
+    return [
+      { tip: `[Goal] Don't answer questions one-by-one — invite to an open Q&A visit instead`, type: "goal" as const },
+      { tip: `[Opener] "Hello ${first}, you've asked some great questions. Let me do better — invite you to our open house."`, type: "insight" as const },
+      { tip: `[Redirect] "Our Principal and Dept. Heads will answer everything in person with real examples."`, type: "insight" as const },
+      { tip: `[Triage] Answer only the 1 most urgent question — defer the rest to the visit`, type: "question" as const },
+      { tip: `[Offer] "I'll send our school FAQ brochure now. Let's book a 30-min Q&A visit too."`, type: "objection" as const },
+      { tip: `[Close] "When works this week? I'll block time with our Admissions Head personally."`, type: "goal" as const },
+    ];
+  }
+
+  // Standard script (no strong signal from notes)
   const tips: { tip: string; type: "goal" | "question" | "objection" | "insight" }[] = [
     { tip: `[Goal] Schedule campus visit within 48 hours for ${grade}`, type: "goal" },
   ];
@@ -36,13 +97,13 @@ function generateCallScript(inq: ApiInquiry) {
     tips.push({ tip: `[Opener] "Hello! Calling about ${grade} admission. Good time to talk?"`, type: "insight" });
     tips.push({ tip: `[Question] "What made you consider our school for your child?"`, type: "question" });
   } else if (inq.status === "contacted") {
-    tips.push({ tip: "[Tip] Reference previous conversation. Show continuity.", type: "insight" });
+    tips.push({ tip: "[Tip] Reference previous conversation — show continuity.", type: "insight" });
     tips.push({ tip: "[Question] \"What's holding you back from scheduling a campus visit?\"", type: "question" });
   } else if (inq.status === "visited") {
     tips.push({ tip: "[Post-visit] \"How did you find the campus? Any questions on fees?\"", type: "insight" });
   }
-  tips.push({ tip: "[Objection] If fees concern: \"We have flexible payment plans.\"", type: "objection" });
-  tips.push({ tip: "[Objection] If distance concern: \"We have transport routes covering most areas.\"", type: "objection" });
+  tips.push({ tip: "[Objection] Fees concern: \"We have flexible quarterly payment plans.\"", type: "objection" });
+  tips.push({ tip: "[Objection] Distance concern: \"We have transport routes covering most areas.\"", type: "objection" });
   return tips;
 }
 
@@ -98,6 +159,11 @@ const OUTCOMES = [
   { value: "enrolled",              label: "Enrolled" },
 ];
 
+const STAGE_LABELS: Record<string, string> = {
+  new: "New", contacted: "In Conversation", visited: "Decision Pending",
+  enrolled: "Enrolled", waitlisted: "Waitlist", declined: "Cold / Dropped",
+};
+
 const BROADCAST_TEMPLATES = {
   followup: "Hi {{name}}! Following up on your inquiry. When would be a good time to talk? - Admissions Team",
   visit:    "Hi {{name}}! We'd like to invite you for a campus visit. Reply with your preferred date. - Admissions Team",
@@ -136,6 +202,7 @@ export function AdmissionsCommandCenter() {
   const [drawerForm, setDrawerForm] = useState<DrawerForm>(initialDrawerForm(new Date().toISOString().slice(0, 10)));
   const [drawerErrors, setDrawerErrors] = useState<Record<string, string>>({});
   const [drawerSaving, setDrawerSaving] = useState(false);
+  const [quickAddMode, setQuickAddMode] = useState(true);
 
   const [showLogModal, setShowLogModal] = useState(false);
   const [logInquiry, setLogInquiry] = useState<ApiInquiry | null>(null);
@@ -166,6 +233,7 @@ export function AdmissionsCommandCenter() {
   const [showAITip, setShowAITip] = useState(false);
   const [aiTipForm, setAITipForm] = useState<DrawerForm | null>(null);
   const [globalSearch, setGlobalSearch] = useState("");
+  const [showAIComposer, setShowAIComposer] = useState(false);
 
   const loadAll = async () => {
     setLoading(true); setError("");
@@ -219,8 +287,26 @@ export function AdmissionsCommandCenter() {
 
   const showWorkspace = selectedClassId !== undefined;
 
+  /** One-liner that tells the counsellor where to focus — derived purely from existing data, zero API cost */
+  const priorityText = useMemo(() => {
+    const { overdueFollowUp, newToday, visitsToday, decisionsPending } = briefData;
+    if (overdueFollowUp > 0 && visitsToday > 0)
+      return `${overdueFollowUp} follow-up${overdueFollowUp > 1 ? "s" : ""} overdue · ${visitsToday} visit${visitsToday > 1 ? "s" : ""} scheduled today — start with overdue.`;
+    if (overdueFollowUp > 5)
+      return `${overdueFollowUp} follow-ups are overdue — clear these before taking new inquiries.`;
+    if (overdueFollowUp > 0)
+      return `${overdueFollowUp} follow-up${overdueFollowUp > 1 ? "s" : ""} overdue — reach out before end of day.`;
+    if (visitsToday > 0)
+      return `${visitsToday} campus visit${visitsToday > 1 ? "s" : ""} today — confirm time slots and prepare welcome kits.`;
+    if (decisionsPending > 0)
+      return `${decisionsPending} application${decisionsPending > 1 ? "s" : ""} awaiting a decision — follow up to close.`;
+    if (newToday > 0)
+      return `${newToday} new inquiry${newToday > 1 ? "s" : ""} today — respond within 30 minutes for best conversion.`;
+    return "All clear — great time to proactively reach out to cold leads.";
+  }, [briefData]);
+
   const openNewAdmission = () => {
-    setEditingId(null); setDrawerForm(initialDrawerForm(today)); setDrawerErrors({}); setAdmissionSection(0); setShowAdmissionModal(true);
+    setEditingId(null); setDrawerForm(initialDrawerForm(today)); setDrawerErrors({}); setAdmissionSection(0); setQuickAddMode(true); setShowAdmissionModal(true);
   };
 
   const openEditAdmission = (inq: ApiInquiry) => {
@@ -410,7 +496,7 @@ export function AdmissionsCommandCenter() {
               setForcedStage(stage);
               // Reset forcedStage after one tick so next manual tab click works normally
               setTimeout(() => setForcedStage(null), 200);
-            }} isLoading={loading} />
+            }} isLoading={loading} priorityText={priorityText} />
             <div className="border-t border-gray-100 my-1" />
             <ClassPortfolioGrid classes={classConfigs} selectedClassId={selectedClassId ?? null} onSelectClass={(id) => setSelectedClassId(id)} onClassesUpdated={() => void loadAll()} isLoading={loading} />
             <AnimatePresence>
@@ -536,8 +622,15 @@ export function AdmissionsCommandCenter() {
         <div style={overlay}>
           <div style={{ position: "relative", width: "min(540px, 100%)", background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,.3)", overflow: "hidden", maxHeight: "92vh", overflowY: "auto" }}>
             <div style={{ padding: "16px 20px", background: "linear-gradient(135deg,#15803d,#16a34a)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}><MessageSquare size={20} /><h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>WhatsApp Composer - {waInquiry.full_name}</h3></div>
-              <button onClick={() => setShowWAModal(false)} style={{ background: "rgba(255,255,255,.2)", border: "none", cursor: "pointer", borderRadius: 8, padding: 6, color: "#fff", display: "flex" }}><X size={18} /></button>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}><MessageSquare size={20} /><h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>WhatsApp Composer — {waInquiry.full_name}</h3></div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <button
+                  onClick={() => { setShowWAModal(false); setShowAIComposer(true); }}
+                  title="Let AI draft a personalised message using this lead's full history"
+                  style={{ background: "rgba(255,255,255,.15)", border: "1px solid rgba(255,255,255,.4)", cursor: "pointer", borderRadius: 8, padding: "4px 10px", color: "#fff", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 4 }}
+                ><Sparkles size={12} /> AI Compose</button>
+                <button onClick={() => setShowWAModal(false)} style={{ background: "rgba(255,255,255,.2)", border: "none", cursor: "pointer", borderRadius: 8, padding: 6, color: "#fff", display: "flex" }}><X size={18} /></button>
+              </div>
             </div>
             <div style={{ padding: 20 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
@@ -557,26 +650,172 @@ export function AdmissionsCommandCenter() {
         </div>
       )}
 
+      {/* AI MESSAGE COMPOSER (T1) — real AI endpoint, auto-logs on send */}
+      {showAIComposer && waInquiry && (
+        <AIMessageComposer
+          lead={waInquiry}
+          channel="whatsapp"
+          onClose={() => setShowAIComposer(false)}
+          onSent={() => {
+            setShowAIComposer(false);
+            const nextDate = new Date(Date.now() + 2 * 864e5).toISOString().slice(0, 10);
+            setLogInquiry(waInquiry);
+            setLogForm({ outcome: "whatsapp_sent", note: "AI-composed WhatsApp sent via Command Center", next_follow_up_date: nextDate, status: "contacted" });
+            setShowLogModal(true);
+          }}
+        />
+      )}
+
       {/* ADMISSION FORM MODAL */}
       {showAdmissionModal && (
         <div style={overlay}>
           <div style={{ position: "relative", width: "min(600px, 100%)", background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,.3)", overflow: "hidden", maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
             <div style={{ padding: "16px 20px", background: "var(--primary, #4f46e5)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
-              <div><h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{editingId ? "Edit Inquiry" : "New Admission Inquiry"}</h2></div>
-              <button onClick={() => setShowAdmissionModal(false)} style={{ background: "rgba(255,255,255,.2)", border: "none", cursor: "pointer", borderRadius: 8, padding: 6, color: "#fff", display: "flex" }}><X size={18} /></button>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "14px 20px", background: "#f8fafc", borderBottom: "1px solid var(--line, #e5e7eb)", flexShrink: 0 }}>
-              {[{ label: "Parent/Guardian" }, { label: "Child Details" }, { label: "Preferences" }].map((step, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center" }}>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-                    <div style={{ width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, background: i <= admissionSection ? "var(--primary, #4f46e5)" : "#fff", color: i <= admissionSection ? "#fff" : "#6b7280", border: i <= admissionSection ? "2px solid var(--primary, #4f46e5)" : "2px solid #d1d5db" }}>{i + 1}</div>
-                    <span style={{ fontSize: 10, fontWeight: i === admissionSection ? 700 : 500, color: i <= admissionSection ? "var(--primary, #4f46e5)" : "#6b7280", whiteSpace: "nowrap" }}>{step.label}</span>
+              <div>
+                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{editingId ? "Edit Inquiry" : "New Admission Inquiry"}</h2>
+                {!editingId && <p style={{ margin: "2px 0 0", fontSize: 11, opacity: 0.8 }}>Quick Add captures in 10 seconds · Full form adds more detail</p>}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {/* Quick Add / Full Form toggle — only for new inquiries */}
+                {!editingId && (
+                  <div style={{ display: "flex", background: "rgba(255,255,255,.15)", borderRadius: 8, padding: 2 }}>
+                    <button
+                      type="button"
+                      onClick={() => setQuickAddMode(true)}
+                      style={{ padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, background: quickAddMode ? "#fff" : "transparent", color: quickAddMode ? "var(--primary, #4f46e5)" : "rgba(255,255,255,.85)", transition: "all 0.15s" }}
+                    >⚡ Quick</button>
+                    <button
+                      type="button"
+                      onClick={() => { setQuickAddMode(false); setAdmissionSection(0); }}
+                      style={{ padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, background: !quickAddMode ? "#fff" : "transparent", color: !quickAddMode ? "var(--primary, #4f46e5)" : "rgba(255,255,255,.85)", transition: "all 0.15s" }}
+                    >📋 Full</button>
                   </div>
-                  {i < 2 && <div style={{ width: 40, height: 2, background: i < admissionSection ? "var(--primary, #4f46e5)" : "#d1d5db", margin: "0 8px", marginBottom: 18 }} />}
-                </div>
-              ))}
+                )}
+                <button onClick={() => setShowAdmissionModal(false)} style={{ background: "rgba(255,255,255,.2)", border: "none", cursor: "pointer", borderRadius: 8, padding: 6, color: "#fff", display: "flex" }}><X size={18} /></button>
+              </div>
             </div>
-            <form onSubmit={submitDrawer} style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+
+            {/* Full form — 3-step stepper (only when not quickAddMode or editing) */}
+            {(!quickAddMode || editingId) && (
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "14px 20px", background: "#f8fafc", borderBottom: "1px solid var(--line, #e5e7eb)", flexShrink: 0 }}>
+                {[{ label: "Parent/Guardian" }, { label: "Child Details" }, { label: "Preferences" }].map((step, i) => (
+                  <div key={i} style={{ display: "flex", alignItems: "center" }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, background: i <= admissionSection ? "var(--primary, #4f46e5)" : "#fff", color: i <= admissionSection ? "#fff" : "#6b7280", border: i <= admissionSection ? "2px solid var(--primary, #4f46e5)" : "2px solid #d1d5db" }}>{i + 1}</div>
+                      <span style={{ fontSize: 10, fontWeight: i === admissionSection ? 700 : 500, color: i <= admissionSection ? "var(--primary, #4f46e5)" : "#6b7280", whiteSpace: "nowrap" }}>{step.label}</span>
+                    </div>
+                    {i < 2 && <div style={{ width: 40, height: 2, background: i < admissionSection ? "var(--primary, #4f46e5)" : "#d1d5db", margin: "0 8px", marginBottom: 18 }} />}
+                  </div>
+                ))}
+              </div>
+            )}
+            <form onSubmit={(e) => {
+              e.preventDefault();
+              if (quickAddMode && !editingId) {
+                // Quick Add validation: only name + phone + follow-up required
+                const errs: Record<string, string> = {};
+                if (!drawerForm.full_name.trim()) errs.full_name = "Name is required.";
+                else if (!/^[A-Za-z\s\-']+$/.test(drawerForm.full_name)) errs.full_name = "Name can only contain letters.";
+                if (!drawerForm.phone.trim()) errs.phone = "Phone is required.";
+                else if (!/^[6-9]\d{9}$/.test(drawerForm.phone)) errs.phone = "Enter a valid 10-digit Indian mobile number.";
+                if (!drawerForm.next_follow_up_date) errs.next_follow_up_date = "Next follow-up date is required.";
+                if (Object.keys(errs).length > 0) { setDrawerErrors(errs); return; }
+                // T7: Duplicate phone check against in-memory inquiries (zero API cost)
+                const dupPhone = drawerForm.phone.trim();
+                const duplicate = inquiries.find((i) => i.phone === dupPhone);
+                if (duplicate) {
+                  setDrawerErrors({ phone: `Already in system: ${duplicate.full_name} · ${STAGE_LABELS[duplicate.status] ?? duplicate.status}` });
+                  return;
+                }
+                // Auto-fill non-required fields with safe defaults
+                const quickForm: DrawerForm = {
+                  ...drawerForm,
+                  assigned: drawerForm.assigned.trim() || "Unassigned",
+                  source: drawerForm.source || (sources[0] ? String(sources[0].id) : ""),
+                  reference: drawerForm.reference || (references[0] ? String(references[0].id) : ""),
+                };
+                const payload = {
+                  full_name: quickForm.full_name.trim(),
+                  phone: quickForm.phone.trim(),
+                  email: quickForm.email.trim(),
+                  description: quickForm.description.trim(),
+                  query_date: quickForm.query_date,
+                  next_follow_up_date: quickForm.next_follow_up_date,
+                  assigned: quickForm.assigned,
+                  reference: quickForm.reference ? Number(quickForm.reference) : null,
+                  source: quickForm.source ? Number(quickForm.source) : null,
+                  school_class: quickForm.school_class ? Number(quickForm.school_class) : null,
+                  no_of_child: Number(quickForm.no_of_child) || 1,
+                  active_status: 1,
+                  note: quickForm.note.trim(),
+                };
+                setDrawerSaving(true);
+                void apiRequestWithRefresh("/api/v1/admissions/inquiries/", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                }).then(() => {
+                  toast.success("Inquiry added.", { autoClose: 3000 });
+                  setAITipForm({ ...quickForm });
+                  setShowAITip(true);
+                  setShowAdmissionModal(false);
+                  void loadAll();
+                }).catch(() => {
+                  toast.error("Unable to create inquiry.", { autoClose: 5000 });
+                }).finally(() => setDrawerSaving(false));
+                return;
+              }
+              void submitDrawer(e);
+            }} style={{ flex: 1, overflowY: "auto", padding: 20 }}>
+
+              {/* ⚡ Quick Add form — 5 essential fields, flat, no wizard */}
+              {quickAddMode && !editingId && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: "10px 14px", fontSize: 12, color: "#1d4ed8" }}>
+                    <strong>Quick Add</strong> — capture a lead in seconds. Add more details later from the inquiry page.
+                  </div>
+                  <PopField label="Parent / Guardian Name *" error={drawerErrors.full_name}>
+                    <input value={drawerForm.full_name} onChange={(e) => setDf("full_name", e.target.value)} style={inp(Boolean(drawerErrors.full_name))} placeholder="e.g. Rahul Sharma" autoFocus />
+                  </PopField>
+                  <PopField label="Mobile Number *" error={drawerErrors.phone}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <span style={{ width: 48, height: 36, border: "1px solid var(--line)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, flexShrink: 0, background: "#f8fafc" }}>+91</span>
+                      <input value={drawerForm.phone} onChange={(e) => setDf("phone", e.target.value.replace(/\D/g, "").slice(0, 10))} style={{ ...inp(Boolean(drawerErrors.phone)), flex: 1 }} placeholder="9876543210" inputMode="numeric" />
+                    </div>
+                  </PopField>
+                  <PopField label="Grade Applying For">
+                    <select value={drawerForm.school_class} onChange={(e) => setDf("school_class", e.target.value)} style={inp()}>
+                      <option value="">Select Grade</option>
+                      {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </PopField>
+                  <PopField label="How did they hear about us?">
+                    <select value={drawerForm.source} onChange={(e) => setDf("source", e.target.value)} style={inp()}>
+                      <option value="">Select Source</option>
+                      {sources.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  </PopField>
+                  <PopField label="Next Follow-up *" error={drawerErrors.next_follow_up_date}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                      <input value={drawerForm.next_follow_up_date} onChange={(e) => setDf("next_follow_up_date", e.target.value)} style={inp(Boolean(drawerErrors.next_follow_up_date))} type="date" />
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" as const }}>
+                        {[{ label: "+1 day", days: 1 }, { label: "+2 days", days: 2 }, { label: "+1 week", days: 7 }].map(({ label, days }) => (
+                          <button key={days} type="button" onClick={() => setDf("next_follow_up_date", new Date(Date.now() + days * 864e5).toISOString().slice(0, 10))} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 6, border: "1px solid var(--line, #e5e7eb)", background: "transparent", cursor: "pointer" }}>{label}</button>
+                        ))}
+                      </div>
+                    </div>
+                  </PopField>
+                  <div style={{ display: "flex", gap: 8, marginTop: 4, paddingTop: 16, borderTop: "1px solid var(--line, #e5e7eb)" }}>
+                    <button type="submit" disabled={drawerSaving} style={{ ...btnPrimary, flex: 1, justifyContent: "center" }}>
+                      {drawerSaving ? "Saving..." : "⚡ Add Inquiry"}
+                    </button>
+                    <button type="button" onClick={() => setShowAdmissionModal(false)} style={{ ...btnGhost, flex: 1, justifyContent: "center" }}>Cancel</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Full 3-step form (when editing or quickAddMode is off) */}
+              {(!quickAddMode || editingId) && <>
               {admissionSection === 0 && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <PopField label="Parent / Guardian Full Name *" error={drawerErrors.full_name}><input value={drawerForm.full_name} onChange={(e) => setDf("full_name", e.target.value)} style={inp(Boolean(drawerErrors.full_name))} placeholder="e.g. Rahul Sharma" /></PopField>
@@ -623,6 +862,7 @@ export function AdmissionsCommandCenter() {
                 {admissionSection < 2 && <button type="button" onClick={() => { if (admissionSection === 0) { const errs: Record<string, string> = {}; if (!drawerForm.full_name.trim()) errs.full_name = "Required"; if (!drawerForm.phone.trim() || !/^[6-9]\d{9}$/.test(drawerForm.phone)) errs.phone = "Invalid phone"; if (Object.keys(errs).length > 0) { setDrawerErrors(errs); return; } setDrawerErrors({}); } setAdmissionSection((s) => s + 1); }} style={btnPrimary}>Next</button>}
                 {admissionSection === 2 && <button type="submit" disabled={drawerSaving} style={btnPrimary}>{drawerSaving ? "Saving..." : editingId ? "Update" : "Save"}</button>}
               </div>
+              </>}
             </form>
           </div>
         </div>

@@ -114,6 +114,65 @@ const TEMPLATE_GROUPS: TemplateGroup[] = [
       },
     ],
   },
+  // ── Parent-type specific templates (T3) ──────────────────────────────────
+  {
+    category: "Difficult Parent",
+    templates: [
+      {
+        label: "Acknowledge & Escalate",
+        body: (inq) => {
+          const first = inq.full_name.split(" ")[0] || "there";
+          return `Dear ${first},\n\nThank you for sharing your concerns with us. We take all feedback very seriously.\n\nOur Admissions Head will personally reach out to you within 24 hours to address each point.\n\nWe genuinely want to make this right for your family.\n\nWarm regards,\nAdmissions Team`;
+        },
+      },
+      {
+        label: "Personal Assurance",
+        body: (inq) => {
+          const first = inq.full_name.split(" ")[0] || "there";
+          return `Dear ${first},\n\nI want to personally assure you that your child's experience at our school is our highest priority.\n\nI've escalated your concern directly and we will have a resolution for you shortly.\n\nPlease feel free to call me directly at any time.\n\nWith respect,\nAdmissions Head`;
+        },
+      },
+    ],
+  },
+  {
+    category: "Busy Parent",
+    templates: [
+      {
+        label: "30-Second Pitch",
+        body: (inq) => {
+          const first = inq.full_name.split(" ")[0] || "there";
+          const grade = inq.class_name_resolved ? `Grade ${inq.class_name_resolved}` : "your child's grade";
+          return `Hi ${first} ⚡\n\nQuick update — seats for ${grade} are filling fast.\n\n✅ Top faculty\n✅ Strong results\n✅ Safe campus\n\nCan we do a 20-min campus visit this Saturday? I'll keep it brief.\n\nReply YES and I'll block a slot for you.\n\nAdmissions Team`;
+        },
+      },
+      {
+        label: "Video Tour Offer",
+        body: (inq) => {
+          const first = inq.full_name.split(" ")[0] || "there";
+          return `Hi ${first},\n\nNo problem if you're busy — I'll send you a 60-second video tour of our campus right now.\n\nTake a look whenever you get a moment, and I'm happy to answer any questions over WhatsApp at your convenience.\n\nAdmissions Team 🏫`;
+        },
+      },
+    ],
+  },
+  {
+    category: "FAQ Parent",
+    templates: [
+      {
+        label: "Open House Invite",
+        body: (inq) => {
+          const first = inq.full_name.split(" ")[0] || "there";
+          return `Dear ${first},\n\nThank you for your thoughtful questions! You've asked all the right things.\n\n🎓 Rather than reply one-by-one, I'd love to invite you to our Open House where our Principal and Department Heads will answer everything in person.\n\nDate: [Open House Date]\nTime: [Time]\nVenue: School Campus\n\nShall I reserve a spot for you?\n\nAdmissions Team`;
+        },
+      },
+      {
+        label: "FAQ Brochure + Q&A Offer",
+        body: (inq) => {
+          const first = inq.full_name.split(" ")[0] || "there";
+          return `Hi ${first}! 📋\n\nI'm sharing our detailed FAQ brochure that covers:\n✅ Curriculum & syllabus\n✅ Faculty credentials\n✅ Fee structure & scholarships\n✅ Transport & facilities\n✅ Co-curricular programs\n\nI'd also love to book a personal 30-min Q&A session with our Admissions Head.\n\nWhen are you available this week?\n\nAdmissions Team`;
+        },
+      },
+    ],
+  },
 ];
 
 export function TemplatePicker({ isOpen, onClose, onSelect, inquiry }: Props) {

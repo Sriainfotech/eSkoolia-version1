@@ -10,6 +10,8 @@ import { API_BASE_URL } from '@/lib/api';
 import { parseIntent } from '@/lib/aiBotIntent';
 import { StudentLookupResults, type StudentResult } from './aibot/StudentLookupResults';
 import { StudentProfilePopup } from './aibot/StudentProfilePopup';
+import { EnquiryLookupResults, type EnquiryResult, searchMockEnquiries } from './aibot/EnquiryLookupResults';
+import { EnquiryProfilePopup } from './aibot/EnquiryProfilePopup';
 
 /** Shape returned by /api/v1/students/students/ list endpoint */
 interface RawStudentAPI {
@@ -92,6 +94,8 @@ interface Msg {
   results?: FlatEntry[];
   studentResults?: StudentResult[];
   studentQuery?: string;
+  enquiryResults?: EnquiryResult[];
+  enquiryQuery?: string;
   redirect?: FlatEntry;
   collapsed?: boolean;
   collapsedCount?: number;
@@ -132,6 +136,7 @@ export function AIBot() {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [profileStudent, setProfileStudent] = useState<StudentResult | null>(null);
+  const [profileEnquiry, setProfileEnquiry] = useState<EnquiryResult | null>(null);
   const [todos, setTodos] = useState<TodoItem[]>(() => {
     try {
       const saved = localStorage.getItem('eskoolia_todos');
@@ -217,6 +222,13 @@ export function AIBot() {
         const withoutTyping = prev.filter(m => !m.isTyping);
         return [...withoutTyping, { id: uid(), role: 'bot' as const, text: '', studentResults: students, studentQuery: intent.query }];
       });
+      return;
+    }
+
+    // Enquiry lookup (static mock data)
+    if (intent.kind === 'enquiry-lookup') {
+      const results = searchMockEnquiries(intent.query);
+      setMsgs(prev => [...prev, { id: uid(), role: 'bot' as const, text: '', enquiryResults: results, enquiryQuery: intent.query }]);
       return;
     }
 
@@ -591,6 +603,15 @@ export function AIBot() {
                           />
                         </div>
                       )}
+                      {m.enquiryResults && (
+                        <div style={{ width: '100%' }}>
+                          <EnquiryLookupResults
+                            enquiries={m.enquiryResults}
+                            query={m.enquiryQuery || ''}
+                            onViewReport={(e) => setProfileEnquiry(e)}
+                          />
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
@@ -674,6 +695,20 @@ export function AIBot() {
               >
                 🎓 Find student…
               </button>
+              {/* Enquiry search chip */}
+              <button
+                onClick={() => { setInput('find enquiry '); setTimeout(() => inputRef.current?.focus(), 50); }}
+                style={{
+                  fontSize: 10.5, padding: '3px 9px',
+                  border: '1px solid rgba(234,88,12,0.4)',
+                  borderRadius: 20, background: '#FEF3C7', cursor: 'pointer',
+                  color: '#92400E', fontWeight: 600, transition: 'all 0.12s',
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#EA580C'; (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#FEF3C7'; (e.currentTarget as HTMLButtonElement).style.color = '#92400E'; }}
+              >
+                📋 Find enquiry…
+              </button>
               {/* Planner chip */}
               <button
                 onClick={() => { setInput('add wednesday 10am '); setTimeout(() => inputRef.current?.focus(), 50); }}
@@ -708,6 +743,9 @@ export function AIBot() {
       )}
       {profileStudent && (
         <StudentProfilePopup student={profileStudent} onClose={() => setProfileStudent(null)} />
+      )}
+      {profileEnquiry && (
+        <EnquiryProfilePopup enquiry={profileEnquiry} onClose={() => setProfileEnquiry(null)} />
       )}
     </>
   );

@@ -32,7 +32,7 @@ export default function LoginPage() {
 
       const data = (await response.json()) as { access: string; refresh: string };
       setAuthTokens(data.access, data.refresh);
-      router.push("/roles");
+      router.push("/home");
     } catch (e) {
       setError("Login failed. Verify credentials and backend availability.");
     } finally {
