@@ -83,7 +83,7 @@ export default function BulkActionModal({ selectedLeads, onClose, onDone }: Prop
           lead_ids: selectedLeads.map((l) => l.id),
           payload: buildPayload(),
         }),
-      }) as Response;as Response;
+      }) as Response;
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Failed to start job");
       setJobId(json.job_id);

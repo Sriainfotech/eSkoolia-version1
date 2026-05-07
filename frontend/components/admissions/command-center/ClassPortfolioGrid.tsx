@@ -1,6 +1,6 @@
 "use client";
 
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
 import { ChevronDown, ChevronUp, LayoutGrid, MoreVertical, Pencil, EyeOff, Eye, Check, X, AlertTriangle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { ClassConfig, ApiSection } from "@/types/admissions";
@@ -17,11 +17,11 @@ interface Props {
 
 const HIDDEN_KEY = "portfolio_hidden_classes";
 
-const scaleIn = {
+const scaleIn: Variants = {
   hidden: { opacity: 0, scale: 0.95 },
   show: { opacity: 1, scale: 1, transition: { duration: 0.25, ease: "easeOut" } },
 };
-const stagger = {
+const stagger: Variants = {
   hidden: {},
   show: { transition: { staggerChildren: 0.05 } },
 };

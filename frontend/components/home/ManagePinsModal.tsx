@@ -187,7 +187,7 @@ export function ManagePinsModal({ pins, onAdd, onRemove, onClose }: Props) {
                       onClick={() => {
                         if (atMax) return;
                         if (isPinned) onRemove(entry.path);
-                        else onAdd({ path: entry.path, label: entry.label });
+                        else onAdd({ path: entry.path, label: entry.label, modId: entry.modId });
                       }}
                     >
                       <div style={{
