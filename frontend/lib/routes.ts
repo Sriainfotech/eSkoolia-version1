@@ -125,12 +125,17 @@ export const MODULES: ModuleRoute[] = [
   {
     id: 'admissions',
     name: 'Admissions',
-    path: '/admissions',
+    path: '/admissions/command-center',
     icon: UserPlus,
     bg: '#ECFDF5',
     ic: '#047857',
     permission: 'admissions',
-    sub: [],
+    sub: [
+      { label: 'Command Center', path: '/admissions/command-center', icon: LayoutGrid },
+      { label: 'Inquiry List', path: '/admissions/inquiries', icon: ClipboardList },
+      { label: 'Analytics', path: '/admissions/analytics', icon: BarChart2 },
+      { label: 'Marketing', path: '/admissions/marketing', icon: Send },
+    ],
   },
   {
     id: 'students',

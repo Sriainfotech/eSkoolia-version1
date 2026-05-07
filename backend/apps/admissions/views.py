@@ -19,10 +19,15 @@ from .models import (
     AdmissionFollowUp,
     AdmissionInquiry,
     AdminSetupEntry,
+    AuditLog,
+    BulkJob,
     CertificateTemplate,
     ComplaintEntry,
+    ConsentLog,
+    ContactLog,
     IdCardTemplate,
     PhoneCallLogEntry,
+    PipelineStage,
     PostalDispatchEntry,
     PostalReceiveEntry,
     VisitorBookEntry,
@@ -32,10 +37,16 @@ from .serializers import (
     AdmissionFollowUpSerializer,
     AdmissionInquirySerializer,
     AdminSetupEntrySerializer,
+    AIGenerateRequestSerializer,
+    AIGenerateResponseSerializer,
+    BulkJobSerializer,
     CertificateTemplateSerializer,
     ComplaintEntrySerializer,
+    ConsentLogSerializer,
+    ContactLogSerializer,
     IdCardTemplateSerializer,
     PhoneCallLogEntrySerializer,
+    PipelineStageSerializer,
     PostalDispatchEntrySerializer,
     PostalReceiveEntrySerializer,
     VisitorBookEntrySerializer,
@@ -426,6 +437,109 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
+
+    # ── Contact action endpoints ─────────────────────────────────────────────
+
+    def _get_school_inquiry(self, pk):
+        user = self.request.user
+        qs = AdmissionInquiry.objects.select_related("school")
+        try:
+            if user.is_superuser:
+                return qs.get(pk=pk)
+            return qs.get(pk=pk, school_id=user.school_id)
+        except AdmissionInquiry.DoesNotExist:
+            raise PermissionDenied("Inquiry not found.")
+
+    def _log_contact(self, inquiry, channel, body="", subject="", provider_id="", direction="outbound"):
+        ContactLog.objects.create(
+            inquiry=inquiry,
+            channel=channel,
+            direction=direction,
+            status="sent",
+            provider_message_id=provider_id,
+            body=body,
+            subject=subject,
+            performed_by=self.request.user,
+        )
+        inquiry.last_contacted_at = timezone.now()
+        inquiry.save(update_fields=["last_contacted_at"])
+        AuditLog.objects.create(
+            school=inquiry.school,
+            user=self.request.user,
+            action=f"contact.{channel}",
+            object_type="AdmissionInquiry",
+            object_id=str(inquiry.pk),
+        )
+
+    @action(detail=True, methods=["post"], url_path="actions/call")
+    def action_call(self, request, pk=None):
+        from apps.admissions.providers import get_sms_adapter
+        inquiry = self._get_school_inquiry(pk)
+        adapter = get_sms_adapter()
+        result = adapter.initiate_call(to=inquiry.phone)
+        self._log_contact(inquiry, "call", body="Click-to-call initiated")
+        return Response(
+            {"success": True, "call_session_id": result.get("call_session_id"), "call_url": result.get("call_url")},
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="actions/whatsapp")
+    def action_whatsapp(self, request, pk=None):
+        from apps.admissions.providers import get_sms_adapter
+        inquiry = self._get_school_inquiry(pk)
+        text = request.data.get("text", "")
+        template_id = request.data.get("template_id")
+        adapter = get_sms_adapter()
+        result = adapter.send_whatsapp(to=inquiry.phone, body=text, template_id=template_id)
+        self._log_contact(inquiry, "whatsapp", body=text, provider_id=result.get("message_id", ""))
+        return Response(
+            {"success": True, "message": "WhatsApp sent.", "provider_message_id": result.get("message_id")},
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="actions/sms")
+    def action_sms(self, request, pk=None):
+        from apps.admissions.providers import get_sms_adapter
+        inquiry = self._get_school_inquiry(pk)
+        text = request.data.get("text", "")
+        adapter = get_sms_adapter()
+        result = adapter.send_sms(to=inquiry.phone, body=text)
+        self._log_contact(inquiry, "sms", body=text, provider_id=result.get("message_id", ""))
+        return Response(
+            {"success": True, "message": "SMS sent.", "provider_message_id": result.get("message_id")},
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="actions/email")
+    def action_email(self, request, pk=None):
+        from django.core.mail import send_mail
+        inquiry = self._get_school_inquiry(pk)
+        subject = request.data.get("subject", "")
+        body = request.data.get("body", "")
+        if inquiry.email:
+            send_mail(subject=subject, message=body, from_email=None, recipient_list=[inquiry.email])
+        self._log_contact(inquiry, "email", body=body, subject=subject)
+        return Response({"success": True, "message": "Email sent."}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="followups")
+    def add_followup(self, request, pk=None):
+        inquiry = self._get_school_inquiry(pk)
+        data = {**request.data, "inquiry": inquiry.pk}
+        ser = AdmissionFollowUpSerializer(data=data, context={"request": request})
+        if not ser.is_valid():
+            return Response({"success": False, "field_errors": ser.errors}, status=status.HTTP_400_BAD_REQUEST)
+        follow_up = ser.save(author=request.user)
+        AuditLog.objects.create(
+            school=inquiry.school,
+            user=request.user,
+            action="followup.create",
+            object_type="AdmissionInquiry",
+            object_id=str(inquiry.pk),
+        )
+        return Response(
+            {"success": True, "message": "Follow-up scheduled.", "data": AdmissionFollowUpSerializer(follow_up).data},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
@@ -1277,3 +1391,297 @@ class IdCardReadOnlyViewSet(AdminSectionRBACMixin, mixins.ListModelMixin, mixins
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Admissions Command Center – new viewsets
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class PipelineViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    GET  /api/v1/admissions/pipeline/      – list pipeline stages + counts
+    GET  /api/v1/admissions/pipeline/{id}/ – stage detail
+    """
+    serializer_class = PipelineStageSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = PipelineStage.objects.all()
+        if user.is_superuser:
+            return qs
+        if getattr(user, "school_id", None):
+            return qs.filter(school_id=user.school_id)
+        return qs.none()
+
+    def list(self, request, *args, **kwargs):
+        stages = self.get_queryset()
+        data = []
+        for stage in stages:
+            count = AdmissionInquiry.objects.filter(pipeline_stage=stage).count()
+            row = PipelineStageSerializer(stage).data
+            row["lead_count"] = count
+            data.append(row)
+        return Response({"success": True, "results": data})
+
+
+class BulkJobViewSet(viewsets.GenericViewSet,
+                     mixins.CreateModelMixin,
+                     mixins.RetrieveModelMixin):
+    """
+    POST /api/v1/admissions/bulk/      – create & enqueue bulk job
+    GET  /api/v1/admissions/bulk/{id}/ – check status
+    """
+    serializer_class = BulkJobSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = BulkJob.objects.all()
+        if user.is_superuser:
+            return qs
+        if getattr(user, "school_id", None):
+            return qs.filter(school_id=user.school_id)
+        return qs.none()
+
+    def create(self, request, *args, **kwargs):
+        from apps.admissions.tasks import process_bulk_job
+        user = request.user
+        school = getattr(user, "school", None)
+        if not school and getattr(user, "school_id", None):
+            school = School.objects.filter(id=user.school_id).first()
+        if not school:
+            return Response({"success": False, "message": "School context required."}, status=400)
+
+        serializer = BulkJobSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({"success": False, "field_errors": serializer.errors}, status=400)
+
+        job = serializer.save(school=school, created_by=user, status="pending")
+        AuditLog.objects.create(
+            school=school,
+            user=user,
+            action="bulk_job.create",
+            object_type="BulkJob",
+            object_id=str(job.pk),
+        )
+        process_bulk_job.delay(job.pk)
+        return Response(
+            {"success": True, "job_id": job.pk, "status": job.status},
+            status=status.HTTP_201_CREATED,
+        )
+
+    def retrieve(self, request, pk=None):
+        try:
+            job = self.get_queryset().get(pk=pk)
+        except BulkJob.DoesNotExist:
+            return Response({"success": False, "message": "Job not found."}, status=404)
+        return Response({"success": True, "data": BulkJobSerializer(job).data})
+
+
+class AIGenerateView(APIView):
+    """
+    POST /api/v1/admissions/ai/generate/
+    Input:  {lead_id, template_id, tone_preferences?}
+    Output: {variant_a, variant_b, prompt_used}
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from apps.admissions.providers import AIMessageService
+        serializer = AIGenerateRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({"success": False, "field_errors": serializer.errors}, status=400)
+
+        lead_id = serializer.validated_data["lead_id"]
+        template_id = serializer.validated_data.get("template_id")
+        tone = serializer.validated_data.get("tone_preferences", "")
+
+        user = request.user
+        try:
+            inquiry = AdmissionInquiry.objects.get(
+                pk=lead_id,
+                **({"school_id": user.school_id} if not user.is_superuser else {}),
+            )
+        except AdmissionInquiry.DoesNotExist:
+            return Response({"success": False, "message": "Lead not found."}, status=404)
+
+        from apps.admissions.models import AIMessageTemplate
+        template = None
+        if template_id:
+            template = AIMessageTemplate.objects.filter(pk=template_id).first()
+
+        svc = AIMessageService()
+        result = svc.generate(inquiry=inquiry, template=template, tone_preferences=tone)
+
+        AuditLog.objects.create(
+            school=inquiry.school,
+            user=user,
+            action="ai.generate",
+            object_type="AdmissionInquiry",
+            object_id=str(inquiry.pk),
+        )
+
+        out_ser = AIGenerateResponseSerializer(data=result)
+        out_ser.is_valid()
+        return Response({"success": True, "data": out_ser.data if out_ser.is_valid() else result})
+
+
+class ConsentLogView(APIView):
+    """
+    POST /api/v1/admissions/consent/
+    Body: {lead_id, channel, consent_given}
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = ConsentLogSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({"success": False, "field_errors": serializer.errors}, status=400)
+
+        user = request.user
+        lead_id = request.data.get("lead_id") or request.data.get("inquiry")
+        if not lead_id:
+            return Response({"success": False, "message": "lead_id is required."}, status=400)
+
+        try:
+            inquiry = AdmissionInquiry.objects.get(
+                pk=lead_id,
+                **({"school_id": user.school_id} if not user.is_superuser else {}),
+            )
+        except AdmissionInquiry.DoesNotExist:
+            return Response({"success": False, "message": "Lead not found."}, status=404)
+
+        log = serializer.save(inquiry=inquiry, recorded_by=user)
+        AuditLog.objects.create(
+            school=inquiry.school,
+            user=user,
+            action="consent.log",
+            object_type="AdmissionInquiry",
+            object_id=str(inquiry.pk),
+        )
+        return Response(
+            {"success": True, "message": "Consent recorded.", "data": ConsentLogSerializer(log).data},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AnalyticsOverviewView(APIView):
+    """
+    GET /api/v1/admissions/analytics/overview/?period=month|quarter|year|all
+    Returns full conversion metrics, monthly trend, counsellor leaderboard, channel breakdown.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from django.db.models import Count, Q
+        from django.db.models.functions import TruncMonth
+        from datetime import timedelta
+
+        user = request.user
+        base_qs = AdmissionInquiry.objects.all()
+        if not user.is_superuser and getattr(user, "school_id", None):
+            base_qs = base_qs.filter(school_id=user.school_id)
+
+        # Period filter
+        period = request.query_params.get("period", "all")
+        today = timezone.localdate()
+        if period == "month":
+            base_qs = base_qs.filter(query_date__gte=today.replace(day=1))
+        elif period == "quarter":
+            base_qs = base_qs.filter(query_date__gte=today - timedelta(days=90))
+        elif period == "year":
+            base_qs = base_qs.filter(query_date__year=today.year)
+
+        # Funnel counts
+        total = base_qs.count()
+        contacted = base_qs.exclude(status="new").count()
+        visited = base_qs.filter(status__in=["visited", "enrolled", "declined"]).count()
+        enrolled = base_qs.filter(status="enrolled").count()
+        declined = base_qs.filter(status="declined").count()
+
+        # By pipeline status
+        by_status = list(
+            base_qs.values("status").annotate(count=Count("id")).order_by("status")
+        )
+
+        # By source with enrolled count
+        by_source = list(
+            base_qs.values("source__name").annotate(
+                count=Count("id"),
+                enrolled=Count("id", filter=Q(status="enrolled")),
+            ).order_by("-count")[:10]
+        )
+
+        # By grade
+        by_grade = list(
+            base_qs.values("school_class__name").annotate(count=Count("id")).order_by("-count")[:10]
+        )
+
+        # Monthly trend — last 6 months
+        six_months_ago = today - timedelta(days=180)
+        monthly_qs = (
+            base_qs
+            .filter(query_date__gte=six_months_ago)
+            .annotate(month=TruncMonth("query_date"))
+            .values("month")
+            .annotate(
+                inquiries=Count("id"),
+                enrolled=Count("id", filter=Q(status="enrolled")),
+            )
+            .order_by("month")
+        )
+        monthly_trend = [
+            {
+                "month": str(item["month"])[:7] if item["month"] else None,
+                "inquiries": item["inquiries"],
+                "enrolled": item["enrolled"],
+            }
+            for item in monthly_qs
+        ]
+
+        # Counsellor leaderboard (by assigned text field)
+        counsellor_stats = list(
+            base_qs.exclude(assigned="").values("assigned").annotate(
+                total=Count("id"),
+                enrolled=Count("id", filter=Q(status="enrolled")),
+                contacted=Count("id", filter=~Q(status="new")),
+            ).order_by("-total")[:8]
+        )
+        for c in counsellor_stats:
+            c["conversion_pct"] = round(c["enrolled"] / c["total"] * 100, 1) if c["total"] else 0.0
+
+        # Channel breakdown from ContactLog
+        contact_qs = ContactLog.objects.all()
+        if not user.is_superuser and getattr(user, "school_id", None):
+            contact_qs = contact_qs.filter(inquiry__school_id=user.school_id)
+        channel_breakdown = list(
+            contact_qs.values("channel").annotate(count=Count("id")).order_by("-count")
+        )
+
+        return Response(
+            {
+                "success": True,
+                "data": {
+                    "total": total,
+                    "contacted": contacted,
+                    "visited": visited,
+                    "enrolled": enrolled,
+                    "declined": declined,
+                    "contact_rate_pct": round(contacted / total * 100, 1) if total else 0.0,
+                    "visit_rate_pct": round(visited / total * 100, 1) if total else 0.0,
+                    "enroll_rate_pct": round(enrolled / total * 100, 1) if total else 0.0,
+                    "monthly_trend": monthly_trend,
+                    "by_status": by_status,
+                    "by_source": by_source,
+                    "by_grade": by_grade,
+                    "counsellor_stats": counsellor_stats,
+                    "channel_breakdown": channel_breakdown,
+                    # Legacy fields kept for backwards compatibility
+                    "total_leads": total,
+                    "conversion_rate_pct": round(enrolled / total * 100, 1) if total else 0.0,
+                },
+            }
+        )
+

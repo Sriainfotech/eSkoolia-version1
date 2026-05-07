@@ -57,6 +57,16 @@ export function ModuleSubNav() {
 
   if (!mod || mod.sub.length === 0) return null;
 
+  // Find the best-matching active tab (longest path match wins, preventing parent paths from being
+  // active on child routes, e.g. /roles being active on /roles/login-permission)
+  const activeTab = mod.sub.reduce<typeof mod.sub[0] | null>((best, s) => {
+    const isExact = pathname === s.path;
+    const isPrefix = pathname.startsWith(s.path + '/');
+    if (!isExact && !isPrefix) return best;
+    if (!best) return s;
+    return s.path.length > best.path.length ? s : best;
+  }, null);
+
   const arrowBtn = (dir: 'left' | 'right', enabled: boolean) => (
     <button
       onClick={() => scroll(dir)}
@@ -113,7 +123,7 @@ export function ModuleSubNav() {
           style={{ display: 'flex', flex: 1, overflowX: 'auto', scrollbarWidth: 'none', gap: 0 }}
         >
           {mod.sub.map(s => {
-            const isActive = pathname === s.path || pathname.startsWith(s.path + '/');
+            const isActive = s === activeTab;
             const SubIcon = s.icon ?? mod.icon;
             return (
               <Link

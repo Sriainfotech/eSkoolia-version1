@@ -215,11 +215,19 @@ class AdmissionInquirySerializer(serializers.ModelSerializer):
             "class_name",
             "note",
             "status",
+            "pipeline_stage",
+            "lead_score",
+            "last_contacted_at",
+            "documents_status",
+            "calendar_event_id",
             "follow_ups",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "school", "created_by", "created_by_name", "follow_ups", "created_at", "updated_at"]
+        read_only_fields = [
+            "id", "school", "created_by", "created_by_name", "follow_ups",
+            "last_contacted_at", "created_at", "updated_at",
+        ]
 
     def get_created_by_name(self, obj):
         if obj.created_by:
@@ -1438,6 +1446,7 @@ class CertificateTemplateSerializer(serializers.ModelSerializer):
 
         return attrs
 
+
     def create(self, validated_data):
         bg = validated_data.pop("background_upload", None)
         if bg is not None:
@@ -1449,3 +1458,107 @@ class CertificateTemplateSerializer(serializers.ModelSerializer):
         if bg is not None:
             validated_data["background_image"] = bg
         return super().update(instance, validated_data)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Command Center serializers
+# ──────────────────────────────────────────────────────────────────────────────
+from .models import (  # noqa: E402 – placed here to avoid circular import concerns
+    AIMessageTemplate,
+    AuditLog,
+    BulkJob,
+    ConsentLog,
+    ContactLog,
+    PipelineStage,
+)
+
+
+class PipelineStageSerializer(serializers.ModelSerializer):
+    inquiry_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PipelineStage
+        fields = ["id", "name", "slug", "order", "color", "is_active", "inquiry_count", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+    def get_inquiry_count(self, obj):
+        return obj.inquiries.count()
+
+
+class ContactLogSerializer(serializers.ModelSerializer):
+    performed_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ContactLog
+        fields = [
+            "id", "inquiry", "channel", "direction", "status",
+            "provider_message_id", "call_session_id", "call_url",
+            "subject", "body", "template_id",
+            "performed_by", "performed_by_name", "created_at",
+        ]
+        read_only_fields = ["id", "performed_by", "performed_by_name", "created_at"]
+
+    def get_performed_by_name(self, obj):
+        if obj.performed_by:
+            return obj.performed_by.get_full_name() or obj.performed_by.username
+        return None
+
+
+class ConsentLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConsentLog
+        fields = ["id", "inquiry", "channel", "consent", "ip_address", "user_agent", "recorded_by", "created_at"]
+        read_only_fields = ["id", "ip_address", "user_agent", "recorded_by", "created_at"]
+
+
+class BulkJobSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    progress_pct = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BulkJob
+        fields = [
+            "id", "action", "lead_ids", "payload",
+            "status", "total", "processed", "failed", "error_detail",
+            "celery_task_id", "created_by", "created_by_name",
+            "progress_pct", "started_at", "finished_at", "created_at",
+        ]
+        read_only_fields = [
+            "id", "status", "total", "processed", "failed", "error_detail",
+            "celery_task_id", "created_by", "created_by_name",
+            "progress_pct", "started_at", "finished_at", "created_at",
+        ]
+
+    def get_created_by_name(self, obj):
+        if obj.created_by:
+            return obj.created_by.get_full_name() or obj.created_by.username
+        return None
+
+    def get_progress_pct(self, obj):
+        if not obj.total:
+            return 0
+        return round((obj.processed / obj.total) * 100, 1)
+
+
+class AIMessageTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AIMessageTemplate
+        fields = [
+            "id", "school", "name", "system_prompt", "user_prompt_template",
+            "channel", "is_active", "created_by", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "school", "created_by", "created_at", "updated_at"]
+
+
+class AIGenerateRequestSerializer(serializers.Serializer):
+    lead_id = serializers.IntegerField()
+    template_id = serializers.IntegerField(required=False)
+    next_step = serializers.CharField(required=False, default="schedule campus visit")
+    tone_preferences = serializers.DictField(required=False, default=dict)
+
+
+class AIGenerateResponseSerializer(serializers.Serializer):
+    variant_a = serializers.CharField()
+    variant_b = serializers.CharField()
+    prompt_used = serializers.CharField()
+

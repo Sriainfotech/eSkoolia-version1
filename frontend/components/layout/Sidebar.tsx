@@ -120,7 +120,7 @@ function filterSidebarByPermissions(items: SidebarItem[], me: MePayload): Sideba
   return walk(items);
 }
 
-export function Sidebar() {
+export function Sidebar({ mobileOpen = false, onMobileClose }: { mobileOpen?: boolean; onMobileClose?: () => void }) {
   const pathname = usePathname();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [activeId, setActiveId] = useState("");
@@ -163,7 +163,11 @@ export function Sidebar() {
   };
 
   return (
-    <aside className={styles.aside}>
+    <>
+      {mobileOpen && (
+        <div className="sidebar-mobile-backdrop" onClick={onMobileClose} aria-hidden="true" />
+      )}
+      <aside className={`${styles.aside}${mobileOpen ? ` ${styles.asideMobileOpen}` : ''}`}>
       <a href="/dashboard" className={styles.brandLink}>
         <div className={styles.brand}>Eskoolia</div>
       </a>
@@ -181,6 +185,7 @@ export function Sidebar() {
           />
         ))}
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

@@ -10,6 +10,110 @@ INQUIRY_STATUS_CHOICES = [
     ("declined", "Declined"),
 ]
 
+PIPELINE_STAGE_CHOICES = [
+    ("new_lead", "New Lead"),
+    ("first_contact", "First Contact"),
+    ("campus_visit", "Campus Visit"),
+    ("application_submitted", "Application Submitted"),
+    ("documents_pending", "Documents Pending"),
+    ("enrolled", "Enrolled"),
+    ("declined", "Declined"),
+]
+
+CONTACT_CHANNEL_CHOICES = [
+    ("call", "Call"),
+    ("whatsapp", "WhatsApp"),
+    ("sms", "SMS"),
+    ("email", "Email"),
+    ("walk_in", "Walk-in"),
+]
+
+CONTACT_DIRECTION_CHOICES = [
+    ("outbound", "Outbound"),
+    ("inbound", "Inbound"),
+]
+
+BULK_JOB_STATUS_CHOICES = [
+    ("pending", "Pending"),
+    ("running", "Running"),
+    ("done", "Done"),
+    ("failed", "Failed"),
+]
+
+BULK_JOB_ACTION_CHOICES = [
+    ("send_whatsapp", "Send WhatsApp"),
+    ("send_sms", "Send SMS"),
+    ("send_email", "Send Email"),
+    ("assign", "Assign"),
+    ("update_status", "Update Status"),
+    ("update_stage", "Update Stage"),
+]
+
+DOCUMENTS_STATUS_CHOICES = [
+    ("not_requested", "Not Requested"),
+    ("requested", "Requested"),
+    ("partial", "Partial"),
+    ("complete", "Complete"),
+]
+
+
+class PipelineStage(models.Model):
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="pipeline_stages")
+    name = models.CharField(max_length=120)
+    slug = models.CharField(max_length=60, choices=PIPELINE_STAGE_CHOICES, blank=True)
+    order = models.PositiveSmallIntegerField(default=0)
+    color = models.CharField(max_length=20, default="#6366f1")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "admission_pipeline_stages"
+        ordering = ["order", "name"]
+        unique_together = ("school", "name")
+
+    def __str__(self):
+        return self.name
+
+
+class AIMessageTemplate(models.Model):
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="ai_message_templates")
+    name = models.CharField(max_length=255)
+    system_prompt = models.TextField(
+        default=(
+            "You are a helpful assistant that writes short, clear, and culturally appropriate messages "
+            "for Indian school admissions. Produce two variants: Formal and Friendly. "
+            "Keep messages under 220 characters for SMS/WhatsApp. Use the lead context to personalize."
+        )
+    )
+    user_prompt_template = models.TextField(
+        default=(
+            "Lead context:\n"
+            "- name: {{lead.name}}\n"
+            "- child_grade: {{lead.grade_interest}}\n"
+            "- next_step: {{next_step}}\n"
+            "- source: {{lead.source}}\n"
+            "- school_name: {{school.name}}\n"
+            "Generate:\n"
+            "1) Variant A (Formal): ...\n"
+            "2) Variant B (Friendly): ...\n"
+            "Also return the prompt used (redact PII in logs)."
+        )
+    )
+    channel = models.CharField(max_length=20, choices=CONTACT_CHANNEL_CHOICES, default="whatsapp")
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="ai_templates_created"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "admission_ai_message_templates"
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
 
 class AdmissionInquiry(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="admission_inquiries")
@@ -55,6 +159,20 @@ class AdmissionInquiry(models.Model):
     class_name = models.CharField(max_length=120, blank=True)
     note = models.TextField(blank=True)
     status = models.CharField(max_length=32, choices=INQUIRY_STATUS_CHOICES, default="new")
+    # --- Command Center Extension fields (additive, nullable) ---
+    pipeline_stage = models.ForeignKey(
+        "admissions.PipelineStage",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="inquiries",
+    )
+    lead_score = models.PositiveSmallIntegerField(default=0, help_text="Score 0-100 based on engagement signals")
+    last_contacted_at = models.DateTimeField(null=True, blank=True)
+    documents_status = models.CharField(
+        max_length=20, choices=DOCUMENTS_STATUS_CHOICES, default="not_requested"
+    )
+    calendar_event_id = models.CharField(max_length=255, blank=True, help_text="External calendar event ID if synced")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -334,3 +452,104 @@ class CertificateTemplate(models.Model):
     class Meta:
         db_table = "certificate_templates"
         ordering = ["-created_at"]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Command Center models
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ContactLog(models.Model):
+    """Records every outreach attempt (call, WhatsApp, SMS, email) against an inquiry."""
+    inquiry = models.ForeignKey(AdmissionInquiry, on_delete=models.CASCADE, related_name="contact_logs")
+    channel = models.CharField(max_length=20, choices=CONTACT_CHANNEL_CHOICES)
+    direction = models.CharField(max_length=10, choices=CONTACT_DIRECTION_CHOICES, default="outbound")
+    status = models.CharField(max_length=32, default="initiated", help_text="initiated, delivered, failed, answered")
+    provider_message_id = models.CharField(max_length=255, blank=True, help_text="Provider-assigned message/call ID")
+    call_session_id = models.CharField(max_length=255, blank=True)
+    call_url = models.URLField(blank=True)
+    subject = models.CharField(max_length=255, blank=True)
+    body = models.TextField(blank=True)
+    template_id = models.IntegerField(null=True, blank=True)
+    performed_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="admission_contact_logs"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "admission_contact_logs"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.channel}/{self.direction} on {self.inquiry_id} at {self.created_at:%Y-%m-%d %H:%M}"
+
+
+class ConsentLog(models.Model):
+    """Records opt-in / opt-out consent for messaging channels."""
+    CONSENT_CHOICES = [("opt_in", "Opt In"), ("opt_out", "Opt Out")]
+
+    inquiry = models.ForeignKey(AdmissionInquiry, on_delete=models.CASCADE, related_name="consent_logs")
+    channel = models.CharField(max_length=20, choices=CONTACT_CHANNEL_CHOICES)
+    consent = models.CharField(max_length=10, choices=CONSENT_CHOICES)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True)
+    recorded_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="admission_consent_logs"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "admission_consent_logs"
+        ordering = ["-created_at"]
+
+
+class BulkJob(models.Model):
+    """Tracks async bulk action jobs (WhatsApp blast, bulk assign, etc.)."""
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="admission_bulk_jobs")
+    action = models.CharField(max_length=30, choices=BULK_JOB_ACTION_CHOICES)
+    lead_ids = models.JSONField(default=list)
+    payload = models.JSONField(default=dict, help_text="Extra payload for the action (template_id, text, etc.)")
+    status = models.CharField(max_length=10, choices=BULK_JOB_STATUS_CHOICES, default="pending")
+    total = models.PositiveIntegerField(default=0)
+    processed = models.PositiveIntegerField(default=0)
+    failed = models.PositiveIntegerField(default=0)
+    error_detail = models.JSONField(default=list, help_text="List of {lead_id, error} for failed items")
+    celery_task_id = models.CharField(max_length=255, blank=True)
+    created_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="admission_bulk_jobs_created"
+    )
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "admission_bulk_jobs"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"BulkJob {self.id} – {self.action} ({self.status})"
+
+
+class AuditLog(models.Model):
+    """Lightweight audit trail for all write actions in the admissions module."""
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="admission_audit_logs")
+    actor = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="admission_audit_logs"
+    )
+    action = models.CharField(max_length=80, help_text="e.g. inquiry.create, inquiry.update_status, bulk.send_whatsapp")
+    object_type = models.CharField(max_length=60, blank=True)
+    object_id = models.CharField(max_length=60, blank=True)
+    changes = models.JSONField(default=dict, help_text="Snapshot of changed fields")
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "admission_audit_logs"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["school", "action"]),
+            models.Index(fields=["object_type", "object_id"]),
+        ]
+
+    def __str__(self):
+        return f"{self.action} by {self.actor_id} at {self.created_at:%Y-%m-%d %H:%M}"
+

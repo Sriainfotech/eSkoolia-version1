@@ -6,23 +6,38 @@ import type { ModuleRoute } from '@/lib/routes';
 
 export function OverflowMenu({ mods }: { mods: ModuleRoute[] }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (
+        btnRef.current && !btnRef.current.contains(t) &&
+        dropRef.current && !dropRef.current.contains(t)
+      ) setOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  const handleOpen = () => {
+    if (btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 4, left: r.right - 240 });
+    }
+    setOpen(v => !v);
+  };
+
   return (
-    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
+    <div style={{ flexShrink: 0 }}>
       <button
-        onClick={() => setOpen(v => !v)}
+        ref={btnRef}
+        onClick={handleOpen}
         style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          width: 36, height: 36, borderRadius: 8, border: 'none',
+          width: 32, height: 32, borderRadius: 8, border: 'none',
           background: open ? 'var(--bg-2)' : 'transparent',
           color: 'var(--ink-2)', cursor: 'pointer',
           transition: 'background 0.15s, color 0.15s',
@@ -39,23 +54,32 @@ export function OverflowMenu({ mods }: { mods: ModuleRoute[] }) {
         }}
         title="More modules"
       >
-        <MoreHorizontal size={16} strokeWidth={1.5} />
+        <MoreHorizontal size={15} strokeWidth={1.5} />
       </button>
 
       {open && (
-        <div style={{
-          position: 'absolute', right: 0, top: 'calc(100% + 4px)',
-          minWidth: 240, background: '#fff', border: '1px solid var(--bd)',
-          borderRadius: 12, padding: 6, zIndex: 200,
-          boxShadow: '0 14px 32px -10px rgba(14,16,32,0.18)',
-          animation: 'fadeIn 140ms ease-out',
-        }}>
+        <div
+          ref={dropRef}
+          style={{
+            position: 'fixed',
+            top: pos.top,
+            left: Math.max(8, pos.left),
+            minWidth: 240,
+            background: 'var(--bg-1)',
+            border: '1px solid var(--bd)',
+            borderRadius: 12, padding: 6, zIndex: 500,
+            boxShadow: '0 14px 32px -10px rgba(14,16,32,0.18)',
+            animation: 'fadeIn 140ms ease-out',
+            maxHeight: 'calc(100vh - 80px)',
+            overflowY: 'auto',
+          }}
+        >
           <div style={{
             padding: '6px 10px 8px', fontSize: 10.5, fontWeight: 600,
             letterSpacing: '0.06em', textTransform: 'uppercase',
             color: 'var(--ink-3)', borderBottom: '1px solid var(--bd)', marginBottom: 4,
           }}>
-            More
+            More modules
           </div>
           {mods.map(m => (
             <Link

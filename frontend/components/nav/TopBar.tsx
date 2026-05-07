@@ -7,8 +7,6 @@ import {
   Search,
   Bell,
   ChevronLeft,
-  Menu,
-  X,
   ChevronDown,
 } from "lucide-react";
 import { MODULES, type ModuleRoute } from "@/lib/routes";
@@ -17,8 +15,10 @@ import { clearAuthTokens, getAccessToken, getRefreshToken } from "@/lib/auth";
 import { API_BASE_URL } from "@/lib/api";
 import { ModulePill } from "./ModulePill";
 import { OverflowMenu } from "./OverflowMenu";
+import { ModuleManager } from "./ModuleManager";
 import { NoteTrigger } from "@/components/notes/NoteTrigger";
 import { WidgetManager } from "@/components/home/WidgetManager";
+import { useModuleStore } from "@/lib/moduleStore";
 
 type MePayload = {
   id?: number;
@@ -58,194 +58,15 @@ function filterModules(modules: ModuleRoute[], me: MePayload): ModuleRoute[] {
     }));
 }
 
-/* ─── Mobile slide-out sheet ─── */
-function MobileSheet({ modules, onClose }: { modules: ModuleRoute[]; onClose: () => void }) {
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-
-  return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 200,
-        background: "rgba(15,18,34,0.4)",
-        backdropFilter: "blur(4px)",
-      }}
-      onClick={onClose}
-    >
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          bottom: 0,
-          width: 300,
-          background: "var(--bg-1)",
-          overflowY: "auto",
-          padding: "16px 0",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "0 16px 12px",
-            borderBottom: "1px solid var(--bd)",
-          }}
-        >
-          <LogoMark />
-          <button
-            onClick={onClose}
-            style={{
-              padding: 6,
-              borderRadius: 8,
-              border: "none",
-              background: "transparent",
-              cursor: "pointer",
-              color: "var(--ink-2)",
-            }}
-          >
-            <X size={18} strokeWidth={1.5} />
-          </button>
-        </div>
-        <div style={{ paddingTop: 8 }}>
-          {modules.map((mod) => {
-            const Icon = mod.icon;
-            const hasSub = mod.sub.length > 0;
-            const isExpanded = expandedId === mod.id;
-            return (
-              <div key={mod.id}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "0 16px",
-                    height: 44,
-                    cursor: "pointer",
-                    fontSize: 13,
-                    fontWeight: 500,
-                    color: "var(--ink-1)",
-                  }}
-                  onClick={() => hasSub && setExpandedId(isExpanded ? null : mod.id)}
-                >
-                  <span
-                    style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 8,
-                      background: mod.bg,
-                      color: mod.ic,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      flexShrink: 0,
-                    }}
-                  >
-                    <Icon size={15} strokeWidth={1.5} />
-                  </span>
-                  <Link
-                    href={mod.path}
-                    style={{ flex: 1, color: "inherit", textDecoration: "none" }}
-                    onClick={onClose}
-                  >
-                    {mod.name}
-                  </Link>
-                  {hasSub && (
-                    <ChevronDown
-                      size={14}
-                      strokeWidth={1.5}
-                      style={{
-                        transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
-                        transition: "transform 180ms",
-                        color: "var(--ink-3)",
-                      }}
-                    />
-                  )}
-                </div>
-                {hasSub && isExpanded && (
-                  <div style={{ paddingLeft: 54, paddingBottom: 4 }}>
-                    {mod.sub.map((s) => {
-                      const SubIcon = s.icon ?? mod.icon;
-                      return (
-                        <Link
-                          key={s.path}
-                          href={s.path}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            height: 32,
-                            padding: "0 8px",
-                            borderRadius: 6,
-                            fontSize: 12.5,
-                            color: "var(--ink-2)",
-                            textDecoration: "none",
-                          }}
-                          onClick={onClose}
-                        >
-                          <SubIcon size={13} strokeWidth={1.5} />
-                          {s.label}
-                        </Link>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ─── Logo mark (reused in sheet too) ─── */
-function LogoMark() {
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <span
-        style={{
-          width: 32,
-          height: 32,
-          borderRadius: 9,
-          background: "linear-gradient(135deg, var(--pu) 0%, var(--pu-deep) 100%)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#fff",
-          fontWeight: 700,
-          fontSize: 18,
-          letterSpacing: "-0.04em",
-        }}
-      >
-        e
-      </span>
-      <span
-        style={{
-          fontWeight: 600,
-          fontSize: 17,
-          letterSpacing: "-0.02em",
-          color: "var(--ink-1)",
-        }}
-      >
-        eskoolia
-      </span>
-    </div>
-  );
-}
-
 /* ─── Main TopBar export ─── */
 export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
   const [me, setMe] = useState<MePayload | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const avatarRef = useRef<HTMLDivElement>(null);
+  const { isEnabled: isModuleEnabled } = useModuleStore();
 
   useEffect(() => {
     let mounted = true;
@@ -266,6 +87,7 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
   }, []);
 
   const visibleModules = me ? filterModules(MODULES, me) : MODULES;
+  const activeModules = visibleModules.filter(m => isModuleEnabled(m.id));
 
   const currentUserLabel = (() => {
     const first = String(me?.first_name || "").trim();
@@ -318,8 +140,8 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 16,
-            padding: "0 24px",
+            gap: 8,
+            padding: "0 16px",
             width: "100%",
             height: "100%",
           }}
@@ -372,46 +194,44 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
             </span>
           </Link>
 
-          {/* Module pills — desktop (md+) */}
+          {/* Module pills — desktop only, max 6 visible + overflow */}
           <nav
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 2,
+              gap: 1,
               marginLeft: 8,
-              flexShrink: 1,
+              flex: "1 1 0",
               minWidth: 0,
-              overflowX: "auto",
-              scrollbarWidth: "none",
+              overflow: "hidden",
             }}
             className="hidden md:flex"
           >
-            {visibleModules.slice(0, 13).map(m => (
+            {activeModules.slice(0, 6).map(m => (
               <ModulePill key={m.id} mod={m} />
             ))}
-            {visibleModules.length > 13 && <OverflowMenu mods={visibleModules.slice(13)} />}
+            {activeModules.length > 6 && <OverflowMenu mods={activeModules.slice(6)} />}
           </nav>
 
-          {/* Right side */}
+          {/* Right side — fixed, never grows */}
           <div
             style={{
               marginLeft: "auto",
               display: "flex",
               alignItems: "center",
-              gap: 8,
+              gap: 6,
               flexShrink: 0,
             }}
           >
-            {/* ⌘K trigger — desktop */}
+            {/* ⌘K trigger — xl screens only */}
             <button
               onClick={onCmdK}
-              className="hidden md:flex"
+              className="hidden xl:flex"
               style={{
-                display: "flex",
                 alignItems: "center",
                 gap: 8,
-                height: 36,
-                padding: "0 12px",
+                height: 34,
+                padding: "0 10px",
                 borderRadius: 8,
                 border: "1px solid var(--bd)",
                 background: "var(--bg-2)",
@@ -448,12 +268,37 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
               </kbd>
             </button>
 
+            {/* ⌘K icon-only — md/lg */}
+            <button
+              onClick={onCmdK}
+              className="hidden md:flex xl:hidden"
+              style={{
+                alignItems: "center",
+                justifyContent: "center",
+                width: 34,
+                height: 34,
+                borderRadius: 8,
+                border: "1px solid var(--bd)",
+                background: "var(--bg-2)",
+                color: "var(--ink-3)",
+                cursor: "pointer",
+              }}
+              title="Search (⌘K)"
+            >
+              <Search size={15} strokeWidth={1.5} />
+            </button>
+
             {/* Sticky Notes trigger */}
             <NoteTrigger />
 
-            {/* Widget manager — visible only on home page */}
+            {/* Module manager — always visible on md+ */}
+            <div className="hidden md:block">
+              <ModuleManager />
+            </div>
+
+            {/* Widget manager — home page only */}
             {isHome && (
-              <div className="hidden lg:block">
+              <div className="hidden md:block">
                 <WidgetManager />
               </div>
             )}
@@ -461,8 +306,8 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
             {/* Notifications */}
             <button
               style={{
-                width: 36,
-                height: 36,
+                width: 34,
+                height: 34,
                 borderRadius: 8,
                 border: "none",
                 background: "transparent",
@@ -471,21 +316,22 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
+                flexShrink: 0,
               }}
             >
               <Bell size={17} strokeWidth={1.5} />
             </button>
 
             {/* Avatar menu */}
-            <div ref={avatarRef} style={{ position: "relative" }}>
+            <div ref={avatarRef} style={{ position: "relative", flexShrink: 0 }}>
               <button
                 onClick={() => setAvatarOpen((v) => !v)}
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 8,
-                  height: 36,
-                  padding: "0 8px",
+                  gap: 6,
+                  height: 34,
+                  padding: "0 6px",
                   borderRadius: 8,
                   border: "none",
                   background: "transparent",
@@ -494,15 +340,15 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
               >
                 <div
                   style={{
-                    width: 30,
-                    height: 30,
+                    width: 28,
+                    height: 28,
                     borderRadius: "50%",
                     background: "var(--pu)",
                     color: "#fff",
                     display: "grid",
                     placeItems: "center",
                     fontWeight: 700,
-                    fontSize: 12,
+                    fontSize: 11,
                     flexShrink: 0,
                   }}
                 >
@@ -511,10 +357,10 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
                 <span
                   className="hidden lg:block"
                   style={{
-                    fontSize: 12.5,
+                    fontSize: 12,
                     color: "var(--ink-1)",
                     fontWeight: 500,
-                    maxWidth: 120,
+                    maxWidth: 90,
                     overflow: "hidden",
                     textOverflow: "ellipsis",
                     whiteSpace: "nowrap",
@@ -522,7 +368,7 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
                 >
                   {currentUserLabel}
                 </span>
-                <ChevronDown size={13} strokeWidth={1.5} style={{ color: "var(--ink-3)" }} />
+                <ChevronDown size={12} strokeWidth={1.5} style={{ color: "var(--ink-3)", flexShrink: 0 }} />
               </button>
 
               {avatarOpen && (
@@ -596,36 +442,9 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
                 </div>
               )}
             </div>
-
-            {/* Mobile hamburger */}
-            <button
-              onClick={() => setMobileOpen(true)}
-              className="flex md:hidden"
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 8,
-                border: "none",
-                background: "transparent",
-                color: "var(--ink-2)",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Menu size={18} strokeWidth={1.5} />
-            </button>
           </div>
         </div>
       </header>
-
-      {mobileOpen && (
-        <MobileSheet
-          modules={visibleModules}
-          onClose={() => setMobileOpen(false)}
-        />
-      )}
     </>
   );
 }

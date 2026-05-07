@@ -193,11 +193,19 @@
 
 @media (max-width: 900px) {
   .aside {
-    width: 100%;
-    min-height: 0;
-    height: auto;
-    position: static;
-    border-right: none;
-    border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+    display: none; /* hidden by default; toggled by .asideMobileOpen */
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 280px;
+    height: 100vh;
+    overflow-y: auto;
+    z-index: 100;
+    border-right: 1px solid rgba(148, 163, 184, 0.28);
+    border-bottom: none;
+    box-shadow: 4px 0 24px rgba(15, 23, 42, 0.18);
+  }
+  .asideMobileOpen {
+    display: block !important;
   }
 }

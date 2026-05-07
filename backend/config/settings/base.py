@@ -235,6 +235,22 @@ except (ValueError, TypeError):
 CELERY_BROKER_URL = REDIS_URL or "redis://127.0.0.1:6379/0"
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 
+# ── Celery Beat — scheduled tasks ────────────────────────────────────────────
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    # Run every morning at 8:00 AM (server local time) to generate follow-up reminders
+    "admissions-morning-followup-digest": {
+        "task": "admissions.send_followup_reminders",
+        "schedule": crontab(hour=8, minute=0),
+    },
+    # Recompute lead scores every day at 7:45 AM so fresh data is ready by 8 AM
+    "admissions-compute-lead-scores": {
+        "task": "admissions.compute_lead_scores",
+        "schedule": crontab(hour=7, minute=45),
+    },
+}
+
 # Optional AI suggestion settings for student category descriptions
 CATEGORY_AI_SUGGESTION_ENABLED = os.getenv("CATEGORY_AI_SUGGESTION_ENABLED", "False").lower() == "true"
 CATEGORY_AI_OPENAI_API_KEY = os.getenv("CATEGORY_AI_OPENAI_API_KEY", "").strip()

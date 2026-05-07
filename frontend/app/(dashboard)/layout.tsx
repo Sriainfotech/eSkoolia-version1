@@ -49,7 +49,7 @@ function NewNavShell({ children }: { children: React.ReactNode }) {
       <ModuleSubNav />
       <main
         id="main-content"
-        className="flex-1 overflow-y-auto min-h-0"
+        className="flex-1 overflow-y-auto min-h-0 main-content-new-nav"
         style={{ padding: 18 }}
       >
         {children}
@@ -63,11 +63,12 @@ function NewNavShell({ children }: { children: React.ReactNode }) {
 
 function LegacyShell({ children }: { children: React.ReactNode }) {
   useRecentsTracking();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   return (
     <div className="erp-shell h-screen flex overflow-hidden">
-      <Sidebar />
+      <Sidebar mobileOpen={mobileNavOpen} onMobileClose={() => setMobileNavOpen(false)} />
       <div className="flex-1 h-screen flex flex-col overflow-hidden min-w-0">
-        <Topbar />
+        <Topbar onMenuToggle={() => setMobileNavOpen((o) => !o)} mobileMenuOpen={mobileNavOpen} />
         <main
           id="main-content"
           className="dashboard-main flex-1 overflow-y-auto min-h-0"

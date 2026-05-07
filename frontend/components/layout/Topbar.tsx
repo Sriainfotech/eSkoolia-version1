@@ -27,7 +27,7 @@ function getInitialsFromName(name: string): string {
   return `${words[0].slice(0, 1)}${words[words.length - 1].slice(0, 1)}`.toUpperCase();
 }
 
-export function Topbar() {
+export function Topbar({ onMenuToggle, mobileMenuOpen }: { onMenuToggle?: () => void; mobileMenuOpen?: boolean }) {
   const pathname = usePathname();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
@@ -116,7 +116,24 @@ export function Topbar() {
         zIndex: 40,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", minWidth: 0, gap: 6 }}>
+        {onMenuToggle && (
+          <button
+            className="topbar-hamburger"
+            onClick={onMenuToggle}
+            aria-label={mobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
+          >
+            {mobileMenuOpen ? (
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="4" y1="4" x2="16" y2="16" /><line x1="16" y1="4" x2="4" y2="16" />
+              </svg>
+            ) : (
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="3" y1="6" x2="17" y2="6" /><line x1="3" y1="10" x2="17" y2="10" /><line x1="3" y1="14" x2="17" y2="14" />
+              </svg>
+            )}
+          </button>
+        )}
         {showBackButton ? <BackButton /> : null}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -135,7 +152,7 @@ export function Topbar() {
         >
           {loggingOut ? "Logging out..." : "Logout"}
         </button>
-        <span style={{ fontSize: 13, color: "var(--text-muted)" }}>{currentUserLabel}</span>
+        <span className="topbar-username-text" style={{ fontSize: 13, color: "var(--text-muted)" }}>{currentUserLabel}</span>
         <div
           style={{
             width: 34,

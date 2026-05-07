@@ -1,5 +1,5 @@
-import { AdmissionsPanel } from "@/components/admissions/AdmissionsPanel";
+import { redirect } from "next/navigation";
 
 export default function AdmissionsPage() {
-  return <AdmissionsPanel />;
+  redirect("/admissions/command-center");
 }

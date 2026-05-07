@@ -69,6 +69,7 @@ export function PaginationControls({
 
         <button
           type="button"
+          className="pagination-edge-btn"
           disabled={loading || safeCurrent <= 1}
           onClick={() => onPageChange(1)}
           style={{
@@ -121,6 +122,7 @@ export function PaginationControls({
 
         <button
           type="button"
+          className="pagination-edge-btn"
           disabled={loading || safeCurrent >= safeTotalPages}
           onClick={() => onPageChange(safeTotalPages)}
           style={{

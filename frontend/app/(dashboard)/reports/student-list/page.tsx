@@ -87,7 +87,7 @@ export default function StudentListReportPage() {
   return (
     <div>
       {/* Breadcrumb */}
-      <section style={{ background: "#fff", padding: "12px 20px", borderRadius: 8, marginBottom: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <section className="report-page-header" style={{ background: "#fff", padding: "12px 20px", borderRadius: 8, marginBottom: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Student List Report</h1>
         <div style={{ fontSize: 13, color: "#6b7280", display: "flex", gap: 6 }}>
           <Link href="/dashboard" style={{ color: "#6b7280", textDecoration: "none" }}>Dashboard</Link>

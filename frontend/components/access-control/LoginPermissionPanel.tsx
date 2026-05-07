@@ -278,7 +278,7 @@ export function LoginPermissionPanel() {
         <div style={{ display: "grid", gridTemplateColumns: isStudentRole ? "repeat(5, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))", gap: 10 }}>
           <div>
             <label style={{ display: "block", marginBottom: 4 }}>Role *</label>
-            <select value={roleId} onChange={(e) => setRoleId(e.target.value)} style={{ width: "100%", height: 36 }} disabled={loadingCriteria || loading}>
+            <select value={roleId} onChange={(e) => setRoleId(e.target.value)} style={{ width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} disabled={loadingCriteria || loading}>
               <option value="">Select role</option>
               {roles.map((role) => (
                 <option key={role.id} value={role.id}>{role.name}</option>
@@ -290,7 +290,7 @@ export function LoginPermissionPanel() {
             <>
               <div>
                 <label style={{ display: "block", marginBottom: 4 }}>Class *</label>
-                <select value={classId} onChange={(e) => setClassId(e.target.value)} style={{ width: "100%", height: 36 }} disabled={loading}>
+                <select value={classId} onChange={(e) => setClassId(e.target.value)} style={{ width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} disabled={loading}>
                   <option value="">Select class</option>
                     {studentClasses.map((item) => (
                     <option key={item.id} value={item.id}>{item.name}</option>
@@ -300,7 +300,7 @@ export function LoginPermissionPanel() {
 
               <div>
                 <label style={{ display: "block", marginBottom: 4 }}>Section</label>
-                <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={{ width: "100%", height: 36 }} disabled={loading}>
+                <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={{ width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} disabled={loading}>
                   <option value="">Select section</option>
                   {studentFilteredSections.map((item) => (
                     <option key={item.id} value={item.id}>{item.name}</option>
@@ -313,8 +313,7 @@ export function LoginPermissionPanel() {
                 <select
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  style={{ width: "100%", height: 36, boxSizing: "border-box" }}
-                  disabled={!classId || !sectionId || loading}
+                  style={{ width: "100%", height: 36, boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }}
                 >
                   <option value="">Select student</option>
                   {studentOptions.map((student) => {
@@ -332,7 +331,7 @@ export function LoginPermissionPanel() {
 
               <div>
                 <label style={{ display: "block", marginBottom: 4 }}>Roll No</label>
-                <input value={rollNo} onChange={(e) => setRollNo(e.target.value)} placeholder="Roll no" style={{ width: "100%", height: 36, boxSizing: "border-box" }} />
+                <input value={rollNo} onChange={(e) => setRollNo(e.target.value)} placeholder="Roll no" style={{ width: "100%", height: 36, boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} />
               </div>
             </>
           ) : null}
@@ -418,7 +417,7 @@ export function LoginPermissionPanel() {
                             value={passwordMap[row.user_id] || ""}
                             onChange={(event) => setPasswordMap((prev) => ({ ...prev, [row.user_id]: event.target.value }))}
                             placeholder="New password"
-                            style={{ height: 30, minWidth: 120 }}
+                            style={{ height: 30, minWidth: 120, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }}
                           />
                           <button type="button" onClick={() => void resetPassword(row.user_id, false)} style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 6, padding: "5px 8px" }}>
                             Update
@@ -452,7 +451,7 @@ export function LoginPermissionPanel() {
                             value={passwordMap[row.parent_user_id] || ""}
                             onChange={(event) => setPasswordMap((prev) => ({ ...prev, [row.parent_user_id!]: event.target.value }))}
                             placeholder="Parent password"
-                            style={{ height: 30, minWidth: 120 }}
+                            style={{ height: 30, minWidth: 120, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }}
                           />
                           <button type="button" onClick={() => void resetPassword(row.parent_user_id!, false)} style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 6, padding: "5px 8px" }}>
                             Update
@@ -488,7 +487,7 @@ export function LoginPermissionPanel() {
                           value={passwordMap[row.user_id] || ""}
                           onChange={(event) => setPasswordMap((prev) => ({ ...prev, [row.user_id]: event.target.value }))}
                           placeholder="New password"
-                          style={{ height: 30, minWidth: 120 }}
+                          style={{ height: 30, minWidth: 120, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }}
                         />
                         <button type="button" onClick={() => void resetPassword(row.user_id, false)} style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 6, padding: "5px 8px" }}>
                           Update

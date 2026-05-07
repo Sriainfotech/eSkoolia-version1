@@ -65,52 +65,76 @@ export default function HomePage() {
   const showRight = isEnabled('morning-brief') || isEnabled('smart-todo') || isEnabled('week-ahead') || isEnabled('notifications') || isEnabled('calls-queue') || isEnabled('drafts') || isEnabled('broadcast') || isEnabled('pinned-notes');
 
   return (
-    <div style={{
-      display: 'grid',
-      gap: 28,
-      maxWidth: 1680,
-      margin: '0 auto',
-      padding: '24px 28px 56px',
-      gridTemplateColumns: '1fr',
-    }}
+    <div
+      data-left={showLeft ? 'on' : 'off'}
+      data-right={showRight ? 'on' : 'off'}
+      style={{
+        display: 'grid',
+        gap: 28,
+        maxWidth: 1680,
+        margin: '0 auto',
+        padding: '24px 28px 56px',
+        gridTemplateColumns: '1fr',
+      }}
       className="home-grid"
     >
-      {showLeft && (
-        <div className="home-left-rail">
-          <LeftRail />
-        </div>
-      )}
+      {/*
+        Always render both rail divs so the center column never reflowss.
+        Empty rails collapse to 0px via CSS custom properties on the grid.
+      */}
+      <div className="home-left-rail" style={{ minWidth: 0, overflow: 'hidden' }}>
+        {showLeft && <LeftRail />}
+      </div>
       <HomeCenter />
-      {showRight && (
-        <div className="home-right-rail">
-          <RightRail />
-        </div>
-      )}
+      <div className="home-right-rail" style={{ minWidth: 0, overflow: 'hidden' }}>
+        {showRight && <RightRail />}
+      </div>
 
       <style>{`
+        /* Mobile: single column, rails hidden */
+        .home-left-rail  { display: none; }
+        .home-right-rail { display: none; }
+
+        /* ≥1024px: show left rail; right rail collapsed (0px) */
         @media (min-width: 1024px) {
           .home-grid {
-            grid-template-columns: 272px 1fr !important;
+            grid-template-columns: 272px 1fr 0px !important;
             gap: 32px !important;
           }
-          .home-left-rail { display: block !important; }
-          .home-right-rail { display: none !important; }
+          .home-left-rail  { display: block !important; }
+          .home-right-rail { display: block !important; }
+
+          /* Left rail off → collapse it, center stays locked */
+          .home-grid[data-left="off"] {
+            grid-template-columns: 0px 1fr 0px !important;
+          }
         }
+
+        /* ≥1360px: both rails active — center is always locked at 1fr */
         @media (min-width: 1360px) {
           .home-grid {
             grid-template-columns: 280px 1fr 340px !important;
             gap: 32px !important;
           }
-          .home-right-rail { display: block !important; }
+          /* Each rail collapses independently — center 1fr never changes */
+          .home-grid[data-left="off"]  { grid-template-columns: 0px 1fr 340px !important; }
+          .home-grid[data-right="off"] { grid-template-columns: 280px 1fr 0px !important; }
+          .home-grid[data-left="off"][data-right="off"] {
+            grid-template-columns: 0px 1fr 0px !important;
+          }
         }
+
         @media (min-width: 1560px) {
           .home-grid {
             grid-template-columns: 296px 1fr 360px !important;
             gap: 36px !important;
           }
+          .home-grid[data-left="off"]  { grid-template-columns: 0px 1fr 360px !important; }
+          .home-grid[data-right="off"] { grid-template-columns: 296px 1fr 0px !important; }
+          .home-grid[data-left="off"][data-right="off"] {
+            grid-template-columns: 0px 1fr 0px !important;
+          }
         }
-        .home-left-rail { display: none; }
-        .home-right-rail { display: none; }
       `}</style>
     </div>
   );

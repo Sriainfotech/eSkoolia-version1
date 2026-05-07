@@ -171,7 +171,7 @@ export function DueFeesLoginPermissionPanel() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 }}>
           <div>
             <label style={{ display: "block", marginBottom: 4 }}>Class</label>
-            <select value={classId} onChange={(e) => setClassId(e.target.value)} style={{ width: "100%", height: 36 }} disabled={loading || loadingCriteria}>
+            <select value={classId} onChange={(e) => setClassId(e.target.value)} style={{ width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} disabled={loading || loadingCriteria}>
               <option value="">Select class</option>
               {classes.map((item) => (
                 <option key={item.id} value={item.id}>{item.name}</option>
@@ -180,7 +180,7 @@ export function DueFeesLoginPermissionPanel() {
           </div>
           <div>
             <label style={{ display: "block", marginBottom: 4 }}>Section</label>
-            <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={{ width: "100%", height: 36 }} disabled={loading || loadingCriteria}>
+            <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={{ width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} disabled={loading || loadingCriteria}>
               <option value="">Select section</option>
               {filteredSections.map((item) => (
                 <option key={item.id} value={item.id}>{item.name}</option>
@@ -189,11 +189,11 @@ export function DueFeesLoginPermissionPanel() {
           </div>
           <div>
             <label style={{ display: "block", marginBottom: 4 }}>Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Student/Parent name" style={{ width: "100%", height: 36, boxSizing: "border-box" }} />
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Student/Parent name" style={{ width: "100%", height: 36, boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} />
           </div>
           <div>
             <label style={{ display: "block", marginBottom: 4 }}>Admission No</label>
-            <input value={admissionNo} onChange={(e) => setAdmissionNo(e.target.value)} placeholder="Admission no" style={{ width: "100%", height: 36, boxSizing: "border-box" }} />
+            <input value={admissionNo} onChange={(e) => setAdmissionNo(e.target.value)} placeholder="Admission no" style={{ width: "100%", height: 36, boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} />
           </div>
         </div>
 

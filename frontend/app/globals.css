@@ -87,19 +87,15 @@ a {
    Keeping the class name lets future overrides hook here without churn. */
 
 @media (max-width: 900px) {
-  /* Mobile: let the shell breathe with natural page scroll instead of
-     viewport-lock so the sidebar can stack above the content.          */
+  /* Mobile: sidebar is a fixed overlay — the shell stays as a flex row
+     and the main content area fills the full viewport width.           */
   .erp-shell {
-    flex-direction: column !important;
-    height: auto !important;
-    overflow: visible !important;
+    height: 100vh !important;
+    overflow: hidden !important;
   }
   .erp-shell > div:last-child {
-    height: auto !important;
-    overflow: visible !important;
-  }
-  .dashboard-main {
-    overflow: visible !important;
+    height: 100vh !important;
+    overflow: hidden !important;
   }
 }
 
@@ -837,4 +833,61 @@ tr.date-alert:hover {
   .student-maint-list h3 {
     font-size: 28px;
   }
+}
+
+/* ─── Mobile responsiveness utilities ─────────────────────────────────────── */
+
+/* Hamburger button: hidden on desktop, shown on mobile */
+.topbar-hamburger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 8px;
+  color: var(--text);
+  flex-shrink: 0;
+}
+.topbar-hamburger:hover { background: var(--surface-muted); }
+
+/* Sidebar overlay backdrop */
+.sidebar-mobile-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 99;
+}
+
+@media (max-width: 900px) {
+  .topbar-hamburger { display: flex !important; }
+  .sidebar-mobile-backdrop { display: block; }
+}
+
+/* Reduce content padding on small screens */
+@media (max-width: 768px) {
+  .dashboard-main { padding: 12px !important; }
+  .main-content-new-nav { padding: 12px !important; }
+
+  /* Report tables: reduce forced min-width so horizontal scroll is shorter */
+  .report-table { min-width: 600px; }
+
+  /* Hide username text next to avatar in legacy Topbar */
+  .topbar-username-text { display: none !important; }
+
+  /* Hide First / Last pagination buttons to save space */
+  .pagination-edge-btn { display: none !important; }
+
+  /* Stack page-header breadcrumb sections on mobile */
+  .report-page-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 6px !important;
+  }
+
+  /* Tighter gap for report action buttons */
+  .report-actions { gap: 6px; }
 }

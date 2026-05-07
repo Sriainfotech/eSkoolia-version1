@@ -143,7 +143,12 @@ async function requestWithRefreshResponse(path: string, options?: RequestInit): 
   let token = getAccessToken();
   if (!token) {
     const refreshed = await refreshAccessToken();
-    if (!refreshed) throw new Error("401");
+    if (!refreshed) {
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+      throw new Error("401");
+    }
     token = refreshed;
   }
 

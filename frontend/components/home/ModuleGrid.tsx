@@ -1,15 +1,19 @@
 'use client';
 import Link from 'next/link';
 import { MODULES } from '@/lib/routes';
+import { useModuleStore } from '@/lib/moduleStore';
 
 export function ModuleGrid() {
+  const { isEnabled } = useModuleStore();
+  const visibleModules = MODULES.filter(m => isEnabled(m.id));
+
   return (
     <div style={{
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fill, minmax(108px, 1fr))',
       gap: 8,
     }}>
-      {MODULES.map(mod => (
+      {visibleModules.map(mod => (
         <Link
           key={mod.id}
           href={mod.path}
