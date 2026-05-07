@@ -37,7 +37,7 @@ export default function AIMessageComposer({ lead, channel = "whatsapp", onClose,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lead_id: lead.id }),
-      });
+      }) as Response;
       if (!res.ok) throw new Error("Failed to generate variants");
       const json = await res.json();
       const data: AIVariants = json.data ?? json;
