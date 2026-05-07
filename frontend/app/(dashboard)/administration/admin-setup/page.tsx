@@ -1,5 +1,6 @@
-import { AdminSetupPanel } from "@/components/administration/AdminSetupPanel";
+import { redirect } from 'next/navigation';
 
-export default function AdminSetupPage() {
-  return <AdminSetupPanel />;
+// Legacy route — redirects to consolidated page
+export default function LegacyRedirect() {
+  redirect('/administration/system-config');
 }

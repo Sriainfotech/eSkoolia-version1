@@ -1,5 +1,6 @@
-import { VisitorBookPanel } from "@/components/administration/VisitorBookPanel";
+import { redirect } from 'next/navigation';
 
-export default function VisitorBookPage() {
-  return <VisitorBookPanel />;
+// Legacy route — redirects to consolidated page
+export default function LegacyRedirect() {
+  redirect('/administration/communication-hub');
 }

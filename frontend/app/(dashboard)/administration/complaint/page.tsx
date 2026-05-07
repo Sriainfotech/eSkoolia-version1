@@ -1,5 +1,6 @@
-import { ComplaintPanel } from "@/components/administration/ComplaintPanel";
+import { redirect } from 'next/navigation';
 
-export default function ComplaintPage() {
-  return <ComplaintPanel />;
+// Legacy route — redirects to consolidated page
+export default function LegacyRedirect() {
+  redirect('/administration/communication-hub');
 }

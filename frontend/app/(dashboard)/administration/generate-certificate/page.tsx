@@ -1,5 +1,6 @@
-import { GenerateCertificatePanel } from "@/components/administration/GenerateCertificatePanel";
+import { redirect } from 'next/navigation';
 
-export default function GenerateCertificatePage() {
-  return <GenerateCertificatePanel />;
+// Legacy route — redirects to consolidated page
+export default function LegacyRedirect() {
+  redirect('/administration/documents');
 }

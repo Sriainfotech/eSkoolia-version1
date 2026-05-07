@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Send,
   Plus,
@@ -352,24 +352,150 @@ function StatusBadge({ status }: { status: Campaign["status"] }) {
   );
 }
 
+/* ─────────────────────── category styles ─────────────────────── */
+const CATEGORY_STYLES: Record<string, { color: string; emoji: string }> = {
+  Welcome: { color: '#3b82f6', emoji: '👋' },
+  'Follow-up': { color: '#14b8a6', emoji: '📞' },
+  Visit: { color: '#f59e0b', emoji: '🏫' },
+  Urgency: { color: '#ef4444', emoji: '🔥' },
+  Offer: { color: '#8b5cf6', emoji: '🎁' },
+  Enrollment: { color: '#22c55e', emoji: '🎉' },
+  'Re-engagement': { color: '#6366f1', emoji: '💙' },
+  Event: { color: '#ec4899', emoji: '🌟' },
+  'Post-Visit': { color: '#f59e0b', emoji: '🤝' },
+  Nurture: { color: '#0ea5e9', emoji: '🌱' },
+  Save: { color: '#ef4444', emoji: '💔' },
+  Referral: { color: '#10b981', emoji: '🎯' },
+};
+
+function CountUp({ target, suffix = '' }: { target: number; suffix?: string }) {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    const steps = 30;
+    const increment = target / steps;
+    let current = 0;
+    const timer = setInterval(() => {
+      current = Math.min(current + increment, target);
+      setCount(Math.round(current));
+      if (current >= target) clearInterval(timer);
+    }, Math.round(800 / steps));
+    return () => clearInterval(timer);
+  }, [target]);
+  return <>{count}{suffix}</>;
+}
+
+function CampaignEditModal({ campaign, isOpen, onClose }: { campaign: Campaign; isOpen: boolean; onClose: () => void }) {
+  const [name, setName] = useState(campaign.name);
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6">
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="text-lg font-bold text-gray-900">Edit Campaign</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100">✕</button>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="text-sm font-medium text-gray-700 block mb-1">Campaign Name</label>
+            <input value={name} onChange={e => setName(e.target.value)}
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700 block mb-1">Channel</label>
+            <input value={campaign.channel} readOnly
+              className="w-full border border-gray-100 rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500" />
+          </div>
+          <div>
+            <label className="text-sm font-medium text-gray-700 block mb-1">Audience</label>
+            <input value={campaign.audience} readOnly
+              className="w-full border border-gray-100 rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-500" />
+          </div>
+        </div>
+        <div className="flex gap-3 mt-6">
+          <button onClick={onClose} className="flex-1 border border-gray-200 rounded-lg py-2 text-sm text-gray-600 hover:bg-gray-50">Cancel</button>
+          <button onClick={() => { onClose(); }}
+            className="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-semibold hover:bg-blue-700">Save Changes</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TemplatePreviewModal({ template, onClose }: { template: Template; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const highlightVars = (text: string) =>
+    text.split(/(\{[^}]+\})/g).map((part, i) =>
+      part.startsWith('{') ? (
+        <span key={i} className="bg-blue-100 text-blue-700 rounded px-1 py-0.5 text-xs font-medium mx-0.5">{part}</span>
+      ) : <span key={i}>{part}</span>
+    );
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto">
+        <div className="flex items-center justify-between p-5 border-b border-gray-100">
+          <div>
+            <h2 className="font-bold text-gray-900">{template.name}</h2>
+            <div className="flex gap-2 mt-1">
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                template.channel === 'whatsapp' ? 'bg-green-100 text-green-700' :
+                template.channel === 'email' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'
+              }`}>{template.channel}</span>
+              <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{template.category}</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100">✕</button>
+        </div>
+        <div className="p-5">
+          {template.channel === 'whatsapp' ? (
+            <div className="bg-[#128C7E] rounded-t-xl rounded-br-xl p-1">
+              <div className="bg-[#ECE5DD] rounded-xl p-4 text-sm leading-relaxed whitespace-pre-wrap text-gray-800">
+                {highlightVars(template.body)}
+              </div>
+            </div>
+          ) : (
+            <div className="border border-gray-200 rounded-xl overflow-hidden">
+              {template.subject && (
+                <div className="bg-gray-50 border-b border-gray-200 p-3">
+                  <span className="text-xs text-gray-400">Subject: </span>
+                  <span className="text-sm font-medium text-gray-800">{template.subject}</span>
+                </div>
+              )}
+              <div className="p-4 text-sm leading-relaxed whitespace-pre-wrap text-gray-800">
+                {highlightVars(template.body)}
+              </div>
+            </div>
+          )}
+          <p className="text-xs text-gray-400 mt-3">💡 Use case: {template.useCase}</p>
+        </div>
+        <div className="flex gap-3 p-5 pt-0 border-t border-gray-100">
+          <button onClick={() => { navigator.clipboard.writeText(template.body); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+            className={`flex-1 border rounded-lg py-2 text-sm font-medium transition-colors ${copied ? 'border-green-300 bg-green-50 text-green-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+            {copied ? '✓ Copied!' : '📋 Copy Text'}
+          </button>
+          <button onClick={onClose} className="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-semibold hover:bg-blue-700">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ─────────────────────── main component ─────────────────────── */
 export function AdmissionsMarketing() {
   const [templateTab, setTemplateTab] = useState<Template["channel"]>("whatsapp");
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [previewId, setPreviewId] = useState<string | null>(null);
   const [searchQ, setSearchQ] = useState("");
   const [showNewCampaign, setShowNewCampaign] = useState(false);
   const [campaigns, setCampaigns] = useState<Campaign[]>(DEMO_CAMPAIGNS);
+  const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
 
   const filtered = TEMPLATES.filter(
     (t) => t.channel === templateTab && (searchQ === "" || t.name.toLowerCase().includes(searchQ.toLowerCase()) || t.category.toLowerCase().includes(searchQ.toLowerCase()))
   );
 
-  function copyTemplate(t: Template) {
-    const text = t.subject ? `Subject: ${t.subject}\n\n${t.body}` : t.body;
-    navigator.clipboard.writeText(text).catch(() => {});
-    setCopiedId(t.id);
-    setTimeout(() => setCopiedId(null), 2000);
+  function handleEditCampaign(campaign: Campaign) {
+    setEditingCampaign(campaign);
+    setEditModalOpen(true);
   }
 
   const card: React.CSSProperties = {
@@ -378,8 +504,6 @@ export function AdmissionsMarketing() {
     borderRadius: 12,
     boxShadow: "0 1px 3px rgba(0,0,0,.06)",
   };
-
-  const preview = TEMPLATES.find((t) => t.id === previewId);
 
   return (
     <div style={{ padding: "24px 16px", maxWidth: 1280, margin: "0 auto" }}>
@@ -425,60 +549,78 @@ export function AdmissionsMarketing() {
             </button>
           </div>
         ) : (
-          <div style={{ padding: "0 0 4px" }}>
-            {campaigns.map((c) => (
-              <div
-                key={c.id}
-                style={{ padding: "16px 20px", borderBottom: "1px solid var(--line, #e5e7eb)", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}
-              >
-                <div style={{ flex: 1, minWidth: 200 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontSize: 14, fontWeight: 600, color: "var(--ink-1, #111)" }}>{c.name}</span>
-                    <StatusBadge status={c.status} />
-                  </div>
-                  <div style={{ fontSize: 12.5, color: "var(--ink-2, #6b7280)", marginBottom: 4 }}>
-                    Channel: {c.channel} · Audience: {c.audience}
-                  </div>
-                  {c.status === "sent" && (
-                    <div style={{ display: "flex", gap: 16, fontSize: 12, color: "var(--ink-2, #6b7280)" }}>
-                      <span>Sent {c.sentAt} · {c.sentCount} parents</span>
-                      <span style={{ color: "#059669" }}>{c.deliveredPct}% delivered</span>
-                      <span>{c.replies} replies</span>
+          <div className="space-y-3 p-4">
+            {campaigns.map((campaign) => {
+              const stripeColor = campaign.status === 'scheduled' ? 'bg-blue-500'
+                : campaign.status === 'sent' ? 'bg-green-500'
+                : campaign.status === 'active' ? 'bg-amber-500'
+                : 'bg-gray-400';
+              const statusBadge = campaign.status === 'sent'
+                ? <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-green-50 text-green-700">✓ Sent</span>
+                : campaign.status === 'scheduled'
+                ? <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">⏰ Scheduled</span>
+                : campaign.status === 'active'
+                ? <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">● Active</span>
+                : <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">✏️ Draft</span>;
+              const channelIcon = campaign.channel.includes('WhatsApp') && campaign.channel.includes('Email') ? '💬📧'
+                : campaign.channel.includes('WhatsApp') ? '💬'
+                : campaign.channel.includes('Email') ? '📧'
+                : '📱';
+              return (
+                <div key={campaign.id} className="bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md hover:scale-[1.002] transition-all overflow-hidden flex">
+                  <div className={`w-1.5 flex-shrink-0 ${stripeColor}${campaign.status === 'active' ? ' animate-pulse' : ''}`} />
+                  <div className="flex-1 p-4">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="font-bold text-gray-900">{campaign.name}</span>
+                      {statusBadge}
                     </div>
-                  )}
-                  {c.status === "scheduled" && (
-                    <div style={{ fontSize: 12, color: "#1d4ed8" }}>
-                      Scheduled: {c.scheduledFor} · {c.sentCount} recipients
+                    <div className="text-sm text-gray-500 mb-2">
+                      {channelIcon} {campaign.channel} · 👥 {campaign.audience}
                     </div>
-                  )}
+                    {campaign.status === 'sent' && (
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">{campaign.sentCount} parents</span>
+                        <span className="text-xs bg-green-50 text-green-700 rounded-full px-2 py-0.5">{campaign.deliveredPct}% delivered</span>
+                        <span className="text-xs bg-purple-50 text-purple-700 rounded-full px-2 py-0.5">{campaign.replies} replies</span>
+                      </div>
+                    )}
+                    {campaign.status === 'scheduled' && (
+                      <div className="text-xs text-blue-600 mb-3">Scheduled: {campaign.scheduledFor} · {campaign.sentCount} recipients</div>
+                    )}
+                    <div className="flex gap-2">
+                      <button onClick={() => handleEditCampaign(campaign)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm hover:bg-gray-50 text-gray-700">Edit</button>
+                      {campaign.status === 'sent' && (
+                        <button className="bg-blue-600 text-white rounded-lg px-3 py-1.5 text-sm hover:bg-blue-700">View Report</button>
+                      )}
+                      {campaign.status === 'scheduled' && (
+                        <button onClick={() => setCampaigns(prev => prev.filter(x => x.id !== campaign.id))}
+                          className="bg-blue-600 text-white rounded-lg px-3 py-1.5 text-sm hover:bg-blue-700">Cancel</button>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button style={{ padding: "6px 12px", border: "1px solid var(--line, #e5e7eb)", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer", color: "var(--ink-2, #6b7280)" }}>Edit</button>
-                  {c.status === "scheduled" && (
-                    <button
-                      onClick={() => setCampaigns((prev) => prev.filter((x) => x.id !== c.id))}
-                      style={{ padding: "6px 12px", border: "1px solid #fca5a5", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer", color: "#dc2626" }}
-                    >Cancel</button>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
         {/* Summary bar */}
         {campaigns.some(c => c.status === "sent") && (
-          <div style={{ padding: "12px 20px", background: "#f9fafb", borderTop: "1px solid var(--line, #e5e7eb)", display: "flex", gap: 24, flexWrap: "wrap" }}>
-            {[
-              { label: "Total Sent", value: campaigns.filter(c => c.sentCount).reduce((a, c) => a + (c.sentCount ?? 0), 0) },
-              { label: "Avg Delivery", value: `${Math.round(campaigns.filter(c => c.deliveredPct).reduce((a, c) => a + (c.deliveredPct ?? 0), 0) / campaigns.filter(c => c.deliveredPct).length)}%` },
-              { label: "Total Replies", value: campaigns.reduce((a, c) => a + (c.replies ?? 0), 0) },
-            ].map((s) => (
-              <div key={s.label}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "var(--ink-1, #111)" }}>{s.value}</div>
-                <div style={{ fontSize: 11.5, color: "var(--ink-2, #6b7280)" }}>{s.label}</div>
-              </div>
-            ))}
+          <div className="p-4 border-t border-gray-100">
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { icon: '📨', iconBg: 'bg-blue-100', label: 'Total Sent', value: campaigns.filter(c => c.sentCount).reduce((a, c) => a + (c.sentCount ?? 0), 0), suffix: '', sub: null },
+                { icon: '✅', iconBg: 'bg-green-100', label: 'Avg Delivery', value: Math.round(campaigns.filter(c => c.deliveredPct).reduce((a, c) => a + (c.deliveredPct ?? 0), 0) / campaigns.filter(c => c.deliveredPct).length), suffix: '%', sub: 'Industry avg: 90%' },
+                { icon: '💬', iconBg: 'bg-purple-100', label: 'Total Replies', value: campaigns.reduce((a, c) => a + (c.replies ?? 0), 0), suffix: '', sub: '7.5% reply rate' },
+              ].map((s) => (
+                <div key={s.label} className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+                  <div className={`w-8 h-8 ${s.iconBg} rounded-lg flex items-center justify-center text-base mb-2`}>{s.icon}</div>
+                  <div className="text-xl font-bold text-gray-900"><CountUp target={s.value} suffix={s.suffix} /></div>
+                  <div className="text-xs text-gray-500 mt-0.5">{s.label}</div>
+                  {s.sub && <div className="text-xs text-gray-400 mt-0.5">{s.sub}</div>}
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -502,22 +644,21 @@ export function AdmissionsMarketing() {
             </div>
           </div>
           {/* Channel tabs */}
-          <div style={{ display: "flex", gap: 0, borderBottom: "none" }}>
+          <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
             {(["whatsapp", "email", "sms"] as Template["channel"][]).map((ch) => {
               const labels = { whatsapp: "💬 WhatsApp", email: "📧 Email", sms: "📱 SMS" };
+              const badgeColors = { whatsapp: "bg-green-500", email: "bg-blue-500", sms: "bg-yellow-500" };
               const cnt = TEMPLATES.filter(t => t.channel === ch).length;
               return (
                 <button
                   key={ch}
                   onClick={() => setTemplateTab(ch)}
-                  style={{
-                    height: 36, padding: "0 16px", border: "none",
-                    borderBottom: templateTab === ch ? "2px solid #6366f1" : "2px solid transparent",
-                    background: "transparent", fontSize: 13, fontWeight: templateTab === ch ? 700 : 400,
-                    color: templateTab === ch ? "#6366f1" : "var(--ink-2, #6b7280)", cursor: "pointer",
-                  }}
+                  className={`rounded-lg px-4 py-2 text-sm font-medium transition-all flex items-center gap-1.5 ${
+                    templateTab === ch ? "bg-white shadow-sm text-gray-900" : "text-gray-500 hover:text-gray-700"
+                  }`}
                 >
-                  {labels[ch]} ({cnt})
+                  {labels[ch]}
+                  <span className={`text-xs rounded-full px-1.5 py-0.5 text-white font-bold ${badgeColors[ch]}`}>{cnt}</span>
                 </button>
               );
             })}
@@ -528,73 +669,35 @@ export function AdmissionsMarketing() {
           {filtered.length === 0 ? (
             <div style={{ textAlign: "center", padding: "30px 0", color: "#9ca3af", fontSize: 13 }}>No templates match your search.</div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 14 }}>
-              {filtered.map((t) => (
-                <div
-                  key={t.id}
-                  style={{
-                    border: "1px solid var(--line, #e5e7eb)", borderRadius: 10, padding: "14px 16px",
-                    background: previewId === t.id ? "#fafafa" : "#fff",
-                    transition: "box-shadow 0.15s",
-                  }}
-                >
-                  {/* Template header */}
-                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
-                    <div>
-                      <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--ink-1, #111)", marginBottom: 4 }}>{t.name}</div>
-                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                        <ChannelBadge ch={t.channel} />
-                        <span style={{ fontSize: 11, color: "var(--ink-2, #6b7280)", background: "#f3f4f6", borderRadius: 20, padding: "1px 7px" }}>{t.category}</span>
-                      </div>
+            <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))' }}>
+              {filtered.map((t) => {
+                const catStyle = CATEGORY_STYLES[t.category] ?? { color: '#6b7280', emoji: '📄' };
+                return (
+                  <div key={t.id} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden hover:shadow-md transition-all cursor-pointer">
+                    <div className="h-9 flex items-center px-4" style={{ backgroundColor: catStyle.color }}>
+                      <span className="text-xl">{catStyle.emoji}</span>
                     </div>
-                    <div style={{ display: "flex", gap: 4 }}>
-                      <button
-                        onClick={() => setPreviewId(previewId === t.id ? null : t.id)}
-                        title="Preview"
-                        style={{ width: 30, height: 30, border: "1px solid var(--line, #e5e7eb)", borderRadius: 7, background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
-                      >
-                        <Eye size={13} color="var(--ink-2, #6b7280)" />
-                      </button>
-                      <button
-                        onClick={() => copyTemplate(t)}
-                        title="Copy"
-                        style={{ width: 30, height: 30, border: `1px solid ${copiedId === t.id ? "#10b981" : "var(--line, #e5e7eb)"}`, borderRadius: 7, background: copiedId === t.id ? "#d1fae5" : "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
-                      >
-                        {copiedId === t.id ? <CheckCircle2 size={13} color="#10b981" /> : <Copy size={13} color="var(--ink-2, #6b7280)" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div style={{ fontSize: 12, color: "#9ca3af", marginBottom: previewId === t.id ? 10 : 0, fontStyle: "italic" }}>
-                    Use when: {t.useCase}
-                  </div>
-
-                  {/* Preview body */}
-                  {previewId === t.id && (
-                    <div>
-                      {t.subject && (
-                        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6 }}>
-                          <span style={{ fontWeight: 600 }}>Subject: </span>{t.subject}
+                    <div className="p-4">
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div>
+                          <div className="font-semibold text-gray-900 text-sm">{t.name}</div>
+                          <div className="text-xs text-gray-400 mt-0.5">{t.useCase}</div>
                         </div>
-                      )}
-                      <div
-                        style={{
-                          background: t.channel === "whatsapp" ? "#e7fce8" : "#f0f4ff",
-                          borderRadius: 8, padding: "10px 12px", fontSize: 12.5, lineHeight: 1.6,
-                          color: "var(--ink-1, #111)", whiteSpace: "pre-wrap", maxHeight: 200, overflowY: "auto",
-                        }}
-                      >
-                        {t.body}
+                        <span className="text-xs bg-gray-100 text-gray-500 rounded-full px-2 py-0.5 whitespace-nowrap">{t.variables.length} vars</span>
                       </div>
-                      <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 4 }}>
-                        {t.variables.map((v) => (
-                          <span key={v} style={{ fontSize: 11, background: "#eff6ff", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontFamily: "monospace" }}>{v}</span>
-                        ))}
+                      <div className="flex items-center justify-between mt-3">
+                        <ChannelBadge ch={t.channel} />
+                        <button
+                          onClick={() => setPreviewTemplate(t)}
+                          className="w-8 h-8 border border-gray-200 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-colors"
+                        >
+                          <Eye size={13} color="#6b7280" />
+                        </button>
                       </div>
                     </div>
-                  )}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -643,6 +746,9 @@ export function AdmissionsMarketing() {
           </p>
         </div>
       </div>
+
+      {previewTemplate && <TemplatePreviewModal template={previewTemplate} onClose={() => setPreviewTemplate(null)} />}
+      {editingCampaign && <CampaignEditModal campaign={editingCampaign} isOpen={editModalOpen} onClose={() => { setEditModalOpen(false); setEditingCampaign(null); }} />}
 
       {/* ── New Campaign Modal ── */}
       {showNewCampaign && (

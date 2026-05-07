@@ -1,5 +1,6 @@
-import { CertificatePanel } from "@/components/administration/CertificatePanel";
+import { redirect } from 'next/navigation';
 
-export default function CertificatePage() {
-  return <CertificatePanel />;
+// Legacy route — redirects to consolidated page
+export default function LegacyRedirect() {
+  redirect('/administration/documents');
 }

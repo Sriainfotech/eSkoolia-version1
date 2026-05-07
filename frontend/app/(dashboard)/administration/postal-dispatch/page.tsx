@@ -1,5 +1,6 @@
-import { PostalDispatchPanel } from "@/components/administration/PostalDispatchPanel";
+import { redirect } from 'next/navigation';
 
-export default function PostalDispatchPage() {
-  return <PostalDispatchPanel />;
+// Legacy route — redirects to consolidated page
+export default function LegacyRedirect() {
+  redirect('/administration/postal');
 }

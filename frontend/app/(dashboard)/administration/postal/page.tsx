@@ -6,8 +6,8 @@ import { PostalReceivePanel } from "@/components/administration/PostalReceivePan
 import { PostalDispatchPanel } from "@/components/administration/PostalDispatchPanel";
 
 const TABS = [
-  { id: "receive", label: "Postal Received", icon: Mail },
-  { id: "dispatch", label: "Postal Dispatched", icon: Send },
+  { id: "receive",  label: "Postal Received",   icon: Mail },
+  { id: "dispatch", label: "Postal Dispatched",  icon: Send },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -16,18 +16,17 @@ export default function PostalManagementPage() {
   const [active, setActive] = useState<TabId>("receive");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 0, height: "100%" }}>
-      {/* Tab bar */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-end",
-          gap: 0,
-          borderBottom: "2px solid var(--line, #e5e7eb)",
-          background: "var(--surface, #fff)",
-          padding: "0 24px",
-        }}
-      >
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+
+      {/* Primary tab bar — matches ModuleSubNav style */}
+      <div style={{
+        display: "flex",
+        alignItems: "flex-end",
+        borderBottom: "2px solid var(--bd)",
+        background: "#fff",
+        padding: "0 24px",
+        gap: 0,
+      }}>
         {TABS.map((tab) => {
           const isActive = active === tab.id;
           const Icon = tab.icon;
@@ -42,10 +41,10 @@ export default function PostalManagementPage() {
                 padding: "10px 18px",
                 fontSize: 13,
                 fontWeight: isActive ? 600 : 400,
-                color: isActive ? "var(--pu, #7c3aed)" : "var(--ink-2, #6b7280)",
+                color: isActive ? "var(--pu)" : "var(--ink-2)",
                 background: "transparent",
                 border: "none",
-                borderBottom: isActive ? "2px solid var(--pu, #7c3aed)" : "2px solid transparent",
+                borderBottom: isActive ? "2px solid var(--pu)" : "2px solid transparent",
                 marginBottom: -2,
                 cursor: "pointer",
                 transition: "color 0.12s",
@@ -60,10 +59,11 @@ export default function PostalManagementPage() {
       </div>
 
       {/* Panel content */}
-      <div style={{ flex: 1, overflow: "auto" }}>
-        {active === "receive" && <PostalReceivePanel />}
+      <div style={{ flex: 1, overflow: "auto", background: "var(--bg-0)" }}>
+        {active === "receive"  && <PostalReceivePanel />}
         {active === "dispatch" && <PostalDispatchPanel />}
       </div>
+
     </div>
   );
 }

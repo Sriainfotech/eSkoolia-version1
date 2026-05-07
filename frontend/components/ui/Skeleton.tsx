@@ -68,7 +68,19 @@ export function ChartSkeleton({ height = 200 }: { height?: number }) {
         <ShimmerBase className="w-40 h-5 rounded" />
         <ShimmerBase className="w-20 h-5 rounded" />
       </div>
-      <ShimmerBase className={`w-full rounded-lg`} style={{ height }} />
+      <div
+        className="relative overflow-hidden bg-gray-100 rounded-lg w-full"
+        style={{ height }}
+      >
+        <div
+          className="absolute inset-0"
+          style={{
+            background: "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.6) 50%, transparent 100%)",
+            backgroundSize: "200% 100%",
+            animation: "shimmer 1.4s infinite",
+          }}
+        />
+      </div>
     </div>
   );
 }

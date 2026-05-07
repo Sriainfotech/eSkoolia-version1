@@ -1,5 +1,6 @@
-import { PhoneCallLogPanel } from "@/components/administration/PhoneCallLogPanel";
+import { redirect } from 'next/navigation';
 
-export default function PhoneCallLogPage() {
-  return <PhoneCallLogPanel />;
+// Legacy route — redirects to consolidated page
+export default function LegacyRedirect() {
+  redirect('/administration/communication-hub');
 }

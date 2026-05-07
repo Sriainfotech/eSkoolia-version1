@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -8,13 +8,13 @@ import {
   Bell,
   ChevronLeft,
   ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { MODULES, type ModuleRoute } from "@/lib/routes";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { clearAuthTokens, getAccessToken, getRefreshToken } from "@/lib/auth";
 import { API_BASE_URL } from "@/lib/api";
 import { ModulePill } from "./ModulePill";
-import { OverflowMenu } from "./OverflowMenu";
 import { ModuleManager } from "./ModuleManager";
 import { NoteTrigger } from "@/components/notes/NoteTrigger";
 import { WidgetManager } from "@/components/home/WidgetManager";
@@ -66,6 +66,9 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
   const [loggingOut, setLoggingOut] = useState(false);
   const [avatarOpen, setAvatarOpen] = useState(false);
   const avatarRef = useRef<HTMLDivElement>(null);
+  const navScrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
   const { isEnabled: isModuleEnabled } = useModuleStore();
 
   useEffect(() => {
@@ -85,6 +88,29 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
+
+  const checkNavScroll = useCallback(() => {
+    const el = navScrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 4);
+    setCanScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }, []);
+
+  useEffect(() => {
+    const el = navScrollRef.current;
+    if (!el) return;
+    checkNavScroll();
+    el.addEventListener("scroll", checkNavScroll, { passive: true });
+    const ro = new ResizeObserver(checkNavScroll);
+    ro.observe(el);
+    return () => { el.removeEventListener("scroll", checkNavScroll); ro.disconnect(); };
+  }, [checkNavScroll, me]);
+
+  const scrollNav = (dir: "left" | "right") => {
+    const el = navScrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir === "left" ? -200 : 200, behavior: "smooth" });
+  };
 
   const visibleModules = me ? filterModules(MODULES, me) : MODULES;
   const activeModules = visibleModules.filter(m => isModuleEnabled(m.id));
@@ -120,6 +146,29 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
   };
 
   const isHome = pathname === "/home" || pathname === "/dashboard" || pathname === "/";
+
+  const navArrowBtn = (dir: "left" | "right", enabled: boolean) => (
+    <button
+      onClick={() => scrollNav(dir)}
+      disabled={!enabled}
+      style={{
+        flexShrink: 0, width: 24, height: 28, border: "none",
+        cursor: enabled ? "pointer" : "default",
+        background: enabled
+          ? `linear-gradient(to ${dir === "left" ? "right" : "left"}, var(--bg-1) 50%, transparent)`
+          : "transparent",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        opacity: enabled ? 1 : 0.2, transition: "opacity 0.15s",
+        borderRadius: 6, padding: 0,
+        color: "var(--ink-2)",
+      }}
+    >
+      {dir === "left"
+        ? <ChevronLeft size={13} strokeWidth={2} />
+        : <ChevronRight size={13} strokeWidth={2} />
+      }
+    </button>
+  );
 
   return (
     <>
@@ -194,12 +243,12 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
             </span>
           </Link>
 
-          {/* Module pills — desktop only, max 6 visible + overflow */}
+          {/* Module pills — scrollable with arrow buttons, all modules shown */}
           <nav
             style={{
               display: "flex",
               alignItems: "center",
-              gap: 1,
+              gap: 2,
               marginLeft: 8,
               flex: "1 1 0",
               minWidth: 0,
@@ -207,10 +256,23 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
             }}
             className="hidden md:flex"
           >
-            {activeModules.slice(0, 6).map(m => (
-              <ModulePill key={m.id} mod={m} />
-            ))}
-            {activeModules.length > 6 && <OverflowMenu mods={activeModules.slice(6)} />}
+            {navArrowBtn("left", canScrollLeft)}
+            <div
+              ref={navScrollRef}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1,
+                flex: 1,
+                overflowX: "auto",
+                scrollbarWidth: "none",
+              }}
+            >
+              {activeModules.map(m => (
+                <ModulePill key={m.id} mod={m} />
+              ))}
+            </div>
+            {navArrowBtn("right", canScrollRight)}
           </nav>
 
           {/* Right side — fixed, never grows */}

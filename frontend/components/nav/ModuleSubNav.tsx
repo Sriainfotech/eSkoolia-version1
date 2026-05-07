@@ -94,9 +94,9 @@ export function ModuleSubNav() {
       <div style={{
         maxWidth: 1280, margin: '0 auto',
         display: 'flex', alignItems: 'center', height: 42,
-        padding: '0 24px', gap: 0,
+        padding: '0 24px 0 8px', gap: 0,
       }}>
-        {/* Module label */}
+        {/* Module label — left side breadcrumb */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 6,
           paddingRight: 14, marginRight: 8,
@@ -117,10 +117,10 @@ export function ModuleSubNav() {
         {/* Left arrow */}
         {arrowBtn('left', canScrollLeft)}
 
-        {/* Scrollable tabs */}
+        {/* Scrollable tabs — left-aligned */}
         <div
           ref={scrollRef}
-          style={{ display: 'flex', flex: 1, overflowX: 'auto', scrollbarWidth: 'none', gap: 0 }}
+          style={{ display: 'flex', overflowX: 'auto', scrollbarWidth: 'none', gap: 0, flex: 1 }}
         >
           {mod.sub.map(s => {
             const isActive = s === activeTab;

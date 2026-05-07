@@ -1,5 +1,6 @@
-import { IdCardPanel } from "@/components/administration/IdCardPanel";
+import { redirect } from 'next/navigation';
 
-export default function IdCardPage() {
-  return <IdCardPanel />;
+// Legacy route — redirects to consolidated page
+export default function LegacyRedirect() {
+  redirect('/administration/documents');
 }

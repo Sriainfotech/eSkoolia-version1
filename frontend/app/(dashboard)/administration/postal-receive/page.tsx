@@ -1,5 +1,6 @@
-import { PostalReceivePanel } from "@/components/administration/PostalReceivePanel";
+import { redirect } from 'next/navigation';
 
-export default function PostalReceivePage() {
-  return <PostalReceivePanel />;
+// Legacy route — redirects to consolidated page
+export default function LegacyRedirect() {
+  redirect('/administration/postal');
 }

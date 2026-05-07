@@ -1,21 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { UserSearch, AlertCircle, Phone } from "lucide-react";
-import { VisitorBookPanel } from "@/components/administration/VisitorBookPanel";
-import { ComplaintPanel } from "@/components/administration/ComplaintPanel";
-import { PhoneCallLogPanel } from "@/components/administration/PhoneCallLogPanel";
+import { Settings, BookMarked } from "lucide-react";
+import { AdminSetupPanel } from "@/components/administration/AdminSetupPanel";
+import { StudentCategoryManagerPanel } from "@/components/students/StudentCategoryManagerPanel";
 
 const TABS = [
-  { id: "visitors",   label: "Visitor Book",  icon: UserSearch  },
-  { id: "complaints", label: "Complaints",    icon: AlertCircle },
-  { id: "calls",      label: "Phone Calls",   icon: Phone       },
+  { id: "admin-setup",        label: "Admin Setup",       icon: Settings    },
+  { id: "student-categories", label: "Student Categories", icon: BookMarked  },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
 
-export default function CommunicationHubPage() {
-  const [active, setActive] = useState<TabId>("visitors");
+export default function SystemConfigPage() {
+  const [active, setActive] = useState<TabId>("admin-setup");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -62,9 +60,8 @@ export default function CommunicationHubPage() {
 
       {/* Panel content */}
       <div style={{ flex: 1, overflow: "auto", background: "var(--bg-0)" }}>
-        {active === "visitors"   && <VisitorBookPanel />}
-        {active === "complaints" && <ComplaintPanel />}
-        {active === "calls"      && <PhoneCallLogPanel />}
+        {active === "admin-setup"        && <AdminSetupPanel />}
+        {active === "student-categories" && <StudentCategoryManagerPanel />}
       </div>
 
     </div>
