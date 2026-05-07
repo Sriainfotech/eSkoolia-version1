@@ -557,8 +557,8 @@ export default function StudentGroupPage() {
   function togCls(gid: number, cls: string, checked: boolean) {
     const grp = groups.find(g => g.id === gid)
     const ids = grp?.type === 'CLUB'
-      ? fStudents().filter(s => (s.clubIds || []).includes(gid) && s.class === cls).map(s => s.id)
-      : fStudents().filter(s => s.currentGroupId === gid && s.class === cls).map(s => s.id)
+      ? students.filter(s => (s.clubIds || []).includes(gid) && s.class === cls).map(s => s.id)
+      : students.filter(s => s.currentGroupId === gid && s.class === cls).map(s => s.id)
     setSel(p => { const n=new Set(p[gid]||[]); ids.forEach(id=>checked?n.add(id):n.delete(id)); return {...p,[gid]:n} })
   }
   function clearSel(gid: number) { setSel(p=>({...p,[gid]:new Set()})) }
