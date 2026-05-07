@@ -46,7 +46,7 @@ export default function BulkActionModal({ selectedLeads, onClose, onDone }: Prop
     if (!jobId) return;
     const interval = setInterval(async () => {
       try {
-        const res = await apiRequestWithRefresh(`/api/v1/admissions/bulk/${jobId}/`);
+        const res = await apiRequestWithRefresh(`/api/v1/admissions/bulk/${jobId}/`) as Response;
         if (res.ok) {
           const json = await res.json();
           const data: JobStatus = json.data ?? json;
@@ -83,7 +83,7 @@ export default function BulkActionModal({ selectedLeads, onClose, onDone }: Prop
           lead_ids: selectedLeads.map((l) => l.id),
           payload: buildPayload(),
         }),
-      });
+      }) as Response;
       const json = await res.json();
       if (!res.ok) throw new Error(json.message ?? "Failed to start job");
       setJobId(json.job_id);
