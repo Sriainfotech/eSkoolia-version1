@@ -3,6 +3,11 @@ import os
 from dotenv import load_dotenv
 from urllib.parse import parse_qs, unquote, urlparse
 
+try:
+    import dj_database_url
+except ImportError:  # pragma: no cover - optional dependency fallback
+    dj_database_url = None
+
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -84,48 +89,59 @@ CHANNEL_LAYERS = {
 }
 
 DB_ENGINE = os.getenv("DB_ENGINE", "django.db.backends.sqlite3")
-DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+# Normalize accidental quoted env values, e.g. DATABASE_URL="postgres://..."
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip().strip("\"").strip("'")
 
 if DATABASE_URL:
     parsed_db_url = urlparse(DATABASE_URL)
-    db_scheme = (parsed_db_url.scheme or "").split("+")[0].lower()
-    engine_map = {
-        "postgres": "django.db.backends.postgresql",
-        "postgresql": "django.db.backends.postgresql",
-        "sqlite": "django.db.backends.sqlite3",
-    }
-    resolved_engine = engine_map.get(db_scheme, DB_ENGINE)
-    resolved_name = (
-        unquote(parsed_db_url.path.lstrip("/"))
-        if resolved_engine != "django.db.backends.sqlite3"
-        else (unquote(parsed_db_url.path) or str(BASE_DIR / "db.sqlite3"))
-    )
-    resolved_options = {
-        "connect_timeout": 10,  # 10 sec timeout — lets Neon wake up without hanging
-    }
     query_params = parse_qs(parsed_db_url.query or "")
     resolved_sslmode = (query_params.get("sslmode", [""])[0] or os.getenv("DB_SSLMODE", "")).strip()
-    if resolved_sslmode:
-        resolved_options["sslmode"] = resolved_sslmode
 
-    DATABASES = {
-        "default": {
-            "ENGINE": resolved_engine,
-            "NAME": resolved_name,
-            "USER": unquote(parsed_db_url.username or ""),
-            "PASSWORD": unquote(parsed_db_url.password or ""),
-            "HOST": parsed_db_url.hostname or "",
-            "PORT": str(parsed_db_url.port or ""),
-            **({"OPTIONS": resolved_options} if resolved_options else {}),
-            # Neon / serverless Postgres: never reuse a connection between
-            # requests — the idle connection will be dropped by Neon and
-            # the next query will fail with "getaddrinfo failed".
-            "CONN_MAX_AGE": 0,
-            # Django 4.1+: health-check each connection before use so a
-            # freshly obtained connection is guaranteed to be open.
-            "CONN_HEALTH_CHECKS": True,
+    if dj_database_url is not None:
+        default_db = dj_database_url.parse(DATABASE_URL, conn_max_age=0)
+        default_db.setdefault("OPTIONS", {})
+        default_db["OPTIONS"].setdefault("connect_timeout", 10)
+        if resolved_sslmode:
+            default_db["OPTIONS"]["sslmode"] = resolved_sslmode
+        default_db["CONN_HEALTH_CHECKS"] = True
+        DATABASES = {"default": default_db}
+    else:
+        db_scheme = (parsed_db_url.scheme or "").split("+")[0].lower()
+        engine_map = {
+            "postgres": "django.db.backends.postgresql",
+            "postgresql": "django.db.backends.postgresql",
+            "sqlite": "django.db.backends.sqlite3",
         }
-    }
+        resolved_engine = engine_map.get(db_scheme, DB_ENGINE)
+        resolved_name = (
+            unquote(parsed_db_url.path.lstrip("/"))
+            if resolved_engine != "django.db.backends.sqlite3"
+            else (unquote(parsed_db_url.path) or str(BASE_DIR / "db.sqlite3"))
+        )
+        resolved_options = {
+            "connect_timeout": 10,  # 10 sec timeout — lets Neon wake up without hanging
+        }
+        if resolved_sslmode:
+            resolved_options["sslmode"] = resolved_sslmode
+
+        DATABASES = {
+            "default": {
+                "ENGINE": resolved_engine,
+                "NAME": resolved_name,
+                "USER": unquote(parsed_db_url.username or ""),
+                "PASSWORD": unquote(parsed_db_url.password or ""),
+                "HOST": parsed_db_url.hostname or "",
+                "PORT": str(parsed_db_url.port or ""),
+                **({"OPTIONS": resolved_options} if resolved_options else {}),
+                # Neon / serverless Postgres: never reuse a connection between
+                # requests — the idle connection will be dropped by Neon and
+                # the next query will fail with "getaddrinfo failed".
+                "CONN_MAX_AGE": 0,
+                # Django 4.1+: health-check each connection before use so a
+                # freshly obtained connection is guaranteed to be open.
+                "CONN_HEALTH_CHECKS": True,
+            }
+        }
 else:
     DATABASES = {
         "default": {
