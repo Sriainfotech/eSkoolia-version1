@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 
 type Option = { id: number; name: string };
@@ -46,6 +45,37 @@ type LoginUserRow = {
 type UserResponse = {
   role: { id: number; name: string };
   users: LoginUserRow[];
+};
+
+const thCell: React.CSSProperties = {
+  textAlign: "left",
+  padding: "10px 14px",
+  borderBottom: "1px solid var(--bd)",
+  fontSize: 12,
+  fontWeight: 600,
+  color: "var(--ink-2)",
+  whiteSpace: "nowrap",
+  background: "var(--bg-2)",
+};
+
+const tdCell: React.CSSProperties = {
+  padding: "10px 14px",
+  borderBottom: "1px solid var(--bd)",
+  fontSize: 13,
+  color: "var(--ink-1)",
+  verticalAlign: "middle",
+};
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  height: 36,
+  boxSizing: "border-box",
+  border: "1px solid var(--bd)",
+  borderRadius: 8,
+  padding: "0 10px",
+  fontSize: 13,
+  background: "var(--bg-1)",
+  color: "var(--ink-1)",
 };
 
 export function LoginPermissionPanel() {
@@ -97,7 +127,6 @@ export function LoginPermissionPanel() {
           .filter((value): value is number => typeof value === "number" && value > 0),
       );
     }
-
     const selectedClassId = Number(classId);
     return new Set(
       studentRows
@@ -161,7 +190,6 @@ export function LoginPermissionPanel() {
       setError("Select role first.");
       return;
     }
-
     if (isStudentRole && !classId) {
       setError("Select class for student role.");
       return;
@@ -206,7 +234,6 @@ export function LoginPermissionPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId, status: checked }),
       });
-
       setRows((prev) => prev.map((row) => (row.user_id === userId ? { ...row, access_status: checked } : row)));
       setMessage("Login permission updated.");
     } catch (e) {
@@ -231,13 +258,11 @@ export function LoginPermissionPanel() {
         setActionType(null);
         return;
       }
-
       await apiRequestWithRefresh("/api/v1/access-control/login-access-control/reset-password/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId, password, default_password: defaultPassword }),
       });
-
       setMessage(defaultPassword ? "Password reset to 123456." : "Password updated.");
       if (!defaultPassword) {
         setPasswordMap((prev) => ({ ...prev, [userId]: "" }));
@@ -253,54 +278,126 @@ export function LoginPermissionPanel() {
   const tableColSpan = isStudentRole ? 8 : 6;
 
   return (
-    <section className="admin-visitor-area up_st_admin_visitor">
-      <div style={{ marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <h1 style={{ margin: 0, fontSize: 24 }}>Login Permission</h1>
-        <div style={{ display: "flex", gap: 8, fontSize: 13, color: "var(--text-muted)", flexWrap: "wrap" }}>
-          <span>Dashboard</span>
-          <span>|</span>
-          <span>Role Permission</span>
-          <span>|</span>
-          <span>Login Permission</span>
-        </div>
+    <section style={{ padding: "24px 28px", background: "var(--bg-0)", minHeight: "100vh" }}>
+      {/* Page Header */}
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 700, color: "var(--ink-1)", lineHeight: 1.2 }}>
+          Login{" "}
+          <em style={{ fontStyle: "italic", fontWeight: 300, color: "var(--pu)" }}>Permission</em>
+        </h1>
+        <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--ink-3)" }}>
+          Control who can log into the system and manage passwords
+        </p>
       </div>
 
-      <div style={{ background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 10, padding: 12, marginBottom: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
-          <h3 style={{ margin: 0 }}>Select Criteria</h3>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Link href="/roles" style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "8px 12px", textDecoration: "none", color: "var(--text)" }}>Role</Link>
-            <Link href="/roles/assign-permission" style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "8px 12px", textDecoration: "none", color: "var(--text)" }}>Assign Permission</Link>
-            <Link href="/roles/due-fees-login-permission" style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "8px 12px", textDecoration: "none", color: "var(--text)" }}>Due Fees Login Permission</Link>
-          </div>
+      {/* Feedback */}
+      {error && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: "10px 14px",
+            background: "#FEF2F2",
+            border: "1px solid #FECACA",
+            borderRadius: 8,
+            color: "var(--err)",
+            fontSize: 13,
+          }}
+          role="alert"
+        >
+          {error}
         </div>
+      )}
+      {message && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: "10px 14px",
+            background: "#F0FDF4",
+            border: "1px solid #BBF7D0",
+            borderRadius: 8,
+            color: "var(--ok)",
+            fontSize: 13,
+          }}
+          role="status"
+        >
+          {message}
+        </div>
+      )}
 
-        <div style={{ display: "grid", gridTemplateColumns: isStudentRole ? "repeat(5, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))", gap: 10 }}>
+      {/* Filter card */}
+      <div
+        style={{
+          background: "var(--bg-1)",
+          border: "1px solid var(--bd)",
+          borderRadius: 14,
+          boxShadow: "var(--sh-2)",
+          padding: "18px 20px",
+          marginBottom: 20,
+        }}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isStudentRole
+              ? "repeat(auto-fill, minmax(170px, 1fr))"
+              : "repeat(auto-fill, minmax(220px, 1fr))",
+            gap: 14,
+            marginBottom: 14,
+          }}
+        >
+          {/* Role */}
           <div>
-            <label style={{ display: "block", marginBottom: 4 }}>Role *</label>
-            <select value={roleId} onChange={(e) => setRoleId(e.target.value)} style={{ width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} disabled={loadingCriteria || loading}>
+            <label
+              style={{ display: "block", marginBottom: 5, fontSize: 12, fontWeight: 600, color: "var(--ink-2)" }}
+            >
+              Role <span style={{ color: "var(--err)" }}>*</span>
+            </label>
+            <select
+              value={roleId}
+              onChange={(e) => setRoleId(e.target.value)}
+              disabled={loadingCriteria || loading}
+              style={inputStyle}
+            >
               <option value="">Select role</option>
               {roles.map((role) => (
-                <option key={role.id} value={role.id}>{role.name}</option>
+                <option key={role.id} value={role.id}>
+                  {role.name}
+                </option>
               ))}
             </select>
           </div>
 
-          {isStudentRole ? (
+          {isStudentRole && (
             <>
+              {/* Class */}
               <div>
-                <label style={{ display: "block", marginBottom: 4 }}>Class *</label>
-                <select value={classId} onChange={(e) => setClassId(e.target.value)} style={{ width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} disabled={loading}>
+                <label style={{ display: "block", marginBottom: 5, fontSize: 12, fontWeight: 600, color: "var(--ink-2)" }}>
+                  Class <span style={{ color: "var(--err)" }}>*</span>
+                </label>
+                <select
+                  value={classId}
+                  onChange={(e) => setClassId(e.target.value)}
+                  disabled={loading}
+                  style={inputStyle}
+                >
                   <option value="">Select class</option>
-                    {studentClasses.map((item) => (
+                  {studentClasses.map((item) => (
                     <option key={item.id} value={item.id}>{item.name}</option>
                   ))}
                 </select>
               </div>
 
+              {/* Section */}
               <div>
-                <label style={{ display: "block", marginBottom: 4 }}>Section</label>
-                <select value={sectionId} onChange={(e) => setSectionId(e.target.value)} style={{ width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} disabled={loading}>
+                <label style={{ display: "block", marginBottom: 5, fontSize: 12, fontWeight: 600, color: "var(--ink-2)" }}>
+                  Section
+                </label>
+                <select
+                  value={sectionId}
+                  onChange={(e) => setSectionId(e.target.value)}
+                  disabled={loading}
+                  style={inputStyle}
+                >
                   <option value="">Select section</option>
                   {studentFilteredSections.map((item) => (
                     <option key={item.id} value={item.id}>{item.name}</option>
@@ -308,203 +405,331 @@ export function LoginPermissionPanel() {
                 </select>
               </div>
 
+              {/* Student name */}
               <div>
-                <label style={{ display: "block", marginBottom: 4 }}>Name</label>
+                <label style={{ display: "block", marginBottom: 5, fontSize: 12, fontWeight: 600, color: "var(--ink-2)" }}>
+                  Student
+                </label>
                 <select
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  style={{ width: "100%", height: 36, boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }}
+                  style={inputStyle}
                 >
                   <option value="">Select student</option>
                   {studentOptions.map((student) => {
                     const studentName = `${student.first_name || ""} ${student.last_name || ""}`.trim() || `Student ${student.id}`;
-                    const admissionNo = student.admission_no ? ` (${student.admission_no})` : "";
-                    const rollNo = student.roll_no ? ` [Roll: ${student.roll_no}]` : "";
+                    const admNo = student.admission_no ? ` (${student.admission_no})` : "";
+                    const rlNo = student.roll_no ? ` [Roll: ${student.roll_no}]` : "";
                     return (
                       <option key={student.id} value={student.admission_no || String(student.id)}>
-                        {studentName}{admissionNo}{rollNo}
+                        {studentName}{admNo}{rlNo}
                       </option>
                     );
                   })}
                 </select>
               </div>
 
+              {/* Roll No */}
               <div>
-                <label style={{ display: "block", marginBottom: 4 }}>Roll No</label>
-                <input value={rollNo} onChange={(e) => setRollNo(e.target.value)} placeholder="Roll no" style={{ width: "100%", height: 36, boxSizing: "border-box", border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }} />
+                <label style={{ display: "block", marginBottom: 5, fontSize: 12, fontWeight: 600, color: "var(--ink-2)" }}>
+                  Roll No
+                </label>
+                <input
+                  value={rollNo}
+                  onChange={(e) => setRollNo(e.target.value)}
+                  placeholder="Roll no"
+                  style={inputStyle}
+                />
               </div>
             </>
-          ) : null}
+          )}
         </div>
 
-        <div style={{ marginTop: 10, textAlign: "right" }}>
-          <button type="button" onClick={searchUsers} disabled={loadingCriteria || loading} style={{ border: "1px solid var(--primary)", background: "var(--primary)", color: "#fff", borderRadius: 8, padding: "8px 14px", opacity: loadingCriteria || loading ? 0.7 : 1 }}>
-            {loading ? "Searching..." : "Search"}
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            onClick={searchUsers}
+            disabled={loadingCriteria || loading}
+            style={{
+              height: 36,
+              border: "none",
+              background: loadingCriteria || loading ? "var(--ink-3)" : "var(--pu)",
+              color: "#fff",
+              borderRadius: 8,
+              padding: "0 20px",
+              cursor: loadingCriteria || loading ? "not-allowed" : "pointer",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            {loading ? "Searching…" : "Search"}
           </button>
         </div>
       </div>
 
-      {error && <div style={{ marginBottom: 8, color: "var(--danger)" }}>{error}</div>}
-      {message && <div style={{ marginBottom: 8, color: "var(--primary)" }}>{message}</div>}
-
-      <div style={{ background: "var(--surface)", border: "1px solid var(--line)", borderRadius: 10, overflow: "auto" }}>
+      {/* Table */}
+      <div
+        style={{
+          background: "var(--bg-1)",
+          border: "1px solid var(--bd)",
+          borderRadius: 14,
+          boxShadow: "var(--sh-2)",
+          overflow: "auto",
+        }}
+      >
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isStudentRole ? 1250 : 980 }}>
           <thead>
-            <tr style={{ background: "var(--surface-muted)" }}>
+            <tr>
               {isStudentRole ? (
                 <>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Admission</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Roll</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Name</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Class</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Student Permission</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Student Password</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Parent Permission</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Parent Password</th>
+                  <th style={thCell}>Admission</th>
+                  <th style={thCell}>Roll</th>
+                  <th style={thCell}>Name</th>
+                  <th style={thCell}>Class</th>
+                  <th style={thCell}>Student Login</th>
+                  <th style={thCell}>Student Password</th>
+                  <th style={thCell}>Parent Login</th>
+                  <th style={thCell}>Parent Password</th>
                 </>
               ) : (
                 <>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Staff No</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Name</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Role</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Email</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Login Permission</th>
-                  <th style={{ textAlign: "left", padding: 8, borderBottom: "1px solid var(--line)" }}>Password</th>
+                  <th style={thCell}>Staff No</th>
+                  <th style={thCell}>Name</th>
+                  <th style={thCell}>Role</th>
+                  <th style={thCell}>Email</th>
+                  <th style={thCell}>Login Access</th>
+                  <th style={thCell}>Password</th>
                 </>
               )}
             </tr>
           </thead>
           <tbody>
-            {!loading && rows.length === 0 && (
+            {loading && (
               <tr>
-                <td colSpan={tableColSpan} style={{ padding: 10, color: "var(--text-muted)" }}>
-                  No users found. Select role and click search.
+                <td colSpan={tableColSpan} style={{ ...tdCell, color: "var(--ink-3)", textAlign: "center", padding: 32 }}>
+                  Loading…
                 </td>
               </tr>
             )}
-            {loading && (
+            {!loading && rows.length === 0 && (
               <tr>
-                <td colSpan={tableColSpan} style={{ padding: 10, color: "var(--text-muted)" }}>Loading...</td>
+                <td colSpan={tableColSpan} style={{ ...tdCell, color: "var(--ink-3)", textAlign: "center", padding: 32 }}>
+                  No users found. Select a role and click Search.
+                </td>
               </tr>
             )}
-            {!loading && rows.map((row) => (
-              <tr key={row.user_id ?? row.admission_no ?? row.username}>
-                {isStudentRole ? (
-                  <>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.admission_no || "-"}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.roll_no || "-"}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.name}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                      {row.class_name ? `${row.class_name}${row.section_name ? ` (${row.section_name})` : ""}` : "-"}
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                      {row.user_id ? (
-                        <input
-                          type="checkbox"
+            {!loading &&
+              rows.map((row) => (
+                <tr
+                  key={row.user_id ?? row.admission_no ?? row.username}
+                  style={{ transition: "background 0.1s" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-2)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "")}
+                >
+                  {isStudentRole ? (
+                    <>
+                      <td style={tdCell}>{row.admission_no || "—"}</td>
+                      <td style={tdCell}>{row.roll_no || "—"}</td>
+                      <td style={{ ...tdCell, fontWeight: 500 }}>{row.name}</td>
+                      <td style={tdCell}>
+                        {row.class_name
+                          ? `${row.class_name}${row.section_name ? ` (${row.section_name})` : ""}`
+                          : "—"}
+                      </td>
+                      <td style={tdCell}>
+                        {row.user_id ? (
+                          <AccessToggle
+                            checked={row.access_status}
+                            disabled={actionType === "toggle" && actionUserId === row.user_id}
+                            onChange={(v) => void toggle(row.user_id, v)}
+                          />
+                        ) : (
+                          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>Not linked</span>
+                        )}
+                      </td>
+                      <td style={tdCell}>
+                        {row.user_id ? (
+                          <PasswordCell
+                            userId={row.user_id}
+                            value={passwordMap[row.user_id] || ""}
+                            onChange={(v) => setPasswordMap((prev) => ({ ...prev, [row.user_id]: v }))}
+                            onUpdate={() => void resetPassword(row.user_id, false)}
+                            onDefault={() => void resetPassword(row.user_id, true)}
+                          />
+                        ) : (
+                          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>Not linked</span>
+                        )}
+                      </td>
+                      <td style={tdCell}>
+                        {row.parent_user_id ? (
+                          <AccessToggle
+                            checked={Boolean(row.parent_access_status)}
+                            disabled={actionType === "toggle" && actionUserId === row.parent_user_id}
+                            onChange={(v) => void toggle(row.parent_user_id!, v)}
+                          />
+                        ) : (
+                          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>Not linked</span>
+                        )}
+                      </td>
+                      <td style={tdCell}>
+                        {row.parent_user_id ? (
+                          <PasswordCell
+                            userId={row.parent_user_id}
+                            value={passwordMap[row.parent_user_id] || ""}
+                            onChange={(v) =>
+                              setPasswordMap((prev) => ({ ...prev, [row.parent_user_id!]: v }))
+                            }
+                            onUpdate={() => void resetPassword(row.parent_user_id!, false)}
+                            onDefault={() => void resetPassword(row.parent_user_id!, true)}
+                          />
+                        ) : (
+                          <span style={{ fontSize: 12, color: "var(--ink-3)" }}>Not linked</span>
+                        )}
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td style={tdCell}>{row.staff_no || "—"}</td>
+                      <td style={{ ...tdCell, fontWeight: 500 }}>{row.name}</td>
+                      <td style={tdCell}>{row.role_name}</td>
+                      <td style={tdCell}>{row.email || "—"}</td>
+                      <td style={tdCell}>
+                        <AccessToggle
                           checked={row.access_status}
                           disabled={actionType === "toggle" && actionUserId === row.user_id}
-                          onChange={(event) => void toggle(row.user_id, event.target.checked)}
+                          onChange={(v) => void toggle(row.user_id, v)}
                         />
-                      ) : (
-                        <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Not linked</span>
-                      )}
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                      {row.user_id ? (
-                        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                          <input
-                            type="text"
-                            value={passwordMap[row.user_id] || ""}
-                            onChange={(event) => setPasswordMap((prev) => ({ ...prev, [row.user_id]: event.target.value }))}
-                            placeholder="New password"
-                            style={{ height: 30, minWidth: 120, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }}
-                          />
-                          <button type="button" onClick={() => void resetPassword(row.user_id, false)} style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 6, padding: "5px 8px" }}>
-                            Update
-                          </button>
-                          <button type="button" onClick={() => void resetPassword(row.user_id, true)} style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 6, padding: "5px 8px" }}>
-                            Default
-                          </button>
-                          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Default = 123456</span>
-                        </div>
-                      ) : (
-                        <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Not linked</span>
-                      )}
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                      {row.parent_user_id ? (
-                        <input
-                          type="checkbox"
-                          checked={Boolean(row.parent_access_status)}
-                          disabled={actionType === "toggle" && actionUserId === row.parent_user_id}
-                          onChange={(event) => void toggle(row.parent_user_id!, event.target.checked)}
-                        />
-                      ) : (
-                        <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Not linked</span>
-                      )}
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                      {row.parent_user_id ? (
-                        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                          <input
-                            type="text"
-                            value={passwordMap[row.parent_user_id] || ""}
-                            onChange={(event) => setPasswordMap((prev) => ({ ...prev, [row.parent_user_id!]: event.target.value }))}
-                            placeholder="Parent password"
-                            style={{ height: 30, minWidth: 120, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }}
-                          />
-                          <button type="button" onClick={() => void resetPassword(row.parent_user_id!, false)} style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 6, padding: "5px 8px" }}>
-                            Update
-                          </button>
-                          <button type="button" onClick={() => void resetPassword(row.parent_user_id!, true)} style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 6, padding: "5px 8px" }}>
-                            Default
-                          </button>
-                          <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Default = 123456</span>
-                        </div>
-                      ) : (
-                        <span style={{ color: "var(--text-muted)", fontSize: 12 }}>Not linked</span>
-                      )}
-                    </td>
-                  </>
-                ) : (
-                  <>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.staff_no || "-"}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.name}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.role_name}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.email || "-"}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                      <input
-                        type="checkbox"
-                        checked={row.access_status}
-                        disabled={actionType === "toggle" && actionUserId === row.user_id}
-                        onChange={(event) => void toggle(row.user_id, event.target.checked)}
-                      />
-                    </td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                        <input
-                          type="text"
+                      </td>
+                      <td style={tdCell}>
+                        <PasswordCell
+                          userId={row.user_id}
                           value={passwordMap[row.user_id] || ""}
-                          onChange={(event) => setPasswordMap((prev) => ({ ...prev, [row.user_id]: event.target.value }))}
-                          placeholder="New password"
-                          style={{ height: 30, minWidth: 120, border: "1px solid var(--line)", borderRadius: 6, padding: "0 8px" }}
+                          onChange={(v) => setPasswordMap((prev) => ({ ...prev, [row.user_id]: v }))}
+                          onUpdate={() => void resetPassword(row.user_id, false)}
+                          onDefault={() => void resetPassword(row.user_id, true)}
                         />
-                        <button type="button" onClick={() => void resetPassword(row.user_id, false)} style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 6, padding: "5px 8px" }}>
-                          Update
-                        </button>
-                        <button type="button" onClick={() => void resetPassword(row.user_id, true)} style={{ border: "1px solid var(--line)", background: "var(--surface)", borderRadius: 6, padding: "5px 8px" }}>
-                          Default
-                        </button>
-                        <span style={{ fontSize: 12, color: "var(--text-muted)" }}>Default = 123456</span>
-                      </div>
-                    </td>
-                  </>
-                )}
-              </tr>
-            ))}
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))}
           </tbody>
         </table>
       </div>
     </section>
+  );
+}
+
+/* ── Small reusable sub-components ─────────────────────────────── */
+
+function AccessToggle({
+  checked,
+  disabled,
+  onChange,
+}: {
+  checked: boolean;
+  disabled: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <label
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        cursor: disabled ? "not-allowed" : "pointer",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ width: 15, height: 15, accentColor: "var(--pu)", cursor: disabled ? "not-allowed" : "pointer" }}
+      />
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          borderRadius: 20,
+          padding: "2px 8px",
+          background: checked ? "#F0FDF4" : "#FEF2F2",
+          color: checked ? "var(--ok)" : "var(--err)",
+          border: `1px solid ${checked ? "#BBF7D0" : "#FECACA"}`,
+        }}
+      >
+        {checked ? "Active" : "Blocked"}
+      </span>
+    </label>
+  );
+}
+
+function PasswordCell({
+  userId,
+  value,
+  onChange,
+  onUpdate,
+  onDefault,
+}: {
+  userId: number;
+  value: string;
+  onChange: (v: string) => void;
+  onUpdate: () => void;
+  onDefault: () => void;
+}) {
+  void userId;
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="New password"
+        style={{
+          height: 30,
+          minWidth: 120,
+          border: "1px solid var(--bd)",
+          borderRadius: 6,
+          padding: "0 8px",
+          fontSize: 12,
+          background: "var(--bg-1)",
+          color: "var(--ink-1)",
+        }}
+      />
+      <button
+        type="button"
+        onClick={onUpdate}
+        style={{
+          height: 30,
+          border: "1px solid var(--bd)",
+          background: "var(--bg-1)",
+          borderRadius: 6,
+          padding: "0 10px",
+          fontSize: 12,
+          cursor: "pointer",
+          color: "var(--ink-2)",
+          fontWeight: 500,
+        }}
+      >
+        Update
+      </button>
+      <button
+        type="button"
+        onClick={onDefault}
+        style={{
+          height: 30,
+          border: "1px solid var(--bd)",
+          background: "var(--bg-1)",
+          borderRadius: 6,
+          padding: "0 10px",
+          fontSize: 12,
+          cursor: "pointer",
+          color: "var(--ink-3)",
+        }}
+        title="Reset to 123456"
+      >
+        Default
+      </button>
+    </div>
   );
 }

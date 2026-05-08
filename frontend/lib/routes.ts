@@ -94,8 +94,7 @@ export const MODULES: ModuleRoute[] = [
     ic: '#6D28D9',
     permission: 'roles',
     sub: [
-      { label: 'Role', path: '/roles', icon: ShieldCheck },
-      { label: 'Assign Permission', path: '/roles/assign-permission', icon: Lock },
+      { label: 'Roles & Assign Permissions', path: '/roles/assign-permission', icon: Lock },
       { label: 'Login Permission', path: '/roles/login-permission', icon: LogIn },
       { label: 'Due Fees Login', path: '/roles/due-fees-login-permission', icon: ShieldAlert },
     ],

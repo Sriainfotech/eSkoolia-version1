@@ -3,6 +3,7 @@ from .views import (
 	DueFeesLoginPermissionViewSet,
 	LoginAccessControlViewSet,
 	PermissionViewSet,
+	RoleTemplateViewSet,
 	RoleViewSet,
 	UserRoleViewSet,
 )
@@ -13,5 +14,6 @@ router.register("roles", RoleViewSet, basename="role")
 router.register("user-roles", UserRoleViewSet, basename="user-role")
 router.register("login-access-control", LoginAccessControlViewSet, basename="login-access-control")
 router.register("due-fees-login-permission", DueFeesLoginPermissionViewSet, basename="due-fees-login-permission")
+router.register("role-templates", RoleTemplateViewSet, basename="role-template")
 
 urlpatterns = router.urls

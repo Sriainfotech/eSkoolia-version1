@@ -1,10 +1,9 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
-import { PaginationControls } from "@/components/common/PaginationControls";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { usePersistentPagination } from "@/hooks/usePersistentPagination";
 
@@ -15,41 +14,20 @@ type RoleItem = {
   created_at: string;
 };
 
-function boxStyle() {
-  return {
-    background: "var(--surface)",
-    border: "1px solid var(--line)",
-    borderRadius: "var(--radius)",
-    padding: 14,
-  } as const;
+/** Deterministic background colour per role name — no hardcoding */
+function getRoleColor(name: string): string {
+  const palette = [
+    "#F3E8FF", "#EFF6FF", "#DCFCE7", "#FEF9C3",
+    "#EEEAFF", "#FEF3C7", "#E0F2FE", "#FCE7F3", "#FEF2F2", "#D1FAE5",
+  ];
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return palette[Math.abs(hash) % palette.length];
 }
 
-function inputStyle() {
-  return {
-    width: "100%",
-    height: 40,
-    border: "1px solid var(--line)",
-    borderRadius: 8,
-    padding: "0 10px",
-  } as const;
-}
-
-function buttonStyle(color = "var(--primary)") {
-  return {
-    height: 36,
-    border: `1px solid ${color}`,
-    background: color,
-    color: "#fff",
-    borderRadius: 8,
-    padding: "0 12px",
-    cursor: "pointer",
-    fontSize: 13,
-    textDecoration: "none",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-  } as const;
-}
+type PanelMode = "add" | "edit" | null;
 
 export function RoleManagementPanel() {
   const { page, pageSize, setPage, setPageSize } = usePersistentPagination("roles.list", 1, 10);
@@ -66,6 +44,9 @@ export function RoleManagementPanel() {
   const [roleName, setRoleName] = useState("");
   const [editingRoleId, setEditingRoleId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
+
+  const [panelMode, setPanelMode] = useState<PanelMode>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const loadRoles = async (targetPage = page, targetPageSize = pageSize) => {
     setLoading(true);
@@ -85,9 +66,7 @@ export function RoleManagementPanel() {
   };
 
   useEffect(() => {
-    const handle = window.setTimeout(() => {
-      void loadRoles();
-    }, 250);
+    const handle = window.setTimeout(() => { void loadRoles(); }, 250);
     return () => window.clearTimeout(handle);
   }, [page, pageSize, search]);
 
@@ -99,6 +78,28 @@ export function RoleManagementPanel() {
     setFieldError("");
   };
 
+  const closePanel = () => {
+    setPanelMode(null);
+    resetForm();
+    setError("");
+    setSuccess("");
+  };
+
+  const openAddPanel = () => {
+    resetForm();
+    setPanelMode("add");
+    setTimeout(() => nameInputRef.current?.focus(), 50);
+  };
+
+  const openEditPanel = (row: RoleItem) => {
+    setEditingRoleId(row.id);
+    setRoleName(row.name);
+    setFieldError("");
+    setSuccess("");
+    setPanelMode("edit");
+    setTimeout(() => nameInputRef.current?.focus(), 50);
+  };
+
   const isValidRoleName = (value: string) => /^[A-Za-z0-9 ]+$/.test(value);
 
   const submit = async (event: FormEvent) => {
@@ -106,17 +107,12 @@ export function RoleManagementPanel() {
     const normalized = roleName.trim();
     if (!normalized) {
       setFieldError("Role name is required.");
-      setError("Please fix the highlighted field.");
-      setSuccess("");
       return;
     }
     if (!isValidRoleName(normalized)) {
-      setFieldError("Role name can contain only letters, numbers, and spaces.");
-      setError("Please fix the highlighted field.");
-      setSuccess("");
+      setFieldError("Only letters, numbers, and spaces are allowed.");
       return;
     }
-
     try {
       setSaving(true);
       setError("");
@@ -128,26 +124,16 @@ export function RoleManagementPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: normalized }),
       });
-      resetForm();
-      setSuccess(isUpdate ? "Role updated successfully." : "Role created successfully.");
+      setSuccess(isUpdate ? `"${normalized}" updated.` : `"${normalized}" created.`);
+      closePanel();
       await loadRoles(page, pageSize);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to save role.";
       setError(message);
-      setSuccess("");
-      if (message.toLowerCase().includes("name")) {
-        setFieldError(message);
-      }
+      if (message.toLowerCase().includes("name")) setFieldError(message);
     } finally {
       setSaving(false);
     }
-  };
-
-  const startEdit = (row: RoleItem) => {
-    setEditingRoleId(row.id);
-    setRoleName(row.name);
-    setFieldError("");
-    setSuccess("");
   };
 
   const remove = async (id: number) => {
@@ -157,13 +143,12 @@ export function RoleManagementPanel() {
       setSuccess("");
       await apiRequestWithRefresh(`/api/v1/access-control/roles/${id}/`, { method: "DELETE" });
       if (editingRoleId === id) resetForm();
-      setSuccess("Role deleted successfully.");
+      setSuccess("Role deleted.");
       const nextRoles = roles.filter((row) => row.id !== id);
-      if (nextRoles.length === 0 && page > 1) {
-        setPage(page - 1);
-      }
-      await loadRoles(nextRoles.length === 0 && page > 1 ? page - 1 : page, pageSize);
-    } catch (err) {
+      const nextPage = nextRoles.length === 0 && page > 1 ? page - 1 : page;
+      if (nextPage !== page) setPage(nextPage);
+      await loadRoles(nextPage, pageSize);
+    } catch {
       setError("Unable to delete role.");
     } finally {
       setDeletingId(null);
@@ -172,127 +157,313 @@ export function RoleManagementPanel() {
   };
 
   return (
-    <section className="admin-visitor-area up_st_admin_visitor">
-      <div style={{ marginBottom: 14 }}>
-        <h1 style={{ margin: 0, fontSize: 24 }}>Role Permission</h1>
-      </div>
+    <section style={{ maxWidth: 1280, margin: "0 auto", padding: "24px 24px 40px" }}>
 
-      {error && <div style={{ color: "var(--warning)", marginBottom: 10 }}>{error}</div>}
-      {success && <div style={{ color: "#16a34a", marginBottom: 10 }}>{success}</div>}
-
-      <div style={{ display: "grid", gridTemplateColumns: "330px 1fr", gap: 12 }}>
-        <div style={boxStyle()}>
-          <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingRoleId ? "Edit Role" : "Add Role"}</h3>
-          <form onSubmit={submit} style={{ display: "grid", gap: 10 }}>
-            <label style={{ display: "grid", gap: 6 }}>
-              <span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>NAME *</span>
-              <input
-                value={roleName}
-                onChange={(e) => {
-                  setRoleName(e.target.value);
-                  if (fieldError) setFieldError("");
-                  if (error) setError("");
-                }}
-                style={{
-                  ...inputStyle(),
-                  borderColor: fieldError ? "#dc2626" : "var(--line)",
-                  boxShadow: fieldError ? "0 0 0 2px rgba(220, 38, 38, 0.15)" : "none",
-                }}
-              />
-              {fieldError ? (
-                <span id="role-name-error" style={{ fontSize: 12, color: "#dc2626" }}>
-                  {fieldError}
-                </span>
-              ) : null}
-            </label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="submit" disabled={saving} style={buttonStyle()}>
-                {saving ? "Saving..." : "Save"}
-              </button>
-              {editingRoleId ? (
-                <button type="button" onClick={resetForm} style={buttonStyle("#6b7280")}>Cancel</button>
-              ) : null}
-            </div>
-          </form>
+      {/* ── Page header ── */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20 }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "var(--ink-1)" }}>
+            Role{" "}
+            <em style={{ color: "var(--pu)", fontStyle: "italic", fontWeight: 300 }}>Permission</em>
+          </h1>
+          <p style={{ margin: "4px 0 0", fontSize: 12, color: "var(--ink-3)" }}>
+            Define roles and control which pages each role can access
+          </p>
         </div>
-
-        <div style={boxStyle()}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <h3 style={{ margin: 0 }}>Role List</h3>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {/* Search */}
+          <div style={{ position: "relative" }}>
+            <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--ink-3)", pointerEvents: "none" }}>🔍</span>
             <input
               value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                  setPage(1);
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              placeholder="Search roles…"
+              style={{
+                paddingLeft: 30, paddingRight: 12, height: 36,
+                border: "1px solid var(--bd)", borderRadius: 8,
+                fontSize: 12, color: "var(--ink-1)", background: "var(--bg-1)",
+                outline: "none", width: 200,
               }}
-              placeholder="Search"
-              style={{ ...inputStyle(), width: 280, height: 36 }}
+              onFocus={(e) => (e.target.style.borderColor = "var(--pu)")}
+              onBlur={(e) => (e.target.style.borderColor = "var(--bd)")}
             />
           </div>
-
-          {loading ? <div style={{ color: "var(--text-muted)" }}>Loading...</div> : null}
-
-          {!loading && (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
-                  <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Role</th>
-                  <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Type</th>
-                  <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {roles.map((row) => (
-                  <tr key={row.id}>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.name}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.is_system ? "System" : "Custom"}</td>
-                    <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <Link href={`/roles/assign-permission/${row.id}`} style={buttonStyle("#7c3aed")}>Assign Permission</Link>
-                        <button type="button" onClick={() => startEdit(row)} style={buttonStyle("#0ea5e9")}>Edit</button>
-                        {!row.is_system ? (
-                          <button type="button" onClick={() => setDeleteCandidate(row)} style={buttonStyle("#dc2626")}>Delete</button>
-                        ) : null}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {roles.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} style={{ padding: 12, borderBottom: "1px solid var(--line)", color: "var(--text-muted)" }}>
-                      No Data Available.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          )}
-
-          <PaginationControls
-            currentPage={page}
-            totalPages={totalPages}
-            totalItems={totalCount}
-            pageSize={pageSize}
-            loading={loading}
-            onPageChange={(nextPage) => setPage(nextPage)}
-            onPageSizeChange={(nextSize) => {
-              setPageSize(nextSize);
-              setPage(1);
+          <button
+            type="button"
+            onClick={openAddPanel}
+            style={{
+              height: 36, background: "var(--pu)", color: "#fff",
+              border: "none", borderRadius: 8, padding: "0 16px",
+              fontSize: 12, fontWeight: 600, cursor: "pointer",
             }}
-          />
+          >
+            + New Role
+          </button>
         </div>
       </div>
 
+      {/* ── Feedback banners ── */}
+      {error && (
+        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "8px 14px", marginBottom: 12, fontSize: 12, color: "var(--err)" }}>
+          {error}
+        </div>
+      )}
+      {success && (
+        <div style={{ background: "#DCFCE7", border: "1px solid #BBF7D0", borderRadius: 8, padding: "8px 14px", marginBottom: 12, fontSize: 12, color: "#16A34A" }}>
+          {success}
+        </div>
+      )}
+
+      {/* ── Split layout: cards + editor panel ── */}
+      <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+
+        {/* ── Role cards ── */}
+        <div style={{
+          flex: 1, minWidth: 0,
+          background: "var(--bg-1)", border: "1px solid var(--bd)",
+          borderRadius: 14, boxShadow: "var(--sh-2)", padding: 20,
+        }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 14 }}>
+            All Roles{!loading ? ` · ${totalCount} defined` : ""}
+          </div>
+
+          {loading ? (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} style={{ height: 54, borderRadius: 10, background: "var(--bg-2)", animation: "pulse 1.5s ease-in-out infinite" }} />
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+
+              {roles.map((role) => {
+                const isSelected = panelMode === "edit" && editingRoleId === role.id;
+                const bgColor = getRoleColor(role.name);
+                return (
+                  <div
+                    key={role.id}
+                    style={{
+                      border: `1.5px solid ${isSelected ? "var(--pu)" : "var(--bd)"}`,
+                      borderRadius: 10, padding: "10px 12px",
+                      background: isSelected ? "#FAFAFF" : "var(--bg-1)",
+                      cursor: "pointer", position: "relative",
+                      display: "flex", alignItems: "center", gap: 10,
+                      transition: "border-color 0.15s",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isSelected) e.currentTarget.style.borderColor = "#C4B5FD";
+                      const actions = e.currentTarget.querySelector<HTMLElement>(".role-hover-actions");
+                      if (actions) actions.style.opacity = "1";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isSelected) e.currentTarget.style.borderColor = "var(--bd)";
+                      const actions = e.currentTarget.querySelector<HTMLElement>(".role-hover-actions");
+                      if (actions) actions.style.opacity = "0";
+                    }}
+                  >
+                    {/* Icon: first letter, deterministic colour */}
+                    <div style={{
+                      width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+                      background: bgColor,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 13, fontWeight: 700, color: "var(--ink-2)",
+                    }}>
+                      {role.name.charAt(0).toUpperCase()}
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {role.name}
+                      </div>
+                      <div style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 2 }}>
+                        {role.is_system ? "System" : "Custom"}
+                      </div>
+                    </div>
+
+                    {/* Hover actions */}
+                    <div
+                      className="role-hover-actions"
+                      style={{ position: "absolute", top: 6, right: 6, display: "flex", gap: 4, opacity: 0, transition: "opacity 0.15s" }}
+                    >
+                      <button
+                        type="button"
+                        title="Assign permissions"
+                        onClick={(e) => { e.stopPropagation(); }}
+                        style={{ width: 22, height: 22, borderRadius: 5, border: "none", background: "var(--pu-soft)", color: "var(--pu)", cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}
+                      >
+                        <Link href={`/roles/assign-permission/${role.id}`} style={{ color: "inherit", textDecoration: "none", fontSize: 10 }} title="Assign">🔑</Link>
+                      </button>
+                      <button
+                        type="button"
+                        title="Edit role"
+                        onClick={(e) => { e.stopPropagation(); openEditPanel(role); }}
+                        style={{ width: 22, height: 22, borderRadius: 5, border: "none", background: "var(--bg-2)", color: "var(--pu)", cursor: "pointer", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center" }}
+                      >✏</button>
+                      {!role.is_system && (
+                        <button
+                          type="button"
+                          title="Delete role"
+                          onClick={(e) => { e.stopPropagation(); setDeleteCandidate(role); }}
+                          style={{ width: 22, height: 22, borderRadius: 5, border: "none", background: "#FEF2F2", color: "var(--err)", cursor: "pointer", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center" }}
+                        >🗑</button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Add New Role dashed card */}
+              <div
+                onClick={openAddPanel}
+                style={{
+                  border: "1.5px dashed var(--bd)", borderRadius: 10,
+                  padding: "10px 12px", cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 10,
+                  color: "var(--ink-3)", fontSize: 12, background: "transparent",
+                  transition: "border-color 0.15s",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--pu)"; e.currentTarget.style.color = "var(--pu)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--bd)"; e.currentTarget.style.color = "var(--ink-3)"; }}
+              >
+                <div style={{ width: 30, height: 30, borderRadius: 8, border: "1.5px dashed var(--bd)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>+</div>
+                Add New Role
+              </div>
+
+              {roles.length === 0 && !loading && (
+                <div style={{ gridColumn: "1 / -1", textAlign: "center", padding: "32px 24px", color: "var(--ink-3)", fontSize: 13 }}>
+                  No roles found{search ? ` matching "${search}"` : ""}. Create your first role.
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ marginTop: 12, fontSize: 11, color: "var(--ink-2)", background: "var(--bg-2)", borderRadius: 8, padding: "8px 12px" }}>
+            Hover any card → <strong style={{ color: "var(--ink-1)" }}>🔑 assign permissions</strong> · <strong style={{ color: "var(--ink-1)" }}>✏ edit</strong> · <strong style={{ color: "var(--ink-1)" }}>🗑 delete</strong>
+          </div>
+
+          {/* Pagination — only shown when there are multiple pages */}
+          {totalPages > 1 && (
+            <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12, color: "var(--ink-3)" }}>
+              <span>Showing {roles.length} of {totalCount}</span>
+              <div style={{ display: "flex", gap: 6 }}>
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setPage(p)}
+                    style={{
+                      width: 28, height: 28, borderRadius: 6, border: "1px solid var(--bd)",
+                      background: p === page ? "var(--pu)" : "var(--bg-1)",
+                      color: p === page ? "#fff" : "var(--ink-2)",
+                      cursor: "pointer", fontSize: 12, fontWeight: p === page ? 600 : 400,
+                    }}
+                  >{p}</button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Slide-in editor panel ── */}
+        {panelMode !== null && (
+          <div style={{
+            width: 290, flexShrink: 0,
+            border: "1.5px solid var(--pu)", borderRadius: 10,
+            background: "#FAFAFF", overflow: "hidden",
+            boxShadow: "var(--sh-2)",
+          }}>
+            {/* Header */}
+            <div style={{
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "12px 14px",
+              background: panelMode === "add" ? "var(--pu-soft)" : "#EFF6FF",
+              borderBottom: "1px solid #C4B5FD",
+            }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--pu-deep)" }}>
+                {panelMode === "add" ? "+ New Role" : "✏ Edit Role"}
+              </span>
+              <button
+                type="button"
+                onClick={closePanel}
+                style={{ background: "none", border: "none", fontSize: 18, color: "var(--ink-3)", cursor: "pointer", lineHeight: 1 }}
+              >×</button>
+            </div>
+
+            {/* Body */}
+            <form onSubmit={submit}>
+              <div style={{ padding: 14 }}>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>
+                    Role Name *
+                  </label>
+                  <input
+                    ref={nameInputRef}
+                    value={roleName}
+                    onChange={(e) => { setRoleName(e.target.value); if (fieldError) setFieldError(""); }}
+                    placeholder="e.g. Sports Coordinator"
+                    style={{
+                      width: "100%", padding: "8px 10px",
+                      border: `1px solid ${fieldError ? "var(--err)" : "var(--bd)"}`,
+                      borderRadius: 8, fontSize: 12, color: "var(--ink-1)",
+                      background: "var(--bg-1)", outline: "none", fontFamily: "inherit",
+                      boxShadow: fieldError ? "0 0 0 2px rgba(224,70,58,0.1)" : "none",
+                    }}
+                    onFocus={(e) => { if (!fieldError) e.target.style.borderColor = "var(--pu)"; e.target.style.boxShadow = "0 0 0 2px rgba(109,74,255,0.1)"; }}
+                    onBlur={(e) => { if (!fieldError) e.target.style.borderColor = "var(--bd)"; e.target.style.boxShadow = "none"; }}
+                  />
+                  {fieldError && (
+                    <span style={{ fontSize: 11, color: "var(--err)", marginTop: 4, display: "block" }}>{fieldError}</span>
+                  )}
+                </div>
+
+                <div style={{ background: "var(--bg-2)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "var(--ink-2)" }}>
+                  {panelMode === "add"
+                    ? "After creating, use the 🔑 button on the card to assign page permissions."
+                    : "Changing the name does not affect existing permissions."}
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div style={{ display: "flex", gap: 8, padding: "12px 14px", borderTop: "1px solid var(--bd)", background: "var(--bg-1)" }}>
+                <button
+                  type="button"
+                  onClick={closePanel}
+                  style={{ flex: 1, padding: "7px 14px", borderRadius: 8, border: "1px solid var(--bd)", background: "var(--bg-1)", color: "var(--ink-2)", fontSize: 11, cursor: "pointer" }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  style={{ flex: 1, padding: "7px 14px", borderRadius: 8, border: "none", background: saving ? "var(--ink-3)" : "var(--pu)", color: "#fff", fontSize: 11, fontWeight: 600, cursor: saving ? "not-allowed" : "pointer" }}
+                >
+                  {saving ? "Saving…" : panelMode === "add" ? "Create Role" : "Save Changes"}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+      </div>
+
+      {/* ── Delete confirmation modal (existing, untouched) ── */}
       <ConfirmationModal
         isOpen={deleteCandidate !== null}
         title="Delete Role"
-        message="Are you sure you want to delete this record?"
+        message={`Are you sure you want to delete "${deleteCandidate?.name}"? This cannot be undone.`}
         confirmLabel="Delete"
         cancelLabel="Cancel"
         isConfirming={deletingId !== null}
-        onConfirm={() => deleteCandidate ? void remove(deleteCandidate.id) : undefined}
+        onConfirm={() => (deleteCandidate ? void remove(deleteCandidate.id) : undefined)}
         onCancel={() => setDeleteCandidate(null)}
       />
+
+      <style jsx global>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.4; }
+        }
+      `}</style>
     </section>
   );
 }

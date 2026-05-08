@@ -14,9 +14,10 @@ from apps.fees.models import FeesAssignment
 from apps.hr.models import Staff
 from apps.students.models import Student, StudentMultiClassRecord
 
-from .models import Permission, Role, UserRole
+from .models import AccessTier, ModuleAccessTier, Permission, Role, RoleModuleAccess, RoleTemplate, UserRole
 from .permission_classes import CanManageRoles, CanManageUserRoles, CanViewPermissions
 from .serializers import PermissionSerializer, RoleSerializer, UserRoleSerializer
+from .services import apply_template_to_role, infer_tier_for_role_module, sync_role_module_permissions
 from config.pagination import ApiPageNumberPagination
 
 User = get_user_model()
@@ -325,6 +326,109 @@ class RoleViewSet(StandardizedAccessControlResponseMixin, viewsets.ModelViewSet)
                 "role_id": role.id,
                 "permission_ids": list(permissions_qs.values_list("id", flat=True)),
             },
+        )
+
+    @action(detail=True, methods=["get", "post"], url_path="module-access")
+    def module_access(self, request, pk=None):
+        """
+        GET  → returns current tier for every known module for this role.
+        POST → { "module": "fees", "tier": "view" }
+               Sets the tier and syncs RolePermission rows for that module.
+        """
+        role = self.get_object()
+
+        if request.method == "GET":
+            known_modules = list(
+                ModuleAccessTier.objects.values_list("module", flat=True).distinct()
+            )
+            existing = {
+                rma.module: rma.tier
+                for rma in RoleModuleAccess.objects.filter(role=role)
+            }
+            result = []
+            for module in sorted(set(known_modules)):
+                tier = existing.get(module, AccessTier.NONE)
+                tier_counts = {}
+                for mat in ModuleAccessTier.objects.filter(module=module):
+                    tier_counts[mat.tier] = mat.permissions.count()
+                result.append({
+                    "module": module,
+                    "tier": tier,
+                    "tier_counts": tier_counts,
+                })
+            return self.success_response("Module access retrieved.", result)
+
+        # POST
+        module = (request.data.get("module") or "").strip()
+        tier = request.data.get("tier", AccessTier.NONE)
+        if not module:
+            return self.error_response("module is required.", status.HTTP_400_BAD_REQUEST)
+        valid_tiers = [t[0] for t in AccessTier.choices]
+        if tier not in valid_tiers:
+            return self.error_response(f"Invalid tier '{tier}'.", status.HTTP_400_BAD_REQUEST)
+
+        rma, _ = RoleModuleAccess.objects.update_or_create(
+            role=role, module=module, defaults={"tier": tier}
+        )
+        sync_role_module_permissions(rma)
+        return self.success_response(
+            f"Module '{module}' tier set to '{tier}' and permissions synced.",
+            {"module": module, "tier": tier},
+        )
+
+    @action(detail=True, methods=["post"], url_path="apply-template")
+    def apply_template(self, request, pk=None):
+        """
+        POST { "template_id": 3 }
+        Applies a RoleTemplate's module_tiers to this role.
+        """
+        role = self.get_object()
+        template_id = request.data.get("template_id")
+        try:
+            template = RoleTemplate.objects.get(pk=template_id)
+        except RoleTemplate.DoesNotExist:
+            return self.error_response("Template not found.", status.HTTP_404_NOT_FOUND)
+
+        apply_template_to_role(role, template)
+        return self.success_response(
+            f"Template '{template.name}' applied to role '{role.name}'.",
+            {"template": template.name, "applied_modules": list(template.module_tiers.keys())},
+        )
+
+    @action(detail=True, methods=["get"], url_path="module-access/infer")
+    def infer_module_access(self, request, pk=None):
+        """
+        GET → Infers tiers from existing RolePermission rows.
+        Returns suggested tiers without writing anything.
+        """
+        role = self.get_object()
+        modules = list(
+            ModuleAccessTier.objects.values_list("module", flat=True).distinct()
+        )
+        suggestions = []
+        for module in sorted(set(modules)):
+            inferred = infer_tier_for_role_module(role, module)
+            suggestions.append({"module": module, "suggested_tier": inferred})
+        return self.success_response("Tier inference complete.", suggestions)
+
+
+class RoleTemplateViewSet(StandardizedAccessControlResponseMixin, viewsets.ReadOnlyModelViewSet):
+    """Read-only list of available role templates for the Apply Template dropdown."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return RoleTemplate.objects.all()
+
+    def list(self, request, *args, **kwargs):
+        qs = self.get_queryset()
+        data = [{"id": t.id, "name": t.name, "description": t.description} for t in qs]
+        return self.success_response("Templates retrieved.", data)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        return self.success_response(
+            "Template retrieved.",
+            {"id": instance.id, "name": instance.name, "description": instance.description, "module_tiers": instance.module_tiers},
         )
 
 
