@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
 	StudentAttendanceBulkStoreAPIView,
+	StudentAttendanceChatbotMarkAPIView,
 	ClassAttendanceSummaryAPIView,
 	StudentAttendanceDailySummaryAPIView,
 	StudentAttendanceExportAPIView,
@@ -37,6 +38,7 @@ urlpatterns = [
 	path("student-attendance/index/", StudentAttendanceIndexAPIView.as_view(), name="student-attendance-index"),
 	path("student-attendance/import/", StudentAttendanceImportAPIView.as_view(), name="student-attendance-import"),
 	path("student-attendance/download-sample/", StudentAttendanceDownloadSampleAPIView.as_view(), name="student-attendance-download-sample"),
+	path("student-attendance/chatbot-mark/", StudentAttendanceChatbotMarkAPIView.as_view(), name="student-attendance-chatbot-mark"),
 	path("student-attendance/bulk-store/", StudentAttendanceBulkStoreAPIView.as_view(), name="student-attendance-bulk-store"),
 	path("student-attendance/student-search/", StudentSearchAPIView.as_view(), name="student-search"),
 	path("student-attendance/store/", StudentAttendanceStoreAPIView.as_view(), name="student-attendance-store"),

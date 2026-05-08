@@ -10,8 +10,10 @@ import { API_BASE_URL } from '@/lib/api';
 import { parseIntent } from '@/lib/aiBotIntent';
 import { StudentLookupResults, type StudentResult } from './aibot/StudentLookupResults';
 import { StudentProfilePopup } from './aibot/StudentProfilePopup';
-import { EnquiryLookupResults, type EnquiryResult, searchMockEnquiries } from './aibot/EnquiryLookupResults';
+import { EnquiryLookupResults, type EnquiryResult } from './aibot/EnquiryLookupResults';
 import { EnquiryProfilePopup } from './aibot/EnquiryProfilePopup';
+import { AbsenceFlow, type AbsenceResult } from './aibot/AbsenceFlow';
+import { IssueFlow, type IssueType } from './aibot/IssueFlow';
 
 /** Shape returned by /api/v1/students/students/ list endpoint */
 interface RawStudentAPI {
@@ -100,6 +102,10 @@ interface Msg {
   collapsed?: boolean;
   collapsedCount?: number;
   isTyping?: boolean;
+  phonePrompt?: string;
+  quickActions?: boolean;
+  absenceFlow?: { prefillName?: string };
+  issueFlow?: { type: IssueType };
 }
 
 interface TodoItem {
@@ -144,6 +150,8 @@ export function AIBot() {
     } catch { return []; }
   });
   const [showTodos, setShowTodos] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const [showChips, setShowChips] = useState(false);
   const [todoInput, setTodoInput] = useState('');
   const router = useRouter();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -164,7 +172,7 @@ export function AIBot() {
   const handleOpen = useCallback(() => {
     setOpen(true);
     if (msgs.length === 0) {
-      addMsg({ role: 'bot', text: "Hi — I'm your eskoolia assistant. I can find students, navigate pages, answer parent questions, compose messages, and add tasks to your planner. Try 'find Priya Sharma', 'add wednesday 10am staff meeting', or 'compose message about fees'." });
+      addMsg({ role: 'bot', text: "Hi — I'm your eskoolia assistant. I can log parent calls (absence, bus issues, etc.), find students, check enquiries by phone number, navigate pages, and add tasks to your planner. Try a quick action below, or type a student name, phone number, or page." });
     } else {
       setMsgs(prev => {
         const resultCount = prev.filter(m => m.results || m.redirect).length;
@@ -200,6 +208,88 @@ export function AIBot() {
       return;
     }
 
+    // Phone number lookup — check for existing enquiry
+    if (intent.kind === 'phone-lookup') {
+      setLoading(true);
+      addMsg({ role: 'bot', isTyping: true, text: '' });
+      try {
+        const token = getAccessToken();
+        const res = await fetch(
+          `${API_BASE_URL}/api/v1/admissions/inquiries/?phone=${encodeURIComponent(intent.phone)}&limit=10`,
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+        );
+        const data = res.ok ? await res.json() : { results: [] };
+        const raw: Record<string, unknown>[] = Array.isArray(data) ? data : (data.results ?? []);
+        const list: EnquiryResult[] = raw.map((i) => ({
+          id: i.id as number,
+          student_name: (i.full_name ?? i.child_name ?? i.student_name ?? '') as string,
+          parent_name: (i.parent_name ?? i.guardian_name ?? '') as string,
+          phone: (i.phone ?? '') as string,
+          email: (i.email ?? '') as string,
+          address: (i.address ?? '') as string,
+          description: (i.description ?? '') as string,
+          class_applied: (i.school_class_name ?? i.class_applied ?? '') as string,
+          status: (i.active_status ?? i.status ?? 'new') as string,
+          query_date: (i.query_date ?? null) as string | null,
+          follow_up_date: (i.follow_up_date ?? null) as string | null,
+          next_follow_up_date: (i.next_follow_up_date ?? null) as string | null,
+          assigned: (i.assigned ?? '') as string,
+          source_name: (i.source_name ?? '') as string,
+          lead_score: (i.lead_score ?? 0) as number,
+          documents_status: (i.documents_status ?? '') as string,
+          note: (i.note ?? '') as string,
+          no_of_child: (i.no_of_child ?? 1) as number,
+          family_id: i.family_id as number | undefined,
+          sibling_ids: i.sibling_ids as number[] | undefined,
+        }));
+        setMsgs(prev => {
+          const withoutTyping = prev.filter(m => !m.isTyping);
+          if (list.length > 0) {
+            return [...withoutTyping, {
+              id: uid(), role: 'bot' as const, text: '',
+              enquiryResults: list, enquiryQuery: intent.phone,
+            }];
+          }
+          return [...withoutTyping, {
+            id: uid(), role: 'bot' as const, text: '',
+            phonePrompt: intent.phone,
+          }];
+        });
+      } catch {
+        setMsgs(prev => {
+          const withoutTyping = prev.filter(m => !m.isTyping);
+          return [...withoutTyping, { id: uid(), role: 'bot' as const, text: 'Could not check enquiry data. Please try again.' }];
+        });
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    // Report Absence
+    if (intent.kind === 'report-absence') {
+      addMsg({ role: 'bot', text: 'Let me help you log this absence.', absenceFlow: { prefillName: intent.query || undefined } });
+      return;
+    }
+
+    // Report Bus Issue
+    if (intent.kind === 'report-bus') {
+      addMsg({ role: 'bot', text: "I'll log this bus issue.", issueFlow: { type: 'bus' } });
+      return;
+    }
+
+    // Report Lunch Concern
+    if (intent.kind === 'report-lunch') {
+      addMsg({ role: 'bot', text: "I'll log this lunch concern.", issueFlow: { type: 'lunch' } });
+      return;
+    }
+
+    // Emergency Pickup
+    if (intent.kind === 'report-emergency') {
+      addMsg({ role: 'bot', text: "I'll log this emergency pickup request.", issueFlow: { type: 'emergency' } });
+      return;
+    }
+
     // Student lookup
     if (intent.kind === 'student-lookup') {
       setLoading(true);
@@ -225,10 +315,50 @@ export function AIBot() {
       return;
     }
 
-    // Enquiry lookup (static mock data)
+    // Enquiry lookup (live API)
     if (intent.kind === 'enquiry-lookup') {
-      const results = searchMockEnquiries(intent.query);
-      setMsgs(prev => [...prev, { id: uid(), role: 'bot' as const, text: '', enquiryResults: results, enquiryQuery: intent.query }]);
+      setLoading(true);
+      try {
+        const token = getAccessToken();
+        const res = await fetch(
+          `${API_BASE_URL}/api/v1/admissions/inquiries/?search=${encodeURIComponent(intent.query)}&limit=5`,
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+        );
+        const data = res.ok ? await res.json() : { results: [] };
+        const list: EnquiryResult[] = (Array.isArray(data) ? data : (data.results ?? [])).map((i: Record<string, unknown>) => ({
+          id: i.id as number,
+          student_name: (i.full_name ?? i.child_name ?? i.student_name ?? '') as string,
+          parent_name: (i.parent_name ?? i.guardian_name ?? '') as string,
+          phone: (i.phone ?? i.contact_number ?? '') as string,
+          email: (i.email ?? '') as string,
+          address: (i.address ?? '') as string,
+          description: (i.description ?? '') as string,
+          class_applied: (i.school_class_name ?? i.class_applied ?? i.grade ?? '') as string,
+          status: (i.active_status ?? i.status ?? 'new') as string,
+          query_date: (i.query_date ?? null) as string | null,
+          follow_up_date: (i.follow_up_date ?? null) as string | null,
+          next_follow_up_date: (i.next_follow_up_date ?? null) as string | null,
+          assigned: (i.assigned ?? '') as string,
+          source_name: (i.source_name ?? '') as string,
+          lead_score: (i.lead_score ?? 0) as number,
+          documents_status: (i.documents_status ?? '') as string,
+          note: (i.note ?? '') as string,
+          no_of_child: (i.no_of_child ?? 1) as number,
+          family_id: i.family_id as number | undefined,
+          sibling_ids: i.sibling_ids as number[] | undefined,
+        }));
+        setMsgs(prev => {
+          const withoutTyping = prev.filter(m => !m.isTyping);
+          return [...withoutTyping, { id: uid(), role: 'bot' as const, text: '', enquiryResults: list, enquiryQuery: intent.query }];
+        });
+      } catch {
+        setMsgs(prev => {
+          const withoutTyping = prev.filter(m => !m.isTyping);
+          return [...withoutTyping, { id: uid(), role: 'bot' as const, text: 'Could not fetch enquiry data. Please try again.' }];
+        });
+      } finally {
+        setLoading(false);
+      }
       return;
     }
 
@@ -612,6 +742,109 @@ export function AIBot() {
                           />
                         </div>
                       )}
+                      {m.phonePrompt && (
+                        <div style={{
+                          width: '100%', padding: '12px', border: '1px solid var(--bd)',
+                          borderRadius: 10, background: 'var(--bg-0)',
+                        }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink-1)', marginBottom: 4 }}>
+                            📵 No enquiry found
+                          </div>
+                          <div style={{ fontSize: 11.5, color: 'var(--ink-2)', marginBottom: 10 }}>
+                            No existing enquiry for <strong>{m.phonePrompt}</strong>. Would you like to create a new enquiry for this number?
+                          </div>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                              onClick={() => {
+                                router.push(`/admissions/command-center?prefill_phone=${encodeURIComponent(m.phonePrompt!)}`);
+                                setOpen(false);
+                              }}
+                              style={{
+                                fontSize: 11.5, fontWeight: 600, color: '#fff',
+                                background: 'var(--pu)', border: 'none', borderRadius: 8,
+                                padding: '6px 14px', cursor: 'pointer',
+                              }}
+                            >
+                              ✚ Create New Enquiry
+                            </button>
+                            <button
+                              onClick={() => router.push('/admissions/command-center')}
+                              style={{
+                                fontSize: 11.5, fontWeight: 600, color: 'var(--pu)',
+                                background: 'var(--pu-soft)', border: 'none', borderRadius: 8,
+                                padding: '6px 14px', cursor: 'pointer',
+                              }}
+                            >
+                              Open Admissions
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {m.quickActions && (
+                        <div style={{ width: '100%', marginTop: 6 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
+                            📞 Log a Parent Call
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                            {([
+                              { icon: '🏥', label: 'Absence', color: '#dc2626', bg: 'rgba(220,38,38,0.07)', border: 'rgba(220,38,38,0.3)', action: 'absence' },
+                              { icon: '🚌', label: 'Bus Issue', color: '#d97706', bg: 'rgba(217,119,6,0.07)', border: 'rgba(217,119,6,0.3)', action: 'bus' },
+                              { icon: '🍱', label: 'Lunch', color: '#16a34a', bg: 'rgba(22,163,74,0.07)', border: 'rgba(22,163,74,0.3)', action: 'lunch' },
+                              { icon: '🚨', label: 'Pickup', color: '#7c3aed', bg: 'rgba(124,58,237,0.07)', border: 'rgba(124,58,237,0.3)', action: 'emergency' },
+                            ] as const).map(c => (
+                              <button
+                                key={c.action}
+                                onClick={() => {
+                                  if (c.action === 'absence') {
+                                    addMsg({ role: 'bot', text: 'Let me help you log this absence.', absenceFlow: {} });
+                                  } else {
+                                    const labels = { bus: 'bus issue', lunch: 'lunch concern', emergency: 'emergency pickup' } as const;
+                                    addMsg({ role: 'bot', text: `I'll log this ${labels[c.action]}.`, issueFlow: { type: c.action } });
+                                  }
+                                }}
+                                style={{
+                                  fontSize: 10.5, padding: '4px 10px', border: `1px solid ${c.border}`,
+                                  borderRadius: 20, background: c.bg, cursor: 'pointer',
+                                  color: c.color, fontWeight: 600, transition: 'all 0.12s',
+                                }}
+                                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = c.bg.replace('0.07', '0.18'); }}
+                                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = c.bg; }}
+                              >{c.icon} {c.label}</button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {m.absenceFlow && (
+                        <div style={{ width: '100%' }}>
+                          <AbsenceFlow
+                            prefillName={m.absenceFlow.prefillName}
+                            onComplete={(result: AbsenceResult) => {
+                              setMsgs(prev => prev.filter(x => x.id !== m.id));
+                              const dateLabel = new Date(result.date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+                              const classLabel = [result.className, result.sectionName].filter(Boolean).join('-');
+                              addMsg({ role: 'bot', text: `✅ **${result.studentName}** (${classLabel}) marked absent for ${dateLabel}.\n_Reason: ${result.notes}_\n\nAttendance has been updated in the system.` });
+                            }}
+                            onCancel={() => {
+                              setMsgs(prev => prev.filter(x => x.id !== m.id));
+                            }}
+                          />
+                        </div>
+                      )}
+                      {m.issueFlow && (
+                        <div style={{ width: '100%' }}>
+                          <IssueFlow
+                            type={m.issueFlow.type}
+                            onComplete={(note: string) => {
+                              setMsgs(prev => prev.filter(x => x.id !== m.id));
+                              const labels: Record<IssueType, string> = { bus: '🚌 Bus issue', lunch: '🍱 Lunch concern', emergency: '🚨 Emergency pickup' };
+                              addMsg({ role: 'bot', text: `✅ ${labels[m.issueFlow!.type]} logged:\n_"${note}"_\n\nPlease follow up with the relevant staff.` });
+                            }}
+                            onCancel={() => {
+                              setMsgs(prev => prev.filter(x => x.id !== m.id));
+                            }}
+                          />
+                        </div>
+                      )}
                     </>
                   )}
                 </div>
@@ -652,92 +885,86 @@ export function AIBot() {
               <Send size={14} color="#fff" />
             </button>
             </div>
-            <p style={{ fontSize: 10.5, color: 'var(--ink-3)', margin: '0 0 4px', padding: '0 4px', textAlign: 'center' }}>
-              Tip — find students by name, navigate to pages, add planner tasks, or compose messages
+            <p style={{ fontSize: 10, color: 'var(--ink-3)', margin: '0', padding: '0 4px', textAlign: 'center' }}>
+              Type a student name, phone number, or page name
             </p>
-            {/* Smart quick-action chips */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, justifyContent: 'center', marginBottom: 2 }}>
-              {/* Navigation chips — go directly */}
-              {[
-                { label: '📋 Attendance', q: 'student attendance' },
-                { label: '💰 Fee dues', q: 'fees due' },
-                { label: '🚌 Live bus', q: 'live bus tracking' },
-                { label: '📅 Exam schedule', q: 'exam schedule' },
-                { label: '📝 Marks', q: 'marks register' },
-                { label: '🏥 Sick bay', q: 'sick bay' },
-                { label: '📢 Broadcast', q: 'send broadcast' },
-              ].map(c => (
-                <button
-                  key={c.q}
-                  onClick={() => ask(c.q)}
-                  style={{
-                    fontSize: 10.5, padding: '3px 9px', border: '1px solid var(--bd)',
-                    borderRadius: 20, background: 'var(--bg-2)', cursor: 'pointer',
-                    color: 'var(--ink-2)', transition: 'all 0.12s',
-                  }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--pu-soft)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--pu)'; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-2)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--ink-2)'; }}
-                >
-                  {c.label}
-                </button>
-              ))}
-              {/* Student search chip — prompts user to type a name */}
-              <button
-                onClick={() => { setInput('find '); setTimeout(() => inputRef.current?.focus(), 50); }}
-                style={{
-                  fontSize: 10.5, padding: '3px 9px',
-                  border: '1px solid rgba(109,74,255,0.4)',
-                  borderRadius: 20, background: 'var(--pu-soft)', cursor: 'pointer',
-                  color: 'var(--pu)', fontWeight: 600, transition: 'all 0.12s',
-                }}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--pu)'; (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--pu-soft)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--pu)'; }}
-              >
-                🎓 Find student…
-              </button>
-              {/* Enquiry search chip */}
-              <button
-                onClick={() => { setInput('find enquiry '); setTimeout(() => inputRef.current?.focus(), 50); }}
-                style={{
-                  fontSize: 10.5, padding: '3px 9px',
-                  border: '1px solid rgba(234,88,12,0.4)',
-                  borderRadius: 20, background: '#FEF3C7', cursor: 'pointer',
-                  color: '#92400E', fontWeight: 600, transition: 'all 0.12s',
-                }}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#EA580C'; (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#FEF3C7'; (e.currentTarget as HTMLButtonElement).style.color = '#92400E'; }}
-              >
-                📋 Find enquiry…
-              </button>
-              {/* Planner chip */}
-              <button
-                onClick={() => { setInput('add wednesday 10am '); setTimeout(() => inputRef.current?.focus(), 50); }}
-                style={{
-                  fontSize: 10.5, padding: '3px 9px',
-                  border: '1px solid rgba(59,130,246,0.4)',
-                  borderRadius: 20, background: '#DBEAFE', cursor: 'pointer',
-                  color: '#1E40AF', fontWeight: 600, transition: 'all 0.12s',
-                }}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#3B82F6'; (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#DBEAFE'; (e.currentTarget as HTMLButtonElement).style.color = '#1E40AF'; }}
-              >
-                📅 Add to planner…
-              </button>
-              {/* Compose chip */}
-              <button
-                onClick={() => { setInput('compose message about '); setTimeout(() => inputRef.current?.focus(), 50); }}
-                style={{
-                  fontSize: 10.5, padding: '3px 9px',
-                  border: '1px solid rgba(5,150,105,0.4)',
-                  borderRadius: 20, background: '#D1FAE5', cursor: 'pointer',
-                  color: '#065F46', fontWeight: 600, transition: 'all 0.12s',
-                }}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#059669'; (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#D1FAE5'; (e.currentTarget as HTMLButtonElement).style.color = '#065F46'; }}
-              >
-                ✍️ Compose message…
-              </button>
-            </div>
+            {/* Collapsible quick-actions */}
+            <button
+              onClick={() => setShowChips(s => !s)}
+              style={{
+                width: '100%', background: 'var(--bg-2)', border: '1px solid var(--bd)',
+                borderRadius: 8, padding: '5px 10px', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                fontSize: 11, color: 'var(--ink-2)', fontWeight: 500,
+              }}
+            >
+              <span>⚡ Quick actions</span>
+              <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{showChips ? '▲ hide' : '▼ show'}</span>
+            </button>
+            {showChips && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {/* ── Group 1: Call-log actions ── */}
+                <div>
+                  <div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>
+                    📞 Log a Call
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                    {([
+                      { label: '🏥 Absence', q: 'report absence', color: '#dc2626', bg: 'rgba(220,38,38,0.07)', border: 'rgba(220,38,38,0.3)' },
+                      { label: '🚌 Bus Issue', q: 'bus late', color: '#d97706', bg: 'rgba(217,119,6,0.07)', border: 'rgba(217,119,6,0.3)' },
+                      { label: '🍱 Lunch', q: 'forgot lunch', color: '#16a34a', bg: 'rgba(22,163,74,0.07)', border: 'rgba(22,163,74,0.3)' },
+                      { label: '🚨 Pickup', q: 'emergency pickup', color: '#7c3aed', bg: 'rgba(124,58,237,0.07)', border: 'rgba(124,58,237,0.3)' },
+                    ] as const).map(c => (
+                      <button key={c.q} onClick={() => { ask(c.q); setShowChips(false); }} style={{
+                        fontSize: 10.5, padding: '4px 10px', border: `1px solid ${c.border}`,
+                        borderRadius: 20, background: c.bg, cursor: 'pointer',
+                        color: c.color, fontWeight: 600, transition: 'all 0.12s',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = c.bg.replace('0.07', '0.18'); }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = c.bg; }}
+                      >{c.label}</button>
+                    ))}
+                  </div>
+                </div>
+                {/* ── Group 2: Navigate ── */}
+                <div>
+                  <div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>
+                    🔗 Go To
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                    {[
+                      { label: '📋 Attendance', q: 'student attendance' },
+                      { label: '💰 Fee dues', q: 'fees due' },
+                      { label: '🚌 Live bus', q: 'live bus tracking' },
+                      { label: '📅 Exam schedule', q: 'exam schedule' },
+                      { label: '📝 Marks', q: 'marks register' },
+                      { label: '🏥 Sick bay', q: 'sick bay' },
+                      { label: '📢 Broadcast', q: 'send broadcast' },
+                    ].map(c => (
+                      <button key={c.q} onClick={() => { ask(c.q); setShowChips(false); }} style={{
+                        fontSize: 10.5, padding: '3px 9px', border: '1px solid var(--bd)',
+                        borderRadius: 20, background: 'var(--bg-2)', cursor: 'pointer',
+                        color: 'var(--ink-2)', transition: 'all 0.12s',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--pu-soft)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--pu)'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--bg-2)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--ink-2)'; }}
+                      >{c.label}</button>
+                    ))}
+                  </div>
+                </div>
+                {/* ── Group 3: Search & Tools ── */}
+                <div>
+                  <div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 4 }}>
+                    🔍 Search & Tools
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                    <button onClick={() => { setInput('find '); setShowChips(false); setTimeout(() => inputRef.current?.focus(), 50); }} style={{ fontSize: 10.5, padding: '3px 9px', border: '1px solid rgba(109,74,255,0.4)', borderRadius: 20, background: 'var(--pu-soft)', cursor: 'pointer', color: 'var(--pu)', fontWeight: 600, transition: 'all 0.12s' }} onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--pu)'; (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }} onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--pu-soft)'; (e.currentTarget as HTMLButtonElement).style.color = 'var(--pu)'; }}>🎓 Find student…</button>
+                    <button onClick={() => { setInput('find enquiry '); setShowChips(false); setTimeout(() => inputRef.current?.focus(), 50); }} style={{ fontSize: 10.5, padding: '3px 9px', border: '1px solid rgba(234,88,12,0.4)', borderRadius: 20, background: '#FEF3C7', cursor: 'pointer', color: '#92400E', fontWeight: 600, transition: 'all 0.12s' }} onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#EA580C'; (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }} onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#FEF3C7'; (e.currentTarget as HTMLButtonElement).style.color = '#92400E'; }}>📋 Find enquiry…</button>
+                    <button onClick={() => { setInput('add wednesday 10am '); setShowChips(false); setTimeout(() => inputRef.current?.focus(), 50); }} style={{ fontSize: 10.5, padding: '3px 9px', border: '1px solid rgba(59,130,246,0.4)', borderRadius: 20, background: '#DBEAFE', cursor: 'pointer', color: '#1E40AF', fontWeight: 600, transition: 'all 0.12s' }} onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = '#3B82F6'; (e.currentTarget as HTMLButtonElement).style.color = '#fff'; }} onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = '#DBEAFE'; (e.currentTarget as HTMLButtonElement).style.color = '#1E40AF'; }}>📅 Add to planner…</button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

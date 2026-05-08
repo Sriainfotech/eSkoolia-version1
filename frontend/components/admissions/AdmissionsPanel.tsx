@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ToastContainer, toast } from "react-toastify";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
@@ -28,6 +28,9 @@ type Inquiry = {
   school_class: number | null;
   class_name_resolved?: string;
   no_of_child: number;
+  child_name: string;
+  has_sibling_enrolled: string;
+  sibling_name: string;
   active_status: number;
   status: string;
   note: string;
@@ -61,6 +64,9 @@ type InquiryForm = {
   source: string;
   school_class: string;
   no_of_child: string;
+  child_name: string;
+  has_sibling_enrolled: string;
+  sibling_name: string;
   active_status: "1" | "2";
   status: string;
   note: string;
@@ -113,6 +119,9 @@ const initialForm = (): InquiryForm => {
     source: "",
     school_class: "",
     no_of_child: "1",
+    child_name: "",
+    has_sibling_enrolled: "",
+    sibling_name: "",
     active_status: "1",
     status: "new",
     note: "",
@@ -266,6 +275,11 @@ export function AdmissionsPanel() {
   const [statusFilter, setStatusFilter] = useState("");
   const [filterErrors, setFilterErrors] = useState<Record<string, string>>({});
   const [rowActions, setRowActions] = useState<Record<number, "" | "add_query" | "edit" | "delete">>({});
+
+  // Club/group toggle: when true, enquiries with same phone are grouped
+  const [clubbedView, setClubbedView] = useState(false);
+  // Track which parent groups are expanded (phone → bool)
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -453,7 +467,7 @@ export function AdmissionsPanel() {
     }
 
     if (key === "assigned") {
-      if (!value.trim()) return phase === "input" ? "" : "Assigned staff member is required.";
+      if (!value.trim()) return ""; // optional
       if (value.trim().length < 2) return "Name must be at least 2 characters.";
       if (!/[A-Za-z]/.test(value)) return "Assigned name must contain letters.";
       const meaningful = validateMeaningfulField(key, value, "Assigned");
@@ -461,17 +475,15 @@ export function AdmissionsPanel() {
     }
 
     if (key === "reference") {
-      if (!value) return phase === "input" ? "" : "Reference is required. Please select a reference.";
-      return "";
+      return ""; // optional
     }
 
     if (key === "source") {
-      if (!value) return phase === "input" ? "" : "Source is required. Please select a source.";
-      return "";
+      return ""; // optional
     }
 
     if (key === "no_of_child") {
-      if (!value.trim()) return phase === "input" ? "" : "Number of children is required.";
+      if (!value.trim()) return ""; // optional, defaults to 1
       const count = Number(value);
       if (count < 1) return "Must be at least 1.";
       if (count > 20) return "Cannot exceed 20.";
@@ -479,14 +491,14 @@ export function AdmissionsPanel() {
     }
 
     if (key === "query_date") {
-      if (!value) return phase === "input" ? "" : "Query date is required.";
+      if (!value) return ""; // optional
       if (value > today) return "Query date cannot be in the future.";
       if (value < sixtyDaysAgo) return "Query date cannot be older than 60 days.";
       return "";
     }
 
     if (key === "next_follow_up_date") {
-      if (!value) return phase === "input" ? "" : "Next follow-up date is required.";
+      if (!value) return ""; // optional
       if (value < today) return "Follow-up date cannot be in the past.";
       if (value > fortyFiveDaysAhead) return "Follow-up date cannot be more than 45 days ahead.";
       if (form.query_date && value < form.query_date) return "Follow-up date must be on or after the Query Date.";
@@ -669,6 +681,7 @@ export function AdmissionsPanel() {
   };
 
   const validateAll = () => {
+    // Only full_name and phone are mandatory; all other fields are optional
     const keys: (keyof InquiryForm)[] = [
       "full_name",
       "phone",
@@ -679,8 +692,6 @@ export function AdmissionsPanel() {
       "query_date",
       "next_follow_up_date",
       "assigned",
-      "reference",
-      "source",
       "no_of_child",
     ];
 
@@ -746,13 +757,16 @@ export function AdmissionsPanel() {
       email: form.email.trim(),
       address: composedAddress,
       description: form.description.trim(),
-      query_date: form.query_date,
-      next_follow_up_date: form.next_follow_up_date,
+      query_date: form.query_date || null,
+      next_follow_up_date: form.next_follow_up_date || null,
       assigned: form.assigned.trim(),
-      reference: Number(form.reference),
-      source: Number(form.source),
+      reference: form.reference ? Number(form.reference) : null,
+      source: form.source ? Number(form.source) : null,
       school_class: form.school_class ? Number(form.school_class) : null,
-      no_of_child: Number(form.no_of_child),
+      no_of_child: form.no_of_child ? Number(form.no_of_child) : 1,
+      child_name: form.child_name.trim(),
+      has_sibling_enrolled: form.has_sibling_enrolled,
+      sibling_name: form.sibling_name.trim(),
       active_status: Number(form.active_status),
       status: form.status,
       note: form.note.trim(),
@@ -819,6 +833,9 @@ export function AdmissionsPanel() {
       source: row.source ? String(row.source) : "",
       school_class: row.school_class ? String(row.school_class) : "",
       no_of_child: String(row.no_of_child || 1),
+      child_name: row.child_name || "",
+      has_sibling_enrolled: row.has_sibling_enrolled || "",
+      sibling_name: row.sibling_name || "",
       active_status: String(row.active_status || 1) as "1" | "2",
       status: row.status || "new",
       note: row.note || "",
@@ -918,7 +935,7 @@ export function AdmissionsPanel() {
     if (item.next_follow_up_date && item.next_follow_up_date < todayDate) {
       return {
         active: true,
-        tooltip: `⚠ Follow-up is overdue. Next follow-up was due on ${item.next_follow_up_date}.`,
+        tooltip: `⚠ Follow-up is overdue. Next follow-up was due on ${formatDisplayDate(item.next_follow_up_date)}.`,
       };
     }
     if (item.query_date && item.next_follow_up_date && item.query_date === item.next_follow_up_date) {
@@ -928,6 +945,78 @@ export function AdmissionsPanel() {
       };
     }
     return { active: false, tooltip: "" };
+  };
+
+  // Build grouped structure for clubbed view: group by phone
+  const groupedByPhone = useMemo(() => {
+    const map = new Map<string, Inquiry[]>();
+    for (const item of sorted) {
+      const key = item.phone || `__nophone_${item.id}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(item);
+    }
+    return map;
+  }, [sorted]);
+
+  const toggleGroup = (phone: string) => {
+    setExpandedGroups((prev) => ({ ...prev, [phone]: !prev[phone] }));
+  };
+
+  const renderInquiryRow = (item: Inquiry, alert: { active: boolean; tooltip: string }, isTodayFollowUp: boolean, indented: boolean) => {
+    const hasSiblingInEnquiry = (item.no_of_child || 1) >= 2;
+    const hasSiblingEnrolled = item.has_sibling_enrolled === "yes";
+    return (
+      <tr key={item.id} className={`${alert.active ? "date-alert" : ""} ${isTodayFollowUp ? "aq-today-row" : ""}`.trim()} title={alert.tooltip}>
+        <td style={{ padding: 10, borderBottom: "1px solid var(--line)", paddingLeft: indented ? 28 : 10 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink-1)" }}>{item.full_name || "-"}</div>
+          {item.child_name && (
+            <div style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 2 }}>👦 {item.child_name}</div>
+          )}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+            {hasSiblingInEnquiry && (
+              <span className="aq-tag aq-tag-sibling">👥 {item.no_of_child} siblings in enquiry</span>
+            )}
+            {hasSiblingEnrolled && (
+              <span className="aq-tag aq-tag-enrolled">
+                🏫 Sibling enrolled{item.sibling_name ? `: ${item.sibling_name}` : ""}
+              </span>
+            )}
+          </div>
+        </td>
+        <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>{item.phone || "-"}</td>
+        <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}><span className={`source-badge ${sourceSlug(item.source_name || "")}`}>{item.source_name || "N/A"}</span></td>
+        <td style={{ padding: 10, borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" }}>{formatDisplayDate(item.query_date)}</td>
+        <td style={{ padding: 10, borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" }}>{formatDisplayDate(item.follow_up_date)}</td>
+        <td style={{ padding: 10, borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" }}>
+          {formatDisplayDate(item.next_follow_up_date)}
+          {isTodayFollowUp ? <div className="aq-today-badge">FOLLOW-UP TODAY</div> : null}
+        </td>
+        <td style={{ padding: 10, borderBottom: "1px solid var(--line)", minWidth: 230 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, alignItems: "center" }}>
+            <select
+              value={rowActions[item.id] || ""}
+              onChange={(event) => setRowActions((prev) => ({ ...prev, [item.id]: event.target.value as "" | "add_query" | "edit" | "delete" }))}
+              style={fieldStyle()}
+            >
+              <option value="" disabled>Select Action</option>
+              <option value="add_query">Add Query</option>
+              <option value="edit">Edit</option>
+              <option value="delete">Delete</option>
+            </select>
+            <button
+              type="button"
+              disabled={!rowActions[item.id] || deletingId === item.id}
+              onClick={() => void runSelectedAction(item)}
+              style={buttonStyle(selectedActionButton(rowActions[item.id] || "").color)}
+            >
+              {deletingId === item.id && (rowActions[item.id] || "") === "delete"
+                ? "Deleting..."
+                : selectedActionButton(rowActions[item.id] || "").label}
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
   };
 
   const searchNow = async () => {
@@ -1105,22 +1194,22 @@ export function AdmissionsPanel() {
                 <SectionDivider title="QUERY DETAILS" />
 
                 <div className="form-group">
-                  <label htmlFor="aq-query-date">Query Date *</label>
-                  <input id="aq-query-date" name="query_date" type="date" required min={sixtyDaysAgo} max={today} value={form.query_date} onChange={(e) => void handleQueryDateChange(e.target.value)} onBlur={() => handleBlur("query_date")} style={fieldStyle(Boolean(fieldErrors.query_date))} />
+                  <label htmlFor="aq-query-date">Query Date</label>
+                  <input id="aq-query-date" name="query_date" type="date" min={sixtyDaysAgo} max={today} value={form.query_date} onChange={(e) => void handleQueryDateChange(e.target.value)} onBlur={() => handleBlur("query_date")} style={fieldStyle(Boolean(fieldErrors.query_date))} />
                   <small className="form-error text-danger" style={{ display: fieldErrors.query_date ? "block" : "none" }}>{fieldErrors.query_date || ""}</small>
                   {fieldWarnings.query_date ? <small className="date-warning-text">{fieldWarnings.query_date}</small> : null}
                 </div>
 
                 <div className="form-group">
-                  <label htmlFor="aq-followup-date">Next Follow-up Date *</label>
-                  <input id="aq-followup-date" name="next_followup_date" type="date" required min={today} max={fortyFiveDaysAhead} value={form.next_follow_up_date} onChange={(e) => void handleNextFollowDateChange(e.target.value)} onBlur={() => handleBlur("next_follow_up_date")} style={fieldStyle(Boolean(fieldErrors.next_follow_up_date))} />
+                  <label htmlFor="aq-followup-date">Next Follow-up Date</label>
+                  <input id="aq-followup-date" name="next_followup_date" type="date" min={today} max={fortyFiveDaysAhead} value={form.next_follow_up_date} onChange={(e) => void handleNextFollowDateChange(e.target.value)} onBlur={() => handleBlur("next_follow_up_date")} style={fieldStyle(Boolean(fieldErrors.next_follow_up_date))} />
                   <small className="form-error text-danger" style={{ display: fieldErrors.next_follow_up_date ? "block" : "none" }}>{fieldErrors.next_follow_up_date || ""}</small>
                   {fieldWarnings.next_follow_up_date ? <small className="date-warning-text">{fieldWarnings.next_follow_up_date}</small> : null}
                 </div>
 
                 <div className="form-group">
-                  <label htmlFor="aq-assigned">Assigned *</label>
-                  <input id="aq-assigned" name="assigned" type="text" required minLength={2} maxLength={100} placeholder="e.g. Mr. Sharma" list="aq-assigned-list" value={form.assigned} onChange={(e) => handleInput("assigned", e.target.value)} onBlur={() => handleBlur("assigned")} style={fieldStyle(Boolean(fieldErrors.assigned))} />
+                  <label htmlFor="aq-assigned">Assigned</label>
+                  <input id="aq-assigned" name="assigned" type="text" minLength={2} maxLength={100} placeholder="e.g. Mr. Sharma" list="aq-assigned-list" value={form.assigned} onChange={(e) => handleInput("assigned", e.target.value)} onBlur={() => handleBlur("assigned")} style={fieldStyle(Boolean(fieldErrors.assigned))} />
                   <datalist id="aq-assigned-list">
                     {Array.from(new Set(items.map((x) => x.assigned).filter(Boolean))).map((entry) => <option key={entry} value={entry} />)}
                   </datalist>
@@ -1130,18 +1219,18 @@ export function AdmissionsPanel() {
                 <SectionDivider title="CLASSIFICATION" />
 
                 <div className="form-group">
-                  <label htmlFor="aq-reference">Reference *</label>
-                  <select id="aq-reference" name="reference" required value={form.reference} onChange={(e) => handleInput("reference", e.target.value)} onBlur={() => handleBlur("reference")} style={fieldStyle(Boolean(fieldErrors.reference))}>
-                    <option value="" disabled>Select Reference</option>
+                  <label htmlFor="aq-reference">Reference</label>
+                  <select id="aq-reference" name="reference" value={form.reference} onChange={(e) => handleInput("reference", e.target.value)} onBlur={() => handleBlur("reference")} style={fieldStyle(Boolean(fieldErrors.reference))}>
+                    <option value="">Select Reference</option>
                     {references.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                   </select>
                   <small className="form-error text-danger" style={{ display: fieldErrors.reference ? "block" : "none" }}>{fieldErrors.reference || ""}</small>
                 </div>
 
                 <div className="form-group">
-                  <label htmlFor="aq-source">Source *</label>
-                  <select id="aq-source" name="source" required value={form.source} onChange={(e) => handleInput("source", e.target.value)} onBlur={() => handleBlur("source")} style={fieldStyle(Boolean(fieldErrors.source))}>
-                    <option value="" disabled>Select Source</option>
+                  <label htmlFor="aq-source">Source</label>
+                  <select id="aq-source" name="source" value={form.source} onChange={(e) => handleInput("source", e.target.value)} onBlur={() => handleBlur("source")} style={fieldStyle(Boolean(fieldErrors.source))}>
+                    <option value="">Select Source</option>
                     {sources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                   </select>
                   <small className="form-error text-danger" style={{ display: fieldErrors.source ? "block" : "none" }}>{fieldErrors.source || ""}</small>
@@ -1158,10 +1247,32 @@ export function AdmissionsPanel() {
                 </div>
 
                 <div className="form-group">
-                  <label htmlFor="aq-no-of-child">Number of Children *</label>
-                  <input id="aq-no-of-child" name="no_of_child" type="number" required min={1} max={20} step={1} placeholder="e.g. 1" value={form.no_of_child} onKeyDown={(e) => { if (["e", "E", ".", "+", "-"].includes(e.key)) e.preventDefault(); }} onChange={(e) => handleInput("no_of_child", e.target.value)} onBlur={() => handleBlur("no_of_child")} style={fieldStyle(Boolean(fieldErrors.no_of_child))} />
+                  <label htmlFor="aq-no-of-child">Number of Children</label>
+                  <input id="aq-no-of-child" name="no_of_child" type="number" min={1} max={20} step={1} placeholder="e.g. 1" value={form.no_of_child} onKeyDown={(e) => { if (["e", "E", ".", "+", "-"].includes(e.key)) e.preventDefault(); }} onChange={(e) => handleInput("no_of_child", e.target.value)} onBlur={() => handleBlur("no_of_child")} style={fieldStyle(Boolean(fieldErrors.no_of_child))} />
                   <small className="form-error text-danger" style={{ display: fieldErrors.no_of_child ? "block" : "none" }}>{fieldErrors.no_of_child || ""}</small>
                 </div>
+
+                <div className="form-group">
+                  <label htmlFor="aq-child-name">Child Name</label>
+                  <input id="aq-child-name" name="child_name" type="text" maxLength={100} placeholder="e.g. Arjun Sharma" value={form.child_name} onChange={(e) => setFormValue("child_name", e.target.value)} style={fieldStyle()} />
+                  <small className="field-hint">Name of child seeking admission</small>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="aq-sibling-enrolled">Sibling Already Enrolled?</label>
+                  <select id="aq-sibling-enrolled" name="has_sibling_enrolled" value={form.has_sibling_enrolled} onChange={(e) => setFormValue("has_sibling_enrolled", e.target.value)} style={fieldStyle()}>
+                    <option value="">Select</option>
+                    <option value="no">No</option>
+                    <option value="yes">Yes</option>
+                  </select>
+                </div>
+
+                {form.has_sibling_enrolled === "yes" && (
+                  <div className="form-group">
+                    <label htmlFor="aq-sibling-name">Enrolled Sibling Name</label>
+                    <input id="aq-sibling-name" name="sibling_name" type="text" maxLength={100} placeholder="e.g. Priya Sharma" value={form.sibling_name} onChange={(e) => setFormValue("sibling_name", e.target.value)} style={fieldStyle()} />
+                  </div>
+                )}
 
                 <div className="form-group">
                   <label htmlFor="aq-status">Status</label>
@@ -1180,7 +1291,23 @@ export function AdmissionsPanel() {
             </div>
 
             <div className="white-box" style={{ ...boxStyle(), maxWidth: "100%" }}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>Query List</h3>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                <h3 style={{ margin: 0 }}>Query List</h3>
+                {items.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setClubbedView((v) => !v)}
+                    style={{
+                      fontSize: 12, padding: "4px 12px", borderRadius: 20, border: "1px solid var(--bd)",
+                      background: clubbedView ? "var(--pu)" : "transparent",
+                      color: clubbedView ? "#fff" : "var(--ink-2)", cursor: "pointer", transition: "all 0.15s",
+                    }}
+                    title="Group enquiries from the same parent phone number"
+                  >
+                    {clubbedView ? "👥 Grouped by Parent" : "👥 Group Siblings"}
+                  </button>
+                )}
+              </div>
               {loading ? <div style={{ color: "var(--text-muted)" }}>Loading admission queries...</div> : null}
               {!loading && items.length === 0 ? <div style={{ color: "var(--text-muted)" }}>No admission queries found.</div> : null}
               {!loading && items.length > 0 ? (
@@ -1190,7 +1317,7 @@ export function AdmissionsPanel() {
                       <caption className="sr-only">Admission Query List</caption>
                       <thead>
                         <tr style={{ background: "var(--surface-muted)" }}>
-                          <th scope="col" onClick={() => toggleSort("full_name")} style={{ padding: 10, textAlign: "left", borderBottom: "1px solid var(--line)", cursor: "pointer", whiteSpace: "nowrap" }}>Name {sortKey === "full_name" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
+                          <th scope="col" onClick={() => toggleSort("full_name")} style={{ padding: 10, textAlign: "left", borderBottom: "1px solid var(--line)", cursor: "pointer", whiteSpace: "nowrap" }}>Parent / Child {sortKey === "full_name" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
                           <th scope="col" style={{ padding: 10, textAlign: "left", borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" }}>Phone</th>
                           <th scope="col" style={{ padding: 10, textAlign: "left", borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" }}>Source</th>
                           <th scope="col" onClick={() => toggleSort("query_date")} style={{ padding: 10, textAlign: "left", borderBottom: "1px solid var(--line)", cursor: "pointer", whiteSpace: "nowrap" }}>Query Date {sortKey === "query_date" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
@@ -1200,63 +1327,68 @@ export function AdmissionsPanel() {
                         </tr>
                       </thead>
                       <tbody>
-                        {pageRows.map((item) => {
-                          const alert = getDateAlert(item);
-                          const isTodayFollowUp = isSameDate(item.next_follow_up_date, today);
-                          return (
-                            <tr key={item.id} className={`${alert.active ? "date-alert" : ""} ${isTodayFollowUp ? "aq-today-row" : ""}`.trim()} title={alert.tooltip}>
-                              <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>{item.full_name || "-"}</td>
-                              <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>{item.phone || "-"}</td>
-                              <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}><span className={`source-badge ${sourceSlug(item.source_name || "")}`}>{item.source_name || "N/A"}</span></td>
-                              <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>{formatDisplayDate(item.query_date)}</td>
-                              <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>{formatDisplayDate(item.follow_up_date)}</td>
-                              <td style={{ padding: 10, borderBottom: "1px solid var(--line)" }}>
-                                {formatDisplayDate(item.next_follow_up_date)}
-                                {isTodayFollowUp ? <div className="aq-today-badge">FOLLOW-UP TODAY</div> : null}
-                              </td>
-                              <td style={{ padding: 10, borderBottom: "1px solid var(--line)", minWidth: 230 }}>
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 6, alignItems: "center" }}>
-                                  <select
-                                    value={rowActions[item.id] || ""}
-                                    onChange={(event) => setRowActions((prev) => ({ ...prev, [item.id]: event.target.value as "" | "add_query" | "edit" | "delete" }))}
-                                    style={fieldStyle()}
-                                  >
-                                    <option value="" disabled>Select Action</option>
-                                    <option value="add_query">Add Query</option>
-                                    <option value="edit">Edit</option>
-                                    <option value="delete">Delete</option>
-                                  </select>
-                                  <button
-                                    type="button"
-                                    disabled={!rowActions[item.id] || deletingId === item.id}
-                                    onClick={() => void runSelectedAction(item)}
-                                    style={buttonStyle(selectedActionButton(rowActions[item.id] || "").color)}
-                                  >
-                                    {deletingId === item.id && (rowActions[item.id] || "") === "delete"
-                                      ? "Deleting..."
-                                      : selectedActionButton(rowActions[item.id] || "").label}
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
+                        {clubbedView ? (
+                          // Grouped view: one header row per unique phone, children collapsible
+                          Array.from(groupedByPhone.entries()).map(([phone, group]) => {
+                            const isMulti = group.length > 1;
+                            const isExpanded = expandedGroups[phone] !== false; // expanded by default
+                            const parentName = group[0].full_name;
+                            return (
+                              <React.Fragment key={phone}>
+                                {isMulti && (
+                                  <tr key={`group-${phone}`} style={{ background: "#f1f5fe" }}>
+                                    <td colSpan={7} style={{ padding: "6px 10px", borderBottom: "1px solid var(--line)" }}>
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleGroup(phone)}
+                                        style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 13, color: "var(--pu)", display: "flex", alignItems: "center", gap: 6 }}
+                                      >
+                                        {isExpanded ? "▼" : "▶"}
+                                        👨‍👩‍👧 {parentName} — {phone} &nbsp;
+                                        <span style={{ fontWeight: 400, color: "var(--ink-2)", fontSize: 12 }}>{group.length} enquiries</span>
+                                      </button>
+                                    </td>
+                                  </tr>
+                                )}
+                                {(!isMulti || isExpanded) && group.map((item) => {
+                                  const alert = getDateAlert(item);
+                                  const isTodayFollowUp = isSameDate(item.next_follow_up_date, today);
+                                  return renderInquiryRow(item, alert, isTodayFollowUp, isMulti);
+                                })}
+                              </React.Fragment>
+                            );
+                          })
+                        ) : (
+                          // Flat view (default)
+                          pageRows.map((item) => {
+                            const alert = getDateAlert(item);
+                            const isTodayFollowUp = isSameDate(item.next_follow_up_date, today);
+                            return renderInquiryRow(item, alert, isTodayFollowUp, false);
+                          })
+                        )}
                       </tbody>
                     </table>
                   </div>
 
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
-                    <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Showing {showingStart}-{showingEnd} of {total} records</span>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} style={{ ...fieldStyle(), width: 110 }}>
-                        <option value={10}>10</option>
-                        <option value={25}>25</option>
-                        <option value={50}>50</option>
-                      </select>
-                      <button type="button" onClick={() => setPage((prev) => Math.max(1, prev - 1))} disabled={safePage === 1} style={buttonStyle("#64748b")}>Previous</button>
-                      <button type="button" onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))} disabled={safePage >= totalPages} style={buttonStyle("#64748b")}>Next</button>
+                  {!clubbedView && (
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+                      <span style={{ color: "var(--text-muted)", fontSize: 13 }}>Showing {showingStart}-{showingEnd} of {total} records</span>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} style={{ ...fieldStyle(), width: 110 }}>
+                          <option value={10}>10</option>
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                        </select>
+                        <button type="button" onClick={() => setPage((prev) => Math.max(1, prev - 1))} disabled={safePage === 1} style={buttonStyle("#64748b")}>Previous</button>
+                        <button type="button" onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))} disabled={safePage >= totalPages} style={buttonStyle("#64748b")}>Next</button>
+                      </div>
                     </div>
-                  </div>
+                  )}
+                  {clubbedView && (
+                    <div style={{ marginTop: 10, color: "var(--text-muted)", fontSize: 13 }}>
+                      {total} enquiries · {groupedByPhone.size} parent{groupedByPhone.size !== 1 ? "s" : ""}
+                    </div>
+                  )}
                 </>
               ) : null}
             </div>
@@ -1349,6 +1481,30 @@ export function AdmissionsPanel() {
 
         .aq-phone-row :global(input) {
           flex: 1;
+        }
+
+        .aq-tag {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          font-size: 10px;
+          font-weight: 600;
+          padding: 2px 7px;
+          border-radius: 10px;
+          letter-spacing: 0.2px;
+          white-space: nowrap;
+        }
+
+        .aq-tag-sibling {
+          background: #ede9fe;
+          color: #6d28d9;
+          border: 1px solid #c4b5fd;
+        }
+
+        .aq-tag-enrolled {
+          background: #ecfdf5;
+          color: #065f46;
+          border: 1px solid #6ee7b7;
         }
 
         .aq-today-row {

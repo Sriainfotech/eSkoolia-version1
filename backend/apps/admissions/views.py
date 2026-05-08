@@ -1,4 +1,5 @@
 from django.db import IntegrityError, transaction
+from django.db import models
 from datetime import datetime
 import re
 import requests
@@ -380,6 +381,15 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
             scoped = scoped.filter(source_id=source)
         if active_status:
             scoped = scoped.filter(active_status=active_status)
+        phone = query.get("phone")
+        if phone:
+            scoped = scoped.filter(phone=phone)
+        search = query.get("search")
+        if search:
+            scoped = scoped.filter(
+                models.Q(full_name__icontains=search)
+                | models.Q(phone__icontains=search)
+            )
 
         return scoped
 
@@ -520,6 +530,65 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
             send_mail(subject=subject, message=body, from_email=None, recipient_list=[inquiry.email])
         self._log_contact(inquiry, "email", body=body, subject=subject)
         return Response({"success": True, "message": "Email sent."}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="merge")
+    def merge(self, request, pk=None):
+        """
+        Merge a duplicate inquiry (source) into this one (target).
+        POST /api/v1/admissions/inquiries/{target_id}/merge/
+        Body: { "source_id": <int> }
+        """
+        target = self._get_school_inquiry(pk)
+        source_id = request.data.get("source_id")
+        if not source_id:
+            return Response({"success": False, "error": "source_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            source = AdmissionInquiry.objects.get(pk=source_id, school=target.school)
+        except AdmissionInquiry.DoesNotExist:
+            return Response({"success": False, "error": "Source inquiry not found."}, status=status.HTTP_404_NOT_FOUND)
+        if source.pk == target.pk:
+            return Response({"success": False, "error": "Cannot merge an inquiry with itself."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            # Fill empty fields in target from source
+            mergeable_fields = [
+                "email", "address", "description", "child_name", "has_sibling_enrolled",
+                "sibling_name", "assigned", "source_id", "reference_id", "next_follow_up_date",
+            ]
+            changed = []
+            for field in mergeable_fields:
+                target_val = getattr(target, field, None)
+                source_val = getattr(source, field, None)
+                if not target_val and source_val:
+                    setattr(target, field, source_val)
+                    changed.append(field)
+
+            # Merge notes
+            source_note = (source.note or "").strip()
+            target_note = (target.note or "").strip()
+            if source_note and source_note not in target_note:
+                target.note = (f"{target_note}\n[Merged] {source_note}".strip() if target_note else f"[Merged] {source_note}")
+                changed.append("note")
+
+            if changed:
+                target.save(update_fields=changed + ["updated_at"])
+
+            # Reassign follow-ups from source to target
+            from apps.admissions.models import AdmissionFollowUp
+            AdmissionFollowUp.objects.filter(inquiry=source).update(inquiry=target)
+
+            # Audit log
+            AuditLog.objects.create(
+                school=target.school,
+                user=request.user,
+                action="inquiry.merge",
+                object_type="AdmissionInquiry",
+                object_id=str(target.pk),
+            )
+            source.delete()
+
+        ser = self.get_serializer(target)
+        return Response({"success": True, "message": "Inquiries merged successfully.", "data": ser.data}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="followups")
     def add_followup(self, request, pk=None):

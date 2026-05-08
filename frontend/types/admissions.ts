@@ -21,6 +21,9 @@ export type ApiInquiry = {
   active_status: number;
   status: string;
   note: string;
+  child_name?: string;
+  has_sibling_enrolled?: string;
+  sibling_name?: string;
   lead_score?: number;
   documents_status?: string;
   last_contacted_at?: string;

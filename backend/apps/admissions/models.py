@@ -148,6 +148,12 @@ class AdmissionInquiry(models.Model):
         related_name="admission_inquiries",
     )
     no_of_child = models.PositiveIntegerField(default=1)
+    child_name = models.CharField(max_length=255, blank=True, help_text="Name of the child seeking admission")
+    has_sibling_enrolled = models.CharField(
+        max_length=3, blank=True, choices=[("yes", "Yes"), ("no", "No")],
+        help_text="Does the family already have a sibling enrolled in this school?"
+    )
+    sibling_name = models.CharField(max_length=255, blank=True, help_text="Name of the enrolled sibling (if any)")
     active_status = models.PositiveSmallIntegerField(default=1)
     created_by = models.ForeignKey(
         "users.User",

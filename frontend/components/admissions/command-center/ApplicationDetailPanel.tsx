@@ -75,6 +75,9 @@ function formatDate(v: string | null | undefined): string {
 
 export function ApplicationDetailPanel({ inquiry, isOpen, onClose, onOpenLog, onOpenCall, onOpenWA, onEdit, today, onReload }: Props) {
   const [siblingBanner, setSiblingBanner] = useState(false);
+  const [dupRecord, setDupRecord] = useState<ApiInquiry | null>(null);
+  const [merging, setMerging] = useState(false);
+  const [mergeConfirm, setMergeConfirm] = useState(false);
   const [stageOpen, setStageOpen] = useState(false);
   const [noteText, setNoteText] = useState("");
   const [noteSaving, setNoteSaving] = useState(false);
@@ -84,21 +87,52 @@ export function ApplicationDetailPanel({ inquiry, isOpen, onClose, onOpenLog, on
   const [localNotes, setLocalNotes] = useState<string>("");
 
   useEffect(() => {
-    if (!inquiry) { setSiblingBanner(false); return; }
+    if (!inquiry) { setSiblingBanner(false); setDupRecord(null); return; }
     setNoteText("");
     setLocalStatus(null);
     setLocalNotes(inquiry.note || "");
     setLocalDocStatus(parseDocStatus(inquiry.documents_status));
+    setMergeConfirm(false);
+    setDupRecord(null);
     if (!inquiry.phone) return;
     apiRequestWithRefresh<{ results?: ApiInquiry[]; count?: number } | ApiInquiry[]>(
       `/api/v1/admissions/inquiries/?phone=${inquiry.phone}&active_status=1`
     )
       .then((data) => {
         const list = Array.isArray(data) ? data : (data.results ?? []);
-        setSiblingBanner(list.some((i) => i.id !== inquiry.id));
+        const others = list.filter((i) => i.id !== inquiry.id);
+        // Same phone + same class = duplicate → offer merge
+        const dup = others.find(
+          (i) => i.school_class != null && inquiry.school_class != null && i.school_class === inquiry.school_class
+        );
+        // Same phone + different class = sibling
+        const sibling = others.some(
+          (i) => i.school_class != null && inquiry.school_class != null && i.school_class !== inquiry.school_class
+        );
+        setDupRecord(dup ?? null);
+        setSiblingBanner(sibling && !dup);
       })
       .catch(() => {});
   }, [inquiry]);
+
+  const handleMerge = async () => {
+    if (!inquiry || !dupRecord) return;
+    setMerging(true);
+    try {
+      await apiRequestWithRefresh(`/api/v1/admissions/inquiries/${inquiry.id}/merge/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source_id: dupRecord.id }),
+      });
+      setMergeConfirm(false);
+      setDupRecord(null);
+      onReload();
+    } catch {
+      // error handled by apiRequestWithRefresh
+    } finally {
+      setMerging(false);
+    }
+  };
 
   const handleStageChange = async (status: string) => {
     if (!inquiry) return;
@@ -204,6 +238,41 @@ export function ApplicationDetailPanel({ inquiry, isOpen, onClose, onOpenLog, on
                 <X size={16} />
               </button>
             </div>
+
+            {/* Duplicate merge banner */}
+            {dupRecord && (
+              <div className="mx-4 mt-3 px-3 py-2.5 bg-orange-50 border border-orange-200 rounded-lg text-xs text-orange-800 flex-shrink-0">
+                <div className="flex items-start justify-between gap-2">
+                  <span>⚠️ Duplicate found: <strong>{dupRecord.full_name}</strong> (#{dupRecord.id}) has the same phone &amp; class.</span>
+                  <button
+                    onClick={() => setMergeConfirm(true)}
+                    className="flex-shrink-0 text-xs font-semibold text-white bg-orange-500 hover:bg-orange-600 px-2.5 py-1 rounded-lg transition-colors"
+                  >
+                    Merge
+                  </button>
+                </div>
+                {mergeConfirm && (
+                  <div className="mt-2 pt-2 border-t border-orange-200">
+                    <p className="mb-2 font-semibold">Keep <em>this</em> record (#{inquiry?.id}) and absorb #{dupRecord.id}? The duplicate will be deleted.</p>
+                    <div className="flex gap-2">
+                      <button
+                        disabled={merging}
+                        onClick={handleMerge}
+                        className="text-xs font-semibold text-white bg-red-600 hover:bg-red-700 px-3 py-1 rounded-lg disabled:opacity-50"
+                      >
+                        {merging ? "Merging…" : "✓ Confirm Merge"}
+                      </button>
+                      <button
+                        onClick={() => setMergeConfirm(false)}
+                        className="text-xs font-semibold text-orange-700 bg-white border border-orange-200 px-3 py-1 rounded-lg hover:bg-orange-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Sibling banner */}
             {siblingBanner && (

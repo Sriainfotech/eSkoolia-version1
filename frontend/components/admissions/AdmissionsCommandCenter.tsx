@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ToastContainer, toast } from "react-toastify";
 import { X, RefreshCw, Plus, Search, Send, Phone, MessageSquare, FileCheck, Copy, CheckCircle2, Sparkles, BarChart2 } from "lucide-react";
 import { AnimatePresence } from "framer-motion";
@@ -186,6 +187,7 @@ const overlay: React.CSSProperties = { position: "fixed", inset: 0, zIndex: 300,
 
 export function AdmissionsCommandCenter() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const searchParams = useSearchParams();
 
   const [inquiries, setInquiries] = useState<ApiInquiry[]>([]);
   const [classes, setClasses] = useState<ApiSchoolClass[]>([]);
@@ -203,6 +205,8 @@ export function AdmissionsCommandCenter() {
   const [drawerErrors, setDrawerErrors] = useState<Record<string, string>>({});
   const [drawerSaving, setDrawerSaving] = useState(false);
   const [quickAddMode, setQuickAddMode] = useState(true);
+  const [dupRecord, setDupRecord] = useState<ApiInquiry | null>(null);
+  const [dupMerging, setDupMerging] = useState(false);
 
   const [showLogModal, setShowLogModal] = useState(false);
   const [logInquiry, setLogInquiry] = useState<ApiInquiry | null>(null);
@@ -259,6 +263,19 @@ export function AdmissionsCommandCenter() {
 
   useEffect(() => { void loadAll(); }, []);
 
+  // Auto-open new enquiry modal when redirected from chatbot with a pre-filled phone
+  useEffect(() => {
+    const prefillPhone = searchParams?.get("prefill_phone");
+    if (!prefillPhone) return;
+    const t = new Date().toISOString().slice(0, 10);
+    setEditingId(null);
+    setDrawerForm({ ...initialDrawerForm(t), phone: prefillPhone });
+    setDrawerErrors({});
+    setAdmissionSection(0);
+    setQuickAddMode(true);
+    setShowAdmissionModal(true);
+  }, [searchParams]);
+
   const stats = useMemo(() => {
     const total    = inquiries.length;
     const enrolled = inquiries.filter((i) => i.status === "enrolled").length;
@@ -306,7 +323,7 @@ export function AdmissionsCommandCenter() {
   }, [briefData]);
 
   const openNewAdmission = () => {
-    setEditingId(null); setDrawerForm(initialDrawerForm(today)); setDrawerErrors({}); setAdmissionSection(0); setQuickAddMode(true); setShowAdmissionModal(true);
+    setEditingId(null); setDrawerForm(initialDrawerForm(today)); setDrawerErrors({}); setDupRecord(null); setAdmissionSection(0); setQuickAddMode(true); setShowAdmissionModal(true);
   };
 
   const openEditAdmission = (inq: ApiInquiry) => {
@@ -485,8 +502,8 @@ export function AdmissionsCommandCenter() {
                   <input value={globalSearch} onChange={(e) => setGlobalSearch(e.target.value)} placeholder="Search name, phone..." className="pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg w-44 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
                 </div>
                 <button onClick={() => void loadAll()} title="Refresh" className="border border-gray-200 rounded-lg p-2 text-gray-400 hover:text-gray-700 transition-colors"><RefreshCw size={14} /></button>
-                <button onClick={() => { setBroadcastMsg(""); setBroadcastDone(0); setShowBroadcastModal(true); }} className="flex items-center gap-1.5 border border-indigo-200 bg-indigo-50 text-indigo-700 rounded-lg px-3 py-1.5 text-sm hover:bg-indigo-100 transition-colors"><Send size={12} /> Broadcast</button>
-                <button onClick={openNewAdmission} className="flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-4 py-1.5 text-sm font-semibold shadow-sm hover:bg-indigo-700 transition-colors"><Plus size={13} /> New Admission</button>
+                {/* <button onClick={() => { setBroadcastMsg(""); setBroadcastDone(0); setShowBroadcastModal(true); }} className="flex items-center gap-1.5 border border-indigo-200 bg-indigo-50 text-indigo-700 rounded-lg px-3 py-1.5 text-sm hover:bg-indigo-100 transition-colors"><Send size={12} /> Broadcast</button> */}
+                <button onClick={openNewAdmission} className="flex items-center gap-1.5 bg-indigo-600 text-white rounded-lg px-4 py-1.5 text-sm font-semibold shadow-sm hover:bg-indigo-700 transition-colors"><Plus size={13} /> New Enquiry</button>
               </div>
             </div>
 
@@ -672,7 +689,7 @@ export function AdmissionsCommandCenter() {
           <div style={{ position: "relative", width: "min(600px, 100%)", background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,.3)", overflow: "hidden", maxHeight: "92vh", display: "flex", flexDirection: "column" }}>
             <div style={{ padding: "16px 20px", background: "var(--primary, #4f46e5)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
               <div>
-                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{editingId ? "Edit Inquiry" : "New Admission Inquiry"}</h2>
+                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{editingId ? "Edit Enquiry" : "New Enquiry"}</h2>
                 {!editingId && <p style={{ margin: "2px 0 0", fontSize: 11, opacity: 0.8 }}>Quick Add captures in 10 seconds · Full form adds more detail</p>}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -723,9 +740,23 @@ export function AdmissionsCommandCenter() {
                 // T7: Duplicate phone check against in-memory inquiries (zero API cost)
                 const dupPhone = drawerForm.phone.trim();
                 const duplicate = inquiries.find((i) => i.phone === dupPhone);
+                let siblingNote = "";
                 if (duplicate) {
-                  setDrawerErrors({ phone: `Already in system: ${duplicate.full_name} · ${STAGE_LABELS[duplicate.status] ?? duplicate.status}` });
-                  return;
+                  const newClass = drawerForm.school_class ? Number(drawerForm.school_class) : null;
+                  const existingClass = duplicate.school_class;
+                  const sameClass = newClass && existingClass && newClass === existingClass;
+                  if (sameClass || !newClass) {
+                    // Same class or no class selected — block and offer to open existing
+                    setDupRecord(duplicate);
+                    const existingClassName = classes.find((c) => c.id === existingClass)?.name || "";
+                    setDrawerErrors({ phone: `Already in system: ${duplicate.full_name}${existingClassName ? ` · Grade ${existingClassName}` : ""} · ${STAGE_LABELS[duplicate.status] ?? duplicate.status}` });
+                    return;
+                  }
+                  // Different class — treat as sibling enquiry, allow saving
+                  setDupRecord(null);
+                  setDrawerErrors({});
+                  const siblingClassName = classes.find((c) => c.id === existingClass)?.name || String(existingClass || "");
+                  siblingNote = `Sibling already in enquiry (${duplicate.full_name}, Grade ${siblingClassName})`;
                 }
                 // Auto-fill non-required fields with safe defaults
                 const quickForm: DrawerForm = {
@@ -733,6 +764,7 @@ export function AdmissionsCommandCenter() {
                   assigned: drawerForm.assigned.trim() || "Unassigned",
                   source: drawerForm.source || (sources[0] ? String(sources[0].id) : ""),
                   reference: drawerForm.reference || (references[0] ? String(references[0].id) : ""),
+                  note: siblingNote ? (drawerForm.note.trim() ? `${drawerForm.note.trim()} | ${siblingNote}` : siblingNote) : drawerForm.note,
                 };
                 const payload = {
                   full_name: quickForm.full_name.trim(),
@@ -780,8 +812,55 @@ export function AdmissionsCommandCenter() {
                   <PopField label="Mobile Number *" error={drawerErrors.phone}>
                     <div style={{ display: "flex", gap: 6 }}>
                       <span style={{ width: 48, height: 36, border: "1px solid var(--line)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, flexShrink: 0, background: "#f8fafc" }}>+91</span>
-                      <input value={drawerForm.phone} onChange={(e) => setDf("phone", e.target.value.replace(/\D/g, "").slice(0, 10))} style={{ ...inp(Boolean(drawerErrors.phone)), flex: 1 }} placeholder="9876543210" inputMode="numeric" />
+                      <input value={drawerForm.phone} onChange={(e) => { setDupRecord(null); setDrawerErrors((prev) => ({ ...prev, phone: "" })); setDf("phone", e.target.value.replace(/\D/g, "").slice(0, 10)); }} style={{ ...inp(Boolean(drawerErrors.phone)), flex: 1 }} placeholder="9876543210" inputMode="numeric" />
                     </div>
+                    {dupRecord && (
+                      <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          onClick={() => { setShowAdmissionModal(false); setDupRecord(null); openEditAdmission(dupRecord); }}
+                          style={{ fontSize: 11, fontWeight: 600, color: "#4f46e5", background: "#eff6ff", border: "1px solid #c7d2fe", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}
+                        >
+                          👤 Open existing record →
+                        </button>
+                        <button
+                          type="button"
+                          disabled={dupMerging}
+                          onClick={async () => {
+                            if (!dupRecord) return;
+                            setDupMerging(true);
+                            try {
+                              // Merge: PATCH existing record with any non-empty new fields
+                              const patch: Record<string, unknown> = {};
+                              if (drawerForm.child_name.trim()) patch.child_name = drawerForm.child_name.trim();
+                              if (drawerForm.email.trim()) patch.email = drawerForm.email.trim();
+                              if (drawerForm.note.trim()) patch.note = dupRecord.note ? `${dupRecord.note}\n[Merged] ${drawerForm.note.trim()}` : drawerForm.note.trim();
+                              if (drawerForm.next_follow_up_date) patch.next_follow_up_date = drawerForm.next_follow_up_date;
+                              if (drawerForm.assigned.trim()) patch.assigned = drawerForm.assigned.trim();
+                              if (Object.keys(patch).length > 0) {
+                                await apiRequestWithRefresh(`/api/v1/admissions/inquiries/${dupRecord.id}/`, {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify(patch),
+                                });
+                              }
+                              toast.success("Merged into existing record.", { autoClose: 3000 });
+                              setShowAdmissionModal(false);
+                              setDupRecord(null);
+                              void loadAll();
+                              openEditAdmission({ ...dupRecord, ...patch } as ApiInquiry);
+                            } catch {
+                              toast.error("Merge failed.");
+                            } finally {
+                              setDupMerging(false);
+                            }
+                          }}
+                          style={{ fontSize: 11, fontWeight: 600, color: "#ffffff", background: dupMerging ? "#94a3b8" : "#f97316", border: "none", borderRadius: 6, padding: "4px 10px", cursor: dupMerging ? "not-allowed" : "pointer" }}
+                        >
+                          {dupMerging ? "Merging…" : "🔀 Merge into existing"}
+                        </button>
+                      </div>
+                    )}
                   </PopField>
                   <PopField label="Grade Applying For">
                     <select value={drawerForm.school_class} onChange={(e) => setDf("school_class", e.target.value)} style={inp()}>

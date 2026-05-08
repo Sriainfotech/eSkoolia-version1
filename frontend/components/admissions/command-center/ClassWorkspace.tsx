@@ -311,7 +311,8 @@ export function ClassWorkspace({
           </button>
           <button
             onClick={onNewInquiry}
-            className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-indigo-700 flex items-center gap-1.5"
+            className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium hover:bg-indigo-700 flex items-center gap-1.5 hidden"
+            style={{ display: 'none' }}
           >
             <Plus size={13} /> New Inquiry
           </button>

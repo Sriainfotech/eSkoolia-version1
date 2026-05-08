@@ -342,7 +342,7 @@ export function ClassPortfolioGrid({ classes, selectedClassId, onSelectClass, on
           )}
 
           {isLoading ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 px-4 pb-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-3 gap-3 px-4 pb-4">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="animate-pulse rounded-xl border border-gray-100 bg-gray-50 h-24" />
               ))}
@@ -353,7 +353,7 @@ export function ClassPortfolioGrid({ classes, selectedClassId, onSelectClass, on
                 variants={stagger}
                 initial="hidden"
                 animate="show"
-                className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 px-4 pb-2"
+                className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-3 gap-3 px-4 pb-2"
               >
                 {/* All Classes card */}
                 <motion.button

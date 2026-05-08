@@ -209,6 +209,9 @@ class AdmissionInquirySerializer(serializers.ModelSerializer):
             "school_class",
             "class_name_resolved",
             "no_of_child",
+            "child_name",
+            "has_sibling_enrolled",
+            "sibling_name",
             "active_status",
             "created_by",
             "created_by_name",
@@ -263,39 +266,33 @@ class AdmissionInquirySerializer(serializers.ModelSerializer):
         address = _sanitize_text(incoming_or_instance("address", ""))
         description = _sanitize_text(incoming_or_instance("description", ""))
         note = _sanitize_text(incoming_or_instance("note", ""))
+        child_name = _sanitize_text(incoming_or_instance("child_name", ""))
+        has_sibling_enrolled = _sanitize_text(incoming_or_instance("has_sibling_enrolled", ""))
+        sibling_name = _sanitize_text(incoming_or_instance("sibling_name", ""))
         reference = incoming_or_instance("reference", None)
         source = incoming_or_instance("source", None)
-        no_of_child_raw = incoming_or_instance("no_of_child", 0)
+        no_of_child_raw = incoming_or_instance("no_of_child", 1)
 
-        if not query_date:
-            errors["query_date"] = "Query date is required."
-        elif query_date > timezone.localdate():
+        # query_date and next_follow_up_date are optional; validate only if provided
+        if query_date and query_date > timezone.localdate():
             errors["query_date"] = "Query date cannot be in the future."
 
-        if not next_follow_up_date:
-            errors["next_follow_up_date"] = "Next follow-up date is required."
-        elif query_date and next_follow_up_date < query_date:
+        if next_follow_up_date and query_date and next_follow_up_date < query_date:
             errors["next_follow_up_date"] = "Follow-up date must be on or after the Query Date."
 
         if follow_up_date and next_follow_up_date and next_follow_up_date < follow_up_date:
             errors["next_follow_up_date"] = "Next follow-up date must be on or after last follow-up date."
 
-        if not assigned:
-            errors["assigned"] = "Assigned staff member is required."
-        elif len(assigned) < 2:
+        # assigned, reference, source, no_of_child are now optional
+        if assigned and len(assigned) < 2:
             errors["assigned"] = "Name must be at least 2 characters."
-        elif not _is_meaningful_text(assigned):
+        elif assigned and not _is_meaningful_text(assigned):
             errors["assigned"] = "Please enter a meaningful name."
-
-        if not reference:
-            errors["reference"] = "Reference is required."
-        if not source:
-            errors["source"] = "Source is required."
 
         try:
             no_of_child = int(no_of_child_raw)
         except (TypeError, ValueError):
-            no_of_child = 0
+            no_of_child = 1
         if no_of_child < 1:
             errors["no_of_child"] = "Must be at least 1."
         elif no_of_child > 20:
@@ -326,6 +323,9 @@ class AdmissionInquirySerializer(serializers.ModelSerializer):
         attrs["description"] = description
         attrs["note"] = note
         attrs["no_of_child"] = no_of_child
+        attrs["child_name"] = child_name
+        attrs["has_sibling_enrolled"] = has_sibling_enrolled
+        attrs["sibling_name"] = sibling_name
 
         school_id = _current_school_id(self.context, self.instance)
         if school_id:

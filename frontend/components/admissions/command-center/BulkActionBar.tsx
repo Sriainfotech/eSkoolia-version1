@@ -41,13 +41,13 @@ export function BulkActionBar({ selectedCount, isLoading, onSendMessage, onMoveS
           </span>
           <div className="w-px h-5 bg-white/20" />
 
-          {/* Send Message */}
-          <button
+          {/* Send Message — hidden for now */}
+          {/* <button
             onClick={() => { setShowStageMenu(false); setShowAssignMenu(false); onSendMessage(); }}
             className="flex items-center gap-1.5 text-sm bg-green-500 hover:bg-green-400 text-white px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
           >
             <Send size={13} /> Message
-          </button>
+          </button> */}
 
           {/* Move Stage */}
           <div className="relative">

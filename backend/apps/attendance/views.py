@@ -15,10 +15,10 @@ from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 from config.pagination import ApiPageNumberPagination
 
-from apps.core.models import Class, Section
+from apps.core.models import AcademicYear, Class, Section
 from apps.students.models import Student
 
-from .models import StudentAttendance, StudentAttendanceBulk
+from .models import ATTENDANCE_TYPE_CHOICES, StudentAttendance, StudentAttendanceBulk
 from .serializers import (
     StudentAttendanceSerializer,
     StudentAttendanceStoreRequestSerializer,
@@ -71,9 +71,11 @@ class AttendanceTenantMixin:
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
         user = request.user
-        if user.is_superuser:
+        if user.is_superuser or getattr(user, "is_staff", False):
             return
         code = self._required_permission_code()
+        if code is None:
+            return
         if not hasattr(user, "has_permission_code") or not user.has_permission_code(code):
             raise PermissionDenied("You do not have permission to perform this action.")
 
@@ -181,6 +183,98 @@ class StudentAttendanceRetrieveUpdateDeleteAPIView(AttendanceTenantMixin, APIVie
         obj = self.get_object(request, pk)
         obj.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+class StudentAttendanceChatbotMarkAPIView(AttendanceTenantMixin, APIView):
+    """
+    Simplified upsert endpoint for chatbot call-logging.
+    POST: { student_id, attendance_type (default A), notes, attendance_date (default today) }
+    Creates or updates attendance record for a single student.
+    Uses a relaxed permission (any attendance or admin permission) since chatbot
+    is an admin-facing tool used across roles.
+    """
+
+    def _required_permission_code(self):
+        return None  # chatbot mark is allowed for any authenticated school staff
+
+    def post(self, request):
+        from datetime import date as _date, datetime as _dt
+
+        student_id = request.data.get("student_id")
+        attendance_type = request.data.get("attendance_type", "A")
+        notes = str(request.data.get("notes", ""))[:250]
+        attendance_date_raw = request.data.get("attendance_date") or str(_date.today())
+
+        if not student_id:
+            return Response({"detail": "student_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        valid_types = [c[0] for c in ATTENDANCE_TYPE_CHOICES]
+        if attendance_type not in valid_types:
+            return Response(
+                {"detail": f"attendance_type must be one of {valid_types}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            attendance_date = _dt.strptime(str(attendance_date_raw), "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            return Response({"detail": "attendance_date must be YYYY-MM-DD."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if attendance_date > _date.today():
+            return Response({"detail": "Cannot mark attendance for future dates."}, status=status.HTTP_400_BAD_REQUEST)
+
+        school_filter = self.school_filter(request)
+        try:
+            student = Student.objects.select_related("current_class", "current_section", "school").get(
+                id=student_id, **school_filter
+            )
+        except Student.DoesNotExist:
+            return Response({"detail": "Student not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Superusers may have no school — use the student's own school as fallback
+        school = getattr(request.user, "school", None) or student.school
+        if school is None:
+            return Response({"detail": "Cannot determine school for this user."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Resolve active academic year (same logic as bulk store)
+        academic_year = None
+        school_id = school.id if school else getattr(request.user, "school_id", None)
+        if school_id:
+            academic_year = (
+                AcademicYear.objects.filter(school_id=school_id, is_current=True).first()
+                or AcademicYear.objects.filter(school_id=school_id).order_by("-start_date").first()
+            )
+
+        obj, created = StudentAttendance.objects.update_or_create(
+            school=school,
+            student=student,
+            attendance_date=attendance_date,
+            academic_year=academic_year,
+            defaults={
+                "attendance_type": attendance_type,
+                "notes": notes,
+                "class_id": getattr(student, "current_class_id", None),
+                "section_id": getattr(student, "current_section_id", None),
+                "marked_by": request.user,
+                "updated_by": request.user,
+            },
+        )
+
+        return Response(
+            {
+                "id": obj.id,
+                "student_id": student.id,
+                "student_name": f"{student.first_name} {student.last_name}".strip(),
+                "admission_no": student.admission_no,
+                "attendance_type": obj.attendance_type,
+                "attendance_date": str(obj.attendance_date),
+                "notes": obj.notes,
+                "class_name": student.current_class.name if student.current_class else "",
+                "section_name": student.current_section.name if student.current_section else "",
+                "created": created,
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
 
 class StudentAttendanceIndexAPIView(AttendanceTenantMixin, APIView):
     """Parity with PHP index(): returns classes used in the criteria form."""

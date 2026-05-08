@@ -10,6 +10,11 @@ const MODULE_KEYWORDS = [
 
 export type Intent =
   | { kind: 'navigate'; path: string; label: string }
+  | { kind: 'phone-lookup'; phone: string }
+  | { kind: 'report-absence'; query: string }
+  | { kind: 'report-bus'; query: string }
+  | { kind: 'report-lunch'; query: string }
+  | { kind: 'report-emergency'; query: string }
   | { kind: 'student-lookup'; query: string }
   | { kind: 'enquiry-lookup'; query: string }
   | { kind: 'parent-qa'; topic: string; raw: string }
@@ -51,6 +56,36 @@ function matchParentQATopic(norm: string): string | null {
  */
 export function parseIntent(q: string): Intent {
   const norm = q.toLowerCase().trim();
+
+  // 0. Phone number — detect before anything else
+  //    Accepts: 9876543210 | +91 9876543210 | +919876543210 | 91 9876543210
+  const phoneMatch = q.trim().match(/^(?:\+91[-\s]?|91[-\s]?)?([6-9]\d{9})$/);
+  if (phoneMatch) {
+    return { kind: 'phone-lookup', phone: phoneMatch[1] };
+  }
+
+  // 0.5. Call-log reporting intents — explicit "report/mark" verbs or clear triggers
+  //      Must come before module-keyword/student-lookup checks
+  if (/\b(report\s+abs[e]?nce|mark\s+abs[e]?nt|child\s+is\s+(sick|ill|unwell)|child\s+(won'?t|cannot|can'?t)\s+(come|attend)|not\s+coming\s+today|sick\s+today|home\s+sick|calling\s+.*abs[e]?nt|abs[e]?nt\s+today)\b/i.test(norm)) {
+    // Try to extract a student name from the query
+    const nameMatch = norm.match(/\b(?:mark|report)\s+(?:abs[e]?nt\s+)?(.+?)\s+(?:abs[e]?nt|sick|today)\b/i)
+      || norm.match(/\b(.+?)\s+(?:is|won'?t|cannot|can'?t)\s+/i);
+    const rawName = nameMatch ? nameMatch[1].trim() : '';
+    const query = /^(report|mark|child|my|his|her|the)$/i.test(rawName) ? '' : rawName;
+    return { kind: 'report-absence', query };
+  }
+
+  if (/\bbus\s*(late|delay|breakdown|issue|problem|miss|stuck|not\s+coming|broke)\b|\b(late\s+bus|bus\s+broke|bus\s+is\s+late|bus\s+delay|missed.*bus)\b/i.test(norm)) {
+    return { kind: 'report-bus', query: norm };
+  }
+
+  if (/\b(forgot\s+(lunch|food|tiffin)|no\s+lunch|lunch\s+(forgot|concern|issue)|dietary\s+restriction|lunch\s+allergy|allergy\s+remind)\b/i.test(norm)) {
+    return { kind: 'report-lunch', query: norm };
+  }
+
+  if (/\b(emergency\s+pickup|early\s+pickup|pick\s+up\s+early|pickup\s+early|urgent\s+pickup|pick\s+(him|her|child)\s+up\s+early)\b/i.test(norm)) {
+    return { kind: 'report-emergency', query: norm };
+  }
 
   // 1. Exact page/module match — navigate immediately
   const exact = exactPageMatch(norm);
