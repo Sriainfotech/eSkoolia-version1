@@ -32,13 +32,6 @@ def school(db):
     return School.objects.create(
         name="Eskoolia Test School",
         code="ETEST",
-        email="admin@eskoolia.test",
-        phone="9876543210",
-        address="123 Test Lane",
-        city="Hyderabad",
-        state="Telangana",
-        country="India",
-        pincode="500001",
         is_active=True,
     )
 
