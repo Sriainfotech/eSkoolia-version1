@@ -269,8 +269,8 @@ class AdmissionInquirySerializer(serializers.ModelSerializer):
         child_name = _sanitize_text(incoming_or_instance("child_name", ""))
         has_sibling_enrolled = _sanitize_text(incoming_or_instance("has_sibling_enrolled", ""))
         sibling_name = _sanitize_text(incoming_or_instance("sibling_name", ""))
-        reference = incoming_or_instance("reference", None)
-        source = incoming_or_instance("source", None)
+        _reference = incoming_or_instance("reference", None)
+        _source = incoming_or_instance("source", None)
         no_of_child_raw = incoming_or_instance("no_of_child", 1)
 
         # query_date and next_follow_up_date are optional; validate only if provided
@@ -1465,7 +1465,6 @@ class CertificateTemplateSerializer(serializers.ModelSerializer):
 # ──────────────────────────────────────────────────────────────────────────────
 from .models import (  # noqa: E402 – placed here to avoid circular import concerns
     AIMessageTemplate,
-    AuditLog,
     BulkJob,
     ConsentLog,
     ContactLog,

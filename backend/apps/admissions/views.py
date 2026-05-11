@@ -1,21 +1,22 @@
-from django.db import IntegrityError, transaction
-from django.db import models
 from datetime import datetime
-import re
+
 import requests
 from django.core.cache import cache
+from django.db import IntegrityError, models, transaction
+from django.utils import timezone
 from rest_framework import mixins, permissions, status, viewsets
-from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
-from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
-from django.utils import timezone
-from apps.tenancy.models import School
+from rest_framework.views import APIView
+
 from apps.access_control.models import Role, UserRole
 from apps.core.models import Class, Section
 from apps.students.models import Student
+from apps.tenancy.models import School
+from config.pagination import ApiPageNumberPagination
+
 from .models import (
     AdmissionFollowUp,
     AdmissionInquiry,
@@ -24,7 +25,6 @@ from .models import (
     BulkJob,
     CertificateTemplate,
     ComplaintEntry,
-    ConsentLog,
     ContactLog,
     IdCardTemplate,
     PhoneCallLogEntry,
@@ -34,9 +34,9 @@ from .models import (
     VisitorBookEntry,
 )
 from .serializers import (
-    AdmissionPincodeLookupQuerySerializer,
     AdmissionFollowUpSerializer,
     AdmissionInquirySerializer,
+    AdmissionPincodeLookupQuerySerializer,
     AdminSetupEntrySerializer,
     AIGenerateRequestSerializer,
     AIGenerateResponseSerializer,
@@ -44,7 +44,6 @@ from .serializers import (
     CertificateTemplateSerializer,
     ComplaintEntrySerializer,
     ConsentLogSerializer,
-    ContactLogSerializer,
     IdCardTemplateSerializer,
     PhoneCallLogEntrySerializer,
     PipelineStageSerializer,
@@ -166,7 +165,6 @@ class DuplicateSafeWriteMixin:
             self.perform_create(serializer)
         except IntegrityError as exc:
             return self._integrity_response(exc)
-        headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
         return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
@@ -426,7 +424,6 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
             self.perform_create(serializer)
         except IntegrityError as exc:
             return self._integrity_response(exc)
-        headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
         return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
@@ -699,7 +696,6 @@ class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
             self.perform_create(serializer)
         except IntegrityError as exc:
             return self._integrity_response(exc)
-        headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
         return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
@@ -776,7 +772,6 @@ class VisitorBookEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
             self.perform_create(serializer)
         except IntegrityError as exc:
             return self._integrity_response(exc)
-        headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
         return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
@@ -840,7 +835,6 @@ class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
             self.perform_create(serializer)
         except IntegrityError as exc:
             return self._integrity_response(exc)
-        headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
         return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
@@ -937,7 +931,6 @@ class PostalDispatchEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
             self.perform_create(serializer)
         except IntegrityError as exc:
             return self._integrity_response(exc)
-        headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
         return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
@@ -999,7 +992,6 @@ class PhoneCallLogEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
             self.perform_create(serializer)
         except IntegrityError as exc:
             return self._integrity_response(exc)
-        headers = self.get_success_headers(serializer.data)
         output = self.get_serializer(serializer.instance)
         return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
