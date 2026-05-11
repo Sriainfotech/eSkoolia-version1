@@ -62,10 +62,13 @@ jobs:
           ruff check apps/admissions/
 
       - name: Django check
-        run: python manage.py check --deploy --fail-level WARNING
+        run: python manage.py check --deploy --fail-level ERROR
 
-      - name: Migrations dry-run
-        run: python manage.py migrate --run-syncdb --check
+      - name: Apply migrations
+        run: python manage.py migrate --run-syncdb
+
+      - name: Check no missing migrations
+        run: python manage.py makemigrations --check --dry-run
 
       - name: Run tests
         run: |

@@ -1,5 +1,33 @@
 {
   "css.lint.unknownAtRules": "ignore",
   "scss.lint.unknownAtRules": "ignore",
-  "less.lint.unknownAtRules": "ignore"
+  "less.lint.unknownAtRules": "ignore",
+
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": [
+    "backend/tests",
+    "--tb=short",
+    "-v"
+  ],
+  "python.testing.unittestEnabled": false,
+  "python.testing.cwd": "${workspaceFolder}",
+  "python.defaultInterpreterPath": "${workspaceFolder}/backend/venv/Scripts/python.exe",
+
+  "jest.jestCommandLine": "npm test --",
+  "jest.rootPath": "${workspaceFolder}/frontend",
+  "jest.showCoverageOnLoad": false,
+  "jest.autoRun": {
+    "watch": false,
+    "onStartup": ["all-tests"]
+  },
+
+  "editor.formatOnSave": true,
+  "typescript.preferences.importModuleSpecifier": "relative",
+
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.patterns": {
+    "*.tsx": "${capture}.test.tsx, ${capture}.spec.tsx",
+    "*.ts": "${capture}.test.ts, ${capture}.spec.ts",
+    "*.py": "test_${capture}.py"
+  }
 }
