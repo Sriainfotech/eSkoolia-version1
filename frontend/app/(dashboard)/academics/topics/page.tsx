@@ -1,5 +1,2 @@
-import { TopicPagePanel } from "@/components/academics/LessonModulePanels";
-
-export default function TopicPage() {
-  return <TopicPagePanel />;
-}
+import ComingSoon from '@/components/shared/ComingSoon';
+export default function Page() { return <ComingSoon />; }

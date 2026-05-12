@@ -8,6 +8,15 @@ import type { ModuleRoute } from '@/lib/routes';
 // Modules that are visible in nav but show Coming Soon on hover
 const COMING_SOON_IDS = new Set(['attendance', 'fees', 'exam', 'reports', 'hr']);
 
+// Individual sub-pages that show Coming Soon when navigated to
+const COMING_SOON_PATHS = new Set([
+  '/academics/class-room', '/academics/class-routine', '/academics/lessons',
+  '/academics/topics', '/academics/homework-add', '/academics/homework-evaluation-report',
+  '/academics/homework-list', '/academics/other-downloads-list', '/academics/study-material-list',
+  '/academics/syllabus-list', '/academics/upload-content', '/academics/assignment-list',
+  '/academics/lesson-planner',
+]);
+
 export function ModulePill({ mod }: { mod: ModuleRoute }) {
   const comingSoon = COMING_SOON_IDS.has(mod.id);
   const pathname = usePathname();
@@ -123,6 +132,7 @@ export function ModulePill({ mod }: { mod: ModuleRoute }) {
               </div>
               {mod.sub.map(s => {
                 const SubIcon = s.icon ?? mod.icon;
+                const subComingSoon = COMING_SOON_PATHS.has(s.path);
                 return (
                   <Link
                     key={s.path}
@@ -144,6 +154,13 @@ export function ModulePill({ mod }: { mod: ModuleRoute }) {
                       <SubIcon size={13} strokeWidth={1.75} style={{ color: mod.ic }} />
                     </span>
                     <span style={{ flex: 1 }}>{s.label}</span>
+                    {subComingSoon && (
+                      <span style={{
+                        fontSize: 9.5, fontWeight: 600, letterSpacing: '0.03em',
+                        color: 'var(--pu, #6D28D9)', background: 'var(--pu-soft, #EDE9FE)',
+                        borderRadius: 5, padding: '2px 6px', flexShrink: 0,
+                      }}>Soon</span>
+                    )}
                   </Link>
                 );
               })}

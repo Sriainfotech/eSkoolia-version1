@@ -96,7 +96,8 @@ export const MODULES: ModuleRoute[] = [
     sub: [
       { label: 'Roles & Assign Permissions', path: '/roles/assign-permission', icon: Lock },
       { label: 'Login Permission', path: '/roles/login-permission', icon: LogIn },
-      { label: 'Due Fees Login', path: '/roles/due-fees-login-permission', icon: ShieldAlert },
+      // HIDDEN - no backend yet
+      // { label: 'Due Fees Login', path: '/roles/due-fees-login-permission', icon: ShieldAlert },
     ],
   },
   {
@@ -337,7 +338,8 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Payroll', path: '/hr/payroll', icon: DollarSign },
     ],
   },
-  {
+  // HIDDEN - no backend yet
+  /* {
     id: 'accounts',
     name: 'Accounts',
     path: '/finance/chart-of-accounts',
@@ -351,7 +353,7 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Ledger Entries', path: '/finance/ledger', icon: BanknoteIcon },
       { label: 'Fund Transfer', path: '/finance/fund-transfer', icon: ArrowRightLeft },
     ],
-  },
+  }, */
   // HIDDEN - no backend yet
   /* {
     id: 'utilities',

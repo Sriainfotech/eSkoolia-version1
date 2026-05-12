@@ -1,5 +1,2 @@
-import { StudyMaterialListPagePanel } from "@/components/academics/UploadContentPanels";
-
-export default function StudyMaterialListPage() {
-  return <StudyMaterialListPagePanel />;
-}
+import ComingSoon from '@/components/shared/ComingSoon';
+export default function Page() { return <ComingSoon />; }

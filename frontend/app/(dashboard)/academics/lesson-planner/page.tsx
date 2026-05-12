@@ -1,5 +1,2 @@
-import { LessonPlannerPagePanel } from "@/components/academics/LessonModulePanels";
-
-export default function LessonPlannerPage() {
-  return <LessonPlannerPagePanel />;
-}
+import ComingSoon from '@/components/shared/ComingSoon';
+export default function Page() { return <ComingSoon />; }

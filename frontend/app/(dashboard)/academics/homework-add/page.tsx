@@ -1,5 +1,2 @@
-import { HomeworkAddPagePanel } from "@/components/academics/HomeworkModulePanels";
-
-export default function HomeworkAddPage() {
-  return <HomeworkAddPagePanel />;
-}
+import ComingSoon from '@/components/shared/ComingSoon';
+export default function Page() { return <ComingSoon />; }

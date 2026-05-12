@@ -1,5 +1,2 @@
-import { HomeworkEvaluationReportPagePanel } from "@/components/academics/HomeworkModulePanels";
-
-export default function HomeworkEvaluationReportPage() {
-  return <HomeworkEvaluationReportPagePanel />;
-}
+import ComingSoon from '@/components/shared/ComingSoon';
+export default function Page() { return <ComingSoon />; }

@@ -1,5 +1,2 @@
-import { SyllabusListPagePanel } from "@/components/academics/UploadContentPanels";
-
-export default function SyllabusListPage() {
-  return <SyllabusListPagePanel />;
-}
+import ComingSoon from '@/components/shared/ComingSoon';
+export default function Page() { return <ComingSoon />; }

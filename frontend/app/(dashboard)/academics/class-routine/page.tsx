@@ -1,5 +1,2 @@
-import { ClassRoutinePanel } from "@/components/academics/AcademicSetupPanels";
-
-export default function ClassRoutinePage() {
-  return <ClassRoutinePanel />;
-}
+import ComingSoon from '@/components/shared/ComingSoon';
+export default function Page() { return <ComingSoon />; }

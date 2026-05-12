@@ -1,5 +1,2 @@
-import { ClassRoomPanel } from "@/components/academics/AcademicSetupPanels";
-
-export default function ClassRoomPage() {
-  return <ClassRoomPanel />;
-}
+import ComingSoon from '@/components/shared/ComingSoon';
+export default function Page() { return <ComingSoon />; }

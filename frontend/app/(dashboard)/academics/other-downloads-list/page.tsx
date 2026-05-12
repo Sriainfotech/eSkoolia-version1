@@ -1,5 +1,2 @@
-import { OtherDownloadsListPagePanel } from "@/components/academics/UploadContentPanels";
-
-export default function OtherDownloadsListPage() {
-  return <OtherDownloadsListPagePanel />;
-}
+import ComingSoon from '@/components/shared/ComingSoon';
+export default function Page() { return <ComingSoon />; }

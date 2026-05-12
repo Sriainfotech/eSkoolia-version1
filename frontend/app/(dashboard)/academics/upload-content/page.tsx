@@ -1,5 +1,2 @@
-import { UploadContentPagePanel } from "@/components/academics/UploadContentPanels";
-
-export default function UploadContentPage() {
-  return <UploadContentPagePanel />;
-}
+import ComingSoon from '@/components/shared/ComingSoon';
+export default function Page() { return <ComingSoon />; }
