@@ -2,9 +2,14 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { Clock } from 'lucide-react';
 import type { ModuleRoute } from '@/lib/routes';
 
+// Modules that are visible in nav but show Coming Soon on hover
+const COMING_SOON_IDS = new Set(['attendance', 'fees', 'exam', 'reports', 'hr']);
+
 export function ModulePill({ mod }: { mod: ModuleRoute }) {
+  const comingSoon = COMING_SOON_IDS.has(mod.id);
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
@@ -14,7 +19,7 @@ export function ModulePill({ mod }: { mod: ModuleRoute }) {
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const seg = mod.path.split('/')[1];
-  const active = Boolean(seg && pathname.startsWith(`/${seg}`)) ||
+  const active = Boolean(seg && pathname.startsWith('/' + seg)) ||
     (mod.path === '/dashboard' && (pathname === '/dashboard' || pathname === '/'));
 
   useEffect(() => {
@@ -72,7 +77,7 @@ export function ModulePill({ mod }: { mod: ModuleRoute }) {
         )}
       </Link>
 
-      {open && mod.sub.length > 0 && (
+      {open && (comingSoon || mod.sub.length > 0) && (
         <div
           ref={dropRef}
           onMouseEnter={() => clearTimeout(leaveTimer.current)}
@@ -81,50 +86,69 @@ export function ModulePill({ mod }: { mod: ModuleRoute }) {
             position: 'fixed',
             top: pos.top,
             left: pos.left,
-            minWidth: 260, maxWidth: 320,
+            minWidth: comingSoon ? 200 : 260,
+            maxWidth: 320,
             background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 12,
-            padding: 6, zIndex: 500,
+            padding: comingSoon ? '12px 14px' : 6, zIndex: 500,
             boxShadow: '0 14px 32px -10px rgba(14,16,32,0.18)',
             animation: 'fadeIn 140ms ease-out',
             maxHeight: 'calc(100vh - 80px)',
             overflowY: 'auto',
           }}
         >
-          <div style={{
-            padding: '8px 10px', fontSize: 10.5, fontWeight: 600,
-            letterSpacing: '0.06em', textTransform: 'uppercase',
-            color: 'var(--ink-3)', borderBottom: '1px solid var(--bd)',
-            marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          }}>
-            <span>{mod.name}</span>
-            <span style={{ fontFamily: 'monospace', fontSize: 10 }}>{mod.sub.length} pages</span>
-          </div>
-          {mod.sub.map(s => {
-            const SubIcon = s.icon ?? mod.icon;
-            return (
-              <Link
-                key={s.path}
-                href={s.path}
-                onClick={() => setOpen(false)}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  height: 36, padding: '0 10px', borderRadius: 8,
-                  fontSize: 12.5, color: 'var(--ink-1)', textDecoration: 'none',
-                  transition: 'background 0.12s',
-                }}
-                onMouseEnter={e => ((e.currentTarget as HTMLAnchorElement).style.background = 'var(--bg-2)')}
-                onMouseLeave={e => ((e.currentTarget as HTMLAnchorElement).style.background = 'transparent')}
-              >
-                <span style={{
-                  width: 24, height: 24, borderRadius: 6, flexShrink: 0,
-                  background: mod.bg, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>
-                  <SubIcon size={13} strokeWidth={1.75} style={{ color: mod.ic }} />
-                </span>
-                <span style={{ flex: 1 }}>{s.label}</span>
-              </Link>
-            );
-          })}
+          {comingSoon ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{
+                width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+                background: 'var(--pu-soft, #EDE9FE)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Clock size={14} strokeWidth={1.75} style={{ color: 'var(--pu, #6D28D9)' }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-1)' }}>Coming Soon</div>
+                <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 1 }}>This module is under development</div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{
+                padding: '8px 10px', fontSize: 10.5, fontWeight: 600,
+                letterSpacing: '0.06em', textTransform: 'uppercase',
+                color: 'var(--ink-3)', borderBottom: '1px solid var(--bd)',
+                marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              }}>
+                <span>{mod.name}</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 10 }}>{mod.sub.length} pages</span>
+              </div>
+              {mod.sub.map(s => {
+                const SubIcon = s.icon ?? mod.icon;
+                return (
+                  <Link
+                    key={s.path}
+                    href={s.path}
+                    onClick={() => setOpen(false)}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      height: 36, padding: '0 10px', borderRadius: 8,
+                      fontSize: 12.5, color: 'var(--ink-1)', textDecoration: 'none',
+                      transition: 'background 0.12s',
+                    }}
+                    onMouseEnter={e => ((e.currentTarget as HTMLAnchorElement).style.background = 'var(--bg-2)')}
+                    onMouseLeave={e => ((e.currentTarget as HTMLAnchorElement).style.background = 'transparent')}
+                  >
+                    <span style={{
+                      width: 24, height: 24, borderRadius: 6, flexShrink: 0,
+                      background: mod.bg, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <SubIcon size={13} strokeWidth={1.75} style={{ color: mod.ic }} />
+                    </span>
+                    <span style={{ flex: 1 }}>{s.label}</span>
+                  </Link>
+                );
+              })}
+            </>
+          )}
         </div>
       )}
     </div>

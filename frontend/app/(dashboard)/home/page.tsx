@@ -10,11 +10,13 @@ import { useUserPrefs } from '@/lib/userPrefs';
 import { useWidgetStore } from '@/lib/widgetStore';
 import { LeftRail } from '@/components/widgets/LeftRail';
 import { RightRail } from '@/components/widgets/RightRail';
-import { MODULES } from '@/lib/routes';
+import { MODULES, FLAT_INDEX } from '@/lib/routes';
 
 function HomeCenter() {
   const { prefs, addPin, removePin } = useUserPrefs();
   const [managePinsOpen, setManagePinsOpen] = useState(false);
+  // Filter out pinned items whose module has been hidden from routes
+  const visiblePins = prefs.pins.filter(pin => FLAT_INDEX.some(f => f.path === pin.path));
 
   return (
     <div style={{ minWidth: 0 }}>
@@ -24,12 +26,12 @@ function HomeCenter() {
         <>
           <SectionLabel
             title="Quick Access"
-            pinned={prefs.pins.length}
+            pinned={visiblePins.length}
             action="Manage"
             onAction={() => setManagePinsOpen(true)}
           />
-          {prefs.pins.length > 0
-            ? <QuickAccessGrid pins={prefs.pins} onRemove={removePin} />
+          {visiblePins.length > 0
+            ? <QuickAccessGrid pins={visiblePins} onRemove={removePin} />
             : (
               <div style={{
                 textAlign: 'center', padding: '20px 0',

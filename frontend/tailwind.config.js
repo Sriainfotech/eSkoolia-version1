@@ -34,6 +34,7 @@ module.exports = {
       },
       fontFamily: {
         sans: ['var(--font-instrument)', 'var(--font-inter)', 'system-ui', 'sans-serif'],
+        serif: ['var(--font-fraunces)', 'system-ui', 'serif'],
         mono: ['var(--font-mono)', 'ui-monospace', 'Menlo', 'monospace'],
       },
     },

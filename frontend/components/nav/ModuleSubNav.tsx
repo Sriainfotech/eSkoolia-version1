@@ -72,7 +72,7 @@ export function ModuleSubNav() {
       onClick={() => scroll(dir)}
       disabled={!enabled}
       style={{
-        flexShrink: 0, width: 28, height: 42, border: 'none', cursor: enabled ? 'pointer' : 'default',
+        flexShrink: 0, width: 28, height: 46, border: 'none', cursor: enabled ? 'pointer' : 'default',
         background: enabled
           ? 'linear-gradient(to ' + (dir === 'left' ? 'right' : 'left') + ', #fff 60%, transparent)'
           : 'transparent',
@@ -93,13 +93,14 @@ export function ModuleSubNav() {
     <div style={{ background: '#fff', borderBottom: '1px solid var(--bd)', position: 'relative' }}>
       <div style={{
         maxWidth: 1280, margin: '0 auto',
-        display: 'flex', alignItems: 'center', height: 42,
-        padding: '0 24px 0 8px', gap: 0,
+        display: 'flex', alignItems: 'center', minHeight: 46,
+        padding: '0 22px 0 8px', gap: 0,
+        overflow: 'visible',
       }}>
         {/* Module label — left side breadcrumb */}
         <div style={{
           display: 'flex', alignItems: 'center', gap: 6,
-          paddingRight: 14, marginRight: 8,
+          paddingRight: 12, marginRight: 7,
           borderRight: '1px solid var(--bd)',
           flexShrink: 0,
         }}>
@@ -120,7 +121,7 @@ export function ModuleSubNav() {
         {/* Scrollable tabs — left-aligned */}
         <div
           ref={scrollRef}
-          style={{ display: 'flex', overflowX: 'auto', scrollbarWidth: 'none', gap: 0, flex: 1 }}
+          style={{ display: 'flex', overflowX: 'auto', overflowY: 'visible', scrollbarWidth: 'none', gap: 0, flex: 1 }}
         >
           {mod.sub.map(s => {
             const isActive = s === activeTab;
@@ -132,9 +133,10 @@ export function ModuleSubNav() {
                 data-active={isActive ? 'true' : 'false'}
                 style={{
                   position: 'relative',
-                  display: 'flex', alignItems: 'center', gap: 5,
-                  height: 42, padding: '0 12px',
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  height: 46, padding: '1px 11px 0',
                   fontSize: 12.5, fontWeight: isActive ? 600 : 400,
+                  lineHeight: 1.25,
                   color: isActive ? 'var(--pu)' : 'var(--ink-2)',
                   textDecoration: 'none', whiteSpace: 'nowrap',
                   transition: 'color 0.12s',

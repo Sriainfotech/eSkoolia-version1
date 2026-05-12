@@ -165,16 +165,14 @@ export const MODULES: ModuleRoute[] = [
     permission: 'academics',
     sub: [
       { label: 'Core Setup', path: '/academics/core-setup', icon: Settings },
-      { label: 'Academic Year', path: '/academics/academic-year', icon: Calendar },
-      { label: 'Class', path: '/academics/class', icon: School },
-      { label: 'Section', path: '/academics/section', icon: List },
       { label: 'Assign Class Teacher', path: '/academics/assign-class-teacher', icon: UserCog },
       { label: 'Assign Subject', path: '/academics/assign-subject', icon: ClipboardList },
       { label: 'Class Room', path: '/academics/class-room', icon: School },
       { label: 'Class Routine', path: '/academics/class-routine', icon: Calendar },
       { label: 'Lessons', path: '/academics/lessons', icon: BookOpen },
       { label: 'Topics', path: '/academics/topics', icon: BookOpenCheck },
-      { label: 'Lesson Planner', path: '/academics/lesson-planner', icon: ClipboardCheck },
+      // HIDDEN - no backend yet
+      // { label: 'Lesson Planner', path: '/academics/lesson-planner', icon: ClipboardCheck },
       { label: 'Homework Add', path: '/academics/homework-add', icon: FileText },
       { label: 'Homework List', path: '/academics/homework-list', icon: ClipboardList },
       { label: 'Homework Evaluation', path: '/academics/homework-evaluation-report', icon: FileBarChart },
@@ -251,7 +249,8 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Fees Carry Forward', path: '/fees/carry-forward', icon: ArrowRightLeft },
     ],
   },
-  {
+  // HIDDEN - no backend yet
+  /* {
     id: 'library',
     name: 'Library',
     path: '/library/books',
@@ -265,8 +264,9 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Library Members', path: '/library/members', icon: Users },
       { label: 'Book Issues', path: '/library/issues', icon: BookmarkCheck },
     ],
-  },
-  {
+  }, */
+  // HIDDEN - no backend yet
+  /* {
     id: 'transport',
     name: 'Transport',
     path: '/transport',
@@ -284,8 +284,9 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Route Builder', path: '/transport/tracking/route-builder', icon: Route },
       { label: 'Student Report', path: '/transport/student-report', icon: FileBarChart },
     ],
-  },
-  {
+  }, */
+  // HIDDEN - no backend yet
+  /* {
     id: 'inventory',
     name: 'Inventory',
     path: '/inventory',
@@ -297,8 +298,9 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Inventory', path: '/inventory', icon: Store },
       { label: 'Stock Report', path: '/reports/inventory-stock', icon: FileBarChart },
     ],
-  },
-  {
+  }, */
+  // HIDDEN - no backend yet
+  /* {
     id: 'behaviour',
     name: 'Behaviour',
     path: '/behaviour/incidents',
@@ -314,7 +316,7 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Incident Report', path: '/behaviour/reports/incident-wise', icon: FileText },
       { label: 'Settings', path: '/behaviour/settings', icon: Settings },
     ],
-  },
+  }, */
   {
     id: 'hr',
     name: 'Human Resource',
@@ -350,7 +352,8 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Fund Transfer', path: '/finance/fund-transfer', icon: ArrowRightLeft },
     ],
   },
-  {
+  // HIDDEN - no backend yet
+  /* {
     id: 'utilities',
     name: 'Utilities',
     path: '/utilities/chat',
@@ -363,7 +366,7 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Invitation', path: '/utilities/invitation', icon: Send },
       { label: 'Blocked Users', path: '/utilities/blocked-users', icon: UserX },
     ],
-  },
+  }, */
   {
     id: 'settings',
     name: 'Settings',

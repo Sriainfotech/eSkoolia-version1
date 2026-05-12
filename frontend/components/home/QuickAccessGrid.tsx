@@ -1,14 +1,18 @@
 'use client';
+import { useState } from 'react';
 import Link from 'next/link';
-import { X } from 'lucide-react';
+import { X, Clock } from 'lucide-react';
 import { MODULES, FLAT_INDEX } from '@/lib/routes';
 import type { PinItem } from '@/lib/userPrefs';
 
+// Modules that show Coming Soon tooltip on hover
+const COMING_SOON_IDS = new Set(['attendance', 'fees', 'exam', 'reports', 'hr']);
+
 function getIconAndColors(path: string) {
   const entry = FLAT_INDEX.find(f => f.path === path);
-  if (!entry) return { Icon: null, bg: '#EEF2FF', ic: '#4F46E5', modName: '' };
+  if (!entry) return { Icon: null, bg: '#EEF2FF', ic: '#4F46E5', modName: '', modId: '' };
   const mod = MODULES.find(m => m.id === entry.modId);
-  return { Icon: entry.icon, bg: entry.bg, ic: entry.ic, modName: mod?.name ?? '' };
+  return { Icon: entry.icon, bg: entry.bg, ic: entry.ic, modName: mod?.name ?? '', modId: entry.modId };
 }
 
 interface Props {
@@ -17,6 +21,8 @@ interface Props {
 }
 
 export function QuickAccessGrid({ pins, onRemove }: Props) {
+  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
+
   return (
     <div style={{
       display: 'grid',
@@ -24,9 +30,15 @@ export function QuickAccessGrid({ pins, onRemove }: Props) {
       gap: 10, marginBottom: 4,
     }}>
       {pins.map(pin => {
-        const { Icon, bg, ic, modName } = getIconAndColors(pin.path);
+        const { Icon, bg, ic, modName, modId } = getIconAndColors(pin.path);
+        const comingSoon = COMING_SOON_IDS.has(modId);
         return (
-          <div key={pin.path} style={{ position: 'relative' }}>
+          <div
+            key={pin.path}
+            style={{ position: 'relative' }}
+            onMouseEnter={() => setHoveredPath(pin.path)}
+            onMouseLeave={() => setHoveredPath(null)}
+          >
             <Link href={pin.path} style={{ textDecoration: 'none' }}>
               <div
                 style={{
@@ -64,6 +76,32 @@ export function QuickAccessGrid({ pins, onRemove }: Props) {
                 </div>
               </div>
             </Link>
+
+            {/* Coming Soon tooltip on hover */}
+            {comingSoon && hoveredPath === pin.path && (
+              <div style={{
+                position: 'absolute', bottom: 'calc(100% + 6px)', left: 12,
+                background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 10,
+                padding: '8px 12px', zIndex: 50, whiteSpace: 'nowrap',
+                boxShadow: '0 8px 24px -6px rgba(14,16,32,0.15)',
+                display: 'flex', alignItems: 'center', gap: 8,
+                animation: 'fadeIn 140ms ease-out',
+                pointerEvents: 'none',
+              }}>
+                <div style={{
+                  width: 26, height: 26, borderRadius: 7, flexShrink: 0,
+                  background: 'var(--pu-soft, #EDE9FE)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Clock size={13} strokeWidth={1.75} style={{ color: 'var(--pu, #6D28D9)' }} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ink-1)' }}>Coming Soon</div>
+                  <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 1 }}>Under development</div>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={() => onRemove(pin.path)}
               style={{
