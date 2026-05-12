@@ -367,7 +367,8 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Blocked Users', path: '/utilities/blocked-users', icon: UserX },
     ],
   }, */
-  {
+  // HIDDEN - no backend yet
+  /* {
     id: 'settings',
     name: 'Settings',
     path: '/setup',
@@ -381,7 +382,7 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Class Periods', path: '/setup/class-periods', icon: Calendar },
       { label: 'Academic Year', path: '/academics/academic-year', icon: Calendar },
     ],
-  },
+  }, */
 ];
 
 /** Flat list: module + all sub-routes — used by ⌘K and AI bot */
