@@ -5,6 +5,7 @@ Provides standardized error responses across the API.
 
 import logging
 
+from django.db.utils import IntegrityError as DjangoIntegrityError
 from django.db.utils import OperationalError as DjangoOperationalError
 from django.db.utils import ProgrammingError as DjangoProgrammingError
 from rest_framework import status
@@ -79,6 +80,50 @@ def custom_exception_handler(exc, context):
                 },
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    # Handle DB integrity errors (unique constraints, NOT NULL drift, etc.)
+    if isinstance(exc, DjangoIntegrityError):
+        raw = str(exc).lower()
+        if "unique" in raw or "duplicate key" in raw:
+            field = "value"
+            for candidate in ("username", "email", "phone", "admission_number", "code"):
+                if candidate in raw:
+                    field = candidate
+                    break
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "already_exists",
+                        "message": f"A record with this {field} already exists.",
+                        "field": field,
+                    },
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        if "not-null" in raw or "null value" in raw:
+            logger.error("NOT NULL integrity error (possible schema drift): %s", exc)
+            return Response(
+                {
+                    "success": False,
+                    "error": {
+                        "code": "missing_required_field",
+                        "message": "A required field is missing. Please contact admin (schema mismatch).",
+                    },
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        logger.error("Database integrity error: %s", exc)
+        return Response(
+            {
+                "success": False,
+                "error": {
+                    "code": "integrity_error",
+                    "message": "The request violates a data integrity rule.",
+                },
+            },
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
     # Return a clean validation message with no nested non_field_errors structure.

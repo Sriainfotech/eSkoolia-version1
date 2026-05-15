@@ -904,3 +904,405 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
             {"user_id": user.id, "due_fees_login_blocked": user.due_fees_login_blocked},
             status=status.HTTP_200_OK,
         )
+
+
+class LoginPermissionViewSet(viewsets.ViewSet):
+    """
+    Dedicated API for the Login Permission management page.
+    Uses camelCase JSON keys to match the frontend TypeScript interfaces directly.
+    """
+
+    permission_classes = [permissions.IsAuthenticated, CanManageUserRoles]
+
+    def _roles_qs(self, request):
+        qs = Role.objects.order_by("name")
+        if request.user.is_superuser:
+            return qs
+        if request.user.school_id:
+            return qs.filter(Q(school_id=request.user.school_id) | Q(school__isnull=True))
+        return Role.objects.none()
+
+    def _get_role_by_slug(self, request, role_slug: str):
+        """Find a Role by name, matching case-insensitively (e.g. 'student' → 'Student')."""
+        slug = (role_slug or "").strip().lower()
+        if not slug:
+            return None
+        # Exact match first
+        for role in self._roles_qs(request):
+            if (role.name or "").lower() == slug:
+                return role
+        # Fallback: contains match
+        for role in self._roles_qs(request):
+            if slug in (role.name or "").lower():
+                return role
+        return None
+
+    def list(self, request):
+        """GET /login-permission/ — returns meta (same as /meta/ action)."""
+        return self._meta_response(request)
+
+    @action(detail=False, methods=["get"], url_path="meta")
+    def meta(self, request):
+        return self._meta_response(request)
+
+    def _meta_response(self, request):
+        classes_qs = Class.objects.order_by("numeric_order", "name")
+        sections_qs = Section.objects.select_related("school_class").order_by("name")
+        if not request.user.is_superuser and request.user.school_id:
+            classes_qs = classes_qs.filter(school_id=request.user.school_id)
+            sections_qs = sections_qs.filter(school_class__school_id=request.user.school_id)
+
+        roles = []
+        for r in self._roles_qs(request):
+            if _is_parent_role(r):
+                continue
+            roles.append({"id": str(r.id), "name": r.name, "isStudent": _is_student_role(r)})
+
+        classes = [{"id": str(c.id), "name": c.name} for c in classes_qs]
+        sections = [{"id": str(s.id), "name": s.name, "classId": str(s.school_class_id)} for s in sections_qs]
+        return Response({"roles": roles, "classes": classes, "sections": sections}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="users")
+    def users(self, request):
+        role_slug = (request.query_params.get("role") or "").strip()
+        class_id = request.query_params.get("class_id") or request.query_params.get("class")
+        section_id = request.query_params.get("section_id") or request.query_params.get("section")
+        search = (request.query_params.get("search") or "").strip()
+        status_filter = (request.query_params.get("status") or "all").strip()
+
+        try:
+            page_num = max(1, int(request.query_params.get("page", 1)))
+        except (ValueError, TypeError):
+            page_num = 1
+        try:
+            page_size = min(200, max(1, int(request.query_params.get("page_size", 25))))
+        except (ValueError, TypeError):
+            page_size = 25
+
+        if not role_slug:
+            return Response({"detail": "role query param is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        role = self._get_role_by_slug(request, role_slug)
+        if not role:
+            return Response({"detail": f"No role matching '{role_slug}' found."}, status=status.HTTP_404_NOT_FOUND)
+
+        is_student = _is_student_role(role)
+
+        # ── Student path ──────────────────────────────────────────────────────
+        if is_student:
+            students_qs = Student.objects.select_related(
+                "current_class", "current_section"
+            ).filter(is_deleted=False)
+            if not request.user.is_superuser and request.user.school_id:
+                students_qs = students_qs.filter(school_id=request.user.school_id)
+            # Class and section are optional filters
+            if class_id:
+                students_qs = students_qs.filter(current_class_id=class_id)
+            if section_id:
+                students_qs = students_qs.filter(current_section_id=section_id)
+            if search:
+                students_qs = students_qs.filter(
+                    Q(first_name__icontains=search)
+                    | Q(last_name__icontains=search)
+                    | Q(admission_no__icontains=search)
+                )
+            students_qs = students_qs.order_by("first_name", "last_name")
+
+            admission_nos = [str(s.admission_no) for s in students_qs if s.admission_no]
+            existing_users = {}
+            if admission_nos:
+                qs_users = User.objects.filter(username__in=admission_nos)
+                if not request.user.is_superuser and request.user.school_id:
+                    qs_users = qs_users.filter(school_id=request.user.school_id)
+                existing_users = {u.username: u for u in qs_users}
+
+            raw_users = []
+            for student in students_qs:
+                username_val = str(student.admission_no or "").strip()
+                if not username_val:
+                    continue
+
+                user_obj = existing_users.get(username_val)
+                if user_obj is None:
+                    user_obj = User.objects.filter(username=username_val).first()
+                if user_obj is None:
+                    user_obj = User(
+                        username=username_val,
+                        first_name=(student.first_name or "").strip(),
+                        last_name=(student.last_name or "").strip(),
+                        school_id=student.school_id,
+                        access_status=True,
+                    )
+                    user_obj.set_password("123456")
+                    user_obj.save()
+                    if not UserRole.objects.filter(user_id=user_obj.id, role_id=role.id).exists():
+                        UserRole.objects.create(user_id=user_obj.id, role_id=role.id)
+                    existing_users[username_val] = user_obj
+
+                class_name = student.current_class.name if student.current_class else ""
+                section_name = student.current_section.name if student.current_section else ""
+                full_name = f"{(student.first_name or '').strip()} {(student.last_name or '').strip()}".strip() or username_val
+
+                raw_users.append({
+                    "id": str(user_obj.id),
+                    "staffId": student.admission_no or username_val,
+                    "name": full_name,
+                    "role": f"{role.name} · {class_name}-{section_name}" if class_name else role.name,
+                    "email": user_obj.email or student.email or "",
+                    "loginAccess": bool(getattr(user_obj, "access_status", True)),
+                    "lastLogin": user_obj.last_login.isoformat() if user_obj.last_login else None,
+                    "mustChange": bool(getattr(user_obj, "must_change_password", False)),
+                })
+
+        # ── Non-student path ──────────────────────────────────────────────────
+        else:
+            user_role_qs = UserRole.objects.select_related("user", "role").filter(role_id=role.id)
+            if not request.user.is_superuser and request.user.school_id:
+                user_role_qs = user_role_qs.filter(
+                    Q(role__school_id=request.user.school_id) | Q(role__school__isnull=True)
+                )
+            if search:
+                user_role_qs = user_role_qs.filter(
+                    Q(user__first_name__icontains=search)
+                    | Q(user__last_name__icontains=search)
+                    | Q(user__username__icontains=search)
+                    | Q(user__email__icontains=search)
+                )
+
+            user_ids = list(user_role_qs.values_list("user_id", flat=True).distinct())
+            staff_map = {
+                row.user_id: row
+                for row in Staff.objects.filter(user_id__in=user_ids).only("user_id", "staff_no")
+            }
+
+            seen = set()
+            raw_users = []
+            for ur in user_role_qs.select_related("user").order_by("user__first_name", "user__last_name"):
+                if ur.user_id in seen:
+                    continue
+                seen.add(ur.user_id)
+                u = ur.user
+                staff = staff_map.get(u.id)
+                full_name = (
+                    f"{(u.first_name or '').strip()} {(u.last_name or '').strip()}".strip()
+                    or u.username
+                )
+                raw_users.append({
+                    "id": str(u.id),
+                    "staffId": staff.staff_no if staff else u.username,
+                    "name": full_name,
+                    "role": role.name,
+                    "email": u.email or "",
+                    "loginAccess": bool(getattr(u, "access_status", True)),
+                    "lastLogin": u.last_login.isoformat() if u.last_login else None,
+                    "mustChange": bool(getattr(u, "must_change_password", False)),
+                })
+
+        # ── Apply status filter ───────────────────────────────────────────────
+        if status_filter == "active":
+            raw_users = [u for u in raw_users if u["loginAccess"]]
+        elif status_filter == "inactive":
+            raw_users = [u for u in raw_users if not u["loginAccess"]]
+        elif status_filter == "new":
+            raw_users = [u for u in raw_users if u["lastLogin"] is None]
+
+        # ── Counts & pagination ───────────────────────────────────────────────
+        total = len(raw_users)
+        counts = {
+            "total": total,
+            "active": sum(1 for u in raw_users if u["loginAccess"]),
+            "disabled": sum(1 for u in raw_users if not u["loginAccess"]),
+        }
+        start = (page_num - 1) * page_size
+        paginated = raw_users[start: start + page_size]
+        total_pages = max(1, (total + page_size - 1) // page_size) if total > 0 else 0
+
+        return Response(
+            {
+                "results": paginated,
+                "page": page_num,
+                "pageSize": page_size,
+                "totalPages": total_pages,
+                "filteredCount": total,
+                "counts": counts,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["post"], url_path="toggle")
+    def toggle(self, request):
+        user_id = request.data.get("id") or request.data.get("user_id")
+        if not user_id:
+            return Response({"detail": "id is required."}, status=status.HTTP_400_BAD_REQUEST)
+        login_access = _coerce_bool(request.data.get("loginAccess", request.data.get("login_access")))
+
+        user_obj = User.objects.filter(id=user_id).first()
+        if not user_obj:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not request.user.is_superuser and request.user.school_id and user_obj.school_id != request.user.school_id:
+            return Response({"detail": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
+
+        user_obj.access_status = login_access
+        user_obj.save(update_fields=["access_status"])
+        return Response({"id": str(user_obj.id), "loginAccess": user_obj.access_status}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="reset-password")
+    def reset_password(self, request):
+        import secrets
+        import string as _string
+
+        user_id = request.data.get("id") or request.data.get("user_id")
+        if not user_id:
+            return Response({"detail": "id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user_obj = User.objects.filter(id=user_id).first()
+        if not user_obj:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not request.user.is_superuser and request.user.school_id and user_obj.school_id != request.user.school_id:
+            return Response({"detail": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
+
+        alphabet = _string.ascii_letters + _string.digits
+        temp_password = "".join(secrets.choice(alphabet) for _ in range(10))
+        user_obj.set_password(temp_password)
+        user_obj.save(update_fields=["password"])
+
+        return Response(
+            {
+                "ok": True,
+                "passwordBackup": temp_password,
+                "message": "Password reset successfully.",
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=False, methods=["post"], url_path="bulk-access")
+    def bulk_access(self, request):
+        ids = request.data.get("ids") or []
+        all_matching = _coerce_bool(request.data.get("allMatching", False))
+        login_access = _coerce_bool(request.data.get("login_access", request.data.get("loginAccess", False)))
+        role_slug = (request.data.get("role") or "").strip()
+        search = (request.data.get("search") or "").strip()
+
+        if all_matching and role_slug:
+            role = self._get_role_by_slug(request, role_slug)
+            if role:
+                user_ids_qs = UserRole.objects.filter(role_id=role.id).values_list("user_id", flat=True).distinct()
+                target_qs = User.objects.filter(id__in=user_ids_qs)
+                if not request.user.is_superuser and request.user.school_id:
+                    target_qs = target_qs.filter(school_id=request.user.school_id)
+                if search:
+                    target_qs = target_qs.filter(
+                        Q(first_name__icontains=search)
+                        | Q(last_name__icontains=search)
+                        | Q(username__icontains=search)
+                    )
+                affected = target_qs.update(access_status=login_access)
+                return Response({"affected": affected}, status=status.HTTP_200_OK)
+        elif ids:
+            safe_ids = [int(i) for i in ids if str(i).lstrip("-").isdigit()]
+            affected = User.objects.filter(id__in=safe_ids).update(access_status=login_access)
+            return Response({"affected": affected}, status=status.HTTP_200_OK)
+
+        return Response({"affected": 0}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="bulk-reset")
+    def bulk_reset(self, request):
+        import secrets
+        import string as _string
+
+        ids = request.data.get("ids") or []
+        all_matching = _coerce_bool(request.data.get("allMatching", False))
+        role_slug = (request.data.get("role") or "").strip()
+        search = (request.data.get("search") or "").strip()
+
+        alphabet = _string.ascii_letters + _string.digits
+
+        def gen_pwd():
+            return "".join(secrets.choice(alphabet) for _ in range(10))
+
+        if all_matching and role_slug:
+            role = self._get_role_by_slug(request, role_slug)
+            if role:
+                user_ids = list(
+                    UserRole.objects.filter(role_id=role.id).values_list("user_id", flat=True).distinct()
+                )
+                target_qs = User.objects.filter(id__in=user_ids)
+                if not request.user.is_superuser and request.user.school_id:
+                    target_qs = target_qs.filter(school_id=request.user.school_id)
+                if search:
+                    target_qs = target_qs.filter(
+                        Q(first_name__icontains=search)
+                        | Q(last_name__icontains=search)
+                        | Q(username__icontains=search)
+                    )
+                count = 0
+                for u in target_qs:
+                    u.set_password(gen_pwd())
+                    u.save(update_fields=["password"])
+                    count += 1
+                return Response({"affected": count}, status=status.HTTP_200_OK)
+        elif ids:
+            safe_ids = [int(i) for i in ids if str(i).lstrip("-").isdigit()]
+            count = 0
+            for u in User.objects.filter(id__in=safe_ids):
+                u.set_password(gen_pwd())
+                u.save(update_fields=["password"])
+                count += 1
+            return Response({"affected": count}, status=status.HTTP_200_OK)
+
+        return Response({"affected": 0}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"], url_path="set-initial-password")
+    def set_initial_password(self, request):
+        user_id = request.data.get("id") or request.data.get("user_id")
+        mode = (request.data.get("mode") or "default").strip().lower()
+        manual_password = (request.data.get("password") or "").strip()
+
+        if not user_id:
+            return Response({"detail": "id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user_obj = User.objects.filter(id=user_id).first()
+        if not user_obj:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+        if not request.user.is_superuser and request.user.school_id and user_obj.school_id != request.user.school_id:
+            return Response({"detail": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
+        if user_obj.last_login:
+            return Response(
+                {"detail": "This user has already logged in. Use Reset Password instead."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if mode == "default":
+            final_password = "123456"
+        elif mode == "manual":
+            if not manual_password:
+                return Response({"detail": "password is required for manual mode."}, status=status.HTTP_400_BAD_REQUEST)
+            if len(manual_password) < 6:
+                return Response({"detail": "Password must be at least 6 characters."}, status=status.HTTP_400_BAD_REQUEST)
+            final_password = manual_password
+        else:
+            return Response({"detail": "Invalid mode. Use 'default' or 'manual'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Use set_password() to store a proper hash — never assign plain text.
+        user_obj.set_password(final_password)
+        user_obj.must_change_password = True
+
+        # Ensure the account is active so the user can actually log in.
+        fields_to_update = ["password", "must_change_password"]
+        if not user_obj.is_active:
+            user_obj.is_active = True
+            fields_to_update.append("is_active")
+        if not getattr(user_obj, "access_status", True):
+            user_obj.access_status = True
+            fields_to_update.append("access_status")
+
+        user_obj.save(update_fields=fields_to_update)
+
+        return Response(
+            {
+                "ok": True,
+                "passwordBackup": final_password,
+                "message": "Initial password set. The user must change it on first login.",
+            },
+            status=status.HTTP_200_OK,
+        )

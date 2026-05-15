@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation';
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { MODULES } from '@/lib/routes';
+import { usePermissions } from '@/hooks/usePermissions';
 
 /** Finds the module that "owns" the given pathname */
 function findOwnerModule(pathname: string) {
@@ -20,6 +21,7 @@ function findOwnerModule(pathname: string) {
 export function ModuleSubNav() {
   const pathname = usePathname();
   const mod = findOwnerModule(pathname);
+  const { can, canAnyPrefix } = usePermissions();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -126,6 +128,17 @@ export function ModuleSubNav() {
           {mod.sub.map(s => {
             const isActive = s === activeTab;
             const SubIcon = s.icon ?? mod.icon;
+
+            // Permission check: specific code wins; fall back to module prefix
+            const allowed = s.permission
+              ? can(s.permission)
+              : mod.permission
+                ? canAnyPrefix(mod.permission)
+                : true;
+
+            // Hidden — user has no permission
+            if (!allowed) return null;
+
             return (
               <Link
                 key={s.path}

@@ -61,6 +61,25 @@ class MeView(APIView):
                 "role_ids": role_ids,
                 "role_names": role_names,
                 "permission_codes": sorted(user.get_permission_codes()),
+                "must_change_password": bool(getattr(user, "must_change_password", False)),
             },
             status=status.HTTP_200_OK,
         )
+
+
+class ChangePasswordView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        new_password = (request.data.get("new_password") or "").strip()
+
+        if not new_password:
+            return Response({"detail": "new_password is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(new_password) < 6:
+            return Response({"detail": "Password must be at least 6 characters."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.must_change_password = False
+        user.save(update_fields=["password", "must_change_password"])
+        return Response({"ok": True, "message": "Password changed successfully."}, status=status.HTTP_200_OK)

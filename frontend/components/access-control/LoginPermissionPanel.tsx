@@ -92,6 +92,8 @@ export function LoginPermissionPanel() {
   const [rollNo, setRollNo] = useState("");
 
   const [rows, setRows] = useState<LoginUserRow[]>([]);
+  const [pageSize, setPageSize] = useState(10);
+  const [currentPage, setCurrentPage] = useState(1);
   const [loadingCriteria, setLoadingCriteria] = useState(false);
   const [loading, setLoading] = useState(false);
   const [actionUserId, setActionUserId] = useState<number | null>(null);
@@ -215,9 +217,11 @@ export function LoginPermissionPanel() {
         `/api/v1/access-control/login-access-control/users/?${query.toString()}`,
       );
       setRows(payload.users || []);
+      setCurrentPage(1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load users.");
       setRows([]);
+      setCurrentPage(1);
     } finally {
       setLoading(false);
     }
@@ -477,6 +481,36 @@ export function LoginPermissionPanel() {
           overflow: "auto",
         }}
       >
+        {/* Page-size toggle */}
+        {rows.length > 0 && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "10px 14px", borderBottom: "1px solid var(--bd)" }}>
+            <span style={{ fontSize: 12, color: "var(--ink-3)" }}>Rows per page:</span>
+            {[10, 25, 50, 100].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => { setPageSize(n); setCurrentPage(1); }}
+                style={{
+                  height: 24,
+                  minWidth: 32,
+                  border: `1px solid ${pageSize === n ? "var(--pu)" : "var(--bd)"}`,
+                  borderRadius: 6,
+                  background: pageSize === n ? "var(--pu)" : "var(--bg-0)",
+                  color: pageSize === n ? "#fff" : "var(--ink-2)",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  padding: "0 6px",
+                }}
+              >
+                {n}
+              </button>
+            ))}
+            <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--ink-3)" }}>
+              {rows.length} total
+            </span>
+          </div>
+        )}
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isStudentRole ? 1250 : 980 }}>
           <thead>
             <tr>
@@ -519,7 +553,7 @@ export function LoginPermissionPanel() {
               </tr>
             )}
             {!loading &&
-              rows.map((row) => (
+              rows.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((row) => (
                 <tr
                   key={row.user_id ?? row.admission_no ?? row.username}
                   style={{ transition: "background 0.1s" }}
@@ -615,6 +649,66 @@ export function LoginPermissionPanel() {
               ))}
           </tbody>
         </table>
+
+        {/* Pagination controls */}
+        {rows.length > pageSize && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 14px", borderTop: "1px solid var(--bd)" }}>
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              style={{
+                height: 30, minWidth: 72, border: "1px solid var(--bd)", borderRadius: 6,
+                background: currentPage === 1 ? "var(--bg-2)" : "var(--bg-0)",
+                color: currentPage === 1 ? "var(--ink-3)" : "var(--ink-1)",
+                fontSize: 12, fontWeight: 600, cursor: currentPage === 1 ? "not-allowed" : "pointer",
+              }}
+            >
+              ← Prev
+            </button>
+            {Array.from({ length: Math.ceil(rows.length / pageSize) }, (_, i) => i + 1)
+              .filter((p) => p === 1 || p === Math.ceil(rows.length / pageSize) || Math.abs(p - currentPage) <= 1)
+              .reduce<(number | "...")[]>((acc, p, idx, arr) => {
+                if (idx > 0 && (p as number) - (arr[idx - 1] as number) > 1) acc.push("...");
+                acc.push(p);
+                return acc;
+              }, [])
+              .map((p, i) =>
+                p === "..." ? (
+                  <span key={`ellipsis-${i}`} style={{ fontSize: 12, color: "var(--ink-3)", padding: "0 2px" }}>…</span>
+                ) : (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setCurrentPage(p as number)}
+                    style={{
+                      height: 30, minWidth: 32, border: `1px solid ${currentPage === p ? "var(--pu)" : "var(--bd)"}`,
+                      borderRadius: 6,
+                      background: currentPage === p ? "var(--pu)" : "var(--bg-0)",
+                      color: currentPage === p ? "#fff" : "var(--ink-1)",
+                      fontSize: 12, fontWeight: 600, cursor: "pointer", padding: "0 6px",
+                    }}
+                  >
+                    {p}
+                  </button>
+                )
+              )}
+            <button
+              type="button"
+              onClick={() => setCurrentPage((p) => Math.min(Math.ceil(rows.length / pageSize), p + 1))}
+              disabled={currentPage === Math.ceil(rows.length / pageSize)}
+              style={{
+                height: 30, minWidth: 72, border: "1px solid var(--bd)", borderRadius: 6,
+                background: currentPage === Math.ceil(rows.length / pageSize) ? "var(--bg-2)" : "var(--bg-0)",
+                color: currentPage === Math.ceil(rows.length / pageSize) ? "var(--ink-3)" : "var(--ink-1)",
+                fontSize: 12, fontWeight: 600,
+                cursor: currentPage === Math.ceil(rows.length / pageSize) ? "not-allowed" : "pointer",
+              }}
+            >
+              Next →
+            </button>
+          </div>
+        )}
       </div>
     </section>
   );

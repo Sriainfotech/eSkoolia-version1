@@ -27,14 +27,40 @@ export default function LoginPage() {
       });
 
       if (!response.ok) {
-        throw new Error("Invalid credentials");
+        let message = "Invalid credentials";
+        try {
+          const errorData = await response.json();
+          message =
+            errorData?.error?.message ||
+            errorData?.detail ||
+            errorData?.message ||
+            message;
+        } catch {
+          // Keep the generic message when the response body is not JSON.
+        }
+        throw new Error(message);
       }
 
       const data = (await response.json()) as { access: string; refresh: string };
       setAuthTokens(data.access, data.refresh);
+
+      // Check if user must change password on first login
+      try {
+        const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me/`, {
+          headers: { Authorization: `Bearer ${data.access}` },
+        });
+        if (meRes.ok) {
+          const me = (await meRes.json()) as { must_change_password?: boolean };
+          if (me.must_change_password) {
+            router.push('/change-password');
+            return;
+          }
+        }
+      } catch { /* non-blocking, fall through to /home */ }
+
       router.push("/home");
     } catch (e) {
-      setError("Login failed. Verify credentials and backend availability.");
+      setError(e instanceof Error ? e.message : "Login failed. Verify credentials and backend availability.");
     } finally {
       setLoading(false);
     }

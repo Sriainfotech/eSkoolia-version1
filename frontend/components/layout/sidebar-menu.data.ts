@@ -16,11 +16,8 @@ export const sidebarMenu: SidebarItem[] = [
       { id: "roles", name: "Role", route: "/roles" },
       { id: "assign-permission", name: "Assign Permission", route: "/roles/assign-permission" },
       { id: "login-permission", name: "Login Permission", route: "/roles/login-permission" },
-      {
-        id: "due-fees-login-permission",
-        name: "Due Fees Login Permission",
-        route: "/roles/due-fees-login-permission",
-      },
+      // HIDDEN - no backend yet
+      // { id: "due-fees-login-permission", name: "Due Fees Login Permission", route: "/roles/due-fees-login-permission" },
     ],
   },
   {
