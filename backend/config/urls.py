@@ -27,6 +27,8 @@ urlpatterns = [
     path("api/v1/behaviour/", include("apps.behaviour.urls")),
     path("api/v1/reports/", include("apps.reports.urls")),
     path("api/v1/tenancy/", include("apps.tenancy.urls")),
+    path("api/super-admin/", include("apps.super_admin.urls")),
+    path("api/v1/super-admin/", include("apps.super_admin.urls")),
     path("api/chat/", include("apps.chat.urls")),
     path("api/v1/utilities/communication/", include("apps.communication.urls")),
     path("api/v1/competitions/", include("apps.competitions.urls")),

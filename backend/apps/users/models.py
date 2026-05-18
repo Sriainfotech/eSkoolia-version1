@@ -14,6 +14,7 @@ class User(AbstractUser):
     is_school_admin = models.BooleanField(default=False)
     access_status = models.BooleanField(default=True)
     due_fees_login_blocked = models.BooleanField(default=False)
+    must_change_password = models.BooleanField(default=False)
 
     class Meta:
         db_table = "users"

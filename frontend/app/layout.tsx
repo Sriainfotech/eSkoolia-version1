@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { DM_Sans, Playfair_Display, Instrument_Sans, Inter, JetBrains_Mono, Fraunces } from "next/font/google";
+import { DM_Sans, Playfair_Display, Instrument_Sans, Inter, JetBrains_Mono, Fraunces, Instrument_Serif } from "next/font/google";
 import "./globals.css";
 import "leaflet/dist/leaflet.css";
 import "react-toastify/dist/ReactToastify.css";
@@ -9,6 +9,7 @@ const playfairDisplay = Playfair_Display({ subsets: ["latin"], variable: "--font
 const instrument = Instrument_Sans({ subsets: ["latin"], weight: ["400","500","600","700"], variable: "--font-instrument", display: "swap" });
 const inter = Inter({ subsets: ["latin"], weight: ["400","500","600","700"], variable: "--font-inter", display: "swap" });
 const fraunces = Fraunces({ subsets: ["latin"], weight: ["400","500","600","700"], variable: "--font-fraunces", display: "swap" });
+const instrumentSerif = Instrument_Serif({ subsets: ["latin"], weight: ["400"], style: ["normal", "italic"], variable: "--font-instrument-serif", display: "swap" });
 const mono = JetBrains_Mono({ subsets: ["latin"], weight: ["400","500"], variable: "--font-mono", display: "swap" });
 
 export const metadata: Metadata = {
@@ -20,7 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="en"
-      className={`${dmSans.variable} ${playfairDisplay.variable} ${instrument.variable} ${inter.variable} ${fraunces.variable} ${mono.variable} h-full`}
+      className={`${dmSans.variable} ${playfairDisplay.variable} ${instrument.variable} ${inter.variable} ${fraunces.variable} ${mono.variable} ${instrumentSerif.variable} h-full`}
     >
       {/* h-full + overflow-hidden on <body> prevents any page-level scroll;
           each route segment owns its own internal scroll area. */}

@@ -107,6 +107,47 @@ eskoolia-v1/
 
 ---
 
+## Deterministic Backend Pytest Rules (Neon/PostgreSQL)
+
+Use these rules for all backend test runs to avoid bootstrap drift and schema contamination.
+
+1. Python runtime (required)
+- Run backend tests with `py -3.10`.
+- Do not use system `python` for backend pytest commands.
+
+2. Settings module (required)
+- Backend pytest must use `config.settings.test`.
+- This is already configured in [backend/pytest.ini](backend/pytest.ini).
+
+3. Working directory (required)
+- Run pytest from [backend](backend), not from repository root.
+- Example:
+```powershell
+Set-Location "D:/eskoolia/New folder (2)/eSkoolia-version1/backend"
+py -3.10 -m pytest apps/super_admin/tests.py -q --create-db
+```
+
+4. Test database workflow
+- Default safe path: use `--create-db` for clean deterministic bootstrap.
+- `--reuse-db` is blocked unless `PYTEST_ALLOW_REUSE_DB=1` is explicitly set.
+
+5. Neon/PostgreSQL caveats
+- Expect long first bootstrap when creating the test database and applying migrations.
+- A missing `tenant_plans`/tenancy table usually indicates migration drift; regenerate/apply tenancy migrations before retrying.
+- Keep test target isolated from production/shared DB names.
+
+6. Recommended commands
+- Minimal super_admin smoke:
+```powershell
+py -3.10 -m pytest apps/super_admin/tests.py::test_dashboard_and_school_list_match_contract -vv -s --maxfail=1 --create-db
+```
+- Sprint 1 super_admin suite:
+```powershell
+py -3.10 -m pytest apps/super_admin/tests.py -q --create-db
+```
+
+---
+
 ## Adding tests for new features
 
 Every time you build a new feature, add:

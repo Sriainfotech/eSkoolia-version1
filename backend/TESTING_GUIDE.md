@@ -425,4 +425,25 @@ coverage report
 
 # Run with profile
 python -m py_spy record -o profile.svg -- python manage.py test
+
+# Run pytest against the dedicated test settings (default in backend/pytest.ini)
+pytest
+
+# Force a fresh PostgreSQL test database on the next run
+pytest --create-db
+
+# Inspect test database hygiene and list any test tenant schemas
+DJANGO_SETTINGS_MODULE=config.settings.test python manage.py test_db_hygiene --show-reset-steps
+
+# Remove only tenant schemas that were created for tests
+DJANGO_SETTINGS_MODULE=config.settings.test python manage.py test_db_hygiene --cleanup-test-schemas
 """
+
+## Test Hygiene Notes
+
+- Pytest now uses `config.settings.test` by default.
+- `--reuse-db` is not enabled by default because it can preserve stale PostgreSQL state.
+- If you intentionally need reuse for local debugging, set `PYTEST_ALLOW_REUSE_DB=1` explicitly.
+- If you do not provide `DATABASE_URL_TEST`, local pytest runs fall back to an isolated SQLite test database.
+- The `test_db_hygiene` command never drops public schema objects or non-test tenant schemas.
+- For Neon or other managed PostgreSQL instances, prefer `pytest --create-db` for clean runs instead of manual table cleanup.

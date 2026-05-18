@@ -50,7 +50,7 @@ function NewNavShell({ children }: { children: React.ReactNode }) {
       <main
         id="main-content"
         className="flex-1 overflow-y-auto min-h-0 main-content-new-nav"
-        style={{ padding: 18 }}
+        style={{ padding: '18px 32px' }}
       >
         {children}
       </main>
