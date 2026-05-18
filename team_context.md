@@ -119,7 +119,63 @@ POST  /api/login-permission/bulk/reset/       → bulk password reset
 GET  /api/login-permission/users/export/      → CSV download
 ```
 
-### 7. Miscellaneous Fixes
+### 7. Access Control — Roles & Permissions Module (Bug Fixes + Enhancements)
+
+#### Backend fixes (`backend/apps/access_control/`)
+
+**Migration 0013** (`0013_role_name_30_and_is_active.py`):
+- Added `is_active = BooleanField(default=True)` back to the `Role` model (was missing, caused FieldError on all role queries)
+- Truncated any existing role names > 30 chars before applying `max_length=30`
+
+**`models.py`**:
+- `is_active` field restored: `is_active = models.BooleanField(default=True)`
+- `UniqueConstraint` on `(school, name)` with `nulls_distinct=False` (migration 0012)
+
+**`serializers.py` — `validate_name`**:
+- Checks for both active AND inactive name collisions
+- Returns specific message: `"A deactivated role with this name already exists. Reactivate it or delete it before creating a new one."` vs `"A role with this name already exists."`
+- `RoleMinimalSerializer` fields: `["id", "name", "is_system", "is_active", "created_at"]`
+
+**`views.py` — `RoleViewSet.get_queryset`**:
+- `is_active=True` filter now applies **only for the `list` action**, not for retrieve/update/destroy
+- This fixed: PATCH to re-activate an inactive role was returning 404 (role not found in filtered queryset)
+- `?show_inactive=1` still supported for the list action to include inactive roles explicitly
+
+#### Frontend fixes (`frontend/components/access-control/`)
+
+**`RoleManagementPanel.tsx`**:
+- `toggleActive`: replaced `await loadRoles(page, pageSize)` with an in-place local state update (`setRoles(prev => prev.map(...))`) — prevents deactivated roles from disappearing on re-fetch
+- `loadRoles`: always appends `&show_inactive=1` so inactive roles are always loaded on mount, search, and pagination
+- Edit panel: Status toggle button added (green Active / red Inactive) — included in PUT body as `is_active`
+
+**`AssignPermissionPanel.tsx`**:
+- `RoleItem` interface: added `is_system?: boolean`
+- `togglingRoleId` state: tracks which role's toggle is mid-request (loading indicator)
+- `toggleRoleActive` async function: PATCHes `{ is_active: !current }`, updates local state, shows toast
+- Initial role fetch: now always includes `&show_inactive=1` so deactivated roles persist across navigation
+- **Per-card toggle switch** added to every role card in the grid:
+  - Pill toggle (36×20 px): green `#16a34a` = Active, gray `#D1D5DB` = Inactive
+  - Thumb slides left/right with 0.25s CSS transition
+  - Inactive cards rendered at `opacity: 0.65` with lighter border/background
+  - Bullet dot changes purple → gray for inactive roles
+  - System roles (`is_system: true`): toggle disabled at 35% opacity, cursor `not-allowed`
+  - Loading state: 55% opacity + `cursor: wait` during in-flight PATCH
+  - `e.stopPropagation()` prevents triggering `switchRole` when clicking toggle
+- Edit Role modal (`RoleFormModal`): Status toggle added via `isActive` / `onIsActiveChange` props; saved in PATCH body
+- Inline validation errors for name conflicts (active vs inactive-specific messages)
+
+#### Summary of bugs fixed
+
+| Bug | Root Cause | Fix |
+|-----|-----------|-----|
+| DELETE `/roles/{id}/` → 500 | `is_active` field missing from `Role` model Python definition | Restored field + migration 0013 |
+| Duplicate role name — no specific error | `validate_name` only checked active roles | Now checks both; inactive gives specific message |
+| PATCH to re-activate → 404 | `get_queryset` filtered `is_active=True` for ALL actions | Filter now only on `list` action |
+| Deactivated role disappears from UI | `toggleActive` called `loadRoles()` (API only returns active) | Update local state directly; always fetch with `show_inactive=1` |
+
+---
+
+### 8. Miscellaneous Fixes
 
 - **`django-filter` version** downgraded to `24.3` in `backend/requirements.txt` (was `25.2`, incompatible with Django 5.1.8)
 - **`ClassesGrid.tsx` build error** — unescaped `"` in JSX attribute fixed with `&quot;`

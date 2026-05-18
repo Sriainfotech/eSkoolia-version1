@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { TopToast } from "@/components/common/TopToast";
 import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { usePersistentPagination } from "@/hooks/usePersistentPagination";
@@ -11,6 +12,7 @@ type RoleItem = {
   id: number;
   name: string;
   is_system: boolean;
+  is_active: boolean;
   created_at: string;
 };
 
@@ -43,9 +45,11 @@ export function RoleManagementPanel() {
 
   const [roleName, setRoleName] = useState("");
   const [editingRoleId, setEditingRoleId] = useState<number | null>(null);
+  const [editingRoleIsActive, setEditingRoleIsActive] = useState(true);
   const [search, setSearch] = useState("");
 
   const [panelMode, setPanelMode] = useState<PanelMode>(null);
+  const [showInactive, setShowInactive] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   const loadRoles = async (targetPage = page, targetPageSize = pageSize) => {
@@ -53,7 +57,8 @@ export function RoleManagementPanel() {
     setError("");
     try {
       const query = buildPaginationQuery(targetPage, targetPageSize, { search: search.trim() || undefined });
-      const data = await apiRequestWithRefresh<ListApiResponse<RoleItem>>(`/api/v1/access-control/roles/?${query}`);
+      const qs = `${query}&minimal=1&show_inactive=1`;
+      const data = await apiRequestWithRefresh<ListApiResponse<RoleItem>>(`/api/v1/access-control/roles/?${qs}`);
       const items = extractListData(data);
       const meta = extractPaginationMeta(data);
       setRoles(items);
@@ -68,13 +73,14 @@ export function RoleManagementPanel() {
   useEffect(() => {
     const handle = window.setTimeout(() => { void loadRoles(); }, 250);
     return () => window.clearTimeout(handle);
-  }, [page, pageSize, search]);
+  }, [page, pageSize, search, showInactive]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   const resetForm = () => {
     setEditingRoleId(null);
     setRoleName("");
+    setEditingRoleIsActive(true);
     setFieldError("");
   };
 
@@ -94,13 +100,32 @@ export function RoleManagementPanel() {
   const openEditPanel = (row: RoleItem) => {
     setEditingRoleId(row.id);
     setRoleName(row.name);
+    setEditingRoleIsActive(row.is_active);
     setFieldError("");
     setSuccess("");
     setPanelMode("edit");
     setTimeout(() => nameInputRef.current?.focus(), 50);
   };
 
-  const isValidRoleName = (value: string) => /^[A-Za-z0-9 ]+$/.test(value);
+  const isValidRoleName = (value: string) => /^[A-Za-z ]+$/.test(value);
+  /** True when 3+ of the same letter appear consecutively (e.g. "www", "Staffff") */
+  const hasRepeatedChars = (value: string) => /(.)(\1){2,}/i.test(value);
+  const MAX_NAME = 30;
+
+  const toggleActive = async (role: RoleItem) => {
+    try {
+      setError("");
+      await apiRequestWithRefresh(`/api/v1/access-control/roles/${role.id}/`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: !role.is_active }),
+      });
+      setRoles((prev) => prev.map((r) => r.id === role.id ? { ...r, is_active: !role.is_active } : r));
+      setSuccess(role.is_active ? `"${role.name}" deactivated.` : `"${role.name}" activated.`);
+    } catch {
+      setError("Unable to update role status.");
+    }
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -109,8 +134,16 @@ export function RoleManagementPanel() {
       setFieldError("Role name is required.");
       return;
     }
+    if (normalized.length > MAX_NAME) {
+      setFieldError(`Role name cannot exceed ${MAX_NAME} characters.`);
+      return;
+    }
     if (!isValidRoleName(normalized)) {
-      setFieldError("Only letters, numbers, and spaces are allowed.");
+      setFieldError("Only letters and spaces are allowed. No numbers or special characters.");
+      return;
+    }
+    if (hasRepeatedChars(normalized)) {
+      setFieldError("Avoid repeating the same letter more than twice (e.g. \"wwwwww\")");
       return;
     }
     try {
@@ -122,7 +155,7 @@ export function RoleManagementPanel() {
       await apiRequestWithRefresh(`/api/v1/access-control/roles/${isUpdate ? `${editingRoleId}/` : ""}`, {
         method: isUpdate ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: normalized }),
+        body: JSON.stringify(isUpdate ? { name: normalized, is_active: editingRoleIsActive } : { name: normalized }),
       });
       setSuccess(isUpdate ? `"${normalized}" updated.` : `"${normalized}" created.`);
       closePanel();
@@ -171,6 +204,19 @@ export function RoleManagementPanel() {
           </p>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {/* Show inactive toggle */}
+          <button
+            type="button"
+            onClick={() => { setShowInactive((v) => !v); setPage(1); }}
+            style={{
+              height: 36, padding: "0 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
+              border: `1px solid ${showInactive ? "var(--pu)" : "var(--bd)"}`,
+              background: showInactive ? "var(--pu-soft)" : "var(--bg-1)",
+              color: showInactive ? "var(--pu)" : "var(--ink-3)",
+            }}
+          >
+            {showInactive ? "● Showing all" : "○ Active only"}
+          </button>
           {/* Search */}
           <div style={{ position: "relative" }}>
             <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--ink-3)", pointerEvents: "none" }}>🔍</span>
@@ -202,17 +248,9 @@ export function RoleManagementPanel() {
         </div>
       </div>
 
-      {/* ── Feedback banners ── */}
-      {error && (
-        <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: 8, padding: "8px 14px", marginBottom: 12, fontSize: 12, color: "var(--err)" }}>
-          {error}
-        </div>
-      )}
-      {success && (
-        <div style={{ background: "#DCFCE7", border: "1px solid #BBF7D0", borderRadius: 8, padding: "8px 14px", marginBottom: 12, fontSize: 12, color: "#16A34A" }}>
-          {success}
-        </div>
-      )}
+      {/* ── Toast notifications ── */}
+      {error && <TopToast message={error} tone="error" onClose={() => setError("")} />}
+      {success && <TopToast message={success} tone="success" onClose={() => setSuccess("")} />}
 
       {/* ── Split layout: cards + editor panel ── */}
       <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
@@ -261,17 +299,27 @@ export function RoleManagementPanel() {
                       if (actions) actions.style.opacity = "0";
                     }}
                   >
+                    {/* Inactive overlay badge */}
+                    {!role.is_active && (
+                      <span style={{
+                        position: "absolute", top: 4, left: 4,
+                        background: "#FEE2E2", color: "#DC2626",
+                        fontSize: 9, fontWeight: 700, borderRadius: 4,
+                        padding: "1px 5px", letterSpacing: "0.05em", textTransform: "uppercase",
+                      }}>Inactive</span>
+                    )}
+
                     {/* Icon: first letter, deterministic colour */}
                     <div style={{
                       width: 30, height: 30, borderRadius: 8, flexShrink: 0,
-                      background: bgColor,
+                      background: bgColor, opacity: role.is_active ? 1 : 0.45,
                       display: "flex", alignItems: "center", justifyContent: "center",
                       fontSize: 13, fontWeight: 700, color: "var(--ink-2)",
                     }}>
                       {role.name.charAt(0).toUpperCase()}
                     </div>
 
-                    <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ flex: 1, minWidth: 0, opacity: role.is_active ? 1 : 0.55 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         {role.name}
                       </div>
@@ -299,6 +347,12 @@ export function RoleManagementPanel() {
                         onClick={(e) => { e.stopPropagation(); openEditPanel(role); }}
                         style={{ width: 22, height: 22, borderRadius: 5, border: "none", background: "var(--bg-2)", color: "var(--pu)", cursor: "pointer", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center" }}
                       >✏</button>
+                      <button
+                        type="button"
+                        title={role.is_active ? "Deactivate role" : "Activate role"}
+                        onClick={(e) => { e.stopPropagation(); void toggleActive(role); }}
+                        style={{ width: 22, height: 22, borderRadius: 5, border: "none", background: role.is_active ? "#FEF3C7" : "#DCFCE7", color: role.is_active ? "#92400E" : "#166534", cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center" }}
+                      >{role.is_active ? "⏸" : "▶"}</button>
                       {!role.is_system && (
                         <button
                           type="button"
@@ -399,8 +453,19 @@ export function RoleManagementPanel() {
                   <input
                     ref={nameInputRef}
                     value={roleName}
-                    onChange={(e) => { setRoleName(e.target.value); if (fieldError) setFieldError(""); }}
+                    onChange={(e) => {
+                      // Strip numbers and special characters as user types
+                      const cleaned = e.target.value.replace(/[^A-Za-z ]/g, "").slice(0, MAX_NAME);
+                      setRoleName(cleaned);
+                      // Real-time repeated-char hint
+                      if (hasRepeatedChars(cleaned)) {
+                        setFieldError("Avoid repeating the same letter more than twice (e.g. \"wwwwww\")");
+                      } else if (fieldError) {
+                        setFieldError("");
+                      }
+                    }}
                     placeholder="e.g. Sports Coordinator"
+                    maxLength={MAX_NAME}
                     style={{
                       width: "100%", padding: "8px 10px",
                       border: `1px solid ${fieldError ? "var(--err)" : "var(--bd)"}`,
@@ -411,11 +476,38 @@ export function RoleManagementPanel() {
                     onFocus={(e) => { if (!fieldError) e.target.style.borderColor = "var(--pu)"; e.target.style.boxShadow = "0 0 0 2px rgba(109,74,255,0.1)"; }}
                     onBlur={(e) => { if (!fieldError) e.target.style.borderColor = "var(--bd)"; e.target.style.boxShadow = "none"; }}
                   />
-                  {fieldError && (
-                    <span style={{ fontSize: 11, color: "var(--err)", marginTop: 4, display: "block" }}>{fieldError}</span>
-                  )}
+                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
+                    {fieldError
+                      ? <span style={{ fontSize: 11, color: "var(--err)" }}>{fieldError}</span>
+                      : <span style={{ fontSize: 11, color: "var(--ink-3)" }}>Letters and spaces only</span>
+                    }
+                    <span style={{ fontSize: 11, color: roleName.length >= MAX_NAME ? "var(--err)" : "var(--ink-3)" }}>
+                      {roleName.length}/{MAX_NAME}
+                    </span>
+                  </div>
                 </div>
 
+                {panelMode === "edit" && (
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>
+                      Status
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setEditingRoleIsActive((v) => !v)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 6,
+                        padding: "6px 12px", borderRadius: 8,
+                        border: `1px solid ${editingRoleIsActive ? "#16a34a" : "#dc2626"}`,
+                        background: editingRoleIsActive ? "#dcfce7" : "#fee2e2",
+                        color: editingRoleIsActive ? "#166534" : "#dc2626",
+                        fontSize: 12, fontWeight: 600, cursor: "pointer",
+                      }}
+                    >
+                      {editingRoleIsActive ? "● Active" : "○ Inactive"}
+                    </button>
+                  </div>
+                )}
                 <div style={{ background: "var(--bg-2)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "var(--ink-2)" }}>
                   {panelMode === "add"
                     ? "After creating, use the 🔑 button on the card to assign page permissions."

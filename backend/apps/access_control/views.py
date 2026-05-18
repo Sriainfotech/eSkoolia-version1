@@ -16,7 +16,7 @@ from apps.students.models import Student, StudentMultiClassRecord
 
 from .models import AccessTier, ModuleAccessTier, Permission, Role, RoleModuleAccess, RoleTemplate, UserRole
 from .permission_classes import CanManageRoles, CanManageUserRoles, CanViewPermissions
-from .serializers import PermissionSerializer, RoleSerializer, UserRoleSerializer
+from .serializers import PermissionSerializer, RoleMinimalSerializer, RoleSerializer, UserRoleSerializer
 from .services import apply_template_to_role, infer_tier_for_role_module, sync_role_module_permissions
 from config.pagination import ApiPageNumberPagination
 
@@ -141,15 +141,26 @@ class RoleViewSet(StandardizedAccessControlResponseMixin, viewsets.ModelViewSet)
     permission_classes = [permissions.IsAuthenticated, CanManageRoles]
     pagination_class = ApiPageNumberPagination
 
+    def get_serializer_class(self):
+        if self.action == "list" and self.request.query_params.get("minimal") == "1":
+            return RoleMinimalSerializer
+        return RoleSerializer
+
     def get_queryset(self):
         user = self.request.user
-        queryset = Role.objects.prefetch_related("permissions")
+        minimal = self.action == "list" and self.request.query_params.get("minimal") == "1"
+        queryset = Role.objects.all() if minimal else Role.objects.prefetch_related("permissions")
         if user.is_superuser:
             pass
         elif user.school_id:
             queryset = queryset.filter(school_id=user.school_id)
         else:
             queryset = queryset.filter(school__isnull=True)
+
+        # For list action: only return active roles by default; pass ?show_inactive=1 to include all.
+        # Detail/update/destroy actions must reach inactive roles (e.g. to re-activate them).
+        if self.action == "list" and self.request.query_params.get("show_inactive") != "1":
+            queryset = queryset.filter(is_active=True)
 
         search = (self.request.query_params.get("search") or "").strip()
         if search:
@@ -174,13 +185,13 @@ class RoleViewSet(StandardizedAccessControlResponseMixin, viewsets.ModelViewSet)
         try:
             serializer.save(school=user.school)
         except IntegrityError:
-            raise ValidationError({"name": "Role with this name already exists."})
+            raise ValidationError({"name": "A role with this name already exists."})
 
     def perform_update(self, serializer):
         try:
             serializer.save()
         except IntegrityError:
-            raise ValidationError({"name": "Role with this name already exists."})
+            raise ValidationError({"name": "A role with this name already exists."})
 
     def perform_destroy(self, instance):
         # 400 business rule: system roles are not deletable.
