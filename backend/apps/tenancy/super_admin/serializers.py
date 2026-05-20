@@ -41,6 +41,8 @@ class SchoolTenantSerializer(serializers.ModelSerializer):
             "staff",
             "seats",
             "lastActivity",
+            "brand_color",
+            "logo_url",
         ]
 
 
@@ -54,6 +56,13 @@ class ProvisionSchoolSerializer(serializers.Serializer):
     storage_region = serializers.CharField(max_length=64, required=False, allow_blank=True)
     backup_retention = serializers.IntegerField(required=False, min_value=1)
     sso_method = serializers.CharField(max_length=64, required=False, allow_blank=True)
+    short_code = serializers.CharField(max_length=16, required=False, allow_blank=True)
+    gstin = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    pan = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    udise_code = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    seats = serializers.IntegerField(required=False, min_value=0)
+    brand_color = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    logo_url = serializers.CharField(max_length=512, required=False, allow_blank=True)
 
 
 class SchoolTenantUpdateSerializer(serializers.Serializer):
@@ -69,6 +78,8 @@ class SchoolTenantUpdateSerializer(serializers.Serializer):
     seats = serializers.IntegerField(required=False, min_value=0)
     student_count = serializers.IntegerField(required=False, min_value=0)
     staff_count = serializers.IntegerField(required=False, min_value=0)
+    brand_color = serializers.CharField(max_length=32, required=False, allow_blank=True)
+    logo_url = serializers.CharField(max_length=512, required=False, allow_blank=True)
 
 
 class InvoiceSerializer(serializers.ModelSerializer):

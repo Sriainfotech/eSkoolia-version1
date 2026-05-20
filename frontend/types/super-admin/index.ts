@@ -28,8 +28,8 @@ export interface ApiError {
 // School & Tenant Types
 // ============================================================================
 
-export type SchoolStatus = 'onboarding' | 'active' | 'trial' | 'suspended' | 'archived';
-export type PlanType = 'trial' | 'premium' | 'enterprise' | 'custom';
+export type SchoolStatus = 'pending' | 'provisioning' | 'onboarding' | 'active' | 'trial' | 'suspended' | 'archived';
+export type PlanType = 'trial' | 'starter' | 'standard' | 'premium' | 'enterprise' | 'custom';
 export type BoardType = 'CBSE' | 'SSC_AP' | 'ICSE' | 'SSC_TG' | 'OTHER';
 export type RegionType = 'north' | 'south' | 'east' | 'west' | 'northeast';
 
@@ -51,6 +51,7 @@ export interface SchoolTenant {
   
   // Computed fields for display
   students?: number;
+  activeStudents?: number;
   seats?: number;
   staff?: number;
   lastActivity?: string;
@@ -59,7 +60,10 @@ export interface SchoolTenant {
   region?: RegionType;
   gstin?: string;
   udiseCode?: string;
+  udise_code?: string;
   pan?: string;
+  brand_color?: string;
+  logo_url?: string;
 }
 
 export interface ProvisionSchoolRequest {
@@ -72,6 +76,13 @@ export interface ProvisionSchoolRequest {
   storage_region?: string;
   backup_retention?: number;
   sso_method?: string;
+  short_code?: string;
+  gstin?: string;
+  pan?: string;
+  udise_code?: string;
+  seats?: number;
+  brand_color?: string;
+  logo_url?: string;
   admin_username?: string;
   admin_password?: string;
 }
@@ -118,6 +129,8 @@ export interface DashboardData {
   totalSchools: number;
   activeSchools: number;
   totalStudents: number;
+  activeStudents?: number;
+  inactiveStudents?: number;
   totalStaff: number;
   mrr: { current: number; previous: number; trend: number };
   alertCount: number;
@@ -202,6 +215,40 @@ export interface MrrData {
   outstanding_amount: number;
   at_risk_amount: number;
   trend_percent: number;
+  // Extended metrics
+  gst_igst?: number;
+  gst_cgst_sgst?: number;
+  gst_trend_percent?: number;
+  gst_month_label?: string;
+  outstanding_count?: number;
+  outstanding_avg_overdue_days?: number;
+  invoices_ytd?: number;
+  invoices_paid?: number;
+  fiscal_year_label?: string;
+  mrr_series?: number[];
+  gst_series?: number[];
+  outstanding_series?: number[];
+  invoices_series?: number[];
+  seller_gstin?: string;
+  seller_state?: string;
+}
+
+export interface SubscriptionPlan {
+  code: string;
+  name: string;
+  price_inr: number;
+  billing_cycle: string;
+  popular: boolean;
+  description: string;
+  features: string[];
+}
+
+export interface PlansCatalog {
+  plans: SubscriptionPlan[];
+  gst_percent: number;
+  sac_code: string;
+  sac_description: string;
+  currency: string;
 }
 
 export interface BillingMetrics {
@@ -310,6 +357,7 @@ export interface SchoolFilters {
   board?: BoardType;
   plan?: PlanType;
   region?: RegionType;
+  state?: string;
   search?: string;
   page?: number;
   page_size?: number;
@@ -329,6 +377,7 @@ export interface AuditFilters {
 export interface InvoiceFilters {
   status?: InvoiceStatus;
   school_name?: string;
+  tenant_id?: string;
   date_from?: string;
   date_to?: string;
   page?: number;

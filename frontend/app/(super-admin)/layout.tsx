@@ -221,7 +221,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
           </div>
         </main>
       </div>
-      <ToastContainer position="bottom-right" autoClose={4000} hideProgressBar newestOnTop closeOnClick pauseOnHover theme="light" />
+      <ToastContainer position="top-right" autoClose={4000} hideProgressBar newestOnTop closeOnClick pauseOnHover theme="light" />
     </AuthGate>
   );
 }

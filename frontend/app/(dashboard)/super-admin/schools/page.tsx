@@ -1,14 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'react-toastify';
 import {
   Archive, BookOpen, Bus, Calendar, ChevronDown, Check, CheckCheck, Copy, Download,
-  Edit2, ExternalLink, Filter, Info, Pause, Plus, RefreshCw, Shield,
+  Edit2, ExternalLink, FileText, Filter, Info, Pause, Plus, RefreshCw, RotateCcw, Shield, Trash2,
   Users, BarChart2, DollarSign, Bell, X,
 } from 'lucide-react';
-import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSchool } from '@/lib/api/super-admin/schools';
+import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSchool, uploadSchoolLogo } from '@/lib/api/super-admin/schools';
 import type {
   BoardType, PaginatedResponse, PlanType, ProvisionSchoolRequest, ProvisionSchoolResponse,
   SchoolFilters, SchoolTenant, SchoolStatus,
@@ -233,27 +233,167 @@ const selectCls = inputCls;
 const monoInputCls = `${inputCls} font-mono text-[12px]`;
 const lockedInputCls = `${inputCls} cursor-not-allowed bg-[var(--bg-2)] font-mono text-[12px] font-semibold text-[var(--pu-deep)]`;
 
+// ── Edit school modal ─────────────────────────────────────────────────────────
+function EditSchoolModal({
+  school, busy, onSave, onCancel,
+}: {
+  school: SchoolTenant;
+  busy: boolean;
+  onSave: (patch: Partial<SchoolTenant>) => void;
+  onCancel: () => void;
+}) {
+  const [form, setForm] = React.useState({
+    name: school.name ?? '',
+    plan: (school.plan ?? 'trial') as string,
+    status: (school.status ?? 'active') as string,
+    board: (school.board ?? 'OTHER') as string,
+    state: school.state ?? '',
+    gstin: school.gstin ?? '',
+    seats: school.seats ?? '',
+  });
+  const set = (k: keyof typeof form, v: string | number) => setForm(f => ({ ...f, [k]: v }));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 backdrop-blur-sm pt-16 pb-8">
+      <div className="w-full max-w-lg rounded-2xl border border-[var(--bd)] bg-[var(--bg-1)] p-6 shadow-2xl mx-4">
+        <div className="mb-5 flex items-start justify-between">
+          <div>
+            <h2 className="text-[15px] font-[700] text-[var(--ink-1)]">Edit school</h2>
+            <p className="mt-0.5 font-mono text-[11.5px] text-[var(--ink-3)]">{school.tenant_id}</p>
+          </div>
+          <button type="button" onClick={onCancel}
+            className="text-[var(--ink-3)] hover:text-[var(--ink-1)] transition-colors text-lg leading-none">&times;</button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="col-span-2">
+            <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">School name</label>
+            <input className={inputCls} value={form.name} onChange={e => set('name', e.target.value)} placeholder="School name" />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Plan</label>
+            <select className={selectCls} value={form.plan} onChange={e => set('plan', e.target.value)} title="Plan">
+              <option value="trial">Trial</option>
+              <option value="starter">Starter</option>
+              <option value="standard">Standard</option>
+              <option value="premium">Premium</option>
+              <option value="enterprise">Enterprise</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Status</label>
+            <select className={selectCls} value={form.status} onChange={e => set('status', e.target.value)} title="Status">
+              <option value="active">Active</option>
+              <option value="trial">Trial</option>
+              <option value="onboarding">Onboarding</option>
+              <option value="pending">Pending</option>
+              <option value="suspended">Suspended</option>
+              <option value="archived">Archived</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Board</label>
+            <select className={selectCls} value={form.board} onChange={e => set('board', e.target.value)} title="Board">
+              <option value="CBSE">CBSE</option>
+              <option value="ICSE">ICSE</option>
+              <option value="SSC_TG">SSC TG</option>
+              <option value="SSC_AP">SSC AP</option>
+              <option value="OTHER">Other</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">State</label>
+            <select className={selectCls} value={form.state} onChange={e => set('state', e.target.value)} title="State">
+              <option value="">— Select —</option>
+              <option value="36">Telangana (36)</option>
+              <option value="37">Andhra Pradesh (37)</option>
+              <option value="29">Karnataka (29)</option>
+              <option value="33">Tamil Nadu (33)</option>
+              <option value="27">Maharashtra (27)</option>
+              <option value="07">Delhi (07)</option>
+            </select>
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">GSTIN</label>
+            <input className={monoInputCls} value={form.gstin} onChange={e => set('gstin', e.target.value.toUpperCase())}
+              placeholder="27AABCU9603R1ZX" maxLength={15} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Seats</label>
+            <input type="number" className={inputCls} value={form.seats}
+              onChange={e => set('seats', e.target.value)} placeholder="500" min={0} />
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} disabled={busy}
+            className="rounded-xl border border-[var(--bd)] px-4 py-2 text-sm font-[550] text-[var(--ink-2)] hover:bg-[var(--bg-3)] disabled:opacity-50 transition-colors">
+            Cancel
+          </button>
+          <button type="button" disabled={busy || !form.name.trim()}
+            onClick={() => onSave({
+              name: form.name.trim(),
+              plan: form.plan as SchoolTenant['plan'],
+              status: form.status as SchoolTenant['status'],
+              board: form.board as SchoolTenant['board'],
+              state: form.state || undefined,
+              gstin: form.gstin || undefined,
+              seats: form.seats ? Number(form.seats) : undefined,
+            })}
+            className="rounded-xl bg-[var(--pu)] px-4 py-2 text-sm font-[600] text-white hover:opacity-90 disabled:opacity-50 transition-opacity">
+            {busy ? 'Saving\u2026' : 'Save changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Confirmation dialog ───────────────────────────────────────────────────────
 function ConfirmDialog({
   type, school, busy, onConfirm, onCancel,
 }: {
-  type: 'suspend' | 'archive';
+  type: 'suspend' | 'archive' | 'restore' | 'permanent_delete';
   school: SchoolTenant;
   busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const title =
+    type === 'suspend'        ? 'Suspend school?'           :
+    type === 'archive'        ? 'Archive school?'           :
+    type === 'restore'        ? 'Restore school?'           :
+                                'Permanently delete school?';
+
+  const confirmLabel = busy
+    ? ({ suspend: 'Suspending\u2026', archive: 'Archiving\u2026', restore: 'Restoring\u2026', permanent_delete: 'Deleting\u2026' }[type])
+    : ({ suspend: 'Yes, suspend', archive: 'Yes, archive', restore: 'Yes, restore', permanent_delete: 'Yes, delete permanently' }[type]);
+
+  const btnCls = type === 'restore'
+    ? 'rounded-xl bg-[#059669] px-4 py-2 text-sm font-[600] text-white hover:opacity-90 disabled:opacity-50 transition-opacity'
+    : 'rounded-xl bg-[var(--danger)] px-4 py-2 text-sm font-[600] text-white hover:opacity-90 disabled:opacity-50 transition-opacity';
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
       <div className="w-full max-w-sm rounded-2xl border border-[var(--bd)] bg-[var(--bg-1)] p-6 shadow-2xl">
-        <h2 className="mb-2 text-base font-[700] text-[var(--ink-1)]">
-          {type === 'suspend' ? 'Suspend school?' : 'Archive school?'}
-        </h2>
+        <h2 className="mb-2 text-base font-[700] text-[var(--ink-1)]">{title}</h2>
         <p className="mb-5 text-sm text-[var(--ink-2)]">
-          {type === 'suspend'
-            ? <><strong>{school.name}</strong> will be suspended immediately — all users will lose access.</>  
-            : <><strong>{school.name}</strong> will be permanently archived and removed from the platform. This cannot be undone.</>
-          }
+          {type === 'suspend' && (
+            <><strong>{school.name}</strong> will be suspended immediately \u2014 all users will lose access.</>
+          )}
+          {type === 'archive' && (
+            <><strong>{school.name}</strong> will be archived and marked as inactive.{' '}
+            Users from this school may lose access to the platform, but historical data will be preserved.</>
+          )}
+          {type === 'restore' && (
+            <><strong>{school.name}</strong> will be restored and reactivated.{' '}
+            Users and administrators may regain access based on their previous permissions.</>
+          )}
+          {type === 'permanent_delete' && (
+            <><strong>{school.name}</strong> and <strong>all associated data</strong> will be permanently deleted.{' '}
+            This action cannot be undone.</>
+          )}
         </p>
         <div className="flex justify-end gap-2">
           <button
@@ -268,12 +408,9 @@ function ConfirmDialog({
             type="button"
             onClick={onConfirm}
             disabled={busy}
-            className="rounded-xl bg-[var(--danger)] px-4 py-2 text-sm font-[600] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className={btnCls}
           >
-            {busy
-              ? (type === 'suspend' ? 'Suspending\u2026' : 'Archiving\u2026')
-              : (type === 'suspend' ? 'Yes, suspend' : 'Yes, archive')
-            }
+            {confirmLabel}
           </button>
         </div>
       </div>
@@ -288,7 +425,14 @@ export default function SuperAdminSchoolsPage() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<SchoolStatus | 'all'>('all');
+  const [globalStats, setGlobalStats] = useState({ total: 0, active: 0, trial: 0, attention: 0, archived: 0 });
+  const [statusFilter, setStatusFilter] = useState<SchoolStatus | 'all'>('active');
+  const [pendingPlan,   setPendingPlan]   = useState('');
+  const [pendingBoard,  setPendingBoard]  = useState('');
+  const [pendingState,  setPendingState]  = useState('');
+  const [planFilter,    setPlanFilter]    = useState('');
+  const [boardFilter,   setBoardFilter]   = useState('');
+  const [stateFilter,   setStateFilter]   = useState('');
 
   const [accAddOpen, setAccAddOpen] = useState(false);
   const [accFiltersOpen, setAccFiltersOpen] = useState(true);
@@ -300,18 +444,30 @@ export default function SuperAdminSchoolsPage() {
   const [credsCopied, setCredsCopied] = useState<'user' | 'pass' | null>(null);
   const [provisionForm, setProvisionForm] = useState<ProvisionSchoolRequest>({
     name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial',
-    shard_region: '', storage_region: '', admin_username: '', admin_password: '',
+    shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native',
+    admin_username: '', admin_password: '',
   });
 
+
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
-  const [confirmDialog, setConfirmDialog] = useState<{ type: 'suspend' | 'archive'; school: SchoolTenant } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{ type: 'suspend' | 'archive' | 'restore' | 'permanent_delete'; school: SchoolTenant } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [editSchool, setEditSchool] = useState<SchoolTenant | null>(null);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editFields, setEditFields] = useState({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '' });
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [logoDragging, setLogoDragging] = useState(false);
 
   const rows = response.results;
-  const activeCount   = rows.filter(s => s.status === 'active').length;
-  const trialCount    = rows.filter(s => s.status === 'trial').length;
+  const activeCount   = rows.filter(s => !['archived', 'suspended'].includes(s.status as string)).length;
+  const trialCount    = rows.filter(s => (s.plan as string) === 'trial' && !['archived', 'suspended'].includes(s.status as string)).length;
   const attnCount     = rows.filter(s => s.status === 'suspended').length;
+  const archivedCount = rows.filter(s => s.status === 'archived').length;
+  const activeFilterCount = [search, planFilter, boardFilter, stateFilter, statusFilter !== 'all' && statusFilter !== 'active' ? statusFilter : ''].filter(Boolean).length;
   const totalStudents = rows.reduce((a, b) => a + (b.students ?? 0), 0);
+  const totalActiveStudents = rows.reduce((a, b) => a + (b.activeStudents ?? 0), 0);
+  const totalInactiveStudents = totalStudents - totalActiveStudents;
   const totalStaff    = rows.reduce((a, b) => a + (b.staff ?? 0), 0);
 
   const loadSchools = useCallback(async () => {
@@ -320,7 +476,10 @@ export default function SuperAdminSchoolsPage() {
     const filters: SchoolFilters = {
       page, page_size: PAGE_SIZE,
       search: search.trim() || undefined,
-      status: statusFilter === 'all' ? undefined : statusFilter,
+      status: statusFilter === 'all' ? undefined : (statusFilter as SchoolStatus),
+      plan: planFilter as PlanType || undefined,
+      board: boardFilter as BoardType || undefined,
+      state: stateFilter || undefined,
     };
     try {
       setResponse(await getSchools(filters));
@@ -330,27 +489,125 @@ export default function SuperAdminSchoolsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter]);
+  }, [page, search, statusFilter, planFilter, boardFilter, stateFilter]);
 
   useEffect(() => { void loadSchools(); }, [loadSchools]);
-  useEffect(() => { setPage(1); }, [search, statusFilter]);
+  useEffect(() => { setPage(1); }, [search, statusFilter, planFilter, boardFilter, stateFilter]);
+
+  // Fetch global stats — extracted so it can be re-called after any status change
+  const loadGlobalStats = useCallback(() => {
+    getSchools({ page_size: 200 }).then(res => {
+      const all = res.results;
+      setGlobalStats({
+        total: res.count,
+        active: all.filter(s => !['archived', 'suspended'].includes(s.status as string)).length,
+        trial: all.filter(s => (s.plan as string) === 'trial' && !['archived', 'suspended'].includes(s.status as string)).length,
+        attention: all.filter(s => s.status === 'suspended').length,
+        archived: all.filter(s => s.status === 'archived').length,
+      });
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => { loadGlobalStats(); }, [loadGlobalStats]);
+
+  const handleApplyFilters = useCallback(() => {
+    setPlanFilter(pendingPlan);
+    setBoardFilter(pendingBoard);
+    setStateFilter(pendingState);
+    setPage(1);
+  }, [pendingPlan, pendingBoard, pendingState]);
 
   const handleProvisionSubmit = useCallback(async () => {
     setProvisionError(null);
-    const sub = provisionForm.subdomain_url.trim().toLowerCase();
-    if (!provisionForm.name.trim() || !sub || !provisionForm.state.trim()) {
-      setProvisionError('School name, subdomain, and state are required.');
+    if (!provisionForm.name.trim() || !provisionForm.state.trim()) {
+      setProvisionError('School name and state are required.');
       return;
     }
+
+    // ── EDIT MODE ──────────────────────────────────────────────
+    if (editSchool) {
+      setProvisioning(true);
+      try {
+        // Upload logo first if a new file was selected
+        let logoUrl: string | undefined;
+        if (logoFile) {
+          try {
+            const res = await uploadSchoolLogo(editSchool.tenant_id, logoFile);
+            logoUrl = res.logo_url;
+          } catch {
+            toast.error('Logo upload failed — other changes were saved.');
+          }
+        }
+        await updateSchool(editSchool.tenant_id, {
+          name: provisionForm.name.trim(),
+          state: provisionForm.state,
+          board: provisionForm.board,
+          plan: provisionForm.plan,
+          shard_region: provisionForm.shard_region,
+          storage_region: provisionForm.storage_region,
+          backup_retention: provisionForm.backup_retention,
+          sso_method: provisionForm.sso_method,
+          short_code: editFields.short_code || undefined,
+          gstin: editFields.gstin || undefined,
+          pan: editFields.pan || undefined,
+          udise_code: editFields.udise_code || undefined,
+          seats: editFields.seats ? Number(editFields.seats) : undefined,
+          api_access: editFields.api_access === 'enabled',
+          brand_color: editFields.brand_color || undefined,
+          logo_url: logoUrl,
+        });
+        toast.success(`${provisionForm.name} updated.`);
+        setEditSchool(null);
+        setAccAddOpen(false);
+        setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
+        setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '' });
+        setLogoFile(null);
+        setLogoPreview(null);
+        setSelectedColor(PALETTE_COLORS[0]!.hex);
+        await loadSchools();
+        void loadGlobalStats();
+      } catch (err) {
+        setProvisionError(err instanceof Error ? err.message : 'Update failed.');
+      } finally {
+        setProvisioning(false);
+      }
+      return;
+    }
+
+    // ── ADD MODE ───────────────────────────────────────────────
+    const sub = provisionForm.subdomain_url.trim().toLowerCase();
+    if (!sub) { setProvisionError('Subdomain is required.'); return; }
     if (!/^[a-z0-9-]+$/.test(sub)) {
       setProvisionError('Subdomain may only contain lowercase letters, numbers, and hyphens.');
       return;
     }
     setProvisioning(true);
     try {
-      const result = await provisionSchool({ ...provisionForm, subdomain_url: sub });
+      const result = await provisionSchool({
+        ...provisionForm,
+        subdomain_url: sub,
+        short_code: editFields.short_code || undefined,
+        gstin: editFields.gstin || undefined,
+        pan: editFields.pan || undefined,
+        udise_code: editFields.udise_code || undefined,
+        seats: editFields.seats ? Number(editFields.seats) : undefined,
+        brand_color: editFields.brand_color || undefined,
+      });
+      // Upload logo after provisioning if a file was selected
+      if (logoFile && result.tenant_id) {
+        try {
+          await uploadSchoolLogo(result.tenant_id, logoFile);
+        } catch {
+          toast.error('Logo upload failed — school was provisioned successfully.');
+        }
+      }
       setAccAddOpen(false);
-      setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', admin_username: '', admin_password: '' });
+      setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
+      setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '' });
+      setLogoFile(null);
+      setLogoPreview(null);
+      setSelectedColor(PALETTE_COLORS[0]!.hex);
+      try { sessionStorage.removeItem('school_add_draft'); } catch { /* ignore */ }
       setCredsResult(result);
       toast.success('School provisioned — admin credentials ready below.');
       await loadSchools();
@@ -359,7 +616,7 @@ export default function SuperAdminSchoolsPage() {
     } finally {
       setProvisioning(false);
     }
-  }, [loadSchools, provisionForm]);
+  }, [editSchool, editFields, loadSchools, loadGlobalStats, provisionForm]);
 
   const handleImpersonate = useCallback(async (school: SchoolTenant) => {
     setImpersonatingId(school.tenant_id);
@@ -373,6 +630,8 @@ export default function SuperAdminSchoolsPage() {
         }));
       } catch { /* sessionStorage unavailable */ }
       window.open(data.handoff_url, '_blank', 'noopener,noreferrer');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Impersonation failed.');
     } finally {
       setImpersonatingId(null);
     }
@@ -386,18 +645,77 @@ export default function SuperAdminSchoolsPage() {
       if (type === 'suspend') {
         await updateSchool(school.tenant_id, { status: 'suspended' });
         toast.success(`${school.name} suspended.`);
-      } else {
+      } else if (type === 'archive') {
         await deleteSchool(school.tenant_id);
         toast.success(`${school.name} archived.`);
+      } else if (type === 'restore') {
+        await updateSchool(school.tenant_id, { status: 'active' });
+        toast.success(`${school.name} restored to active.`);
+      } else {
+        toast.error('Permanent delete is not yet available \u2014 contact system administrator.');
+        setConfirmDialog(null);
+        setConfirmBusy(false);
+        return;
       }
       setConfirmDialog(null);
       await loadSchools();
+      void loadGlobalStats();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : `${type === 'suspend' ? 'Suspend' : 'Archive'} failed.`);
+      toast.error(err instanceof Error ? err.message : `${type} failed.`);
     } finally {
       setConfirmBusy(false);
     }
-  }, [confirmDialog, loadSchools]);
+  }, [confirmDialog, loadSchools, loadGlobalStats]);
+
+  const handleSaveEdit = useCallback(async (data: Partial<SchoolTenant>) => {
+    if (!editSchool) return;
+    setEditBusy(true);
+    try {
+      await updateSchool(editSchool.tenant_id, data);
+      toast.success(`${editSchool.name} updated.`);
+      setEditSchool(null);
+      await loadSchools();
+      void loadGlobalStats();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Update failed.');
+    } finally {
+      setEditBusy(false);
+    }
+  }, [editSchool, loadSchools, loadGlobalStats]);
+
+  const handleEditInForm = useCallback((school: SchoolTenant) => {
+    setEditSchool(school);
+    setProvisionForm({
+      name: school.name,
+      subdomain_url: school.subdomain_url ?? '',
+      state: school.state ?? '',
+      board: (school.board as BoardType) ?? 'OTHER',
+      plan: (school.plan as PlanType) ?? 'trial',
+      shard_region: school.shard_region ?? '',
+      storage_region: school.storage_region ?? '',
+      backup_retention: school.backup_retention ?? 30,
+      sso_method: school.sso_method ?? 'native',
+      admin_username: '',
+      admin_password: '',
+    });
+    setEditFields({
+      short_code: school.short_code ?? '',
+      gstin: school.gstin ?? '',
+      pan: school.pan ?? '',
+      udise_code: school.udiseCode ?? '',
+      seats: school.seats != null ? String(school.seats) : '',
+      api_access: school.api_access ? 'enabled' : 'disabled',
+      brand_color: school.brand_color ?? '',
+    });
+    setSelectedColor(school.brand_color || PALETTE_COLORS[0]!.hex);
+    setLogoPreview(school.logo_url || null);
+    setLogoFile(null);
+    setProvisionError(null);
+    setAccAddOpen(true);
+    setTimeout(() => {
+      document.getElementById('acc-add')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  }, []);
 
   const moduleDefs = [
     { name: 'Admissions',    tag: 'Core',       icon: <Users size={14} />,        on: true },
@@ -434,7 +752,7 @@ export default function SuperAdminSchoolsPage() {
 
   return (
     <>
-    <div className="rounded-[18px] border border-[var(--bd)] bg-[var(--bg-1)] p-[28px_30px]">
+    <div className="mx-auto max-w-[1280px] rounded-[18px] border border-[var(--bd)] bg-[var(--bg-1)] p-[28px_30px]">
 
       {/* TITLE ROW */}
       <div className="mb-7 flex flex-wrap items-end justify-between gap-6">
@@ -457,6 +775,16 @@ export default function SuperAdminSchoolsPage() {
           <button
             type="button"
             onClick={() => {
+              // Restore saved draft if present
+              try {
+                const raw = sessionStorage.getItem('school_add_draft');
+                if (raw) {
+                  const draft = JSON.parse(raw) as { provisionForm: typeof provisionForm; editFields: typeof editFields };
+                  setProvisionForm(draft.provisionForm);
+                  setEditFields(draft.editFields);
+                  setSelectedColor(draft.editFields.brand_color || PALETTE_COLORS[0]!.hex);
+                }
+              } catch { /* ignore */ }
               setAccAddOpen(true);
               setTimeout(() => document.getElementById('acc-add')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
             }}
@@ -469,16 +797,16 @@ export default function SuperAdminSchoolsPage() {
 
       {/* KPI GRID */}
       <div className="mb-6 grid grid-cols-4 gap-3.5 max-md:grid-cols-2">
-        <KpiCard label="Total Schools" value={response.count || rows.length}
+        <KpiCard label="Total Schools" value={globalStats.total || response.count || rows.length}
           trend="+3 QoQ" footnote="Telangana &amp; Andhra Pradesh" sparkColor="#5836E0" />
-        <KpiCard label="Active Tenants" value={activeCount}
-          trend="Healthy" footnote={`${totalStudents.toLocaleString('en-IN')} students`}
+        <KpiCard label="Active Tenants" value={globalStats.active || activeCount}
+          trend="Healthy" footnote={`${totalStudents.toLocaleString('en-IN')} enrolled · ${totalActiveStudents.toLocaleString('en-IN')} active`}
           sparkColor="#0E9F6E" pulse />
-        <KpiCard label="On Trial" value={trialCount}
+        <KpiCard label="On Trial" value={globalStats.trial || trialCount}
           trend="Avg conv 68%" footnote="Trial-to-paid conversion" sparkColor="#A65D08" />
-        <KpiCard label="Needs Attention" value={attnCount}
-          trend={attnCount > 0 ? `${attnCount} suspended` : 'All clear'}
-          trendDown={attnCount > 0}
+        <KpiCard label="Needs Attention" value={globalStats.attention > 0 ? globalStats.attention : attnCount}
+          trend={globalStats.attention > 0 ? `${globalStats.attention} suspended` : 'All clear'}
+          trendDown={globalStats.attention > 0}
           footnote="Open across tenants" sparkColor="#E0463A" />
       </div>
 
@@ -529,11 +857,25 @@ export default function SuperAdminSchoolsPage() {
 
       {/* ACCORDION 01 — ADD SCHOOL */}
       <div id="acc-add">
-        <Accordion num="01" featured open={accAddOpen} onToggle={() => setAccAddOpen(v => !v)}
-          icon={<Plus size={16} />}
-          title="Add a new school"
-          subtitle="Provisions a new isolated tenant \u00b7 9 sections \u00b7 Identity, branding, contacts, GST, plan, modules & data residency"
-          meta={<Chip label="Auto-generates tenant ID" variant="indigo" />}
+        <Accordion num="01" featured open={accAddOpen} onToggle={() => {
+          if (accAddOpen && editSchool) {
+            setEditSchool(null);
+            setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
+            setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '' });
+            setLogoFile(null);
+            setLogoPreview(null);
+            setSelectedColor(PALETTE_COLORS[0]!.hex);
+          }
+          setAccAddOpen(v => !v);
+        }}
+          icon={editSchool ? <Edit2 size={16} /> : <Plus size={16} />}
+          title={editSchool ? `Edit school \u00b7 ${editSchool.name}` : 'Add a new school'}
+          subtitle={editSchool
+            ? `Editing ${editSchool.tenant_id} \u00b7 Update plan, board, state or data regions`
+            : 'Provisions a new isolated tenant \u00b7 8 sections \u00b7 Identity, branding, contacts, GST, plan & data residency'}
+          meta={editSchool
+            ? <Chip label={`Editing \u00b7 ${editSchool.tenant_id}`} variant="indigo" />
+            : <Chip label="Auto-generates tenant ID" variant="indigo" />}
         >
           {/* Info banner */}
           <div className="mt-5 flex items-start gap-3 rounded-[11px] border border-[var(--pu-soft)] bg-gradient-to-b from-[#F6F3FF] to-white p-[14px_16px]">
@@ -561,15 +903,18 @@ export default function SuperAdminSchoolsPage() {
                   value={provisionForm.name} onChange={e => setProvisionForm(f => ({ ...f, name: e.target.value }))} />
               </Fld>
               <Fld label="Short code" required hint="Uppercase">
-                <input className={`${monoInputCls} uppercase`} placeholder="VVP-HYD" maxLength={10} />
+                <input className={`${monoInputCls} uppercase`} placeholder="VVP-HYD" maxLength={10}
+                  value={editFields.short_code}
+                  onChange={e => setEditFields(f => ({ ...f, short_code: e.target.value.toUpperCase() }))} />
               </Fld>
-              <Fld label="Subdomain URL" required hint="Lowercase \u00b7 no spaces" span="2">
-                <div className="flex overflow-hidden rounded-lg border border-[var(--bd-2)] bg-[var(--bg-1)] transition focus-within:border-[var(--pu)] focus-within:shadow-[0_0_0_3px_rgba(109,74,255,.12)]">
+              <Fld label="Subdomain URL" required={!editSchool} hint={editSchool ? 'Immutable \u00b7 cannot be changed' : 'Lowercase \u00b7 no spaces'} span="2">
+                <div className={`flex overflow-hidden rounded-lg border border-[var(--bd-2)] bg-[var(--bg-1)] transition ${editSchool ? 'opacity-60' : 'focus-within:border-[var(--pu)] focus-within:shadow-[0_0_0_3px_rgba(109,74,255,.12)]'}`}>
                   <span className="flex items-center border-r border-[var(--bd-2)] bg-[var(--bg-2)] px-[11px] font-mono text-[12px] text-[var(--ink-3)]">https://</span>
                   <input className="h-9 flex-1 border-none bg-transparent px-3 text-[13px] outline-none"
                     placeholder="vasavi-hyd"
+                    readOnly={!!editSchool}
                     value={provisionForm.subdomain_url}
-                    onChange={e => setProvisionForm(f => ({ ...f, subdomain_url: e.target.value }))} />
+                    onChange={e => !editSchool && setProvisionForm(f => ({ ...f, subdomain_url: e.target.value }))} />
                   <span className="flex items-center border-l border-[var(--bd-2)] bg-[var(--bg-2)] px-[11px] font-mono text-[12px] text-[var(--ink-3)]">.eskoolia.com</span>
                 </div>
               </Fld>
@@ -615,7 +960,9 @@ export default function SuperAdminSchoolsPage() {
                 <input className={monoInputCls} placeholder="CBSE/AFF/930451" />
               </Fld>
               <Fld label="UDISE+ code" required hint="11 digits">
-                <input className={monoInputCls} placeholder="36050200101" maxLength={11} />
+                <input className={monoInputCls} placeholder="36050200101" maxLength={11}
+                  value={editFields.udise_code}
+                  onChange={e => setEditFields(f => ({ ...f, udise_code: e.target.value }))} />
               </Fld>
               <Fld label="State" required>
                 <select className={selectCls} title="State" value={provisionForm.state}
@@ -637,18 +984,51 @@ export default function SuperAdminSchoolsPage() {
             <SectionHead num="03">Branding</SectionHead>
             <div className="grid grid-cols-2 gap-3.5">
               <Fld label="School logo">
-                <div className="flex items-center gap-3 rounded-[9px] border border-dashed border-[var(--bd-3)] bg-[var(--bg-2)] p-[10px_12px]">
-                  <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[9px] bg-gradient-to-br from-[#7C5BFF] to-[#5836E0] text-[13px] font-semibold text-white">VV</span>
+                <label
+                  onDragOver={e => { e.preventDefault(); setLogoDragging(true); }}
+                  onDragLeave={() => setLogoDragging(false)}
+                  onDrop={e => {
+                    e.preventDefault();
+                    setLogoDragging(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) { setLogoFile(file); setLogoPreview(URL.createObjectURL(file)); }
+                  }}
+                  className={`flex cursor-pointer items-center gap-3 rounded-[9px] border border-dashed bg-[var(--bg-2)] p-[10px_12px] transition-colors ${logoDragging ? 'border-[var(--pu)] bg-[rgba(109,74,255,0.06)]' : 'border-[var(--bd-3)]'}`}
+                >
+                  {logoPreview
+                    ? <img src={logoPreview} alt="Logo preview" className="h-11 w-11 flex-shrink-0 rounded-[9px] object-contain" />
+                    : <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-[9px] bg-gradient-to-br from-[#7C5BFF] to-[#5836E0] text-[13px] font-semibold text-white">
+                        {provisionForm.name ? schoolInitials(provisionForm.name) : 'VV'}
+                      </span>
+                  }
                   <span className="text-[11.5px] leading-[1.45] text-[var(--ink-2)]">
-                    <b className="mb-0.5 block text-[12.5px] font-semibold text-[var(--ink-1)]">Drop a PNG or SVG here</b>
-                    or <span className="cursor-pointer font-semibold text-[var(--pu-deep)]">browse files</span> \u00b7 1:1 ratio \u00b7 max 1 MB
+                    <b className="mb-0.5 block text-[12.5px] font-semibold text-[var(--ink-1)]">
+                      {logoFile ? logoFile.name : 'Drop a PNG or SVG here'}
+                    </b>
+                    or <span className="font-semibold text-[var(--pu-deep)]">browse files</span> &middot; 1:1 ratio &middot; max 1 MB
                   </span>
-                </div>
+                  <input
+                    id="logo-upload"
+                    type="file"
+                    accept="image/png,image/svg+xml,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) { setLogoFile(file); setLogoPreview(URL.createObjectURL(file)); }
+                    }}
+                  />
+                </label>
+                {logoFile && (
+                  <button type="button" className="mt-1 text-[11px] text-[var(--ink-3)] hover:text-red-500 transition-colors"
+                    onClick={() => { setLogoFile(null); setLogoPreview(editSchool?.logo_url || null); }}>
+                    Remove selected file
+                  </button>
+                )}
               </Fld>
               <Fld label="Primary brand color">
                 <div className="flex h-[38px] items-center gap-1.5">
                   {PALETTE_COLORS.map(c => (
-                    <button key={c.hex} type="button" onClick={() => setSelectedColor(c.hex)} title={c.hex}
+                    <button key={c.hex} type="button" onClick={() => { setSelectedColor(c.hex); setEditFields(f => ({ ...f, brand_color: c.hex })); }} title={c.hex}
                       className={`relative h-7 w-7 rounded-[7px] border-2 transition-all ${c.bg} ${selectedColor === c.hex ? 'scale-105 border-[var(--ink-1)]' : 'border-transparent'}`}>
                       {selectedColor === c.hex ? <span className="pointer-events-none absolute inset-[3px] rounded border-2 border-white" /> : null}
                     </button>
@@ -710,10 +1090,14 @@ export default function SuperAdminSchoolsPage() {
                 <select className={selectCls} title="GST registration"><option value="yes">GST-registered</option><option value="no">Unregistered (exempt)</option></select>
               </Fld>
               <Fld label="GSTIN" hint="15 chars">
-                <input className={`${monoInputCls} uppercase`} placeholder="36AAACE9988K1ZP" maxLength={15} />
+                <input className={`${monoInputCls} uppercase`} placeholder="36AAACE9988K1ZP" maxLength={15}
+                  value={editFields.gstin}
+                  onChange={e => setEditFields(f => ({ ...f, gstin: e.target.value.toUpperCase() }))} />
               </Fld>
               <Fld label="PAN" required>
-                <input className={`${monoInputCls} uppercase`} placeholder="AAACE9988K" maxLength={10} />
+                <input className={`${monoInputCls} uppercase`} placeholder="AAACE9988K" maxLength={10}
+                  value={editFields.pan}
+                  onChange={e => setEditFields(f => ({ ...f, pan: e.target.value.toUpperCase() }))} />
               </Fld>
               <Fld label="Legal entity name"><input className={inputCls} placeholder="Vasavi Educational Trust" /></Fld>
               <Fld label="Entity type">
@@ -745,7 +1129,8 @@ export default function SuperAdminSchoolsPage() {
               <Fld label="Go-live date">
                 <input type="date" className={inputCls} defaultValue="2026-06-01" title="Go-live date" />
               </Fld>
-              <Fld label="Student seat limit"><input type="number" className={inputCls} defaultValue={2000} title="Student seat limit" /></Fld>
+              <Fld label="Student seat limit"><input type="number" className={inputCls} title="Student seat limit" placeholder="2000"
+                value={editFields.seats} onChange={e => setEditFields(f => ({ ...f, seats: e.target.value }))} /></Fld>
               <Fld label="Staff seat limit"><input type="number" className={inputCls} defaultValue={200} title="Staff seat limit" /></Fld>
               <Fld label="Storage cap" hint="GB"><input type="number" className={inputCls} defaultValue={50} title="Storage cap" /></Fld>
               <Fld label="Billing cycle">
@@ -754,8 +1139,8 @@ export default function SuperAdminSchoolsPage() {
             </div>
           </div>
 
-          {/* 08 Modules */}
-          <div className="border-b border-dashed border-[var(--bd-2)] py-5">
+          {/* 08 Modules — hidden */}
+          <div className="hidden border-b border-dashed border-[var(--bd-2)] py-5">
             <SectionHead num="08">Modules to enable</SectionHead>
             <div className="grid grid-cols-4 gap-2.5 max-md:grid-cols-2">
               {moduleDefs.map(m => {
@@ -788,15 +1173,15 @@ export default function SuperAdminSchoolsPage() {
             <p className="mt-2.5 text-[11px] text-[var(--ink-3)]">Tap a tile to enable / disable. Disabled modules are hidden from the school&apos;s UI entirely.</p>
           </div>
 
-          {/* 09 Data residency */}
+          {/* 08 Data residency */}
           <div className="py-5">
-            <SectionHead num="09">
+            <SectionHead num="08">
               Data residency &amp; provisioning
               <span className="ml-auto text-[10.5px] font-[400] normal-case tracking-normal text-[var(--ink-4)]">Auto-filled \u00b7 super-admin can override</span>
             </SectionHead>
             <div className="grid grid-cols-3 gap-3.5 max-md:grid-cols-2">
               <Fld label="Tenant ID" hint="Auto \u00b7 immutable">
-                <input className={lockedInputCls} value="TNT_TG010K" readOnly title="Tenant ID" />
+                <input className={lockedInputCls} value={editSchool?.tenant_id ?? 'Auto-generated'} readOnly title="Tenant ID" />
               </Fld>
               <Fld label="DB shard region">
                 <select className={selectCls} title="DB shard region" value={provisionForm.shard_region ?? ''}
@@ -806,23 +1191,43 @@ export default function SuperAdminSchoolsPage() {
                 </select>
               </Fld>
               <Fld label="Storage bucket">
-                <input className={lockedInputCls} value="eskoolia-tnt_tg010k" readOnly title="Storage bucket" />
+                <input className={lockedInputCls}
+                  value={editSchool ? `eskoolia-${editSchool.tenant_id.toLowerCase().replace(/_/g, '-')}` : 'Auto-generated'}
+                  readOnly title="Storage bucket" />
               </Fld>
               <Fld label="Backup retention">
-                <select className={selectCls} title="Backup retention"><option>30 days \u00b7 daily snapshots</option><option>90 days</option><option>1 year</option></select>
+                <select className={selectCls} title="Backup retention"
+                  value={String(provisionForm.backup_retention ?? 30)}
+                  onChange={e => setProvisionForm(f => ({ ...f, backup_retention: Number(e.target.value) }))}>
+                  <option value="30">30 days · daily snapshots</option>
+                  <option value="90">90 days</option>
+                  <option value="365">1 year</option>
+                </select>
               </Fld>
               <Fld label="SSO method">
-                <select className={selectCls} title="SSO method"><option>Email + password</option><option>Google Workspace</option><option>Microsoft 365</option><option>SAML 2.0</option></select>
+                <select className={selectCls} title="SSO method"
+                  value={provisionForm.sso_method ?? 'native'}
+                  onChange={e => setProvisionForm(f => ({ ...f, sso_method: e.target.value }))}>
+                  <option value="native">Email + password</option>
+                  <option value="google">Google Workspace</option>
+                  <option value="microsoft">Microsoft 365</option>
+                  <option value="saml">SAML 2.0</option>
+                </select>
               </Fld>
               <Fld label="API access">
-                <select className={selectCls} title="API access"><option>Disabled (default)</option><option>Read-only key</option><option>Read + write key</option></select>
+                <select className={selectCls} title="API access"
+                  value={editFields.api_access}
+                  onChange={e => setEditFields(f => ({ ...f, api_access: e.target.value }))}>
+                  <option value="disabled">Disabled (default)</option>
+                  <option value="enabled">Enabled (read + write)</option>
+                </select>
               </Fld>
             </div>
           </div>
 
-          {/* 10 Admin credentials */}
+          {!editSchool && (
           <div className="border-b border-dashed border-[var(--bd-2)] py-5">
-            <SectionHead num="10">
+            <SectionHead num="09">
               Admin login credentials
               <span className="ml-auto text-[10.5px] font-[400] normal-case tracking-normal text-[var(--ink-4)]">
                 Leave blank to auto-generate
@@ -873,26 +1278,55 @@ export default function SuperAdminSchoolsPage() {
               </Fld>
             </div>
           </div>
+          )}
 
           {/* Footer */}
           <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--bd)] pt-[18px]">
             <span className="flex items-center gap-1.5 text-[11.5px] text-[var(--ink-2)]">
               <Info className="h-3.5 w-3.5 flex-shrink-0" />
-              Tenant ID &amp; subdomain are immutable once provisioned. A welcome email is sent to the principal automatically.
+              {editSchool
+                ? 'Tenant ID & subdomain are immutable. Only name, plan, board, state and regions can be changed.'
+                : 'Tenant ID & subdomain are immutable once provisioned. A welcome email is sent to the principal automatically.'}
             </span>
             <div className="flex gap-2">
-              <button type="button" onClick={() => setAccAddOpen(false)}
-                className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border-0 bg-transparent px-3.5 text-[12.5px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)]">
-                Cancel
-              </button>
-              <button type="button"
-                className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border border-[var(--bd-2)] bg-[var(--bg-1)] px-3.5 text-[12.5px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)]">
-                Save as draft
-              </button>
+              {editSchool ? (
+                <button type="button"
+                  onClick={() => { setEditSchool(null); setAccAddOpen(false); setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' }); setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '' }); setLogoFile(null); setLogoPreview(null); setSelectedColor(PALETTE_COLORS[0]!.hex); setProvisionError(null); }}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border-0 bg-transparent px-3.5 text-[12.5px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)]">
+                  Cancel edit
+                </button>
+              ) : (
+                <>
+                  <button type="button" onClick={() => {
+                    setAccAddOpen(false);
+                    setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
+                    setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '' });
+                    setLogoFile(null);
+                    setLogoPreview(null);
+                    setSelectedColor(PALETTE_COLORS[0]!.hex);
+                    setProvisionError(null);
+                  }}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border-0 bg-transparent px-3.5 text-[12.5px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)]">
+                    Cancel
+                  </button>
+                  <button type="button"
+                    onClick={() => {
+                      try {
+                        sessionStorage.setItem('school_add_draft', JSON.stringify({ provisionForm, editFields }));
+                      } catch { /* storage unavailable */ }
+                      toast.success('Draft saved — your progress is preserved for this session.');
+                    }}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border border-[var(--bd-2)] bg-[var(--bg-1)] px-3.5 text-[12.5px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)]">
+                    Save as draft
+                  </button>
+                </>
+              )}
               <button type="button" disabled={provisioning} onClick={() => void handleProvisionSubmit()}
                 className="inline-flex h-9 items-center gap-1.5 rounded-[9px] bg-[var(--pu)] px-3.5 text-[12.5px] font-[550] text-white shadow-[0_1px_2px_rgba(79,53,204,.25),inset_0_1px_0_rgba(255,255,255,.16)] transition hover:bg-[var(--pu-deep)] disabled:opacity-60">
                 <Check className="h-3.5 w-3.5" />
-                {provisioning ? 'Provisioning\u2026' : 'Provision school'}
+                {provisioning
+                  ? (editSchool ? 'Saving\u2026' : 'Provisioning\u2026')
+                  : (editSchool ? 'Save changes' : 'Provision school')}
               </button>
             </div>
           </div>
@@ -905,7 +1339,7 @@ export default function SuperAdminSchoolsPage() {
         icon={<Filter size={16} />}
         title="Smart filters"
         subtitle="Find schools by status, plan, board, region &amp; billing health"
-        meta={<Chip label="3 active" variant="indigo" />}
+        meta={activeFilterCount > 0 ? <Chip label={`${activeFilterCount} active`} variant="indigo" /> : undefined}
       >
         <div className="pt-5">
           <div className="mb-[18px] grid grid-cols-5 gap-3 max-md:grid-cols-2">
@@ -918,18 +1352,48 @@ export default function SuperAdminSchoolsPage() {
                   value={search} onChange={e => setSearch(e.target.value)} />
               </div>
             </div>
-            {(['Plan','Board','State','Region'] as const).map(lbl => (
-              <div key={lbl}>
-                <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">{lbl}</label>
-                <select className={selectCls} title={lbl}>
-                  <option>All {lbl.toLowerCase()}s</option>
-                  {lbl === 'Plan' && <><option>Starter</option><option>Standard</option><option>Premium</option><option>Enterprise</option></>}
-                  {lbl === 'Board' && <><option>CBSE</option><option>ICSE</option><option>SSC TG</option><option>SSC AP</option></>}
-                  {lbl === 'State' && <><option>Telangana (36)</option><option>Andhra Pradesh (37)</option></>}
-                  {lbl === 'Region' && <><option>ap-south-1 Mumbai</option><option>ap-south-2 Hyderabad</option></>}
-                </select>
-              </div>
-            ))}
+            {/* Plan */}
+            <div>
+              <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Plan</label>
+              <select className={selectCls} title="Plan" value={pendingPlan} onChange={e => setPendingPlan(e.target.value)}>
+                <option value="">All plans</option>
+                <option value="trial">Trial</option>
+                <option value="starter">Starter</option>
+                <option value="standard">Standard</option>
+                <option value="premium">Premium</option>
+                <option value="enterprise">Enterprise</option>
+              </select>
+            </div>
+            {/* Board */}
+            <div>
+              <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Board</label>
+              <select className={selectCls} title="Board" value={pendingBoard} onChange={e => setPendingBoard(e.target.value)}>
+                <option value="">All boards</option>
+                <option value="CBSE">CBSE</option>
+                <option value="ICSE">ICSE</option>
+                <option value="SSC_TG">SSC TG</option>
+                <option value="SSC_AP">SSC AP</option>
+                <option value="OTHER">Other</option>
+              </select>
+            </div>
+            {/* State */}
+            <div>
+              <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">State</label>
+              <select className={selectCls} title="State" value={pendingState} onChange={e => setPendingState(e.target.value)}>
+                <option value="">All states</option>
+                <option value="36">Telangana (36)</option>
+                <option value="37">Andhra Pradesh (37)</option>
+              </select>
+            </div>
+            {/* Region */}
+            <div>
+              <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Region</label>
+              <select className={selectCls} title="Region">
+                <option value="">All regions</option>
+                <option value="ap-south-1">ap-south-1 Mumbai</option>
+                <option value="ap-south-2">ap-south-2 Hyderabad</option>
+              </select>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-6">
@@ -937,11 +1401,11 @@ export default function SuperAdminSchoolsPage() {
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-[var(--ink-2)]">Status</div>
               <div className="flex flex-wrap gap-1.5">
                 {([
-                  { value: 'all' as const,      label: 'All',       count: rows.length },
-                  { value: 'active' as const,    label: 'Active',    count: activeCount },
-                  { value: 'trial' as const,     label: 'Trial',     count: trialCount },
-                  { value: 'suspended' as const, label: 'Suspended', count: attnCount },
-                  { value: 'archived' as const,  label: 'Archived',  count: 0 },
+                  { value: 'all' as const,      label: 'All',       count: globalStats.total     || response.count },
+                  { value: 'active' as const,    label: 'Active',    count: globalStats.active },
+                  { value: 'trial' as const,     label: 'Trial',     count: globalStats.trial },
+                  { value: 'suspended' as const, label: 'Suspended', count: globalStats.attention },
+                  { value: 'archived' as const,  label: 'Archived',  count: globalStats.archived },
                 ] as const).map(o => (
                   <FilterPill key={o.value} label={o.label} count={o.count}
                     active={statusFilter === o.value} onClick={() => setStatusFilter(o.value)} />
@@ -972,7 +1436,8 @@ export default function SuperAdminSchoolsPage() {
               <button type="button" className="inline-flex h-[30px] cursor-pointer items-center gap-1.5 rounded-full border border-dashed border-[var(--bd)] bg-transparent px-3 text-[12px] text-[var(--pu-deep)] hover:bg-[var(--pu-soft)]">
                 + Save current
               </button>
-              <button type="button" className="inline-flex h-[30px] cursor-pointer items-center gap-1.5 rounded-full bg-[var(--pu)] px-3 text-[12px] font-[550] text-white hover:bg-[var(--pu-deep)]">
+              <button type="button" onClick={handleApplyFilters}
+                className="inline-flex h-[30px] cursor-pointer items-center gap-1.5 rounded-full bg-[var(--pu)] px-3 text-[12px] font-[550] text-white hover:bg-[var(--pu-deep)]">
                 Apply
               </button>
             </div>
@@ -988,11 +1453,49 @@ export default function SuperAdminSchoolsPage() {
         meta={
           <>
             <Chip label={`${totalStudents.toLocaleString('en-IN')} students`} variant="ok" />
+            {totalActiveStudents > 0 && totalActiveStudents < totalStudents && (
+              <>
+                <Chip label={`${totalActiveStudents.toLocaleString('en-IN')} active`} variant="ok" />
+                <Chip label={`${totalInactiveStudents.toLocaleString('en-IN')} inactive`} variant="default" />
+              </>
+            )}
             <Chip label={`${totalStaff.toLocaleString('en-IN')} staff`} variant="info" />
           </>
         }
       >
         <div className="pt-4">
+          {/* ── Status quick tabs ── */}
+          <div className="mb-4 flex flex-wrap gap-1.5">
+            {([
+              { value: 'all'       as const, label: 'All',       count: globalStats.total   || response.count },
+              { value: 'active'    as const, label: 'Active',    count: globalStats.active  || activeCount },
+              { value: 'trial'     as const, label: 'Trial',     count: globalStats.trial   || trialCount },
+              { value: 'suspended' as const, label: 'Suspended', count: globalStats.attention },
+              { value: 'archived'  as const, label: 'Archived',  count: globalStats.archived },
+            ] as const).map(tab => (
+              <button
+                key={tab.value}
+                type="button"
+                onClick={() => setStatusFilter(tab.value)}
+                className={[
+                  'inline-flex items-center gap-1.5 rounded-full px-3.5 py-[5px] text-[12px] font-[550] transition-colors',
+                  statusFilter === tab.value
+                    ? 'bg-[var(--pu)] text-white shadow-sm'
+                    : 'border border-[var(--bd-2)] bg-[var(--bg-1)] text-[var(--ink-2)] hover:bg-[var(--bg-2)]',
+                ].join(' ')}
+              >
+                {tab.label}
+                <span className={[
+                  'rounded-full px-1.5 py-[1px] text-[10.5px] font-[600]',
+                  statusFilter === tab.value
+                    ? 'bg-white/20 text-white'
+                    : tab.value === 'archived' ? 'bg-[var(--ink-4)] text-[var(--ink-2)]'
+                    : tab.value === 'suspended' ? 'bg-red-100 text-red-600'
+                    : 'bg-[var(--bg-3)] text-[var(--ink-2)]',
+                ].join(' ')}>{tab.count}</span>
+              </button>
+            ))}
+          </div>
           <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
             <p className="text-[12.5px] text-[var(--ink-2)]">
               Active filter: <strong className="font-[550] text-[var(--pu-deep)]">
@@ -1120,16 +1623,21 @@ export default function SuperAdminSchoolsPage() {
                         </td>
                         <td className="border-b border-[var(--bd)] py-3.5 pl-3.5 pr-[18px] text-right align-middle">
                           <span className="inline-flex gap-0.5 opacity-55 transition-opacity group-hover:opacity-100">
-                            {[
+                            {(school.status === 'archived' ? [
+                              { title: 'Open',             icon: <ExternalLink size={13} />, action: () => window.open(`https://${school.subdomain_url}.eskoolia.com`, '_blank', 'noopener') },
+                              { title: 'Restore',          icon: <RotateCcw size={13} />,   action: () => setConfirmDialog({ type: 'restore', school }) },
+                              { title: 'Audit Logs',       icon: <FileText size={13} />,    action: () => window.open(`/super-admin/schools/${school.tenant_id}/audit`, '_blank') },
+                              { title: 'Permanent Delete', icon: <Trash2 size={13} />,      action: () => setConfirmDialog({ type: 'permanent_delete', school }) },
+                            ] : [
                               { title: 'Open',        icon: <ExternalLink size={13} />, action: () => window.open(`https://${school.subdomain_url}.eskoolia.com`, '_blank', 'noopener') },
-                              { title: 'Edit',        icon: <Edit2 size={13} />,        action: () => {} },
+                              { title: 'Edit',        icon: <Edit2 size={13} />,        action: () => handleEditInForm(school) },
                               { title: 'Impersonate', icon: <Users size={13} />,        action: () => void handleImpersonate(school), loading: impersonatingId === school.tenant_id },
-                              { title: 'Suspend',     icon: <Pause size={13} />,        action: () => setConfirmDialog({ type: 'suspend', school }) },
+                              { title: 'Suspend',     icon: <Pause size={13} />,        action: () => setConfirmDialog({ type: 'suspend', school }),   disabled: school.status === 'suspended' },
                               { title: 'Archive',     icon: <Archive size={13} />,      action: () => setConfirmDialog({ type: 'archive', school }) },
-                            ].map(btn => (
+                            ]).map(btn => (
                               <button key={btn.title} type="button" title={btn.title}
-                                disabled={'loading' in btn && btn.loading}
-                                onClick={e => { e.stopPropagation(); btn.action(); }}
+                                disabled={('loading' in btn && btn.loading) || ('disabled' in btn && btn.disabled)}
+                                onClick={e => { e.stopPropagation(); if (!('disabled' in btn && btn.disabled)) btn.action(); }}
                                 className="inline-flex h-7 w-7 items-center justify-center rounded-[7px] border border-transparent bg-transparent text-[var(--ink-3)] transition-all hover:border-[var(--bd)] hover:bg-[var(--bg-2)] hover:text-[var(--ink-1)] disabled:opacity-40"
                               >
                                 {btn.icon}
@@ -1178,6 +1686,7 @@ export default function SuperAdminSchoolsPage() {
         onCancel={() => setConfirmDialog(null)}
       />
     )}
+
     </>
   );
 }

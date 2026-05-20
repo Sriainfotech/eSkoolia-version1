@@ -27,6 +27,7 @@ export async function getSchools(filters?: SchoolFilters): Promise<PaginatedResp
     if (filters?.board) params.append('board', filters.board);
     if (filters?.plan) params.append('plan', filters.plan);
     if (filters?.region) params.append('region', filters.region);
+    if (filters?.state) params.append('state', filters.state);
 
     const queryString = params.toString();
     const url = `/api/super-admin/schools/${queryString ? '?' + queryString : ''}`;
@@ -117,5 +118,18 @@ export async function impersonateSchool(tenantId: string): Promise<ImpersonateRe
   return apiRequestWithRefresh<ImpersonateResponse>(
     `/api/super-admin/schools/${tenantId}/impersonate/`,
     { method: 'POST' }
+  );
+}
+
+/**
+ * Upload a logo image for a school tenant.
+ * Returns the stored logo URL.
+ */
+export async function uploadSchoolLogo(tenantId: string, file: File): Promise<{ logo_url: string }> {
+  const formData = new FormData();
+  formData.append('logo', file);
+  return apiRequestWithRefresh<{ logo_url: string }>(
+    `/api/super-admin/schools/${tenantId}/logo/`,
+    { method: 'POST', body: formData }
   );
 }

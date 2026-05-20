@@ -235,6 +235,20 @@ class SchoolProvisionView(SuperAdminBaseView):
             tenant.backup_retention = data["backup_retention"]
         if "sso_method" in data:
             tenant.sso_method = data["sso_method"]
+        if data.get("short_code"):
+            tenant.short_code = data["short_code"]
+        if "gstin" in data:
+            tenant.gstin = data["gstin"]
+        if "pan" in data:
+            tenant.pan = data["pan"]
+        if "udise_code" in data:
+            tenant.udise_code = data["udise_code"]
+        if "seats" in data:
+            tenant.seats = data["seats"]
+        if "brand_color" in data:
+            tenant.brand_color = data["brand_color"]
+        if "logo_url" in data:
+            tenant.logo_url = data["logo_url"]
         tenant.save()
 
         audit_super_admin_action(
@@ -280,7 +294,54 @@ class SchoolDetailView(SuperAdminBaseView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class SchoolActivateView(SuperAdminBaseView):
+class SchoolLogoUploadView(SuperAdminBaseView):
+    """Upload a school logo; stores it under media/logos/ and returns the URL."""
+
+    def post(self, request, tenant_id: str):
+        tenant = get_object_or_404(SchoolTenant, tenant_id=tenant_id)
+        logo_file = request.FILES.get("logo")
+        if not logo_file:
+            return Response({"detail": "No file provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate content type
+        allowed_types = {"image/png", "image/svg+xml", "image/jpeg", "image/webp"}
+        if logo_file.content_type not in allowed_types:
+            return Response(
+                {"detail": "Only PNG, SVG, JPEG, and WebP images are allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate file size (max 1 MB)
+        if logo_file.size > 1 * 1024 * 1024:
+            return Response({"detail": "Logo must be under 1 MB."}, status=status.HTTP_400_BAD_REQUEST)
+
+        import os
+        from django.conf import settings
+
+        ext = os.path.splitext(logo_file.name)[1].lower() or ".png"
+        safe_tid = tenant_id.lower().replace("_", "-")
+        filename = f"{safe_tid}{ext}"
+        logos_dir = os.path.join(settings.MEDIA_ROOT, "logos")
+        os.makedirs(logos_dir, exist_ok=True)
+        file_path = os.path.join(logos_dir, filename)
+        with open(file_path, "wb+") as dest:
+            for chunk in logo_file.chunks():
+                dest.write(chunk)
+
+        logo_url = f"{settings.MEDIA_URL}logos/{filename}"
+        tenant.logo_url = logo_url
+        tenant.save(update_fields=["logo_url"])
+
+        audit_super_admin_action(
+            request=request,
+            action="school.logo_upload",
+            tenant_id=tenant.tenant_id,
+            details={"logo_url": logo_url},
+        )
+        return Response({"logo_url": logo_url})
+
+
+
     def post(self, request, tenant_id: str):
         tenant = get_object_or_404(SchoolTenant, tenant_id=tenant_id)
         tenant.status = "active"
@@ -465,16 +526,37 @@ class BillingInvoicesView(SuperAdminBaseView):
 
 
 class BillingMrrView(SuperAdminBaseView):
-    def _sum_invoice_total(self, queryset):
+    def _sum_field(self, queryset, key):
         total = 0.0
         for invoice in queryset.only("tax_breakdown"):
             tax = invoice.tax_breakdown or {}
-            total += float(tax.get("grand_total", 0) or 0)
+            total += float(tax.get(key, 0) or 0)
         return total
 
+    def _sum_invoice_total(self, queryset):
+        return self._sum_field(queryset, "grand_total")
+
+    def _month_range(self, year, month):
+        from datetime import date
+        start = date(year, month, 1)
+        if month == 12:
+            end = date(year + 1, 1, 1)
+        else:
+            end = date(year, month + 1, 1)
+        return start, end
+
+    def _fy_range(self, today):
+        # Indian fiscal year: 1 Apr -> 31 Mar
+        from datetime import date
+        if today.month >= 4:
+            return date(today.year, 4, 1), date(today.year + 1, 4, 1), f"FY {today.year}-{str(today.year + 1)[-2:]}"
+        return date(today.year - 1, 4, 1), date(today.year, 4, 1), f"FY {today.year - 1}-{str(today.year)[-2:]}"
+
     def get(self, request):
+        today = timezone.now().date()
         cur_start, cur_end = current_month_range()
         prev_start, prev_end = previous_month_range()
+        fy_start, fy_end, fy_label = self._fy_range(today)
 
         current_mrr = self._sum_invoice_total(
             SuperAdminInvoice.objects.filter(invoice_date__gte=cur_start, invoice_date__lt=cur_end).exclude(status="cancelled")
@@ -482,23 +564,144 @@ class BillingMrrView(SuperAdminBaseView):
         previous_mrr = self._sum_invoice_total(
             SuperAdminInvoice.objects.filter(invoice_date__gte=prev_start, invoice_date__lt=prev_end).exclude(status="cancelled")
         )
-
-        overdue_amount = self._sum_invoice_total(SuperAdminInvoice.objects.filter(status="overdue"))
-        sent_amount = self._sum_invoice_total(SuperAdminInvoice.objects.filter(status="sent"))
-
         trend = 0
         if previous_mrr:
             trend = round(((float(current_mrr) - float(previous_mrr)) / float(previous_mrr)) * 100, 2)
 
+        # GST collected this month (split by IGST vs CGST+SGST)
+        cur_qs = SuperAdminInvoice.objects.filter(invoice_date__gte=cur_start, invoice_date__lt=cur_end).exclude(status="cancelled")
+        prev_qs = SuperAdminInvoice.objects.filter(invoice_date__gte=prev_start, invoice_date__lt=prev_end).exclude(status="cancelled")
+        gst_igst = self._sum_field(cur_qs, "igst")
+        gst_cgst = self._sum_field(cur_qs, "cgst")
+        gst_sgst = self._sum_field(cur_qs, "sgst")
+        gst_total = gst_igst + gst_cgst + gst_sgst
+        prev_gst = self._sum_field(prev_qs, "igst") + self._sum_field(prev_qs, "cgst") + self._sum_field(prev_qs, "sgst")
+        gst_trend = 0
+        if prev_gst:
+            gst_trend = round(((gst_total - prev_gst) / prev_gst) * 100, 2)
+
+        # Outstanding (sent + overdue)
+        outstanding_qs = SuperAdminInvoice.objects.filter(status__in=["sent", "overdue"])
+        outstanding_amount = self._sum_invoice_total(outstanding_qs)
+        outstanding_count = outstanding_qs.count()
+        # Avg days overdue (only for invoices past due_date)
+        overdue_days = []
+        for inv in SuperAdminInvoice.objects.filter(status__in=["sent", "overdue"]).only("due_date"):
+            if inv.due_date and inv.due_date < today:
+                overdue_days.append((today - inv.due_date).days)
+        avg_overdue = round(sum(overdue_days) / len(overdue_days)) if overdue_days else 0
+
+        # Invoices YTD (financial year)
+        ytd_qs = SuperAdminInvoice.objects.filter(invoice_date__gte=fy_start, invoice_date__lt=fy_end).exclude(status="cancelled")
+        invoices_ytd = ytd_qs.count()
+        invoices_paid = ytd_qs.filter(status="paid").count()
+
+        # Build 7-month sparkline series ending at current month
+        def _month_offset(d, n):
+            from datetime import date
+            y, m = d.year, d.month - n
+            while m <= 0:
+                m += 12
+                y -= 1
+            return date(y, m, 1)
+
+        mrr_series = []
+        gst_series = []
+        outstanding_series = []
+        invoices_series = []
+        for i in range(6, -1, -1):
+            ms = _month_offset(cur_start, i)
+            me_y, me_m = (ms.year + 1, 1) if ms.month == 12 else (ms.year, ms.month + 1)
+            from datetime import date as _d
+            me = _d(me_y, me_m, 1)
+            qs = SuperAdminInvoice.objects.filter(invoice_date__gte=ms, invoice_date__lt=me).exclude(status="cancelled")
+            mrr_series.append(to_money(self._sum_invoice_total(qs)))
+            gst_series.append(to_money(self._sum_field(qs, "igst") + self._sum_field(qs, "cgst") + self._sum_field(qs, "sgst")))
+            outstanding_series.append(to_money(self._sum_invoice_total(qs.filter(status__in=["sent", "overdue"]))))
+            invoices_series.append(qs.count())
+
+        # Seller GST identity (from any invoice or fallback)
+        seller = SuperAdminInvoice.objects.exclude(seller_gstin="").order_by("-invoice_date").only("seller_gstin", "seller_state", "seller_name").first()
+        seller_gstin = seller.seller_gstin if seller else ""
+        seller_state = seller.seller_state if seller else ""
+
         payload = {
             "current_mrr": to_money(current_mrr),
             "previous_mrr": to_money(previous_mrr),
-            "gst_collected": to_money(current_mrr) * 0.18,
-            "outstanding_amount": to_money(overdue_amount),
-            "at_risk_amount": to_money(sent_amount),
             "trend_percent": trend,
+            "gst_collected": to_money(gst_total),
+            "gst_igst": to_money(gst_igst),
+            "gst_cgst_sgst": to_money(gst_cgst + gst_sgst),
+            "gst_trend_percent": gst_trend,
+            "gst_month_label": cur_start.strftime("%b").upper(),
+            "outstanding_amount": to_money(outstanding_amount),
+            "outstanding_count": outstanding_count,
+            "outstanding_avg_overdue_days": avg_overdue,
+            "invoices_ytd": invoices_ytd,
+            "invoices_paid": invoices_paid,
+            "fiscal_year_label": fy_label,
+            "mrr_series": mrr_series,
+            "gst_series": gst_series,
+            "outstanding_series": outstanding_series,
+            "invoices_series": invoices_series,
+            "seller_gstin": seller_gstin,
+            "seller_state": seller_state,
+            # Back-compat
+            "at_risk_amount": to_money(self._sum_invoice_total(SuperAdminInvoice.objects.filter(status="sent"))),
         }
         return Response(payload)
+
+
+class BillingPlansView(SuperAdminBaseView):
+    """Returns subscription plan catalog (India-priced, GST 18% under SAC 998313)."""
+
+    PLANS = [
+        {
+            "code": "starter",
+            "name": "Starter",
+            "price_inr": 4500,
+            "billing_cycle": "monthly",
+            "popular": False,
+            "description": "Up to 500 students \u00b7 50 staff \u00b7 20 GB \u00b7 core modules \u00b7 email support",
+            "features": ["Up to 500 students", "50 staff", "20 GB storage", "Core modules", "Email support"],
+        },
+        {
+            "code": "standard",
+            "name": "Standard",
+            "price_inr": 9000,
+            "billing_cycle": "monthly",
+            "popular": False,
+            "description": "Up to 2,000 students \u00b7 200 staff \u00b7 50 GB \u00b7 all core + transport + library",
+            "features": ["Up to 2,000 students", "200 staff", "50 GB storage", "Transport + Library", "Priority support"],
+        },
+        {
+            "code": "premium",
+            "name": "Premium",
+            "price_inr": 19500,
+            "billing_cycle": "monthly",
+            "popular": True,
+            "description": "Up to 5,000 students \u00b7 500 staff \u00b7 100 GB \u00b7 all 14 modules \u00b7 phone & chat",
+            "features": ["Up to 5,000 students", "500 staff", "100 GB storage", "All 14 modules", "Phone & chat support"],
+        },
+        {
+            "code": "enterprise",
+            "name": "Enterprise",
+            "price_inr": 34500,
+            "billing_cycle": "monthly",
+            "popular": False,
+            "description": "Unlimited \u00b7 multi-campus \u00b7 SLA \u00b7 custom SSO \u00b7 dedicated CSM & onboarding",
+            "features": ["Unlimited students", "Multi-campus", "SLA guarantee", "Custom SSO", "Dedicated CSM"],
+        },
+    ]
+
+    def get(self, request):
+        return Response({
+            "plans": self.PLANS,
+            "gst_percent": 18,
+            "sac_code": "998313",
+            "sac_description": "Education software",
+            "currency": "INR",
+        })
 
 
 class BillingExportGstr1View(SuperAdminBaseView):

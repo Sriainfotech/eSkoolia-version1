@@ -62,6 +62,8 @@ class SchoolTenant(TenantMixin, models.Model):
     udise_code = models.CharField(max_length=32, blank=True)
     pan = models.CharField(max_length=32, blank=True)
     seats = models.IntegerField(default=0)
+    brand_color = models.CharField(max_length=32, blank=True)
+    logo_url = models.CharField(max_length=512, blank=True)
     student_count = models.IntegerField(default=0)
     staff_count = models.IntegerField(default=0)
     last_activity_at = models.DateTimeField(null=True, blank=True)
@@ -435,6 +437,44 @@ class SuperAdminInvoice(models.Model):
 
     def __str__(self):
         return f"{self.invoice_number} ({self.school_name})"
+
+
+class SubscriptionPlan(models.Model):
+    """Catalog of subscription plans available on the platform.
+
+    Used by the Super Admin → Billing screen to show pricing cards and
+    auto-populate invoice line items. GST 18% under SAC 998313 is added
+    on top of `price_inr` at invoice time (not stored here).
+    """
+
+    BILLING_CYCLE_CHOICES = [
+        ("monthly", "Monthly"),
+        ("yearly", "Yearly"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.SlugField(max_length=64, unique=True, db_index=True)
+    name = models.CharField(max_length=128)
+    description = models.TextField(blank=True)
+    price_inr = models.DecimalField(max_digits=12, decimal_places=2)
+    billing_cycle = models.CharField(
+        max_length=16,
+        choices=BILLING_CYCLE_CHOICES,
+        default="monthly",
+    )
+    popular = models.BooleanField(default=False)
+    features = models.JSONField(default=list, blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    sort_order = models.PositiveIntegerField(default=0, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "subscription_plans"
+        ordering = ["sort_order", "price_inr", "name"]
+
+    def __str__(self):
+        return f"{self.name} (₹{self.price_inr})"
 
 
 class SuperAdminPolicy(models.Model):

@@ -86,6 +86,8 @@ const FALLBACK: DashboardData = {
   totalSchools: 0,
   activeSchools: 0,
   totalStudents: 0,
+  activeStudents: 0,
+  inactiveStudents: 0,
   totalStaff: 0,
   mrr: { current: 0, previous: 0, trend: 0 },
   alertCount: 0,
@@ -144,6 +146,7 @@ function DashboardSkeleton() {
 export default function SuperAdminDashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+
 
   const [error, setError] = useState<string | null>(null);
 
@@ -251,14 +254,19 @@ export default function SuperAdminDashboardPage() {
             <span style={{ opacity: 0.65, flexShrink: 0, marginTop: -4 }}><Spark color="#0E9F6E" /></span>
           </div>
           <p style={{ fontSize: 50, fontFamily: 'var(--font-instrument-serif), serif', fontWeight: 400, lineHeight: 0.95, letterSpacing: '-1.5px', color: '#111827', margin: '0 0 8px' }}>
-            {fmtStudents(d.totalStudents)}
+            {fmtStudents(d.activeStudents ?? d.totalStudents)}
           </p>
-          {studentsMoM ? (
-            <p style={{ fontSize: 11.5, fontWeight: 600, color: studentsMoM > 0 ? '#059669' : '#DC2626', margin: '0 0 2px' }}>
-              {studentsMoM > 0 ? '+' : ''}{studentsMoM} MoM
-            </p>
-          ) : null}
-          <p style={{ fontSize: 11, color: '#9CA3AF', margin: 0 }}>{d.totalStaff} staff {'\u00b7'} {d.totalSchools} campuses</p>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#059669', background: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 999, padding: '2px 8px' }}>
+              {(d.activeStudents ?? d.totalStudents).toLocaleString('en-IN')} active
+            </span>
+            {(d.inactiveStudents ?? 0) > 0 && (
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#6B7280', background: '#F9FAFB', border: '1px solid #E5E7EB', borderRadius: 999, padding: '2px 8px' }}>
+                {(d.inactiveStudents ?? 0).toLocaleString('en-IN')} inactive
+              </span>
+            )}
+          </div>
+          <p style={{ fontSize: 11, color: '#9CA3AF', margin: 0 }}>{d.totalStudents.toLocaleString('en-IN')} total {'\u00b7'} {d.totalStaff} staff</p>
         </div>
 
         {/* Monthly Recurring */}

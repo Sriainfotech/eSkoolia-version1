@@ -10,7 +10,15 @@ from collections import OrderedDict
 
 from rest_framework import serializers
 
-from apps.tenancy.models import SchoolTenant, SuperAdminInvoice, SuperAdminPolicy, TenantAuditLog
+from django.utils.text import slugify
+
+from apps.tenancy.models import (
+    SchoolTenant,
+    SubscriptionPlan,
+    SuperAdminInvoice,
+    SuperAdminPolicy,
+    TenantAuditLog,
+)
 
 
 POLICY_GROUP_METADATA = OrderedDict(
@@ -55,6 +63,8 @@ class DashboardDataSerializer(serializers.Serializer):
     totalSchools = serializers.IntegerField()
     activeSchools = serializers.IntegerField()
     totalStudents = serializers.IntegerField()
+    activeStudents = serializers.IntegerField(default=0)
+    inactiveStudents = serializers.IntegerField(default=0)
     totalStaff = serializers.IntegerField()
     mrr = MrrDataSerializer()
     alertCount = serializers.IntegerField()
@@ -68,10 +78,23 @@ class DashboardDataSerializer(serializers.Serializer):
 
 
 class SchoolTenantBaseSerializer(serializers.ModelSerializer):
-    students = serializers.IntegerField(source="student_count", read_only=True)
-    staff = serializers.IntegerField(source="staff_count", read_only=True)
+    students = serializers.SerializerMethodField()
+    activeStudents = serializers.SerializerMethodField()
+    staff = serializers.SerializerMethodField()
     lastActivity = serializers.DateTimeField(source="last_activity_at", read_only=True, allow_null=True)
     udiseCode = serializers.CharField(source="udise_code", required=False, allow_blank=True, allow_null=True)
+
+    def get_students(self, obj):
+        v = getattr(obj, "live_student_count", None)
+        return v if v is not None else (obj.student_count or 0)
+
+    def get_activeStudents(self, obj):
+        v = getattr(obj, "live_active_student_count", None)
+        return v if v is not None else 0
+
+    def get_staff(self, obj):
+        v = getattr(obj, "live_staff_count", None)
+        return v if v is not None else (obj.staff_count or 0)
 
     class Meta:
         model = SchoolTenant
@@ -95,6 +118,7 @@ class SchoolTenantBaseSerializer(serializers.ModelSerializer):
             "udiseCode",
             "pan",
             "students",
+            "activeStudents",
             "seats",
             "staff",
             "lastActivity",
@@ -237,6 +261,74 @@ class InvoiceCreateSerializer(serializers.Serializer):
     tax_breakdown = serializers.DictField(required=False)
     notes = serializers.CharField(required=False, allow_blank=True)
     terms_conditions = serializers.CharField(required=False, allow_blank=True)
+
+
+class SubscriptionPlanSerializer(serializers.ModelSerializer):
+    price_inr = serializers.FloatField()
+
+    class Meta:
+        model = SubscriptionPlan
+        fields = [
+            "code",
+            "name",
+            "description",
+            "price_inr",
+            "billing_cycle",
+            "popular",
+            "features",
+            "is_active",
+            "sort_order",
+        ]
+
+
+class SubscriptionPlanCreateSerializer(serializers.Serializer):
+    code = serializers.SlugField(max_length=64, required=False, allow_blank=True)
+    name = serializers.CharField(max_length=128)
+    description = serializers.CharField(required=False, allow_blank=True)
+    price_inr = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0)
+    billing_cycle = serializers.ChoiceField(
+        choices=[("monthly", "Monthly"), ("yearly", "Yearly")],
+        default="monthly",
+    )
+    popular = serializers.BooleanField(required=False, default=False)
+    features = serializers.ListField(
+        child=serializers.CharField(allow_blank=False, max_length=255),
+        required=False,
+        default=list,
+    )
+    sort_order = serializers.IntegerField(required=False, min_value=0, default=0)
+    is_active = serializers.BooleanField(required=False, default=True)
+
+    def validate(self, attrs):
+        code = (attrs.get("code") or "").strip()
+        if not code:
+            code = slugify(attrs["name"])[:64]
+        if not code:
+            raise serializers.ValidationError({"code": "Unable to derive plan code from name."})
+        if SubscriptionPlan.objects.filter(code=code).exists():
+            raise serializers.ValidationError({"code": f"Plan code '{code}' already exists."})
+        attrs["code"] = code
+        return attrs
+
+
+class SubscriptionPlanUpdateSerializer(serializers.Serializer):
+    """Partial update for an existing subscription plan. Code is immutable."""
+
+    name = serializers.CharField(max_length=128, required=False)
+    description = serializers.CharField(required=False, allow_blank=True)
+    price_inr = serializers.DecimalField(
+        max_digits=12, decimal_places=2, min_value=0, required=False
+    )
+    billing_cycle = serializers.ChoiceField(
+        choices=[("monthly", "Monthly"), ("yearly", "Yearly")], required=False
+    )
+    popular = serializers.BooleanField(required=False)
+    features = serializers.ListField(
+        child=serializers.CharField(allow_blank=False, max_length=255),
+        required=False,
+    )
+    sort_order = serializers.IntegerField(required=False, min_value=0)
+    is_active = serializers.BooleanField(required=False)
 
 
 class BillingMrrSerializer(serializers.Serializer):

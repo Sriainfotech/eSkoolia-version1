@@ -19,20 +19,30 @@ import yaml
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Sum
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.access_control.permission_classes import IsSuperAdmin
 from apps.hr.models import Staff
 from apps.students.models import Student
 from apps.tenancy.audit import log_audit
-from apps.tenancy.models import School, SchoolTenant, SuperAdminInvoice, SuperAdminPolicy, TenantAuditLog
+from apps.tenancy.models import (
+    School,
+    SchoolTenant,
+    SubscriptionPlan,
+    SuperAdminInvoice,
+    SuperAdminPolicy,
+    TenantAuditLog,
+)
 from apps.tenancy.super_admin.utils import build_invoice_number, current_month_range, previous_month_range, to_money
 
 from .serializers import (
@@ -50,6 +60,9 @@ from .serializers import (
     SchoolTenantDetailSerializer,
     SchoolTenantListSerializer,
     SchoolTenantUpdateSerializer,
+    SubscriptionPlanCreateSerializer,
+    SubscriptionPlanSerializer,
+    SubscriptionPlanUpdateSerializer,
 )
 
 
@@ -287,8 +300,10 @@ class DashboardKPIView(SuperAdminBaseAPIView):
 
         total_schools = tenants.count()
         active_schools = tenants.exclude(status__in=["suspended", "archived", "pending"]).count()
-        total_students = Student.objects.using("default").filter(status="active").count()
-        total_staff = Staff.objects.using("default").filter(status="active").count()
+        active_students   = Student.objects.using("default").filter(status="active").count()
+        inactive_students = Student.objects.using("default").filter(status="inactive").count()
+        total_students    = active_students + inactive_students
+        total_staff = Staff.objects.using("default").count()
 
         current_start, current_end = current_month_range()
         previous_start, previous_end = previous_month_range()
@@ -342,9 +357,20 @@ class DashboardKPIView(SuperAdminBaseAPIView):
             'enterprise': 34500, 'trial': 0, 'custom': 0,
         }
 
+        # Build a subquery for live student counts per school
+        _student_sq = (
+            Student.objects.filter(school_id=OuterRef("pk"))
+            .values("school_id")
+            .annotate(cnt=Count("id"))
+            .values("cnt")
+        )
+        tenants_with_students = tenants.annotate(
+            live_student_count=Coalesce(Subquery(_student_sq, output_field=IntegerField()), 0)
+        )
+
         state_breakdown = []
-        for row in tenants.values("state").annotate(
-            count=Count("id"), students=Sum("student_count")
+        for row in tenants_with_students.values("state").annotate(
+            count=Count("id"), students=Sum("live_student_count")
         ).order_by("-count"):
             code = (row.get("state") or "").strip()
             state_breakdown.append({
@@ -355,8 +381,8 @@ class DashboardKPIView(SuperAdminBaseAPIView):
             })
 
         plan_breakdown = []
-        for row in tenants.values("plan").annotate(
-            count=Count("id"), students=Sum("student_count")
+        for row in tenants_with_students.values("plan").annotate(
+            count=Count("id"), students=Sum("live_student_count")
         ).order_by("-count"):
             plan_key = (row.get("plan") or "trial").lower()
             plan_count = row.get("count") or 0
@@ -371,6 +397,8 @@ class DashboardKPIView(SuperAdminBaseAPIView):
             "totalSchools": total_schools,
             "activeSchools": active_schools,
             "totalStudents": total_students,
+            "activeStudents": active_students,
+            "inactiveStudents": inactive_students,
             "totalStaff": total_staff,
             "mrr": {
                 "current": to_money(current_mrr),
@@ -405,7 +433,33 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
     }
 
     def get_queryset(self):
-        queryset = self._public_queryset(SchoolTenant).order_by("-provisioned_at", "name")
+        student_sq = (
+            Student.objects.filter(school_id=OuterRef("pk"))
+            .values("school_id")
+            .annotate(cnt=Count("id"))
+            .values("cnt")
+        )
+        active_student_sq = (
+            Student.objects.filter(school_id=OuterRef("pk"), status="active")
+            .values("school_id")
+            .annotate(cnt=Count("id"))
+            .values("cnt")
+        )
+        staff_sq = (
+            Staff.objects.filter(school_id=OuterRef("pk"))
+            .values("school_id")
+            .annotate(cnt=Count("id"))
+            .values("cnt")
+        )
+        queryset = (
+            self._public_queryset(SchoolTenant)
+            .annotate(
+                live_student_count=Coalesce(Subquery(student_sq, output_field=IntegerField()), 0),
+                live_active_student_count=Coalesce(Subquery(active_student_sq, output_field=IntegerField()), 0),
+                live_staff_count=Coalesce(Subquery(staff_sq, output_field=IntegerField()), 0),
+            )
+            .order_by("-provisioned_at", "name")
+        )
 
         search = self.request.query_params.get("search")
         if search:
@@ -416,7 +470,18 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
                 | Q(gstin__icontains=search)
             )
 
-        for field in ["status", "plan", "board", "region"]:
+        status_value = self.request.query_params.get("status")
+        if status_value:
+            if status_value == "active":
+                # "active" is a frontend alias meaning non-archived, non-suspended
+                queryset = queryset.exclude(status__in=["archived", "suspended"])
+            elif status_value == "trial":
+                # "trial" maps to the plan field, not status
+                queryset = queryset.filter(plan="trial").exclude(status__in=["archived", "suspended"])
+            else:
+                queryset = queryset.filter(status=status_value)
+
+        for field in ["plan", "board", "region", "state"]:
             value = self.request.query_params.get(field)
             if value:
                 queryset = queryset.filter(**{field: value})
@@ -540,7 +605,11 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
 
 class SchoolTenantDetailView(SuperAdminBaseAPIView):
     def get_object(self, tenant_id):
-        return self._public_queryset(SchoolTenant).get(tenant_id=tenant_id)
+        try:
+            return self._public_queryset(SchoolTenant).get(tenant_id=tenant_id)
+        except SchoolTenant.DoesNotExist:
+            from rest_framework.exceptions import NotFound
+            raise NotFound(f"School '{tenant_id}' not found.")
 
     def get(self, request, tenant_id):
         tenant = self.get_object(tenant_id)
@@ -568,6 +637,8 @@ class SchoolTenantDetailView(SuperAdminBaseAPIView):
 
     def delete(self, request, tenant_id):
         tenant = self.get_object(tenant_id)
+        if tenant.status == "archived":
+            return Response({"detail": "School is already archived."}, status=status.HTTP_400_BAD_REQUEST)
         tenant.status = "archived"
         tenant.api_access = False
         tenant.save(update_fields=["status", "api_access"])
@@ -582,6 +653,66 @@ class SchoolTenantDetailView(SuperAdminBaseAPIView):
         )
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SchoolImpersonateView(SuperAdminBaseAPIView):
+    """Mint a short-lived impersonation JWT and return a tenant handoff URL."""
+
+    def post(self, request, tenant_id: str):
+        try:
+            tenant = self._public_queryset(SchoolTenant).get(tenant_id=tenant_id)
+        except SchoolTenant.DoesNotExist:
+            return Response({"detail": "Tenant not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        User = get_user_model()
+        target_username = request.data.get("username")
+        target = None
+        if target_username:
+            target = User.objects.filter(username=target_username, school__tenant_id=tenant_id).first()
+        if target is None:
+            target = (
+                User.objects.filter(school__tenant_id=tenant_id, is_staff=True, is_active=True)
+                .order_by("-is_superuser", "id")
+                .first()
+            )
+        if target is None:
+            return Response(
+                {"detail": "No active staff user found for this tenant."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        refresh = RefreshToken.for_user(target)
+        refresh["impersonated_by"] = request.user.username
+        refresh["tenant_id"] = tenant.tenant_id
+        access = refresh.access_token
+        access["impersonated_by"] = request.user.username
+        access["tenant_id"] = tenant.tenant_id
+
+        scheme = "https" if request.is_secure() else "http"
+        raw_host = request.get_host()
+        host = raw_host.split(":")[0]
+        port_part = (":" + raw_host.split(":")[1]) if ":" in raw_host else ""
+        target_subdomain = tenant.subdomain_url or ""
+        target_host = f"{target_subdomain}.{host}{port_part}" if target_subdomain else f"{host}{port_part}"
+        handoff_url = f"{scheme}://{target_host}/login?impersonate=1&token={str(access)}"
+
+        log_audit(
+            action="auth.impersonate",
+            tenant_id=tenant.tenant_id,
+            status="success",
+            actor_user=request.user,
+            actor_ip=self._client_ip(request),
+            details={"target_username": target.username},
+        )
+
+        return Response({
+            "tenant_id": tenant.tenant_id,
+            "username": target.username,
+            "access": str(access),
+            "refresh": str(refresh),
+            "handoff_url": handoff_url,
+            "expires_in": int(access.lifetime.total_seconds()),
+        })
 
 
 class AuditLogListView(SuperAdminBaseAPIView):
@@ -713,6 +844,10 @@ class BillingInvoiceListCreateView(SuperAdminBaseAPIView):
         return self._paginate(request, self.get_queryset(), InvoiceSerializer)
 
     def post(self, request):
+        # Allow callers to explicitly override the duplicate guard when they
+        # have confirmed the intent (e.g. correction invoice, multi-license).
+        force = str(request.data.get("force", "")).lower() in ("true", "1", "yes")
+
         serializer = InvoiceCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
@@ -720,6 +855,50 @@ class BillingInvoiceListCreateView(SuperAdminBaseAPIView):
         tenant = None
         if data.get("tenant_id"):
             tenant = self._public_queryset(SchoolTenant).filter(tenant_id=data["tenant_id"]).first()
+
+        # ── Duplicate invoice guard ─────────────────────────────────────────
+        # For a given school, billing month, and plan (matched by first line
+        # item description), only one active invoice should exist.  Return
+        # 409 so the UI can surface the conflict and ask for confirmation
+        # before re-submitting with force=true.
+        if tenant and not force:
+            inv_year = data["invoice_date"].year
+            inv_month = data["invoice_date"].month
+            first_desc = (
+                data["line_items"][0].get("description", "").strip()
+                if data["line_items"]
+                else ""
+            )
+            existing_qs = (
+                self._public_queryset(SuperAdminInvoice)
+                .filter(tenant=tenant, invoice_date__year=inv_year, invoice_date__month=inv_month)
+                .exclude(status="cancelled")
+            )
+            conflict = None
+            for inv in existing_qs:
+                inv_desc = (inv.line_items[0].get("description", "").strip() if inv.line_items else "")
+                if not first_desc or inv_desc == first_desc:
+                    conflict = inv
+                    break
+            if conflict:
+                return Response(
+                    {
+                        "code": "duplicate_invoice",
+                        "detail": (
+                            f"Invoice {conflict.invoice_number} already exists for "
+                            f"{conflict.school_name} for "
+                            f"{data['invoice_date'].strftime('%B %Y')}. "
+                            "Void/cancel the existing invoice first, or pass force=true to override."
+                        ),
+                        "existing_invoice": {
+                            "id": str(conflict.id),
+                            "invoice_number": conflict.invoice_number,
+                            "status": conflict.status,
+                        },
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+        # ── End duplicate guard ─────────────────────────────────────────────
 
         line_items = data["line_items"]
         subtotal = sum(_safe_float(item.get("amount")) for item in line_items)
@@ -797,6 +976,110 @@ class BillingMRRView(SuperAdminBaseAPIView):
             "trend_percent": trend_percent,
         }
         return Response(BillingMrrSerializer(payload).data)
+
+
+class BillingPlansView(SuperAdminBaseAPIView):
+    """Subscription plans catalog for the Super Admin billing screen.
+
+    Plans are persisted in `tenancy.SubscriptionPlan`. GST 18% under SAC
+    998313 (Education software) is applied at invoice time, not stored
+    on the plan.
+    """
+
+    CATALOG_META = {
+        "gst_percent": 18,
+        "sac_code": "998313",
+        "sac_description": "Education software",
+        "currency": "INR",
+    }
+
+    def get(self, request):
+        plans = SubscriptionPlan.objects.filter(is_active=True).order_by(
+            "sort_order", "price_inr", "name"
+        )
+        return Response({
+            "plans": SubscriptionPlanSerializer(plans, many=True).data,
+            **self.CATALOG_META,
+        })
+
+    def post(self, request):
+        serializer = SubscriptionPlanCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        plan = SubscriptionPlan.objects.create(
+            code=data["code"],
+            name=data["name"],
+            description=data.get("description", ""),
+            price_inr=data["price_inr"],
+            billing_cycle=data.get("billing_cycle", "monthly"),
+            popular=data.get("popular", False),
+            features=data.get("features", []),
+            sort_order=data.get("sort_order", 0),
+            is_active=data.get("is_active", True),
+        )
+
+        log_audit(
+            action="plan.created",
+            actor_user=request.user if request.user.is_authenticated else None,
+            status="success",
+            details={
+                "code": plan.code,
+                "name": plan.name,
+                "price_inr": str(plan.price_inr),
+                "billing_cycle": plan.billing_cycle,
+            },
+        )
+
+        return Response(
+            SubscriptionPlanSerializer(plan).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class BillingPlanDetailView(SuperAdminBaseAPIView):
+    """Update or delete a single subscription plan by code."""
+
+    def _get(self, code):
+        try:
+            return SubscriptionPlan.objects.get(code=code)
+        except SubscriptionPlan.DoesNotExist:
+            return None
+
+    def patch(self, request, code):
+        plan = self._get(code)
+        if plan is None:
+            return Response({"detail": "Plan not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = SubscriptionPlanUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        for field, value in serializer.validated_data.items():
+            setattr(plan, field, value)
+        plan.save()
+
+        log_audit(
+            action="plan.updated",
+            actor_user=request.user if request.user.is_authenticated else None,
+            status="success",
+            details={"code": plan.code, "fields": list(serializer.validated_data.keys())},
+        )
+        return Response(SubscriptionPlanSerializer(plan).data)
+
+    def delete(self, request, code):
+        plan = self._get(code)
+        if plan is None:
+            return Response({"detail": "Plan not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        snapshot = {"code": plan.code, "name": plan.name, "price_inr": str(plan.price_inr)}
+        plan.delete()
+
+        log_audit(
+            action="plan.deleted",
+            actor_user=request.user if request.user.is_authenticated else None,
+            status="success",
+            details=snapshot,
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class BillingGSTR1ExportView(SuperAdminBaseAPIView):
@@ -939,3 +1222,54 @@ class PoliciesExportView(SuperAdminBaseAPIView):
         response = HttpResponse(json.dumps(data, indent=2, default=str), content_type="application/json")
         response["Content-Disposition"] = 'attachment; filename="policies.json"'
         return response
+
+
+class BillingInvoiceMarkPaidView(SuperAdminBaseAPIView):
+    def post(self, request, invoice_id: str):
+        invoice = get_object_or_404(
+            self._public_queryset(SuperAdminInvoice), id=invoice_id
+        )
+        previous_status = invoice.status
+        invoice.status = "paid"
+        invoice.save(update_fields=["status", "updated_at"])
+
+        log_audit(
+            action="invoice.mark_paid",
+            tenant_id=invoice.tenant.tenant_id if invoice.tenant_id else None,
+            status="success",
+            actor_user=request.user,
+            actor_ip=self._client_ip(request),
+            details={
+                "invoice_number": invoice.invoice_number,
+                "previous_status": previous_status,
+            },
+        )
+        return Response(InvoiceSerializer(invoice).data)
+
+
+class BillingInvoiceReminderView(SuperAdminBaseAPIView):
+    def post(self, request, invoice_id: str):
+        invoice = get_object_or_404(
+            self._public_queryset(SuperAdminInvoice), id=invoice_id
+        )
+
+        # No mailer wired in public schema; bump draft → sent and record audit.
+        if invoice.status == "draft":
+            invoice.status = "sent"
+            invoice.save(update_fields=["status", "updated_at"])
+
+        log_audit(
+            action="invoice.reminder_sent",
+            tenant_id=invoice.tenant.tenant_id if invoice.tenant_id else None,
+            status="success",
+            actor_user=request.user,
+            actor_ip=self._client_ip(request),
+            details={"invoice_number": invoice.invoice_number, "channel": "email"},
+        )
+        return Response(
+            {
+                "invoice_number": invoice.invoice_number,
+                "status": invoice.status,
+                "reminder_recorded": True,
+            }
+        )

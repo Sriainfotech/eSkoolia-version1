@@ -4,7 +4,7 @@
  * Handles billing, invoicing, and financial metrics.
  */
 
-import { Invoice, MrrData, InvoiceFilters, PaginatedResponse } from '@/types/super-admin';
+import { Invoice, MrrData, InvoiceFilters, PaginatedResponse, PlansCatalog, SubscriptionPlan } from '@/types/super-admin';
 import { apiRequestWithRefresh, apiRequestWithRefreshResponse } from '@/lib/api-auth';
 
 /**
@@ -18,6 +18,7 @@ export async function getInvoices(filters?: InvoiceFilters): Promise<PaginatedRe
     if (filters?.page_size) params.append('page_size', filters.page_size.toString());
     if (filters?.status) params.append('status', filters.status);
     if (filters?.school_name) params.append('school_name', filters.school_name);
+    if (filters?.tenant_id) params.append('tenant_id', filters.tenant_id);
     if (filters?.date_from) params.append('date_from', filters.date_from);
     if (filters?.date_to) params.append('date_to', filters.date_to);
 
@@ -106,4 +107,76 @@ export async function sendInvoiceReminder(
     `/api/super-admin/billing/invoices/${invoiceId}/reminder/`,
     { method: 'POST' }
   );
+}
+
+/**
+ * Fetch subscription plans catalog (server-driven pricing).
+ */
+export async function getPlans(): Promise<PlansCatalog> {
+  return apiRequestWithRefresh<PlansCatalog>('/api/super-admin/billing/plans/');
+}
+
+/**
+ * Create a new subscription plan.
+ */
+export interface CreatePlanPayload {
+  name: string;
+  code?: string;
+  description?: string;
+  price_inr: number;
+  billing_cycle: 'monthly' | 'yearly';
+  popular?: boolean;
+  features?: string[];
+  sort_order?: number;
+  is_active?: boolean;
+}
+
+export async function createPlan(data: CreatePlanPayload): Promise<SubscriptionPlan> {
+  try {
+    return await apiRequestWithRefresh<SubscriptionPlan>(
+      '/api/super-admin/billing/plans/',
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      },
+    );
+  } catch (error) {
+    console.error('Error creating plan:', error);
+    throw error;
+  }
+}
+
+export type UpdatePlanPayload = Partial<Omit<CreatePlanPayload, 'code'>>;
+
+/**
+ * Update an existing subscription plan (code is immutable).
+ */
+export async function updatePlan(
+  code: string,
+  data: UpdatePlanPayload,
+): Promise<SubscriptionPlan> {
+  try {
+    return await apiRequestWithRefresh<SubscriptionPlan>(
+      `/api/super-admin/billing/plans/${encodeURIComponent(code)}/`,
+      { method: 'PATCH', body: JSON.stringify(data) },
+    );
+  } catch (error) {
+    console.error('Error updating plan:', error);
+    throw error;
+  }
+}
+
+/**
+ * Delete a subscription plan by code.
+ */
+export async function deletePlan(code: string): Promise<void> {
+  try {
+    await apiRequestWithRefreshResponse(
+      `/api/super-admin/billing/plans/${encodeURIComponent(code)}/`,
+      { method: 'DELETE' },
+    );
+  } catch (error) {
+    console.error('Error deleting plan:', error);
+    throw error;
+  }
 }

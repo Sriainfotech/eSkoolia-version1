@@ -58,7 +58,7 @@ export default function SuperAdminAuthLayout({ children }: { children: ReactNode
   return (
     <>
       {children}
-      <ToastContainer position="bottom-right" autoClose={4000} hideProgressBar newestOnTop closeOnClick pauseOnHover theme="light" />
+      <ToastContainer position="top-right" autoClose={4000} hideProgressBar newestOnTop closeOnClick pauseOnHover theme="light" />
     </>
   );
 }
