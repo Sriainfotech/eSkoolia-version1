@@ -1,12 +1,14 @@
-﻿'use client';
+'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'react-toastify';
 import {
+  Ban,
   Check,
   CheckCircle2,
   Download,
   Edit3,
+  Eye,
   ExternalLink,
   FileText,
   Plus,
@@ -14,6 +16,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import {
+  cancelInvoice,
   deletePlan,
   downloadFile,
   exportGstr1,
@@ -33,7 +36,7 @@ import type {
 import NewInvoiceDrawer from './NewInvoiceDrawer';
 import NewPlanDrawer from './NewPlanDrawer';
 
-// ── Formatting ────────────────────────────────────────────────────────────────
+// -- Formatting ----------------------------------------------------------------
 function fmtINR(n: number, opts?: { compact?: boolean; symbol?: boolean; fraction?: number }) {
   const symbol = opts?.symbol !== false;
   if (opts?.compact) {
@@ -52,7 +55,7 @@ function fmtINR(n: number, opts?: { compact?: boolean; symbol?: boolean; fractio
 }
 
 function fmtDate(iso?: string) {
-  if (!iso) return '—';
+  if (!iso) return '\u2014';
   try {
     return new Intl.DateTimeFormat('en-IN', {
       day: '2-digit',
@@ -100,7 +103,7 @@ function stateCode(name?: string): string {
   return map[name.trim().toLowerCase()] ?? '';
 }
 
-// ── Sparkline ─────────────────────────────────────────────────────────────────
+// -- Sparkline -----------------------------------------------------------------
 function Spark({ data, color = 'var(--pu)' }: { data: number[]; color?: string }) {
   if (!data || data.length < 2) {
     return <svg width={68} height={22} />;
@@ -131,7 +134,7 @@ function Spark({ data, color = 'var(--pu)' }: { data: number[]; color?: string }
   );
 }
 
-// ── KPI Card ──────────────────────────────────────────────────────────────────
+// -- KPI Card ------------------------------------------------------------------
 function KpiCard({
   label,
   value,
@@ -166,7 +169,7 @@ function KpiCard({
   );
 }
 
-// ── Plan Card ─────────────────────────────────────────────────────────────────
+// -- Plan Card -----------------------------------------------------------------
 function PlanCard({
   plan,
   onEdit,
@@ -223,7 +226,7 @@ function PlanCard({
   );
 }
 
-// ── Status Chip ───────────────────────────────────────────────────────────────
+// -- Status Chip ---------------------------------------------------------------
 const STATUS_META: Record<InvoiceStatus, { label: string; dot: string; text: string }> = {
   draft: { label: 'Draft', dot: 'bg-[var(--ink-3)]', text: 'text-[var(--ink-2)]' },
   sent: { label: 'Sent', dot: 'bg-amber-500', text: 'text-amber-700' },
@@ -234,7 +237,7 @@ const STATUS_META: Record<InvoiceStatus, { label: string; dot: string; text: str
 
 function StatusChip({ status, daysOverdue }: { status: InvoiceStatus; daysOverdue?: number }) {
   const m = STATUS_META[status] ?? STATUS_META.draft;
-  const label = status === 'overdue' && daysOverdue ? `${m.label} · ${daysOverdue}d` : m.label;
+  const label = status === 'overdue' && daysOverdue ? `${m.label} � ${daysOverdue}d` : m.label;
   return (
     <span className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${m.text}`}>
       <span className={`h-1.5 w-1.5 rounded-full ${m.dot}`} />
@@ -243,7 +246,7 @@ function StatusChip({ status, daysOverdue }: { status: InvoiceStatus; daysOverdu
   );
 }
 
-// ── Tax Logic Pill ────────────────────────────────────────────────────────────
+// -- Tax Logic Pill ------------------------------------------------------------
 function Pill({ children, tone = 'default' }: { children: React.ReactNode; tone?: 'default' | 'purple' }) {
   const cls =
     tone === 'purple'
@@ -256,7 +259,7 @@ function Pill({ children, tone = 'default' }: { children: React.ReactNode; tone?
   );
 }
 
-// ── Amount in words (Indian) ─────────────────────────────────────────────────
+// -- Amount in words (Indian) -------------------------------------------------
 function amountInWords(num: number): string {
   if (!num || num <= 0) return 'Zero';
   const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
@@ -293,18 +296,24 @@ function amountInWords(num: number): string {
   return words;
 }
 
-// ── Tax Invoice Card ──────────────────────────────────────────────────────────
+// -- Tax Invoice Card ----------------------------------------------------------
 function TaxInvoiceCard({
   invoice,
   sellerGstin,
   sellerState,
   onMarkPaid,
+  onDownloadPdf,
+  onEdit,
+  onCancel,
   actionBusy,
 }: {
   invoice: Invoice | null;
   sellerGstin: string;
   sellerState: string;
   onMarkPaid: () => void;
+  onDownloadPdf: () => void;
+  onEdit: () => void;
+  onCancel: () => void;
   actionBusy: boolean;
 }) {
   if (!invoice) {
@@ -322,8 +331,45 @@ function TaxInvoiceCard({
 
   return (
     <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
+      {/* Print stylesheet: hide everything except the invoice body when printing.
+          The browser print dialog allows saving as PDF (Download PDF action). */}
+      <style jsx global>{`
+        @media print {
+          body * { visibility: hidden !important; }
+          #invoice-printable, #invoice-printable * { visibility: visible !important; }
+          #invoice-printable {
+            position: absolute !important;
+            inset: 0 !important;
+            width: 100% !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 24px !important;
+          }
+        }
+      `}</style>
       {/* LEFT: Invoice body (2/3) */}
-      <div className="rounded-2xl border border-[var(--bd)] bg-[var(--bg-1)] px-6 pb-5 pt-5 xl:col-span-2">
+      <div
+        id="invoice-printable"
+        className={`relative overflow-hidden rounded-2xl border bg-[var(--bg-1)] px-6 pb-5 pt-5 xl:col-span-2 ${
+          invoice.status === 'cancelled' ? 'border-rose-300' : 'border-[var(--bd)]'
+        }`}
+      >
+        {invoice.status === 'cancelled' && (
+          <>
+            {/* Diagonal CANCELLED watermark (hidden in print to avoid obscuring archive copy) */}
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center print:hidden">
+              <span className="-rotate-12 select-none rounded-md border-4 border-rose-300/80 px-6 py-2 font-serif text-[64px] font-black uppercase tracking-widest text-rose-400/40">
+                Cancelled
+              </span>
+            </div>
+            <div className="mb-3 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11.5px] text-rose-700">
+              <Ban className="h-3.5 w-3.5" />
+              <span>
+                This invoice has been <span className="font-semibold">cancelled</span> and is kept for audit. Create a new invoice to re-bill.
+              </span>
+            </div>
+          </>
+        )}
         {/* Header */}
         <div className="flex items-start justify-between">
           <div>
@@ -341,10 +387,10 @@ function TaxInvoiceCard({
               <p className="text-[10.5px] leading-snug text-[var(--ink-3)]">
                 12th Floor, Bagmane Tech Park,<br />
                 CV Raman Nagar, Bengaluru,<br />
-                {sellerState || invoice.seller_state} 560048 · India
+                {sellerState || invoice.seller_state} 560048 � India
               </p>
               <p className="mt-1 text-[10.5px] text-[var(--ink-3)]">
-                GSTIN <span className="font-mono text-[var(--ink-2)]">{sellerGstin || invoice.seller_gstin || '—'}</span>
+                GSTIN <span className="font-mono text-[var(--ink-2)]">{sellerGstin || invoice.seller_gstin || '�'}</span>
               </p>
             </div>
           </div>
@@ -380,15 +426,15 @@ function TaxInvoiceCard({
           <div>
             <p className="text-[9.5px] font-bold uppercase tracking-[0.1em] text-[var(--ink-3)]">Place of supply</p>
             <p className="mt-1 text-[12px] font-semibold text-[var(--ink-1)]">
-              {buyerCode && <span className="font-mono text-[var(--ink-3)]">{buyerCode} — </span>}
+              {buyerCode && <span className="font-mono text-[var(--ink-3)]">{buyerCode} � </span>}
               {invoice.buyer_state}
             </p>
             <p className="text-[11px] text-[var(--ink-3)]">{inter ? 'Inter-state supply' : 'Intra-state supply'}</p>
             <p className="mt-1 text-[10.5px] text-[var(--ink-3)]">
-              Reverse charge <span className="text-[var(--ink-1)]">— No</span>
+              Reverse charge <span className="text-[var(--ink-1)]">� No</span>
             </p>
             <p className="text-[10.5px] text-[var(--ink-3)]">
-              Currency <span className="text-[var(--ink-1)]">— INR</span>
+              Currency <span className="text-[var(--ink-1)]">� INR</span>
             </p>
           </div>
         </div>
@@ -446,7 +492,7 @@ function TaxInvoiceCard({
 
         {/* Amount in words */}
         <div className="mt-4 rounded-lg bg-[var(--bg-3)] px-3 py-2 text-[11.5px] text-[var(--ink-2)]">
-          <span className="italic">Amount in words · </span>
+          <span className="italic">Amount in words � </span>
           <span className="font-semibold text-[var(--ink-1)]">{amountWords}</span>
         </div>
 
@@ -456,8 +502,8 @@ function TaxInvoiceCard({
             <p className="text-[9.5px] font-bold uppercase tracking-[0.1em]">Payment terms</p>
             <p className="mt-1 leading-snug">
               Payable within 15 days of invoice date. Bank transfer to{' '}
-              <Pill>HDFC 0000123456789</Pill> · IFSC <Pill>HDFC0001234</Pill> · A/c name Eskoolia
-              Technologies Pvt Ltd · UPI <Pill>eskoolia@hdfcbank</Pill> · Reference{' '}
+              <Pill>HDFC 0000123456789</Pill> � IFSC <Pill>HDFC0001234</Pill> � A/c name Eskoolia
+              Technologies Pvt Ltd � UPI <Pill>eskoolia@hdfcbank</Pill> � Reference{' '}
               <Pill>{invoice.invoice_number}</Pill> in remittance.
             </p>
           </div>
@@ -470,7 +516,7 @@ function TaxInvoiceCard({
         <div className="mt-3 text-[11px] text-[var(--ink-3)]">
           <p className="text-[9.5px] font-bold uppercase tracking-[0.1em]">Notes</p>
           <p className="mt-1 leading-snug">
-            Whether tax payable under reverse charge — No. This is a computer-generated invoice; signature not required if digitally signed.
+            Whether tax payable under reverse charge � No. This is a computer-generated invoice; signature not required if digitally signed.
           </p>
         </div>
       </div>
@@ -483,11 +529,11 @@ function TaxInvoiceCard({
           <div className="mt-3 space-y-2 text-[12px]">
             <Row label="Taxable value" value={fmtINR(Number(tax.subtotal || 0))} />
             {inter ? (
-              <Row label="IGST · 18%" value={fmtINR(Number(tax.igst || 0))} />
+              <Row label="IGST � 18%" value={fmtINR(Number(tax.igst || 0))} />
             ) : (
               <>
-                <Row label="CGST · 9%" value={fmtINR(Number(tax.cgst || 0))} />
-                <Row label="SGST · 9%" value={fmtINR(Number(tax.sgst || 0))} />
+                <Row label="CGST � 9%" value={fmtINR(Number(tax.cgst || 0))} />
+                <Row label="SGST � 9%" value={fmtINR(Number(tax.sgst || 0))} />
               </>
             )}
             <div className="flex items-center justify-between border-t border-[var(--bd)] pt-2">
@@ -501,8 +547,8 @@ function TaxInvoiceCard({
         <div className="rounded-2xl border border-[var(--bd)] bg-[var(--bg-1)] p-4">
           <p className="text-[9.5px] font-bold uppercase tracking-[0.1em] text-[var(--ink-3)]">Tax logic applied</p>
           <div className="mt-3 space-y-1.5 text-[11.5px]">
-            <LogicRow label="Seller state" right={<><Pill>{sellerCode || '—'}</Pill> <span className="ml-1 text-[var(--ink-2)]">{sellerState || invoice.seller_state}</span></>} />
-            <LogicRow label="Buyer state" right={<><Pill>{buyerCode || '—'}</Pill> <span className="ml-1 text-[var(--ink-2)]">{invoice.buyer_state}</span></>} />
+            <LogicRow label="Seller state" right={<><Pill>{sellerCode || '�'}</Pill> <span className="ml-1 text-[var(--ink-2)]">{sellerState || invoice.seller_state}</span></>} />
+            <LogicRow label="Buyer state" right={<><Pill>{buyerCode || '�'}</Pill> <span className="ml-1 text-[var(--ink-2)]">{invoice.buyer_state}</span></>} />
             <LogicRow label="Supply type" right={<span className="font-semibold text-[var(--ink-1)]">{inter ? 'Inter-state' : 'Intra-state'}</span>} />
             <LogicRow label="Applied" right={<span className="font-semibold text-[var(--ink-1)]">{inter ? 'IGST' : 'CGST + SGST'}</span>} />
             <LogicRow label="SAC" right={<><Pill>998313</Pill> <span className="ml-1 text-[var(--ink-2)]">Education software</span></>} />
@@ -513,16 +559,38 @@ function TaxInvoiceCard({
         <div className="rounded-2xl border border-[var(--bd)] bg-[var(--bg-1)] p-4">
           <p className="text-[9.5px] font-bold uppercase tracking-[0.1em] text-[var(--ink-3)]">Invoice actions</p>
           <div className="mt-3 grid grid-cols-1 gap-1.5">
-            <ActionRow icon={<Download className="h-3.5 w-3.5" />} label="Download PDF" onClick={() => toast.info('PDF export coming soon')} />
-            <ActionRow icon={<ExternalLink className="h-3.5 w-3.5" />} label="Send to buyer" onClick={() => toast.info('Send to buyer coming soon')} />
+            <ActionRow icon={<Download className="h-3.5 w-3.5" />} label="Download PDF" onClick={onDownloadPdf} />
+            <ActionRow
+              icon={<ExternalLink className="h-3.5 w-3.5" />}
+              label="Send to buyer"
+              disabled={invoice.status === 'cancelled'}
+              onClick={() => toast.info('Send to buyer coming soon')}
+            />
             <ActionRow
               icon={<CheckCircle2 className="h-3.5 w-3.5" />}
               label={actionBusy ? 'Updating…' : 'Mark as paid'}
               disabled={actionBusy || invoice.status === 'paid' || invoice.status === 'cancelled'}
               onClick={onMarkPaid}
             />
-            <ActionRow icon={<Edit3 className="h-3.5 w-3.5" />} label="Edit invoice" onClick={() => toast.info('Edit invoice coming soon')} />
+            <ActionRow
+              icon={<Edit3 className="h-3.5 w-3.5" />}
+              label="Edit invoice"
+              disabled={invoice.status === 'cancelled'}
+              onClick={onEdit}
+            />
+            <ActionRow
+              icon={<Ban className="h-3.5 w-3.5" />}
+              label={actionBusy ? 'Cancelling…' : 'Cancel invoice'}
+              disabled={actionBusy || invoice.status === 'paid' || invoice.status === 'cancelled'}
+              onClick={onCancel}
+              variant="danger"
+            />
           </div>
+          {invoice.status === 'paid' && (
+            <p className="mt-2 text-[10.5px] leading-snug text-[var(--ink-3)]">
+              Paid invoices cannot be cancelled. Issue a credit note to reverse a paid invoice.
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -552,18 +620,25 @@ function ActionRow({
   label,
   onClick,
   disabled,
+  variant = 'default',
 }: {
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  variant?: 'default' | 'danger';
 }) {
+  const isDanger = variant === 'danger';
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="flex w-full items-center gap-2 rounded-xl border border-[var(--bd)] bg-[var(--bg-1)] px-3 py-2 text-[12px] font-medium text-[var(--ink-1)] transition-colors hover:bg-[var(--bg-3)] disabled:opacity-40"
+      className={`flex w-full items-center gap-2 rounded-xl border px-3 py-2 text-[12px] font-medium transition-colors disabled:opacity-40 ${
+        isDanger
+          ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:hover:bg-rose-50'
+          : 'border-[var(--bd)] bg-[var(--bg-1)] text-[var(--ink-1)] hover:bg-[var(--bg-3)]'
+      }`}
     >
       {icon}
       {label}
@@ -571,7 +646,63 @@ function ActionRow({
   );
 }
 
-// ── Page ──────────────────────────────────────────────────────────────────────
+// -- ConfirmDialog ------------------------------------------------------------
+interface ConfirmOptions {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  variant?: 'danger' | 'default';
+  onConfirm: () => void;
+}
+
+function ConfirmDialog({
+  open,
+  title,
+  message,
+  confirmLabel = 'Confirm',
+  variant = 'default',
+  onConfirm,
+  onCancel,
+}: ConfirmOptions & { open: boolean; onCancel: () => void }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+        onClick={onCancel}
+        aria-hidden
+      />
+      {/* Card */}
+      <div className="relative w-full max-w-sm rounded-2xl border border-[var(--bd)] bg-[var(--bg-1)] p-6 shadow-2xl">
+        <h2 className="text-[15px] font-semibold text-[var(--ink-1)]">{title}</h2>
+        <p className="mt-2 text-[13px] leading-relaxed text-[var(--ink-2)]">{message}</p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-[var(--bd)] bg-[var(--bg-1)] px-4 py-2 text-[13px] font-medium text-[var(--ink-2)] hover:bg-[var(--bg-3)]"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => { onConfirm(); onCancel(); }}
+            className={`rounded-lg px-4 py-2 text-[13px] font-semibold text-white ${
+              variant === 'danger'
+                ? 'bg-rose-600 hover:bg-rose-700'
+                : 'bg-[var(--pu)] hover:bg-[var(--pu-dark)]'
+            }`}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// -- Page ----------------------------------------------------------------------
 export default function SuperAdminBillingPage() {
   const [mrr, setMrr] = useState<MrrData | null>(null);
   const [plans, setPlans] = useState<PlansCatalog | null>(null);
@@ -582,6 +713,13 @@ export default function SuperAdminBillingPage() {
   const [newInvoiceOpen, setNewInvoiceOpen] = useState(false);
   const [newPlanOpen, setNewPlanOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState<SubscriptionPlan | null>(null);
+  const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<(ConfirmOptions & { open: boolean }) | null>(null);
+
+  const openConfirm = (opts: ConfirmOptions) =>
+    setConfirmDialog({ ...opts, open: true });
+  const closeConfirm = () =>
+    setConfirmDialog((d) => (d ? { ...d, open: false } : null));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -620,11 +758,12 @@ export default function SuperAdminBillingPage() {
     }
   };
 
-  const handleMarkPaid = async () => {
-    if (!selected) return;
+  const handleMarkPaid = async (target?: Invoice) => {
+    const inv = target ?? selected;
+    if (!inv) return;
     setActionBusy(true);
     try {
-      const updated = await markInvoicePaid(String(selected.id));
+      const updated = await markInvoicePaid(String(inv.id));
       setSelected(updated);
       toast.success(`Invoice ${updated.invoice_number} marked as paid.`);
       await load();
@@ -633,6 +772,54 @@ export default function SuperAdminBillingPage() {
     } finally {
       setActionBusy(false);
     }
+  };
+
+  const handleDownloadPdf = (target?: Invoice) => {
+    const inv = target ?? selected;
+    if (!inv) return;
+    // Ensure the row clicked is the one rendered into the printable area before print.
+    if (target && selected?.id !== target.id) {
+      setSelected(target);
+      // Defer print until React paints the new invoice in #invoice-printable.
+      setTimeout(() => window.print(), 50);
+      return;
+    }
+    window.print();
+  };
+
+  const handleEdit = () => {
+    if (!selected) return;
+    setEditingInvoice(selected);
+  };
+
+  const handleCancel = async (target?: Invoice) => {
+    const inv = target ?? selected;
+    if (!inv) return;
+    if (inv.status === 'paid') {
+      toast.error('Paid invoices cannot be cancelled. Issue a credit note instead.');
+      return;
+    }
+    if (inv.status === 'cancelled') return;
+    openConfirm({
+      title: `Cancel invoice ${inv.invoice_number}?`,
+      message:
+        'This marks the invoice as cancelled and cannot be undone. The invoice will remain visible for audit. Create a new invoice to re-bill.',
+      confirmLabel: 'Cancel Invoice',
+      variant: 'danger',
+      onConfirm: async () => {
+        setActionBusy(true);
+        try {
+          const updated = await cancelInvoice(String(inv.id));
+          setSelected(updated);
+          toast.success(`Invoice ${updated.invoice_number} cancelled.`);
+          await load();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : 'Cancel invoice failed.');
+        } finally {
+          setActionBusy(false);
+        }
+      },
+    });
   };
 
   const today = useMemo(() => new Date(), []);
@@ -654,10 +841,10 @@ export default function SuperAdminBillingPage() {
               GST-compliant invoicing across all schools.{' '}
               {sellerGstin && (
                 <>
-                  · Seller GSTIN <span className="font-mono text-[var(--ink-1)]">{sellerGstin}</span>{' '}
+                  � Seller GSTIN <span className="font-mono text-[var(--ink-1)]">{sellerGstin}</span>{' '}
                 </>
               )}
-              {sellerState && <>· {sellerState}.</>} Place of supply auto-detected from buyer state code · IGST for inter-state, CGST + SGST for intra-state.
+              {sellerState && <>� {sellerState}.</>} Place of supply auto-detected from buyer state code � IGST for inter-state, CGST + SGST for intra-state.
             </p>
           </div>
           <div className="flex flex-shrink-0 items-center gap-2">
@@ -685,20 +872,20 @@ export default function SuperAdminBillingPage() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
           label="MRR"
-          value={loading || !mrr ? '—' : fmtINR(mrr.current_mrr, { compact: true })}
+          value={loading || !mrr ? '�' : fmtINR(mrr.current_mrr, { compact: true })}
           trend={
             !loading && mrr && mrr.trend_percent
               ? `${mrr.trend_percent > 0 ? '+' : ''}${mrr.trend_percent}%`
               : undefined
           }
           trendTone={(mrr?.trend_percent ?? 0) >= 0 ? 'up' : 'down'}
-          footnote="Recurring · pre-GST"
+          footnote="Recurring � pre-GST"
           spark={mrr?.mrr_series}
           sparkColor="var(--pu)"
         />
         <KpiCard
           label={`GST Collected (${monthLabel})`}
-          value={loading || !mrr ? '—' : fmtINR(mrr.gst_collected, { compact: true })}
+          value={loading || !mrr ? '�' : fmtINR(mrr.gst_collected, { compact: true })}
           trend={
             !loading && mrr && (mrr.gst_trend_percent ?? 0)
               ? `${(mrr.gst_trend_percent ?? 0) > 0 ? '+' : ''}${mrr.gst_trend_percent}%`
@@ -707,7 +894,7 @@ export default function SuperAdminBillingPage() {
           trendTone={(mrr?.gst_trend_percent ?? 0) >= 0 ? 'up' : 'down'}
           footnote={
             mrr
-              ? `IGST ${fmtINR(mrr.gst_igst ?? 0, { compact: true })} · CGST+SGST ${fmtINR(
+              ? `IGST ${fmtINR(mrr.gst_igst ?? 0, { compact: true })} � CGST+SGST ${fmtINR(
                   mrr.gst_cgst_sgst ?? 0,
                   { compact: true },
                 )}`
@@ -718,7 +905,7 @@ export default function SuperAdminBillingPage() {
         />
         <KpiCard
           label="Outstanding"
-          value={loading || !mrr ? '—' : fmtINR(mrr.outstanding_amount, { compact: true })}
+          value={loading || !mrr ? '�' : fmtINR(mrr.outstanding_amount, { compact: true })}
           trend={
             mrr?.outstanding_count
               ? `${mrr.outstanding_count} invoice${mrr.outstanding_count === 1 ? '' : 's'}`
@@ -735,7 +922,7 @@ export default function SuperAdminBillingPage() {
         />
         <KpiCard
           label="Invoices YTD"
-          value={loading || !mrr ? '—' : String(mrr.invoices_ytd ?? 0)}
+          value={loading || !mrr ? '�' : String(mrr.invoices_ytd ?? 0)}
           trend={mrr?.invoices_paid ? `${mrr.invoices_paid} paid` : undefined}
           trendTone="up"
           footnote={fyLabel}
@@ -754,7 +941,7 @@ export default function SuperAdminBillingPage() {
             <div>
               <p className="text-[13px] font-semibold text-[var(--ink-1)]">Subscription plans</p>
               <p className="text-[11px] text-[var(--ink-3)]">
-                India-priced · GST {plans?.gst_percent ?? 18}% under SAC{' '}
+                India-priced � GST {plans?.gst_percent ?? 18}% under SAC{' '}
                 <span className="font-mono">{plans?.sac_code ?? '998313'}</span> ({plans?.sac_description ?? 'Education software'})
               </p>
             </div>
@@ -776,21 +963,28 @@ export default function SuperAdminBillingPage() {
                 setEditingPlan(plan);
                 setNewPlanOpen(true);
               }}
-              onDelete={async (plan) => {
-                if (!window.confirm(`Delete plan "${plan.name}"? This cannot be undone.`)) return;
-                try {
-                  await deletePlan(plan.code);
-                  toast.success(`Plan "${plan.name}" deleted.`);
-                  await load();
-                } catch (err) {
-                  toast.error(err instanceof Error ? err.message : 'Failed to delete plan.');
-                }
+              onDelete={(plan) => {
+                openConfirm({
+                  title: `Delete plan "${plan.name}"?`,
+                  message: 'This cannot be undone. Schools on this plan will lose access to it.',
+                  confirmLabel: 'Delete',
+                  variant: 'danger',
+                  onConfirm: async () => {
+                    try {
+                      await deletePlan(plan.code);
+                      toast.success(`Plan "${plan.name}" deleted.`);
+                      await load();
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : 'Failed to delete plan.');
+                    }
+                  },
+                });
               }}
             />
           ))}
           {(!plans || plans.plans.length === 0) && (
             <div className="col-span-full py-6 text-center text-[12px] text-[var(--ink-3)]">
-              {loading ? 'Loading plans…' : 'No plans configured.'}
+              {loading ? 'Loading plans�' : 'No plans configured.'}
             </div>
           )}
         </div>
@@ -801,7 +995,10 @@ export default function SuperAdminBillingPage() {
         invoice={selected}
         sellerGstin={sellerGstin}
         sellerState={sellerState}
-        onMarkPaid={handleMarkPaid}
+        onMarkPaid={() => handleMarkPaid()}
+        onDownloadPdf={() => handleDownloadPdf()}
+        onEdit={handleEdit}
+        onCancel={() => handleCancel()}
         actionBusy={actionBusy}
       />
 
@@ -815,7 +1012,7 @@ export default function SuperAdminBillingPage() {
             <div>
               <p className="text-[13px] font-semibold text-[var(--ink-1)]">Recent invoices</p>
               <p className="text-[11px] text-[var(--ink-3)]">
-                {invoices ? `${invoices.results.length} of ${invoices.count} invoices` : ''} · {fyLabel}
+                {invoices ? `${invoices.results.length} of ${invoices.count} invoices` : ''} � {fyLabel}
               </p>
             </div>
           </div>
@@ -839,18 +1036,19 @@ export default function SuperAdminBillingPage() {
                 <th className="py-2.5 pr-3 text-left">Issued / Due</th>
                 <th className="py-2.5 pr-3 text-left">Tax</th>
                 <th className="py-2.5 pr-3 text-left">Status</th>
-                <th className="py-2.5 text-right">Total</th>
+                <th className="py-2.5 pr-3 text-right">Total</th>
+                <th className="py-2.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-[12px] text-[var(--ink-3)]">Loading…</td>
+                  <td colSpan={8} className="py-8 text-center text-[12px] text-[var(--ink-3)]">Loading…</td>
                 </tr>
               )}
               {!loading && invoices && invoices.results.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-[12px] text-[var(--ink-3)]">No invoices yet.</td>
+                  <td colSpan={8} className="py-8 text-center text-[12px] text-[var(--ink-3)]">No invoices yet.</td>
                 </tr>
               )}
               {!loading &&
@@ -866,10 +1064,15 @@ export default function SuperAdminBillingPage() {
                     <tr
                       key={inv.id}
                       onClick={() => setSelected(inv)}
-                      className={`cursor-pointer border-b border-[var(--bd)] align-top transition-colors hover:bg-[var(--bg-3)] ${isSel ? 'bg-[var(--pu-tint)]' : ''}`}
+                      title="Click to view in invoice panel above"
+                      className={`cursor-pointer border-b border-[var(--bd)] align-top transition-colors hover:bg-[var(--bg-3)] ${
+                        isSel ? 'bg-[var(--pu-tint)] shadow-[inset_3px_0_0_0_var(--pu)]' : ''
+                      }`}
                     >
                       <td className="py-3 pr-3">
-                        <p className="font-mono text-[12px] font-semibold text-[var(--ink-1)]">{inv.invoice_number}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-mono text-[12px] font-semibold text-[var(--ink-1)]">{inv.invoice_number}</p>
+                        </div>
                         <p className="font-mono text-[10.5px] text-[var(--ink-3)]">SAC 998313</p>
                       </td>
                       <td className="py-3 pr-3">
@@ -878,7 +1081,7 @@ export default function SuperAdminBillingPage() {
                       </td>
                       <td className="py-3 pr-3">
                         <p className="text-[12px] text-[var(--ink-1)]">
-                          {buyerCode && <span className="font-mono text-[var(--ink-3)]">{buyerCode} — </span>}
+                          {buyerCode && <span className="font-mono text-[var(--ink-3)]">{buyerCode} · </span>}
                           {inv.buyer_state}
                         </p>
                         <p className="text-[10.5px] text-[var(--ink-3)]">{inter ? 'Inter-state' : 'Intra-state'}</p>
@@ -893,13 +1096,62 @@ export default function SuperAdminBillingPage() {
                       <td className="py-3 pr-3">
                         <StatusChip status={inv.status} daysOverdue={daysOverdue} />
                       </td>
-                      <td className="py-3 text-right">
+                      <td className="py-3 pr-3 text-right">
                         <p className="sa-kpi-value text-[14px] text-[var(--ink-1)]">
                           {fmtINR(Number(inv.tax_breakdown?.grand_total || 0), { compact: true })}
                         </p>
                         <p className="font-mono text-[10.5px] text-[var(--ink-3)]">
                           {fmtINR(Number(inv.tax_breakdown?.grand_total || 0), { symbol: false })}
                         </p>
+                      </td>
+                      <td className="py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            title="View in Tax Invoice panel"
+                            aria-label="View invoice"
+                            onClick={() => {
+                              setSelected(inv);
+                              setTimeout(() => {
+                                document
+                                  .getElementById('invoice-printable')
+                                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                              }, 50);
+                            }}
+                            className="grid h-7 w-7 place-items-center rounded-md border border-[var(--bd)] bg-[var(--bg-1)] text-[var(--pu)] hover:bg-[var(--pu-tint)]"
+                          >
+                            <Eye className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            title="Download PDF"
+                            aria-label="Download PDF"
+                            onClick={() => handleDownloadPdf(inv)}
+                            className="grid h-7 w-7 place-items-center rounded-md border border-[var(--bd)] bg-[var(--bg-1)] text-[var(--ink-2)] hover:bg-[var(--bg-3)]"
+                          >
+                            <Download className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            title={inv.status === 'paid' ? 'Already paid' : inv.status === 'cancelled' ? 'Cancelled invoice' : 'Mark as paid'}
+                            aria-label="Mark as paid"
+                            disabled={actionBusy || inv.status === 'paid' || inv.status === 'cancelled'}
+                            onClick={() => handleMarkPaid(inv)}
+                            className="grid h-7 w-7 place-items-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-40 disabled:hover:bg-emerald-50"
+                          >
+                            <CheckCircle2 className="h-3 w-3" />
+                          </button>
+                          <button
+                            type="button"
+                            title={inv.status === 'paid' ? 'Paid invoice — issue credit note instead' : inv.status === 'cancelled' ? 'Already cancelled' : 'Cancel invoice'}
+                            aria-label="Cancel invoice"
+                            disabled={actionBusy || inv.status === 'paid' || inv.status === 'cancelled'}
+                            onClick={() => handleCancel(inv)}
+                            className="grid h-7 w-7 place-items-center rounded-md border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 disabled:opacity-40 disabled:hover:bg-rose-50"
+                          >
+                            <Ban className="h-3 w-3" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -910,10 +1162,15 @@ export default function SuperAdminBillingPage() {
       </section>
 
       <NewInvoiceDrawer
-        open={newInvoiceOpen}
-        onClose={() => setNewInvoiceOpen(false)}
+        open={newInvoiceOpen || !!editingInvoice}
+        invoice={editingInvoice}
+        onClose={() => {
+          setNewInvoiceOpen(false);
+          setEditingInvoice(null);
+        }}
         onCreated={(inv) => {
           setSelected(inv);
+          setEditingInvoice(null);
           void load();
         }}
       />
@@ -930,6 +1187,18 @@ export default function SuperAdminBillingPage() {
           void load();
         }}
       />
+
+      {confirmDialog && (
+        <ConfirmDialog
+          open={confirmDialog.open}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmLabel={confirmDialog.confirmLabel}
+          variant={confirmDialog.variant}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={closeConfirm}
+        />
+      )}
     </div>
   );
 }

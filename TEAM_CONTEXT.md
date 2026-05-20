@@ -75,10 +75,60 @@ Branch: `tenancy` ΓÇó Module: Super Admin ΓåÆ Schools / Billing / Tenancy
 **Reference:** [PHASE_1_SUPER_ADMIN_API_IMPLEMENTATION.md](PHASE_1_SUPER_ADMIN_API_IMPLEMENTATION.md), [SPRINT_1_QUICK_REFERENCE.md](SPRINT_1_QUICK_REFERENCE.md), [SPRINT_1_VALIDATION_REPORT.md](SPRINT_1_VALIDATION_REPORT.md), [VERIFICATION_REPORT_SPRINT1.md](VERIFICATION_REPORT_SPRINT1.md)
 
 ### Day 4 ΓÇö 2026-05-18 ΓÇö Last committed work on `tenancy` (commit `ed554a2`)
-Author: `sridevi-sriagithub` ┬╖ Message: `18/05/26` (consolidated WIP commit). Most recent commit on the branch; specifics are folded into the uncommitted work captured in the Day 4 update below.
+Author: `sridevi-sriagithub` ┬╖ Message: `18/05/26` (consolidated WIP commit). Pushed to `origin/tenancy`.
 
-### Day 5 ΓÇö 2026-05-20 (today) ΓÇö Billing, Schools edit/audit, environment fixes
-See the **"Day 4 Update ΓÇö Sridevi"** section below for full details (16 modified + 6 untracked files; new tenancy migrations 0007 + 0008; super-admin billing UI overhaul; environment fixes for migrations and Python 3.10 vs 3.14).
+### Day 5 ΓÇö 2026-05-20 (today) ΓÇö Post-Push Activity on `tenancy` branch
+After the May 18 push, the following happened on the `tenancy` branch (reconstructed from `git reflog` + `git log`):
+
+**16:28 IST ΓÇö commit `2064e63` "20/05/26-added billing" (pushed to `origin/tenancy`)**
+24 files changed, +4,589 / -995 lines. Highlights:
+- Backend (super-admin + tenancy):
+  - [backend/apps/super_admin/views.py](backend/apps/super_admin/views.py) (+356) ΓÇö `BillingInvoiceListCreateView`, `BillingMRRView`, `BillingPlansView`, `BillingGSTR1ExportView`
+  - [backend/apps/super_admin/serializers.py](backend/apps/super_admin/serializers.py) (+98) ΓÇö `InvoiceCreateSerializer`, plan / school extensions
+  - [backend/apps/super_admin/urls.py](backend/apps/super_admin/urls.py) (+10) ΓÇö billing + plan routes
+  - [backend/apps/tenancy/models.py](backend/apps/tenancy/models.py) (+40) ΓÇö `SuperAdminInvoice`, `SubscriptionPlan`, branding fields on tenant
+  - [backend/apps/tenancy/super_admin/views.py](backend/apps/tenancy/super_admin/views.py) (+223) ΓÇö `InvoiceMarkPaidView`, `InvoiceSendReminderView`, audit logging
+  - [backend/apps/tenancy/super_admin/serializers.py](backend/apps/tenancy/super_admin/serializers.py), [urls.py](backend/apps/tenancy/super_admin/urls.py) ΓÇö invoice serializer + mark-paid/reminder routes
+  - [backend/apps/tenancy/migrations/0007_add_branding_fields.py](backend/apps/tenancy/migrations/0007_add_branding_fields.py) ΓÇö NEW
+  - [backend/apps/tenancy/migrations/0008_add_subscription_plan.py](backend/apps/tenancy/migrations/0008_add_subscription_plan.py) ΓÇö NEW
+  - [backend/apps/access_control/permission_classes.py](backend/apps/access_control/permission_classes.py) ΓÇö super-admin permission tweaks
+  - [backend/fix_test_superuser.py](backend/fix_test_superuser.py) ΓÇö local test user repair script
+- Frontend (super-admin console):
+  - [frontend/app/(dashboard)/super-admin/billing/page.tsx](frontend/app/(dashboard)/super-admin/billing/page.tsx) ΓÇö billing dashboard overhaul (1,600 lines refactored)
+  - [frontend/app/(dashboard)/super-admin/billing/NewInvoiceDrawer.tsx](frontend/app/(dashboard)/super-admin/billing/NewInvoiceDrawer.tsx) ΓÇö NEW (856 lines)
+  - [frontend/app/(dashboard)/super-admin/billing/NewPlanDrawer.tsx](frontend/app/(dashboard)/super-admin/billing/NewPlanDrawer.tsx) ΓÇö NEW (425 lines)
+  - [frontend/app/(dashboard)/super-admin/schools/page.tsx](frontend/app/(dashboard)/super-admin/schools/page.tsx) (+721) ΓÇö schools list rewrite
+  - `frontend/app/(dashboard)/super-admin/schools/[tenantId]/edit/page.tsx` ΓÇö NEW (372 lines)
+  - `frontend/app/(dashboard)/super-admin/schools/[tenantId]/audit/page.tsx` ΓÇö NEW (331 lines)
+  - [frontend/app/(dashboard)/super-admin/dashboard/page.tsx](frontend/app/(dashboard)/super-admin/dashboard/page.tsx), [layout.tsx](frontend/app/(dashboard)/super-admin/layout.tsx), [(super-admin)/layout.tsx](frontend/app/(super-admin)/layout.tsx) ΓÇö nav/layout sync
+  - [frontend/lib/api/super-admin/billing.ts](frontend/lib/api/super-admin/billing.ts) (+75), [schools.ts](frontend/lib/api/super-admin/schools.ts) (+14), [types/super-admin/index.ts](frontend/types/super-admin/index.ts) (+53)
+- Docs: `TEAM_CONTEXT.md` (+155)
+
+**17:13 IST ΓÇö `git reset --hard HEAD`** on `tenancy` (no-op; sanity reset).
+
+**17:14 IST ΓÇö `git pull origin demo` ΓÇö fast-forward to `056329c`**
+Brought in 9 demo commits (some authored 2026-05-12 to 2026-05-20 by `shivasurya-1` and `sriaMain`), 78 files changed, +4,426 / -656 lines:
+- `6dd59cc` ΓÇö Merge **tenancy** branch into main (multi-tenancy, super-admin, billing)
+- `24c2c3d` ΓÇö Merge **roles** branch into main (roles team work)
+- `056329c` ΓÇö Combine tenancy + roles `TEAM_CONTEXT` into single `TEAM_CONTEXT.md` (this caused the em-dash mojibake `ΓÇö` you see throughout this file)
+- New migrations pulled in:
+  - `access_control/0012_role_unique_nulls_distinct.py`, `0013_role_name_30_and_is_active.py`
+  - `tenancy/0002_client_domain.py`, `0002_remove_domain_tenant_delete_client_delete_domain.py`, `0003_add_must_change_password.py`
+  - `users/0004_user_email_unique.py`, `0005_user_users_email_nonempty_uniq.py`
+- New backend infrastructure: [backend/config/exception_handler.py](backend/config/exception_handler.py), [backend/config/pagination.py](backend/config/pagination.py), `urls_public.py`, `urls_tenant.py`, [backend/tests/test_auth.py](backend/tests/test_auth.py)
+- New frontend modules from `roles` team: full **login-permission** suite ΓÇö [frontend/app/(dashboard)/roles/login-permission/page.tsx](<frontend/app/(dashboard)/roles/login-permission/page.tsx>) (+359), `frontend/components/login-permission/*` (BulkActionBar, ConfirmModal, CredentialDrawer, FilterBar, Hero, Pagination, SetInitialPasswordModal, StatsRow, Toast, UsersTable), `frontend/lib/login-permission/{api,types,utils,mock-data}.ts`
+- Change-password flow: [frontend/app/change-password/page.tsx](frontend/app/change-password/page.tsx), `frontend/app/api/auth/change-password/route.ts`, `frontend/app/api/login-permission/*/route.ts` (7 routes)
+- Other: [frontend/hooks/usePermissions.ts](frontend/hooks/usePermissions.ts), [frontend/components/layout/AuthGate.tsx](frontend/components/layout/AuthGate.tsx), [frontend/components/nav/ModulePill.tsx](frontend/components/nav/ModulePill.tsx), [frontend/components/nav/ModuleSubNav.tsx](frontend/components/nav/ModuleSubNav.tsx), updates to `TopBar`, `sidebar-menu.data.ts`, `lib/routes.ts`
+- New top-level doc: [PROJECT_STATE.md](PROJECT_STATE.md) ΓÇö added by the demo merge
+- Removed: `TESTING_GUIDE_COMPLETE.md`, `UAT_CLOSURE_MATRIX_2026-03-30.md`, `promote_pdf_text.txt`
+
+**18:03 IST ΓÇö `git checkout -b tenancy-new`** from `056329c`. Active branch is now `tenancy-new` (continues post-merge work without touching `tenancy`).
+
+**Heads-up after the demo pull:**
+- `TEAM_CONTEXT.md` text was re-encoded ΓÇö all em-dashes appear as `ΓÇö` and the middle dot as `┬╖`. Worth a one-shot Find & Replace pass before committing again.
+- The demo merge brought in **two parallel `tenancy/0002_*` migrations** (`0002_client_domain` and `0002_remove_domain_tenant_delete_client_delete_domain`). Confirm `makemigrations --check` is clean before applying.
+- Three new `users` migrations (`0003`, `0004`, `0005`) and two new `access_control` migrations (`0012`, `0013`) need to be applied on dev + staging.
+- `urls_public.py` / `urls_tenant.py` were added as empty files ΓÇö django-tenants split is started but not yet populated.
 
 ---
 

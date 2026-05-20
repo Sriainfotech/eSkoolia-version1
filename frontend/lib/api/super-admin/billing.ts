@@ -98,6 +98,36 @@ export async function markInvoicePaid(invoiceId: string): Promise<Invoice> {
 }
 
 /**
+ * Update editable fields of an invoice (status, due_date, notes, terms_conditions).
+ */
+export interface UpdateInvoicePayload {
+  status?: Invoice['status'];
+  due_date?: string;
+  notes?: string;
+  terms_conditions?: string;
+}
+
+export async function updateInvoice(
+  invoiceId: string,
+  payload: UpdateInvoicePayload
+): Promise<Invoice> {
+  return apiRequestWithRefresh<Invoice>(
+    `/api/super-admin/billing/invoices/${invoiceId}/`,
+    { method: 'PATCH', body: JSON.stringify(payload) }
+  );
+}
+
+/**
+ * Cancel (soft-delete) an invoice.
+ */
+export async function cancelInvoice(invoiceId: string): Promise<Invoice> {
+  return apiRequestWithRefresh<Invoice>(
+    `/api/super-admin/billing/invoices/${invoiceId}/`,
+    { method: 'DELETE' }
+  );
+}
+
+/**
  * Send (record) a payment reminder for an invoice.
  */
 export async function sendInvoiceReminder(

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'react-toastify';
 import { Plus, Trash2, X, FileText, Loader2, AlertTriangle } from 'lucide-react';
-import { createInvoice, getInvoices, getPlans } from '@/lib/api/super-admin/billing';
+import { createInvoice, getInvoices, getPlans, updateInvoice } from '@/lib/api/super-admin/billing';
 import { getSchools } from '@/lib/api/super-admin/schools';
 import type {
   Invoice,
@@ -131,6 +131,12 @@ export interface NewInvoiceDrawerProps {
   open: boolean;
   onClose: () => void;
   onCreated: (invoice: Invoice) => void;
+  /**
+   * When provided, the drawer opens in **edit mode**: fields are pre-filled
+   * from this invoice, line items / amounts are locked (re-issue for amount
+   * corrections), and submit calls `updateInvoice` instead of `createInvoice`.
+   */
+  invoice?: Invoice | null;
 }
 
 type LineDraft = {
@@ -147,7 +153,8 @@ const blankLine = (sac = '998313'): LineDraft => ({
   unit_price: 0,
 });
 
-export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoiceDrawerProps) {
+export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: NewInvoiceDrawerProps) {
+  const isEditMode = !!invoice;
   const today = useMemo(() => new Date(), []);
   const [schools, setSchools] = useState<SchoolTenant[]>([]);
   const [plans, setPlans] = useState<PlansCatalog | null>(null);
@@ -159,7 +166,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
   const [dueDate, setDueDate] = useState(toISO(addDays(today, 15)));
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [reverseCharge, setReverseCharge] = useState(false);
-  const [statusValue, setStatusValue] = useState<'draft' | 'sent'>('draft');
+  const [statusValue, setStatusValue] = useState<'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled'>('draft');
   const [notes, setNotes] = useState('');
   const [terms, setTerms] = useState('Payment due within 15 days. Late payments attract interest @ 1.5% per month.');
   const [lines, setLines] = useState<LineDraft[]>([blankLine()]);
@@ -171,22 +178,43 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
   } | null>(null);
   const [forceCreate, setForceCreate] = useState(false);
 
-  // Reset state every time drawer opens
+  // Reset / pre-fill state every time drawer opens.
   useEffect(() => {
     if (!open) return;
-    setTenantId('');
-    setPlanCode('');
-    setInvoiceDate(toISO(today));
-    setDueDate(toISO(addDays(today, 15)));
-    setInvoiceNumber(generateInvoiceNumber());
-    setReverseCharge(false);
-    setStatusValue('draft');
-    setNotes('');
-    setTerms('Payment due within 15 days. Late payments attract interest @ 1.5% per month.');
-    setLines([blankLine()]);
+    if (invoice) {
+      // Edit mode — hydrate from existing invoice
+      setTenantId(invoice.tenant_id || '');
+      setPlanCode('');
+      setInvoiceDate(invoice.invoice_date || toISO(today));
+      setDueDate(invoice.due_date || toISO(addDays(today, 15)));
+      setInvoiceNumber(invoice.invoice_number || '');
+      setReverseCharge(false);
+      setStatusValue(invoice.status as typeof statusValue);
+      setNotes(invoice.notes || '');
+      setTerms(invoice.terms_conditions || '');
+      setLines(
+        (invoice.line_items || []).map((li) => ({
+          description: String(li.description ?? ''),
+          sac_code: String(li.sac_code ?? '998313'),
+          quantity: Number(li.quantity ?? 1),
+          unit_price: Number(li.unit_price ?? 0),
+        })),
+      );
+    } else {
+      setTenantId('');
+      setPlanCode('');
+      setInvoiceDate(toISO(today));
+      setDueDate(toISO(addDays(today, 15)));
+      setInvoiceNumber(generateInvoiceNumber());
+      setReverseCharge(false);
+      setStatusValue('draft');
+      setNotes('');
+      setTerms('Payment due within 15 days. Late payments attract interest @ 1.5% per month.');
+      setLines([blankLine()]);
+    }
     setDuplicateWarning(null);
     setForceCreate(false);
-  }, [open, today]);
+  }, [open, invoice, today]);
 
   // Load schools + plans EVERY time the drawer opens so newly created plans appear.
   useEffect(() => {
@@ -206,9 +234,13 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
       .finally(() => setLoadingCatalogs(false));
   }, [open]);
 
-  // Duplicate detection: check if a non-cancelled invoice already exists for
-  // this school + billing month whenever school or invoice date changes.
+  // Duplicate detection: skip entirely in edit mode (we're editing an existing
+  // invoice, not creating a new one).
   useEffect(() => {
+    if (!open || isEditMode) {
+      setDuplicateWarning(null);
+      return;
+    }
     if (!tenantId || !invoiceDate) {
       setDuplicateWarning(null);
       return;
@@ -248,7 +280,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
       controller.abort();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantId, invoiceDate]);
+  }, [tenantId, invoiceDate, isEditMode, open]);
 
   // Esc to close
   useEffect(() => {
@@ -269,16 +301,19 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
 
   // Auto-pick the school's existing subscription plan when a school is selected.
   // Skips 'trial' / 'custom' (no matching catalog entry). User may still override.
+  // Disabled in edit mode (line items already populated from the invoice).
   useEffect(() => {
+    if (isEditMode) return;
     if (!selectedSchool || !plans) return;
     const schoolPlan = (selectedSchool.plan || '').toLowerCase();
     if (!schoolPlan || schoolPlan === 'trial' || schoolPlan === 'custom') return;
     const match = plans.plans.find((p) => p.code.toLowerCase() === schoolPlan);
     if (match) setPlanCode(match.code);
-  }, [selectedSchool, plans]);
+  }, [selectedSchool, plans, isEditMode]);
 
-  // Auto-populate first line when plan picked
+  // Auto-populate first line when plan picked (create mode only)
   useEffect(() => {
+    if (isEditMode) return;
     if (!selectedPlan) return;
     setLines((prev) => {
       const next = [...prev];
@@ -290,7 +325,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
       };
       return next;
     });
-  }, [selectedPlan, plans?.sac_code]);
+  }, [selectedPlan, plans?.sac_code, isEditMode]);
 
   // Tax math
   const subtotal = useMemo(
@@ -298,7 +333,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
     [lines],
   );
   const gstPercent = plans?.gst_percent ?? 18;
-  const buyerState = selectedSchool?.state || '';
+  const buyerState = selectedSchool?.state || invoice?.buyer_state || '';
   const sellerState = SELLER_DEFAULTS.state;
   const isInterState = !!buyerState && buyerState.trim().toLowerCase() !== sellerState.trim().toLowerCase();
   const igst = isInterState ? +(subtotal * (gstPercent / 100)).toFixed(2) : 0;
@@ -318,20 +353,37 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
     setLines((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== idx)));
 
   // Validation
-  const canSubmit =
-    !!selectedSchool &&
-    !!invoiceDate &&
-    !!dueDate &&
-    lines.length > 0 &&
-    lines.every((l) => l.description.trim() && (Number(l.quantity) || 0) > 0 && (Number(l.unit_price) || 0) >= 0) &&
-    subtotal > 0 &&
-    !submitting &&
-    (!duplicateWarning || forceCreate);
+  const canSubmit = isEditMode
+    ? !!invoice && !!dueDate && !submitting
+    : !!selectedSchool &&
+      !!invoiceDate &&
+      !!dueDate &&
+      lines.length > 0 &&
+      lines.every((l) => l.description.trim() && (Number(l.quantity) || 0) > 0 && (Number(l.unit_price) || 0) >= 0) &&
+      subtotal > 0 &&
+      !submitting &&
+      (!duplicateWarning || forceCreate);
 
   const handleSubmit = useCallback(async () => {
-    if (!canSubmit || !selectedSchool) return;
+    if (!canSubmit) return;
     setSubmitting(true);
     try {
+      if (isEditMode && invoice) {
+        // Edit mode — only safely-editable fields are sent (status, due_date,
+        // notes, terms_conditions). Line items / amounts are not allowed to
+        // change once an invoice is issued (GST-compliant practice).
+        const updated = await updateInvoice(String(invoice.id), {
+          status: statusValue,
+          due_date: dueDate,
+          notes: notes.trim(),
+          terms_conditions: terms.trim(),
+        });
+        toast.success(`Invoice ${updated.invoice_number} updated.`);
+        onCreated(updated);
+        onClose();
+        return;
+      }
+      if (!selectedSchool) return;
       const lineItems: InvoiceLineItem[] = lines.map((l) => {
         const amount = +((Number(l.quantity) || 0) * (Number(l.unit_price) || 0)).toFixed(2);
         const gstAmount = +(amount * (gstPercent / 100)).toFixed(2);
@@ -391,7 +443,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, selectedSchool, lines, gstPercent, invoiceNumber, invoiceDate, dueDate, statusValue, subtotal, igst, cgst, sgst, totalTax, grandTotal, notes, terms, plans?.sac_code, onClose, onCreated]);
+  }, [canSubmit, isEditMode, invoice, selectedSchool, lines, gstPercent, invoiceNumber, invoiceDate, dueDate, statusValue, subtotal, igst, cgst, sgst, totalTax, grandTotal, notes, terms, plans?.sac_code, onClose, onCreated]);
 
   if (!open) return null;
 
@@ -409,7 +461,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
       <aside
         className="relative flex h-full w-full max-w-[1080px] flex-col bg-[var(--bg-1)] shadow-2xl"
         role="dialog"
-        aria-label="Create new invoice"
+        aria-label={isEditMode ? 'Edit invoice' : 'Create new invoice'}
       >
         {/* Header */}
         <header className="flex items-start justify-between border-b border-[var(--bd)] px-6 py-4">
@@ -419,10 +471,18 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
             </span>
             <div>
               <h2 className="text-[18px] font-bold text-[var(--ink-1)]">
-                New <span className="font-serif italic text-[var(--pu)]">Invoice</span>
+                {isEditMode ? (
+                  <>Edit <span className="font-serif italic text-[var(--pu)]">Invoice</span></>
+                ) : (
+                  <>New <span className="font-serif italic text-[var(--pu)]">Invoice</span></>
+                )}
               </h2>
               <p className="mt-0.5 text-[12px] text-[var(--ink-2)]">
-                GST-compliant tax invoice · SAC {plans?.sac_code || '998313'} · GST {gstPercent}%
+                {isEditMode && invoice ? (
+                  <>Invoice <span className="font-mono">{invoice.invoice_number}</span> · SAC {plans?.sac_code || '998313'} · GST {gstPercent}%</>
+                ) : (
+                  <>GST-compliant tax invoice · SAC {plans?.sac_code || '998313'} · GST {gstPercent}%</>
+                )}
               </p>
             </div>
           </div>
@@ -446,6 +506,24 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
               </div>
             )}
 
+            {isEditMode && (
+              <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-950/40">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                  <div className="flex-1 text-[12.5px] text-amber-800 dark:text-amber-300">
+                    <p className="font-semibold">Editing an issued invoice</p>
+                    <p className="mt-1 text-[12px]">
+                      School, line items, amounts and GST cannot be modified once
+                      issued. To correct those, cancel this invoice and create a
+                      new one. You can still update <strong>status</strong>,{' '}
+                      <strong>due date</strong>, <strong>notes</strong> and{' '}
+                      <strong>payment terms</strong> here.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* 1. Billed to */}
             <section className="mb-6">
               <SectionHead num="1" title="Billed to" />
@@ -456,8 +534,9 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
                     className={selectCls}
                     value={tenantId}
                     onChange={(e) => setTenantId(e.target.value)}
+                    disabled={isEditMode}
                   >
-                    <option value="">Select a school…</option>
+                    <option value="">{isEditMode ? (invoice?.school_name || invoice?.buyer_name || 'School') : 'Select a school…'}</option>
                     {schools.map((s) => (
                       <option key={s.tenant_id} value={s.tenant_id}>
                         {s.name} {s.state ? `· ${s.state}` : ''}
@@ -478,6 +557,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
                     className={selectCls}
                     value={planCode}
                     onChange={(e) => setPlanCode(e.target.value)}
+                    disabled={isEditMode}
                   >
                     <option value="">— No plan —</option>
                     {plans?.plans.map((p) => {
@@ -497,7 +577,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
                   <input
                     title="GSTIN"
                     className={monoInputCls}
-                    value={selectedSchool?.gstin || ''}
+                    value={selectedSchool?.gstin || invoice?.buyer_gstin || ''}
                     readOnly
                     placeholder="Auto from school"
                   />
@@ -506,7 +586,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
                   <input
                     title="State"
                     className={inputCls}
-                    value={selectedSchool?.state || ''}
+                    value={selectedSchool?.state || invoice?.buyer_state || ''}
                     readOnly
                     placeholder="Auto from school"
                   />
@@ -575,9 +655,10 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
                   <input
                     title="Invoice date"
                     type="date"
-                    className={inputCls}
+                    className={`${inputCls} ${isEditMode ? 'cursor-not-allowed bg-[var(--bg-3)] text-[var(--ink-2)]' : ''}`}
                     value={invoiceDate}
                     onChange={(e) => setInvoiceDate(e.target.value)}
+                    readOnly={isEditMode}
                   />
                 </Field>
                 <Field label="Due date" required>
@@ -594,10 +675,13 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
                     title="Status"
                     className={selectCls}
                     value={statusValue}
-                    onChange={(e) => setStatusValue(e.target.value as 'draft' | 'sent')}
+                    onChange={(e) => setStatusValue(e.target.value as typeof statusValue)}
                   >
                     <option value="draft">Draft</option>
                     <option value="sent">Sent</option>
+                    {isEditMode && <option value="paid">Paid</option>}
+                    {isEditMode && <option value="overdue">Overdue</option>}
+                    {isEditMode && <option value="cancelled">Cancelled</option>}
                   </select>
                 </Field>
                 <Field label="Reverse charge">
@@ -621,13 +705,15 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
             <section className="mb-6">
               <div className="mb-3 flex items-center justify-between">
                 <SectionHead num="3" title="Line items" />
-                <button
-                  type="button"
-                  onClick={addLine}
-                  className="-mt-2 inline-flex items-center gap-1.5 rounded-lg border border-[var(--bd)] bg-[var(--bg-1)] px-2.5 py-1.5 text-[12px] font-semibold text-[var(--ink-1)] hover:bg-[var(--bg-3)]"
-                >
-                  <Plus className="h-3.5 w-3.5" /> Add line
-                </button>
+                {!isEditMode && (
+                  <button
+                    type="button"
+                    onClick={addLine}
+                    className="-mt-2 inline-flex items-center gap-1.5 rounded-lg border border-[var(--bd)] bg-[var(--bg-1)] px-2.5 py-1.5 text-[12px] font-semibold text-[var(--ink-1)] hover:bg-[var(--bg-3)]"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Add line
+                  </button>
+                )}
               </div>
 
               <div className="overflow-hidden rounded-xl border border-[var(--bd)]">
@@ -649,18 +735,20 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
                         <tr key={idx} className="border-t border-[var(--bd)]">
                           <td className="px-3 py-2">
                             <input
-                              className={`${inputCls} h-9`}
+                              className={`${inputCls} h-9 ${isEditMode ? 'cursor-not-allowed bg-[var(--bg-3)]' : ''}`}
                               value={line.description}
                               onChange={(e) => updateLine(idx, { description: e.target.value })}
                               placeholder="e.g. Eskoolia ERP — Premium plan"
+                              readOnly={isEditMode}
                             />
                           </td>
                           <td className="px-3 py-2">
                             <input
                               title="SAC code"
-                              className={`${monoInputCls} h-9`}
+                              className={`${monoInputCls} h-9 ${isEditMode ? 'cursor-not-allowed bg-[var(--bg-3)]' : ''}`}
                               value={line.sac_code}
                               onChange={(e) => updateLine(idx, { sac_code: e.target.value })}
+                              readOnly={isEditMode}
                             />
                           </td>
                           <td className="px-3 py-2">
@@ -668,9 +756,10 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
                               title="Quantity"
                               type="number"
                               min={0}
-                              className={`${inputCls} h-9 text-right`}
+                              className={`${inputCls} h-9 text-right ${isEditMode ? 'cursor-not-allowed bg-[var(--bg-3)]' : ''}`}
                               value={line.quantity}
                               onChange={(e) => updateLine(idx, { quantity: Number(e.target.value) })}
+                              readOnly={isEditMode}
                             />
                           </td>
                           <td className="px-3 py-2">
@@ -679,9 +768,10 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
                               type="number"
                               min={0}
                               step={0.01}
-                              className={`${inputCls} h-9 text-right`}
+                              className={`${inputCls} h-9 text-right ${isEditMode ? 'cursor-not-allowed bg-[var(--bg-3)]' : ''}`}
                               value={line.unit_price}
                               onChange={(e) => updateLine(idx, { unit_price: Number(e.target.value) })}
+                              readOnly={isEditMode}
                             />
                           </td>
                           <td className="px-3 py-2 text-right font-mono text-[12.5px] text-[var(--ink-1)]">
@@ -691,7 +781,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
                             <button
                               type="button"
                               onClick={() => removeLine(idx)}
-                              disabled={lines.length === 1}
+                              disabled={lines.length === 1 || isEditMode}
                               className="grid h-7 w-7 place-items-center rounded-md text-[var(--ink-3)] hover:bg-[var(--danger-soft)] hover:text-[var(--danger)] disabled:cursor-not-allowed disabled:opacity-30"
                               aria-label="Remove line"
                             >
@@ -803,23 +893,37 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated }: NewInvoic
             >
               Cancel
             </button>
-            <button
-              type="button"
-              onClick={() => { setStatusValue('draft'); void handleSubmit(); }}
-              disabled={!canSubmit}
-              className="rounded-xl border border-[var(--bd)] bg-[var(--bg-1)] px-4 py-2 text-[12.5px] font-semibold text-[var(--ink-1)] hover:bg-[var(--bg-3)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {submitting && statusValue === 'draft' ? 'Saving…' : 'Save as draft'}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setStatusValue('sent'); void handleSubmit(); }}
-              disabled={!canSubmit}
-              className="inline-flex items-center gap-2 rounded-xl bg-[var(--pu)] px-4 py-2 text-[12.5px] font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {submitting && statusValue === 'sent' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Save &amp; send
-            </button>
+            {isEditMode ? (
+              <button
+                type="button"
+                onClick={() => void handleSubmit()}
+                disabled={!canSubmit}
+                className="inline-flex items-center gap-2 rounded-xl bg-[var(--pu)] px-4 py-2 text-[12.5px] font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Save changes
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => { setStatusValue('draft'); void handleSubmit(); }}
+                  disabled={!canSubmit}
+                  className="rounded-xl border border-[var(--bd)] bg-[var(--bg-1)] px-4 py-2 text-[12.5px] font-semibold text-[var(--ink-1)] hover:bg-[var(--bg-3)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {submitting && statusValue === 'draft' ? 'Saving…' : 'Save as draft'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setStatusValue('sent'); void handleSubmit(); }}
+                  disabled={!canSubmit}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[var(--pu)] px-4 py-2 text-[12.5px] font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {submitting && statusValue === 'sent' && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Save &amp; send
+                </button>
+              </>
+            )}
           </div>
         </footer>
       </aside>

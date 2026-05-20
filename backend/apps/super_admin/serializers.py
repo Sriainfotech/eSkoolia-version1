@@ -263,6 +263,22 @@ class InvoiceCreateSerializer(serializers.Serializer):
     terms_conditions = serializers.CharField(required=False, allow_blank=True)
 
 
+class InvoiceUpdateSerializer(serializers.Serializer):
+    """Partial update for an existing invoice.
+
+    Intentionally restricted to fields that do not change GST-relevant amounts.
+    To correct amounts/line items, cancel the invoice and re-issue (standard
+    GST-compliant practice).
+    """
+
+    status = serializers.ChoiceField(
+        choices=["draft", "sent", "paid", "overdue", "cancelled"], required=False
+    )
+    due_date = serializers.DateField(required=False)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    terms_conditions = serializers.CharField(required=False, allow_blank=True)
+
+
 class SubscriptionPlanSerializer(serializers.ModelSerializer):
     price_inr = serializers.FloatField()
 
