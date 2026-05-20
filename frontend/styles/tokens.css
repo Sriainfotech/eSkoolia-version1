@@ -2,18 +2,18 @@
 :root {
   /* Brand */
   --pu: #6D4AFF;
-  --pu-soft: #EEEAFF;
+  --pu-soft: #F3F0FF;
   --pu-deep: #4F35CC;
 
   /* Ink (text) */
-  --ink-1: #15172A;
+  --ink-1: #181B2A;
   --ink-2: #5B5E72;
-  --ink-3: #9A9DB0;
+  --ink-3: #A0A3B8;
 
   /* Surfaces */
   --bg-0: #FAFAFB;
   --bg-1: #FFFFFF;
-  --bg-2: #F5F5FB;
+  --bg-2: #F3F4FB;
   --bd:   #E8E8EE;
 
   /* Status */
@@ -23,9 +23,11 @@
 
   /* Shadows */
   --sh-1: 0 1px 2px rgba(15,18,34,0.04);
-  --sh-2: 0 4px 12px -4px rgba(15,18,34,0.08);
+  --sh-2: 0 4px 16px -4px rgba(15,18,34,0.10);
   --sh-3: 0 14px 32px -10px rgba(14,16,32,0.18);
   --sh-bot: 0 18px 50px -18px rgba(15,18,34,0.28);
+  --font-fraunces: 'Fraunces', Georgia, serif;
+  --font-inter: 'Inter', Arial, sans-serif;
 }
 
 [data-theme="dark"] {

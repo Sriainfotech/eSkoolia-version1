@@ -1,4 +1,15 @@
 import os
+import sys
+from pathlib import Path
+
+# Normalise sys.path so the backend root is represented by exactly one
+# resolved absolute entry.  When daphne (or any -m invocation) adds '' or
+# '.' to sys.path, Django's AppConfig._path_from_module sees two filesystem
+# locations for the same package and raises ImproperlyConfigured.
+_backend_dir = str(Path(__file__).resolve().parent.parent)
+sys.path = [p for p in sys.path if p and str(Path(p).resolve()) != _backend_dir]
+sys.path.insert(0, _backend_dir)
+
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
 from django.core.asgi import get_asgi_application

@@ -759,6 +759,8 @@ class UploadedContentSerializer(LegacyAliasMixin):
 
 
 class LessonTopicDetailSerializer(LegacyAliasMixin):
+    lesson_name = serializers.CharField(source="lesson.lesson_title", read_only=True)
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
         topic_title = attrs.get("topic_title")

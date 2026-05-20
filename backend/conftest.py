@@ -1,9 +1,13 @@
 """
-Eskoolia ERP — Shared Test Fixtures
-====================================
+Eskoolia ERP - Shared Test Fixtures
+===================================
 All fixtures here are available to every test file automatically.
-Uses pytest-django with SQLite (in-memory) for speed.
+Uses pytest-django against the dedicated test settings module.
 """
+
+import os
+import sys
+from uuid import uuid4
 
 import pytest
 from django.contrib.auth import get_user_model
@@ -11,6 +15,26 @@ from rest_framework.test import APIClient
 from decimal import Decimal
 
 User = get_user_model()
+
+
+def pytest_configure(config):
+    settings_module = os.getenv("DJANGO_SETTINGS_MODULE")
+    if settings_module != "config.settings.test":
+        raise pytest.UsageError(
+            "pytest must use config.settings.test; update backend/pytest.ini instead of local settings."
+        )
+
+    if sys.version_info[:2] != (3, 10):
+        raise pytest.UsageError(
+            "Backend tests must run on Python 3.10 for deterministic bootstrap in this repo. "
+            "Use `py -3.10 -m pytest ...` from backend/."
+        )
+
+    if config.getoption("--reuse-db", default=False) and os.getenv("PYTEST_ALLOW_REUSE_DB") != "1":
+        raise pytest.UsageError(
+            "--reuse-db is disabled by default because it can reuse stale PostgreSQL state. "
+            "Use --create-db for a fresh run, or set PYTEST_ALLOW_REUSE_DB=1 explicitly after verifying the target DB."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +158,44 @@ def admin_client(admin_user):
     client = APIClient()
     client.force_authenticate(user=admin_user)
     return client
+
+
+@pytest.fixture
+def public_schema_tenant(db):
+    """Reusable public-schema tenant factory for super-admin and tenancy tests."""
+    from apps.tenancy.models import SchoolTenant
+
+    suffix = uuid4().hex[:8].upper()
+    return SchoolTenant.objects.using("default").create(
+        tenant_id=f"TNT_TEST_{suffix}",
+        name=f"Test Tenant {suffix}",
+        short_code=f"TT{suffix[:6]}",
+        subdomain_url=f"tenant-{suffix.lower()}",
+        schema_name=f"school_test_{suffix.lower()}",
+        shard_region="test",
+        storage_region="test",
+        backup_retention=30,
+        sso_method="native",
+        api_access=True,
+        plan="trial",
+        status="onboarding",
+        board="OTHER",
+        state="TestState",
+        region="north",
+        seats=100,
+        student_count=0,
+        staff_count=0,
+    )
+
+
+@pytest.fixture
+def public_schema_tenant_payload(public_schema_tenant):
+    """Compact payload for tests that need tenant identifiers only."""
+    return {
+        "tenant_id": public_schema_tenant.tenant_id,
+        "schema_name": public_schema_tenant.schema_name,
+        "subdomain_url": public_schema_tenant.subdomain_url,
+    }
 
 
 @pytest.fixture
