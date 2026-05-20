@@ -102,8 +102,8 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
   async function loadStreams() {
     setStreamsLoading(true);
     try {
-      const data = await apiRequestWithRefresh("/api/v1/core/streams/");
-      const list: Stream[] = Array.isArray(data) ? data : (data?.results ?? []);
+      const data = await apiRequestWithRefresh("/api/v1/core/streams/") as unknown;
+      const list: Stream[] = Array.isArray(data) ? data : ((data as { results?: Stream[] })?.results ?? []);
       setStreamsList(list);
     } catch {
       // silent — UI still functional with empty list

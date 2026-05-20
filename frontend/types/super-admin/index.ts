@@ -241,6 +241,7 @@ export interface SubscriptionPlan {
   popular: boolean;
   description: string;
   features: string[];
+  sort_order?: number;
 }
 
 export interface PlansCatalog {

@@ -24,6 +24,7 @@ export interface Stream {
   id: number;
   name: string;
   is_active: boolean;
+  capacity?: number;
   created_at?: string;
 }
 
