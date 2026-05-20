@@ -15,6 +15,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "change-me")
 DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
 ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")]
+# Allow any VS Code / GitHub dev-tunnel host so port-forwarded testing works.
+ALLOWED_HOSTS += [".devtunnels.ms", ".githubpreview.dev"]
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -227,6 +229,16 @@ SPECTACULAR_SETTINGS = {
 }
 
 CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_CREDENTIALS = True
+# Trust dev-tunnel origins for CSRF (POST/PUT/DELETE from the tunneled frontend).
+CSRF_TRUSTED_ORIGINS = [
+    "https://*.devtunnels.ms",
+    "https://*.inc1.devtunnels.ms",
+    "https://*.usw3.devtunnels.ms",
+    "https://*.githubpreview.dev",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 
 # JWT Configuration for longer token lifespan
 SIMPLE_JWT = {

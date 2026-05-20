@@ -11,6 +11,7 @@ class AcademicYear(models.Model):
     start_date = models.DateField()
     end_date = models.DateField()
     is_current = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -30,10 +31,57 @@ class AcademicYear(models.Model):
         return self.name
 
 
+class Stream(models.Model):
+    """Academic stream (e.g. Science, Commerce) applicable to Senior Secondary classes."""
+
+    DEFAULT_NAMES = ["Science", "Commerce", "Humanities / Arts", "Vocational"]
+    NAME_REGEX = re.compile(r"^[A-Za-z][A-Za-z0-9 /&.\-]{0,49}$")
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="streams")
+    name = models.CharField(max_length=50)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "academic_streams"
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(fields=["school", "name"], name="uq_stream_school_name"),
+        ]
+
+    @classmethod
+    def ensure_defaults(cls, school):
+        for default_name in cls.DEFAULT_NAMES:
+            cls.objects.get_or_create(school=school, name=default_name)
+
+    def clean(self):
+        cleaned = " ".join((self.name or "").strip().split())
+        if not cleaned:
+            raise ValidationError({"name": "Stream name is required."})
+        if not self.NAME_REGEX.fullmatch(cleaned):
+            raise ValidationError({"name": "Stream name must start with a letter and contain only letters, numbers, spaces, / & . -."})
+        self.name = cleaned
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
+
 class Class(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="classes")
     name = models.CharField(max_length=64, help_text="e.g. Grade 1, Class 10")
     numeric_order = models.PositiveSmallIntegerField(default=0, help_text="For sorting")
+    is_active = models.BooleanField(default=True)
+    streams = models.ManyToManyField(
+        Stream,
+        through="ClassStream",
+        blank=True,
+        related_name="classes",
+        help_text="Applicable to Senior Secondary (Grade 11-12).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class_names = ["Nursery", "LKG", "UKG"] + [f"Grade {index}" for index in range(1, 13)]
@@ -122,6 +170,38 @@ class Section(models.Model):
         return f"{self.school_class.name} - {self.name}"
 
 
+class ClassStream(models.Model):
+    """Per-class stream link with its own capacity (Senior Secondary only)."""
+
+    MIN_CAPACITY = 1
+    MAX_CAPACITY = 200
+
+    school_class = models.ForeignKey(Class, on_delete=models.CASCADE, related_name="class_streams")
+    stream = models.ForeignKey(Stream, on_delete=models.CASCADE, related_name="class_links")
+    capacity = models.PositiveSmallIntegerField(default=40)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "class_streams"
+        ordering = ["stream__name"]
+        constraints = [
+            models.UniqueConstraint(fields=["school_class", "stream"], name="uq_class_stream"),
+        ]
+
+    def clean(self):
+        if self.capacity is None or self.capacity < self.MIN_CAPACITY or self.capacity > self.MAX_CAPACITY:
+            raise ValidationError({
+                "capacity": f"Capacity must be between {self.MIN_CAPACITY} and {self.MAX_CAPACITY} students per stream."
+            })
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.school_class.name} \u2014 {self.stream.name} ({self.capacity})"
+
+
 class Subject(models.Model):
     SUBJECT_TYPE_CHOICES = [
         ("compulsory", "Compulsory"),
@@ -174,7 +254,16 @@ class ClassPeriod(models.Model):
 class ClassRoom(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="class_rooms")
     room_no = models.CharField(max_length=50)
+    floor = models.CharField(max_length=64, blank=True, default="", help_text="e.g. Ground, First, Block A")
     capacity = models.PositiveIntegerField(null=True, blank=True)
+    section = models.ForeignKey(
+        "Section",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="class_rooms",
+        help_text="Optional default section assigned to this room",
+    )
     active_status = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -664,3 +753,45 @@ class ItemSellChild(models.Model):
 
     def __str__(self):
         return f"{self.sell.id} - {self.item.name}"
+
+
+# ===== HOLIDAY CALENDAR =====
+class Holiday(models.Model):
+    TYPE_CHOICES = [
+        ("public",    "Public Holiday"),
+        ("religious", "Religious"),
+        ("national",  "National"),
+        ("school",    "School Event"),
+        ("other",     "Other"),
+    ]
+
+    school        = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="holidays")
+    academic_year = models.ForeignKey(
+        "core.AcademicYear",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="holidays",
+    )
+    name          = models.CharField(max_length=120)
+    date          = models.DateField()
+    end_date      = models.DateField(null=True, blank=True, help_text="Optional - for multi-day holidays")
+    holiday_type  = models.CharField(max_length=20, choices=TYPE_CHOICES, default="public")
+    description   = models.CharField(max_length=255, blank=True, default="")
+    active_status = models.BooleanField(default=True)
+    created_at    = models.DateTimeField(auto_now_add=True)
+    updated_at    = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "holidays"
+        ordering = ["-date", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "date", "name"],
+                name="uq_holiday_school_date_name",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.date})"
+

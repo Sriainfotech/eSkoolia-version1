@@ -153,7 +153,213 @@ GET  /api/login-permission/users/export/      → CSV download
 - `togglingRoleId` state: tracks which role's toggle is mid-request (loading indicator)
 - `toggleRoleActive` async function: PATCHes `{ is_active: !current }`, updates local state, shows toast
 - Initial role fetch: now always includes `&show_inactive=1` so deactivated roles persist across navigation
-- **Per-card toggle switch** added to every role card in the grid:
+- **Per-card toggle switch** added to every role card in the grid
+
+---
+
+### 8. Academics → Foundation Setup — Holidays, Classes, Streams (Yesterday)
+
+Major refactor of the Academics Foundation Setup wizard. Step 6 ("Holidays") was removed; holidays now live directly inside the Academic Year card so they are managed alongside the year they belong to.
+
+#### 8.1 Holidays moved into Academic Year (no separate step)
+
+- Removed the standalone "Holidays" step (step 6) from the Foundation Setup wizard.
+- `HolidayCalendarCard` is now rendered live inside `AcademicYearPane` in both:
+  - **Add Academic Year** modal — holidays can be defined while creating the year.
+  - **Copy Year** modal — holidays can be reviewed/edited during the copy flow.
+- Holidays are persisted against the academic year via the existing `/api/v1/core/holidays/` endpoint and reload on year switch.
+
+#### 8.2 Tenancy fix — User 41 `school_id` NULL
+
+- User 41 had `school_id = NULL`, causing `TenantQueryMixin` to raise `DRFValidationError({"school": [...]})` on every create endpoint (classes, streams, holidays).
+- Re-patched the user record so `school_id` points to the correct tenant.
+- Confirmed `perform_create` flow on all Core ViewSets now succeeds.
+
+#### 8.3 ClassesPane refactor (`frontend/components/academics/foundation/panes/ClassesPane.tsx`)
+
+- Removed the **Sections** and **Students** columns from the classes table — these are now managed elsewhere and were cluttering the foundation view.
+- Display name is normalized through `normalizeClassName` so legacy entries like `"2"`, `"4"`, `"5"` render as `"Grade 2"`, `"Grade 4"`, `"Grade 5"`.
+- Added `inferLevel(name)` to derive the level (pre / primary / middle / secondary / senior) from the class name.
+- **Capacity validation 1–200** enforced on both sides:
+  - Backend: `ClassSerializer.validate_capacity` (in `backend/apps/core/serializers.py`) — message: `"Capacity must be between 1 and 200 students per section."`
+  - Frontend: inline validation in `addClass` / `updateClass` with matching toast.
+- Default capacity by level: pre = 25, primary/middle/secondary = 40, senior = 35.
+
+#### 8.4 Legacy class-name normalization (DB cleanup)
+
+- Ran a one-off Django shell command that loaded each `Class` instance, called `Class.normalize_name(...)`, and saved if changed.
+- 6 rows were corrected (e.g. `"2"` → `"Grade 2"`, `"4"` → `"Grade 4"`, `"5"` → `"Grade 5"`).
+- No production data lost — names only.
+
+#### 8.5 Section capacity error message upgrade
+
+- In `CoreSetupPanel.tsx`, the generic capacity validation toast was replaced with the explicit, copy-paste-friendly message:
+  > **"Capacity must be between 1 and 200 students per section."**
+
+#### 8.6 Stream feature — initial release
+
+A new `Stream` model was added so Senior Secondary classes (Grade 11 & 12) can carry streams like MPC, BiPC, MEC, etc.
+
+**Backend** (`backend/apps/core/`):
+- **`models.py` — `Stream`**:
+  - Fields: `school` (FK), `name` (CharField 50), `is_active`, `created_at`
+  - `Meta`: `db_table = "streams"`, unique constraint `uq_stream_school_name` on `(school, name)`
+  - `DEFAULT_NAMES = ["Science", "Commerce", "Humanities / Arts", "Vocational"]`
+  - `NAME_REGEX = r"^[A-Za-z][A-Za-z0-9 /&.\-]{0,49}$"`
+  - `ensure_defaults(school)` classmethod — seeds the four defaults on first access
+  - `clean()` validates `NAME_REGEX`; `save()` calls `clean()` first
+- **`models.py` — `Class.streams`**: M2M to `Stream` (initially `blank=True`, later moved to `through="ClassStream"` — see §9)
+- **`serializers.py`**:
+  - `StreamSerializer`: `validate_name` uses `NAME_REGEX` and case-insensitive duplicate check (`name__iexact`)
+  - `ClassSerializer`: added `streams` (write list of IDs) + `stream_details` (read-only list of `{id, name, is_active}`)
+  - Cross-validation in `ClassSerializer.validate`: streams allowed **only** on Grade 11 / Grade 12; otherwise rejects with `"Streams can only be assigned to Grade 11 or Grade 12."`
+- **`views.py` — `StreamViewSet`**:
+  - `TenantQueryMixin` based `ModelViewSet`
+  - `get_queryset` lazily calls `Stream.ensure_defaults(school)` on first list per school
+  - `create` / `update` / `partial_update` catch `IntegrityError` → `"A stream with this name already exists."`
+- **`urls.py`**: registered `router.register("streams", StreamViewSet, basename="stream")`
+- **Migration `0021_stream_class_streams_stream_uq_stream_school_name.py`** — applied.
+
+**Frontend** (`frontend/components/academics/foundation/`):
+- **`types.ts`**:
+  - New `Stream` interface: `{ id, name, is_active, created_at? }`
+  - `SchoolClass` extended: `streams?: number[]`, `stream_details?: Stream[]`
+- **`panes/ClassesPane.tsx`**:
+  - State: `streamsList`, `streamsLoading`, `selectedStreams: Set<number>`, `showAddStream`, `newStreamName`, `addingStream`
+  - `loadStreams()` → `GET /api/v1/core/streams/`
+  - `toggleStream(id)` — adds/removes from `selectedStreams`
+  - `addStream()` — regex + duplicate validation, then `POST /api/v1/core/streams/`
+  - **Streams UI** (visible only when level = senior):
+    - Pill checkbox list (selected = `#5B4FCF` / white, unselected = white / `#D2D7DC` border)
+    - "+ Add Stream" toggle opens an inline input (Enter saves, Escape cancels)
+  - `handleLevelChange` clears `selectedStreams` / `showAddStream` / `newStreamName`
+  - `openEditClass` pre-populates `selectedStreams` from `cls.stream_details`
+
+---
+
+### 9. Per-Stream Capacity for Senior Secondary (Today)
+
+Building on §8.6, Senior Secondary classes now carry **a separate capacity per stream** instead of a single class-wide capacity. Non-senior classes are unchanged.
+
+> Requirement: *"When streams are selected, automatically show separate capacity fields for each stream / Hide the common capacity field for streamed classes / For non-stream classes, keep the existing single capacity field unchanged."*
+
+#### 9.1 Backend — `ClassStream` through model
+
+**`backend/apps/core/models.py` — new `ClassStream` model:**
+- `school_class` → FK `Class` (`related_name="class_streams"`, on_delete=CASCADE)
+- `stream` → FK `Stream` (`related_name="class_links"`, on_delete=CASCADE)
+- `capacity` → `PositiveSmallIntegerField(default=40)`, validated 1–200
+- `created_at` → `auto_now_add`
+- `Meta`:
+  - `db_table = "class_streams"`
+  - `ordering = ["stream__name"]`
+  - `UniqueConstraint(["school_class", "stream"], name="uq_class_stream")`
+- `clean()` enforces capacity range; `save()` calls `clean()` first.
+- `MIN_CAPACITY = 1`, `MAX_CAPACITY = 200` constants.
+
+**`Class.streams` updated** to use the new through model:
+```python
+streams = models.ManyToManyField(
+    Stream,
+    through="ClassStream",
+    blank=True,
+    related_name="classes",
+    help_text="Applicable to Senior Secondary (Grade 11-12).",
+)
+```
+
+#### 9.2 Migration — `0022_manual_m2m_through_change.py`
+
+Django cannot `AlterField` to add `through=` on an existing M2M (raises `ValueError: Cannot alter field … you cannot alter to or from M2M fields, or add or remove through= on M2M fields`). Workaround:
+- The auto-generated `AlterField` migration was deleted.
+- A hand-written empty migration `0022_manual_m2m_through_change.py` was created with:
+  1. `RemoveField(Class, "streams")` — drops the auto-generated M2M table.
+  2. `CreateModel(ClassStream, …)` — creates the explicit through table `class_streams`.
+  3. `AddField(Class, "streams", ManyToManyField(through=ClassStream, …))` — re-adds the M2M.
+- Applied cleanly: `Applying core.0022_manual_m2m_through_change... OK`.
+- Safe because no production data was using class↔stream links yet.
+
+#### 9.3 `ClassSerializer` updates (`backend/apps/core/serializers.py`)
+
+- Imported `ClassStream` from `.models`.
+- New write-only field **`stream_capacities`**:
+  ```python
+  stream_capacities = serializers.ListField(
+      child=serializers.DictField(), required=False, write_only=True,
+      help_text="[{stream: <id>, capacity: <int 1-200>}, ...] — Senior Secondary only",
+  )
+  ```
+- `stream_details` (read-only) now enriched with capacity:
+  ```python
+  [{"id", "name", "is_active", "capacity"}]
+  ```
+  Built by querying `ClassStream.objects.filter(school_class=obj).select_related("stream")`.
+- `validate_stream_capacities`:
+  - Each entry must be a dict with valid `stream` id and integer `capacity`.
+  - Duplicate stream ids rejected.
+  - Stream must belong to the same school (tenant check).
+  - Capacity must be 1–200, message: `"Stream '<name>' capacity must be between 1 and 200."`
+- `validate`:
+  - If `stream_capacities` or `streams` provided on a non-senior class → reject: `"Streams can only be assigned to Grade 11 or Grade 12."`
+- `create` / `update`:
+  - Pop `capacity`, `stream_capacities`, `streams` from validated_data.
+  - `_apply_stream_capacities(instance, stream_caps)` clears existing `ClassStream` rows for the class and bulk-creates the new ones.
+  - Back-compat: if only the legacy `streams` ID list is sent (no `stream_capacities`), each row is created with default capacity = 35.
+- `Meta.fields` now includes `"stream_capacities"` (write-only) alongside `"streams"` and `"stream_details"`.
+
+#### 9.4 Frontend — per-stream capacity UI (`frontend/components/academics/foundation/panes/ClassesPane.tsx`)
+
+- New state:
+  ```ts
+  const [streamCapacities, setStreamCapacities] =
+    useState<Record<number, string>>({});
+  ```
+- `toggleStream(id)` now also seeds `streamCapacities[id] = "35"` on first check.
+- `setStreamCapacity(id, value)` — strips non-digits and caps length at 3.
+- `handleLevelChange` also resets `streamCapacities` to `{}`.
+- `openEditClass` pre-populates `streamCapacities` from each `cls.stream_details[i].capacity`.
+
+**New "Stream Capacities" card** (rendered inside the Streams block, only when level = senior **and** `selectedStreams.size > 0`):
+- Header label: **"Stream Capacities"** (`#6F767E` uppercase).
+- White card with `#E8ECEF` border and `divide-y` rows.
+- One row per selected stream:
+  - Stream name (`#1A1D1F`, semibold, 13 px) on the left.
+  - Number input on the right (`min=1 max=200`, width 80 px, placeholder `35`) + caption `"students"`.
+- Helper text below: `"Capacity is set per stream (1–200). Default 35."`.
+
+**Common "Maximum Student Capacity" input** is now wrapped in `{level !== "senior" && ( … )}` — hidden for Senior Secondary, unchanged for every other level.
+
+**Payload changes:**
+- `addClass()` (create) — Senior:
+  ```ts
+  body.stream_capacities = Array.from(selectedStreams).map(sid => ({
+    stream: sid,
+    capacity: parseInt(streamCapacities[sid] ?? "35", 10),
+  }));
+  ```
+  Non-senior: still sends `{ name, capacity }` exactly as before.
+- `updateClass()` (PATCH) — Senior sends `stream_capacities`; non-senior sends `stream_capacities: []` to clear any stale links.
+
+**Validation:**
+- Senior: must select at least one stream → toast `"Select at least one stream for Senior Secondary classes."`
+- Per-stream capacity validated 1–200 → toast: `"<Stream> capacity must be between 1 and 200."`
+- Non-senior: existing capacity check unchanged.
+
+#### 9.5 Summary of files touched today
+
+| File | Change |
+|------|--------|
+| `backend/apps/core/models.py` | Added `ClassStream` through model; updated `Class.streams` to `through="ClassStream"` |
+| `backend/apps/core/serializers.py` | Imported `ClassStream`; added `stream_capacities` write field; enriched `stream_details` with capacity; `_apply_stream_capacities` helper; back-compat for legacy `streams` list |
+| `backend/apps/core/migrations/0022_manual_m2m_through_change.py` | Hand-written migration: remove auto M2M → create `ClassStream` → re-add M2M with `through` |
+| `frontend/components/academics/foundation/panes/ClassesPane.tsx` | `streamCapacities` state, per-stream capacity card, hide common capacity for senior, new payload shape, per-stream validation toasts |
+
+#### 9.6 Verification
+
+- `python manage.py migrate core` → **OK**.
+- `get_errors` on `models.py`, `serializers.py`, `ClassesPane.tsx` → **no errors**.
+- Daphne and Next.js need a restart to pick up the model + serializer changes; the frontend hot-reloads on save.
+
   - Pill toggle (36×20 px): green `#16a34a` = Active, gray `#D1D5DB` = Inactive
   - Thumb slides left/right with 0.25s CSS transition
   - Inactive cards rendered at `opacity: 0.65` with lighter border/background

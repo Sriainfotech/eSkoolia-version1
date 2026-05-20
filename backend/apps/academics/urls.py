@@ -3,6 +3,7 @@ from .views import (
 	ClassOptionalSubjectSetupViewSet,
 	ClassRoutineSlotViewSet,
 	ClassSubjectAssignmentViewSet,
+	ClassSubjectEntryViewSet,
 	ClassTeacherAssignmentViewSet,
 	HomeworkSubmissionViewSet,
 	HomeworkViewSet,
@@ -16,6 +17,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register("class-subjects", ClassSubjectAssignmentViewSet, basename="class-subject-assignment")
+router.register("class-subject-entries", ClassSubjectEntryViewSet, basename="class-subject-entry")
 router.register("class-teachers", ClassTeacherAssignmentViewSet, basename="class-teacher-assignment")
 router.register("class-routines", ClassRoutineSlotViewSet, basename="class-routine-slot")
 router.register("optional-subject-setups", ClassOptionalSubjectSetupViewSet, basename="class-optional-subject-setup")

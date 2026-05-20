@@ -10,12 +10,14 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, MultiPartParser, JSONParser
 from rest_framework.response import Response
 from apps.access_control.models import UserRole
+from apps.core.models import Class as SchoolClass
 from apps.hr.models import Staff
 from apps.users.models import User
 from .models import (
     ClassOptionalSubjectSetup,
     ClassRoutineSlot,
     ClassSubjectAssignment,
+    ClassSubjectEntry,
     ClassTeacherAssignment,
     Homework,
     HomeworkSubmission,
@@ -31,6 +33,7 @@ from .serializers import (
     ClassOptionalSubjectSetupSerializer,
     ClassRoutineSlotSerializer,
     ClassSubjectAssignmentSerializer,
+    ClassSubjectEntrySerializer,
     ClassTeacherAssignmentSerializer,
     HomeworkSerializer,
     HomeworkSubmissionSerializer,
@@ -170,6 +173,107 @@ class ClassSubjectAssignmentViewSet(TenantScopedModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         kwargs["partial"] = True
         return self.update(request, *args, **kwargs)
+
+
+class ClassSubjectEntryViewSet(TenantScopedModelViewSet):
+    """Foundation-step per-class subject catalog."""
+
+    model = ClassSubjectEntry
+    serializer_class = ClassSubjectEntrySerializer
+    pagination_class = None
+    permission_codes = {"*": "academics.core_setup.view"}
+
+    def get_queryset(self):
+        qs = super().get_queryset().select_related("school_class")
+        class_id = self.request.query_params.get("class_id")
+        if class_id:
+            qs = qs.filter(school_class_id=class_id)
+        return qs
+
+    def create(self, request, *args, **kwargs):
+        class_ids = request.data.get("class_ids")
+        if not class_ids or not isinstance(class_ids, list):
+            return Response(
+                {"success": False, "message": "class_ids must be a non-empty list"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        school = request.user.school or getattr(request, "school", None)
+        if not school:
+            first_cls = SchoolClass.objects.filter(pk=class_ids[0]).select_related("school").first()
+            school = first_cls.school if first_cls else None
+        if not school:
+            return Response(
+                {"success": False, "message": "Could not determine school for this user"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        name = (request.data.get("name") or "").strip()
+        code = (request.data.get("code") or "").strip().upper()
+
+        # Auto-generate code from name if not supplied
+        if not code and name:
+            words = name.split()
+            if len(words) >= 2:
+                code = "".join(w[0] for w in words if w)[:6].upper()
+            else:
+                code = name[:6].upper()
+            code = "".join(c for c in code if c.isalnum())
+
+        subject_type = request.data.get("subject_type", ClassSubjectEntry.TYPE_CORE)
+        try:
+            periods = int(request.data.get("periods_per_week", 5))
+        except (TypeError, ValueError):
+            periods = 5
+
+        if not name:
+            return Response(
+                {"success": False, "message": "name is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        created = []
+        skipped = []
+        for cls_id in class_ids:
+            entry, was_created = ClassSubjectEntry.objects.get_or_create(
+                school=school,
+                school_class_id=cls_id,
+                code=code,
+                defaults={
+                    "name": name,
+                    "subject_type": subject_type,
+                    "periods_per_week": periods,
+                },
+            )
+            serializer = self.get_serializer(entry)
+            if was_created:
+                created.append(serializer.data)
+            else:
+                skipped.append({"class_id": cls_id, "message": f"'{code}' already exists in this class"})
+
+        return Response(
+            {"success": True, "created": len(created), "skipped": len(skipped), "data": created, "errors": skipped},
+            status=status.HTTP_201_CREATED,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.delete()
+        return Response({"success": True, "message": "Subject removed"}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["post"])
+    def reset_class(self, request):
+        class_id = request.data.get("class_id")
+        if not class_id:
+            return Response(
+                {"success": False, "message": "class_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        school = request.user.school or getattr(request, "school", None)
+        if not school:
+            cls_obj = SchoolClass.objects.filter(pk=class_id).select_related("school").first()
+            school = cls_obj.school if cls_obj else None
+        count, _ = ClassSubjectEntry.objects.filter(school=school, school_class_id=class_id).delete()
+        return Response({"success": True, "message": f"{count} subject(s) removed from class"})
 
 
 class ClassTeacherAssignmentViewSet(TenantScopedModelViewSet):
