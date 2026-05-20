@@ -51,6 +51,7 @@ from .serializers import (
     DashboardDataSerializer,
     InvoiceCreateSerializer,
     InvoiceSerializer,
+    InvoiceUpdateSerializer,
     POLICY_GROUP_METADATA,
     PolicyGroupSerializer,
     PolicySettingsSerializer,
@@ -1070,14 +1071,16 @@ class BillingPlanDetailView(SuperAdminBaseAPIView):
         if plan is None:
             return Response({"detail": "Plan not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        snapshot = {"code": plan.code, "name": plan.name, "price_inr": str(plan.price_inr)}
-        plan.delete()
+        # Soft-delete: mark inactive — plan disappears from catalog,
+        # historical invoices and school associations remain intact.
+        plan.is_active = False
+        plan.save(update_fields=["is_active", "updated_at"])
 
         log_audit(
-            action="plan.deleted",
+            action="plan.archived",
             actor_user=request.user if request.user.is_authenticated else None,
             status="success",
-            details=snapshot,
+            details={"code": plan.code, "name": plan.name, "price_inr": str(plan.price_inr)},
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -1222,6 +1225,66 @@ class PoliciesExportView(SuperAdminBaseAPIView):
         response = HttpResponse(json.dumps(data, indent=2, default=str), content_type="application/json")
         response["Content-Disposition"] = 'attachment; filename="policies.json"'
         return response
+
+
+class BillingInvoiceDetailView(SuperAdminBaseAPIView):
+    def _get_invoice(self, invoice_id: str) -> SuperAdminInvoice:
+        return get_object_or_404(
+            self._public_queryset(SuperAdminInvoice), id=invoice_id
+        )
+
+    def get(self, request, invoice_id: str):
+        invoice = self._get_invoice(invoice_id)
+        return Response(InvoiceSerializer(invoice).data)
+
+    def patch(self, request, invoice_id: str):
+        invoice = self._get_invoice(invoice_id)
+        serializer = InvoiceUpdateSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        if not data:
+            return Response(InvoiceSerializer(invoice).data)
+
+        update_fields = []
+        previous_status = invoice.status
+        for field, value in data.items():
+            setattr(invoice, field, value)
+            update_fields.append(field)
+        update_fields.append("updated_at")
+        invoice.save(update_fields=update_fields)
+
+        log_audit(
+            action="invoice.updated",
+            tenant_id=invoice.tenant.tenant_id if invoice.tenant_id else None,
+            status="success",
+            actor_user=request.user,
+            actor_ip=self._client_ip(request),
+            details={
+                "invoice_number": invoice.invoice_number,
+                "previous_status": previous_status,
+                "changed_fields": list(data.keys()),
+            },
+        )
+        return Response(InvoiceSerializer(invoice).data)
+
+    def delete(self, request, invoice_id: str):
+        """Cancel (soft-delete) an invoice. Hard delete is never allowed."""
+        invoice = self._get_invoice(invoice_id)
+        previous_status = invoice.status
+        invoice.status = "cancelled"
+        invoice.save(update_fields=["status", "updated_at"])
+        log_audit(
+            action="invoice.cancelled",
+            tenant_id=invoice.tenant.tenant_id if invoice.tenant_id else None,
+            status="success",
+            actor_user=request.user,
+            actor_ip=self._client_ip(request),
+            details={
+                "invoice_number": invoice.invoice_number,
+                "previous_status": previous_status,
+            },
+        )
+        return Response(InvoiceSerializer(invoice).data)
 
 
 class BillingInvoiceMarkPaidView(SuperAdminBaseAPIView):
