@@ -29,6 +29,7 @@ type MePayload = {
   is_superuser?: boolean;
   is_school_admin?: boolean;
   permission_codes?: string[];
+  role_names?: string[];
 };
 
 function getInitials(name: string): string {
@@ -50,8 +51,12 @@ function hasAnyPermission(permission: string | undefined, me: MePayload): boolea
 }
 
 function filterModules(modules: ModuleRoute[], me: MePayload): ModuleRoute[] {
+  const isSuperAdmin = me.is_superuser || me.role_names?.includes('super_admin');
   return modules
-    .filter((m) => hasAnyPermission(m.permission, me))
+    .filter((m) => {
+      if (m.superuserOnly && !isSuperAdmin) return false;
+      return hasAnyPermission(m.permission, me);
+    })
     .map((m) => ({
       ...m,
       sub: m.sub.filter((s) => hasAnyPermission(s.permission ?? m.permission, me)),

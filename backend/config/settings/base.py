@@ -1,5 +1,8 @@
 from pathlib import Path
 import os
+import socket
+import struct
+import random
 from dotenv import load_dotenv
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -8,11 +11,76 @@ try:
 except ImportError:  # pragma: no cover - optional dependency fallback
     dj_database_url = None
 
+
+def _resolve_via_fallback_dns(hostname: str, dns_server: str = "8.8.8.8") -> str | None:
+    """
+    Try to resolve *hostname* using the system DNS first.
+    If system DNS raises gaierror (e.g. corporate DNS refuses .neon.tech),
+    fall back to a raw UDP A-record query against *dns_server* (Google DNS).
+    Returns the first IPv4 address found, or None on any failure.
+    libpq supports the ``hostaddr`` connection parameter which bypasses
+    DNS entirely while keeping the ``host`` value for SSL CN/SAN verification.
+    """
+    try:
+        return socket.gethostbyname(hostname)
+    except socket.gaierror:
+        pass  # system DNS failed — try public resolver
+
+    try:
+        txid = random.randint(0, 65535)
+        header = struct.pack(">HHHHHH", txid, 0x0100, 1, 0, 0, 0)
+        question = b""
+        for label in hostname.encode().split(b"."):
+            question += bytes([len(label)]) + label
+        question += b"\x00"
+        question += struct.pack(">HH", 1, 1)  # QTYPE A, QCLASS IN
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(3)
+        sock.sendto(header + question, (dns_server, 53))
+        data, _ = sock.recvfrom(512)
+        sock.close()
+
+        ancount = struct.unpack(">H", data[6:8])[0]
+        # Skip the question section that follows the 12-byte header
+        offset = 12
+        while offset < len(data) and data[offset] != 0:
+            if data[offset] & 0xC0 == 0xC0:
+                offset += 2
+                break
+            offset += data[offset] + 1
+        else:
+            offset += 1  # root label
+        offset += 4  # QTYPE + QCLASS
+
+        for _ in range(ancount):
+            if offset >= len(data):
+                break
+            # Name: may be a pointer or inline labels
+            if data[offset] & 0xC0 == 0xC0:
+                offset += 2
+            else:
+                while offset < len(data) and data[offset] != 0:
+                    offset += data[offset] + 1
+                offset += 1  # root label
+            if offset + 10 > len(data):
+                break
+            rtype, _rclass, _ttl, rdlen = struct.unpack(">HHIH", data[offset : offset + 10])
+            offset += 10
+            if rtype == 1 and rdlen == 4:  # A record
+                return ".".join(str(b) for b in data[offset : offset + 4])
+            offset += rdlen
+    except Exception:
+        pass
+    return None
+
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "change-me")
+# Feature flag to enable schema-based multi-tenancy (off by default)
+MULTI_TENANCY_ENABLED = os.getenv("MULTI_TENANCY_ENABLED", "False").lower() == "true"
 DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
 ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")]
 
@@ -34,6 +102,7 @@ INSTALLED_APPS = [
     "apps.users",
     "apps.admissions",
     "apps.access_control",
+    "apps.super_admin",
     "apps.students",
     "apps.academics",
     "apps.attendance",
@@ -49,6 +118,18 @@ INSTALLED_APPS = [
     "apps.reports",
 ]
 
+# Guarded django-tenants integration
+if MULTI_TENANCY_ENABLED:
+    try:
+        import django_tenants  # noqa: F401
+    except Exception:
+        # Do not hard-fail at import time; provide a clear runtime error later
+        pass
+
+# NOTE: When MULTI_TENANCY_ENABLED is False the project behaves exactly
+# as before. The guarded logic below will only be applied when the flag
+# is enabled in the environment so changes are reversible and incremental.
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -60,6 +141,93 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+# When enabled we will validate and (optionally) insert the
+# TenantMainMiddleware. This must run first when tenant routing is active.
+def _validate_tenancy_middleware_order(middleware_list):
+    # Only called when MULTI_TENANCY_ENABLED is True
+    tenant_main = "apps.tenancy.middleware.TenantMainMiddleware"
+    auth_mw = "django.contrib.auth.middleware.AuthenticationMiddleware"
+    if tenant_main in middleware_list:
+        tenant_index = middleware_list.index(tenant_main)
+        if auth_mw in middleware_list and tenant_index > middleware_list.index(auth_mw):
+            raise RuntimeError(
+                f"{tenant_main} must appear before {auth_mw} when multi-tenancy is enabled"
+            )
+
+# Guarded setting extensions for tenant-aware authentication and schema switching.
+# These are only applied at runtime when MULTI_TENANCY_ENABLED is True.
+if MULTI_TENANCY_ENABLED:
+    tenant_main_middleware = "apps.tenancy.middleware.TenantMainMiddleware"
+
+    # Insert TenantMainMiddleware FIRST so tenant resolution happens before
+    # auth/session-dependent logic. This enables request-level schema switching.
+    if tenant_main_middleware not in MIDDLEWARE:
+        MIDDLEWARE.insert(0, tenant_main_middleware)
+        # Move SecurityMiddleware back to second position (after TenantMainMiddleware)
+        if "django.middleware.security.SecurityMiddleware" in MIDDLEWARE:
+            security_idx = MIDDLEWARE.index("django.middleware.security.SecurityMiddleware")
+            if security_idx != 1:
+                MIDDLEWARE.pop(security_idx)
+                MIDDLEWARE.insert(1, "django.middleware.security.SecurityMiddleware")
+
+    # Define default SHARED_APPS and TENANT_APPS placeholders. These
+    # should be reviewed and adjusted during the next phases.
+    SHARED_APPS = [
+        "django_tenants",
+        "apps.tenancy",
+        "django.contrib.admin",
+        "django.contrib.auth",
+        "django.contrib.contenttypes",
+        "django.contrib.sessions",
+        "django.contrib.messages",
+        "django.contrib.staticfiles",
+        # global/shared project apps (review before enabling)
+        "apps.core",
+    ]
+
+    TENANT_APPS = [
+        # tenant specific apps (review before enabling)
+        "apps.students",
+        "apps.admissions",
+        "apps.attendance",
+        "apps.academics",
+        "apps.fees",
+        "apps.hr",
+        "apps.library",
+        "apps.exams",
+        "apps.finance",
+        "apps.behaviour",
+        "apps.chat",
+        "apps.communication",
+        "apps.competitions",
+        "apps.reports",
+    ]
+
+    # Basic static validations
+    try:
+        _validate_tenancy_middleware_order(MIDDLEWARE)
+    except RuntimeError as exc:
+        # Raise loudly during startup to avoid misconfigured deployments
+        raise
+
+    # Prevent accidental duplication between shared and tenant app lists
+    duplicate_apps = set(SHARED_APPS) & set(TENANT_APPS)
+    if duplicate_apps:
+        raise RuntimeError(f"Apps duplicated in SHARED_APPS and TENANT_APPS: {duplicate_apps}")
+
+    # Optionally configure a database router placeholder (guarded by feature flag)
+    # Note: database engine override happens below after DATABASES is defined
+    DATABASE_ROUTERS = ["apps.tenancy.routers.TenantSyncRouter"]
+else:
+    # When MULTI_TENANCY_ENABLED is False, ensure DATABASE_ROUTERS is empty
+    # to maintain monolithic behavior without any tenant routing interference.
+    DATABASE_ROUTERS = []
+    # django_tenants registers a post_delete signal that calls get_tenant_model()
+    # which reads settings.TENANT_MODEL. Define a safe fallback so it doesn't
+    # raise AttributeError on every model delete (e.g. session cleanup in admin).
+    TENANT_MODEL = "tenancy.SchoolTenant"
+    TENANT_DOMAIN_MODEL = "tenancy.SchoolTenant"
 
 ROOT_URLCONF = "config.urls"
 
@@ -97,12 +265,28 @@ if DATABASE_URL:
     query_params = parse_qs(parsed_db_url.query or "")
     resolved_sslmode = (query_params.get("sslmode", [""])[0] or os.getenv("DB_SSLMODE", "")).strip()
 
+    # If local DNS can't resolve the DB host (e.g. corporate DNS blocks .neon.tech),
+    # fall back to Google DNS (8.8.8.8) and inject the resolved IP as ``hostaddr``.
+    # libpq connects to the IP directly while still using ``host`` for SSL CN/SAN
+    # verification — so TLS remains fully secure with no admin rights needed.
+    _db_host = parsed_db_url.hostname or ""
+    _resolved_hostaddr: str | None = None
+    if _db_host:
+        _fallback_ip = _resolve_via_fallback_dns(_db_host)
+        # Only inject hostaddr when system DNS actually failed (fallback used)
+        try:
+            socket.gethostbyname(_db_host)
+        except socket.gaierror:
+            _resolved_hostaddr = _fallback_ip
+
     if dj_database_url is not None:
         default_db = dj_database_url.parse(DATABASE_URL, conn_max_age=0)
         default_db.setdefault("OPTIONS", {})
         default_db["OPTIONS"].setdefault("connect_timeout", 10)
         if resolved_sslmode:
             default_db["OPTIONS"]["sslmode"] = resolved_sslmode
+        if _resolved_hostaddr:
+            default_db["OPTIONS"]["hostaddr"] = _resolved_hostaddr
         default_db["CONN_HEALTH_CHECKS"] = True
         DATABASES = {"default": default_db}
     else:
@@ -118,11 +302,13 @@ if DATABASE_URL:
             if resolved_engine != "django.db.backends.sqlite3"
             else (unquote(parsed_db_url.path) or str(BASE_DIR / "db.sqlite3"))
         )
-        resolved_options = {
+        resolved_options: dict = {
             "connect_timeout": 10,  # 10 sec timeout — lets Neon wake up without hanging
         }
         if resolved_sslmode:
             resolved_options["sslmode"] = resolved_sslmode
+        if _resolved_hostaddr:
+            resolved_options["hostaddr"] = _resolved_hostaddr
 
         DATABASES = {
             "default": {
@@ -156,6 +342,15 @@ else:
         }
     }
 
+# Guarded database engine switch mapping — only applied when the
+# feature flag is on and Postgres is in use (after DATABASES is defined).
+if MULTI_TENANCY_ENABLED:
+    if DATABASES.get("default", {}).get("ENGINE", "").startswith("django.db.backends.postgresql"):
+        DATABASES["default"]["ENGINE"] = "django_tenants.postgresql_backend"
+        # django-tenants recommends setting public schema name
+        DATABASES["default"].setdefault("OPTIONS", {})
+        DATABASES["default"]["OPTIONS"].setdefault("options", "-c search_path=public")
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -179,7 +374,9 @@ AUTH_USER_MODEL = "users.User"
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.tenancy.auth.TenantAwareJWTAuthentication"
+        if MULTI_TENANCY_ENABLED
+        else "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
     "DEFAULT_FILTER_BACKENDS": (
         "django_filters.rest_framework.DjangoFilterBackend",

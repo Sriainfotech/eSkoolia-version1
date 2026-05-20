@@ -73,6 +73,8 @@ export interface ModuleRoute {
   ic: string;
   sub: SubRoute[];
   permission?: string;
+  /** If true, only shown to users with is_superuser=true */
+  superuserOnly?: boolean;
 }
 
 export const MODULES: ModuleRoute[] = [
@@ -84,6 +86,23 @@ export const MODULES: ModuleRoute[] = [
     bg: '#EEF2FF',
     ic: '#4F46E5',
     sub: [],
+  },
+  // ─── Super Admin (superuser only) ────────────────────────────────────────
+  {
+    id: 'super_admin',
+    name: 'School Tenancy',
+    path: '/super-admin/dashboard',
+    icon: Building2,
+    bg: '#EDE9FE',
+    ic: '#6D28D9',
+    superuserOnly: true,
+    sub: [
+      { label: 'Dashboard',   path: '/super-admin/dashboard', icon: LayoutGrid  },
+      { label: 'Schools',     path: '/super-admin/schools',   icon: Building2   },
+      { label: 'Billing',     path: '/super-admin/billing',   icon: CreditCard  },
+      { label: 'Audit Log',   path: '/super-admin/audit',     icon: FileText    },
+      { label: 'Policies',    path: '/super-admin/policies',  icon: Settings    },
+    ],
   },
   {
     id: 'roles',

@@ -1,0 +1,107 @@
+:root {
+  --sa-font-inter: var(--font-inter), Arial, sans-serif;
+  --sa-font-fraunces: var(--font-fraunces), Georgia, serif;
+
+  /* Extended palette tokens used by super-admin UI */
+  --pu-tint:       #F6F3FF;
+  --ink-4:         #D4D6E4;
+  --bg-3:          #ECEEF7;
+  --bd-2:          #DADBE8;
+  --bd-3:          #C2C4D6;
+
+  /* Semantic status soft-backgrounds */
+  --ok-soft:       #DCFCE7;
+  --warn-soft:     #FEF3C7;
+  --danger:        #E0463A;
+  --danger-soft:   #FEE2E0;
+  --info:          #0369A1;
+  --info-soft:     #E0F2FE;
+}
+
+[data-theme="dark"] {
+  --pu-tint:       rgba(109, 74, 255, 0.12);
+  --ink-4:         #3A3D55;
+  --bg-3:          #282A42;
+  --bd-2:          #353852;
+  --bd-3:          #454866;
+  --ok-soft:       rgba(34, 197, 94, 0.12);
+  --warn-soft:     rgba(245, 158, 11, 0.12);
+  --danger:        #F97575;
+  --danger-soft:   rgba(224, 70, 58, 0.14);
+  --info:          #38BDF8;
+  --info-soft:     rgba(3, 105, 161, 0.14);
+}
+
+.sa-shell, .sa-panel, .sa-chip, .sa-table, .sa-sidebar, .sa-topbar, .sa-section, .sa-kpi, .sa-filterbar, .sa-pagination {
+  font-family: var(--sa-font-inter);
+}
+
+.sa-section-title {
+  font-family: var(--sa-font-fraunces);
+}
+
+.sa-sidebar {
+  font-family: var(--sa-font-inter);
+}
+
+.sa-topbar {
+  font-family: var(--sa-font-inter);
+}
+:root {
+  --sa-nav-width: 272px;
+  --sa-nav-width-collapsed: 92px;
+}
+
+.sa-shell {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(109, 74, 255, 0.07), transparent 32%),
+    radial-gradient(circle at 100% 0%, rgba(34, 197, 94, 0.07), transparent 26%),
+    linear-gradient(180deg, #FAFAFB 0%, #F3F4FB 100%);
+}
+
+.sa-panel {
+  background: var(--bg-1);
+  border: 1px solid var(--bd);
+  border-radius: 16px;
+  box-shadow: var(--sh-2);
+}
+
+.sa-chip {
+  border: 1px solid var(--bd);
+  border-radius: 999px;
+  background: var(--bg-1);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.1;
+  padding: 8px 16px;
+  font-family: var(--font-inter), Arial, sans-serif;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.sa-chip--active {
+  background: var(--pu-soft);
+  color: var(--pu-deep);
+  border-color: var(--pu);
+}
+
+.sa-kpi-value {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 767px) {
+  :root {
+    --sa-nav-width: 100%;
+  }
+  .sa-panel {
+    border-radius: 12px;
+    box-shadow: var(--sh-1);
+  }
+  .sa-chip {
+    font-size: 12px;
+    padding: 7px 12px;
+  }
+}
