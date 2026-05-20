@@ -426,3 +426,48 @@ The Login Permission screen is fully usable in mock mode without the backend run
 NEXT_PUBLIC_USE_MOCK=true   # switch to "false" when Django backend is ready
 NEXT_PUBLIC_API_BASE=/api   # API base path (proxied through Next.js or direct)
 ```
+
+---
+
+## Day 5 Update — Gowtham (2026-05-20)
+
+Worked on Academics → **Foundation Setup** wizard (Academic Year → Classes → Sections → Rooms → Subjects), plus a backend exception-handler bug found along the way.
+
+**Files changed:**
+
+- Backend
+  - [backend/apps/academics/models.py](backend/apps/academics/models.py) — `Class.streams` M2M migrated to `through="ClassStream"` so each (class, stream) pair can carry its own capacity (per-stream capacity for Senior Secondary)
+  - [backend/apps/academics/serializers.py](backend/apps/academics/serializers.py) — new `stream_capacities` field on `ClassSerializer` (read + write), validates 1–200 per stream
+  - [backend/apps/academics/migrations/](backend/apps/academics/migrations/) — hand-written migration: `RemoveField` → `CreateModel ClassStream` → `AddField streams (through=ClassStream)` (Django can't `AlterField` an M2M to add `through`)
+  - [backend/config/exception_handler.py](backend/config/exception_handler.py) — added explicit `Http404` branch returning a clean 404 envelope (previously fell through to a generic 500)
+- Frontend
+  - [frontend/components/academics/foundation/ConfirmDeleteDialog.tsx](frontend/components/academics/foundation/ConfirmDeleteDialog.tsx) — **new** shared on-brand delete confirmation modal (red `AlertTriangle` icon, `#DC2626` confirm button, ESC/backdrop close, in-flight spinner, "This action cannot be undone." subline)
+  - [frontend/components/academics/foundation/panes/AcademicYearPane.tsx](frontend/components/academics/foundation/panes/AcademicYearPane.tsx) — trash icon now opens `ConfirmDeleteDialog` instead of native `confirm()`; 404-aware refresh
+  - [frontend/components/academics/foundation/panes/ClassesPane.tsx](frontend/components/academics/foundation/panes/ClassesPane.tsx) — per-stream capacity card for Senior Secondary (hides common capacity), new `streamCapacities` state + payload shape; delete confirmation modal; 404-aware `updateClass` refresh
+  - [frontend/components/academics/foundation/panes/SectionsPane.tsx](frontend/components/academics/foundation/panes/SectionsPane.tsx) — delete confirmation modal wiring
+  - [frontend/components/academics/foundation/panes/RoomsPane.tsx](frontend/components/academics/foundation/panes/RoomsPane.tsx) — delete confirmation modal wiring
+  - [frontend/components/academics/foundation/panes/SubjectsPane.tsx](frontend/components/academics/foundation/panes/SubjectsPane.tsx) — delete confirmation modal wiring (`handleDelete` signature changed from `(id: number)` to `(entry: ClassSubjectEntry)` so the modal can show the subject name); bulk `handleReset` still uses native `confirm()` (out of scope)
+
+**Fixed today:**
+
+- `PATCH /api/v1/core/classes/57/` was returning **500** for records that had been deleted server-side. Root cause: custom DRF exception handler had no `Http404` branch. Now returns a friendly 404 with `code: "not_found"`.
+- Foundation Setup panes used the browser's native `confirm()` for the trash icon — visually inconsistent with the Eskoolia UI. Replaced across all 5 panes with a single shared `ConfirmDeleteDialog`. Each pane's delete flow now: open modal → spinner on Confirm → success toast → list refresh, or graceful 404 fallback ("This <thing> no longer exists. Refreshing the list…").
+- Per-Stream Capacity: Senior Secondary classes can now carry a separate capacity per stream (e.g., Science 60, Commerce 40, Arts 30) instead of one class-wide capacity. Non-senior classes are unchanged.
+
+**Still in progress:**
+
+- Nothing pending on these tasks — all 5 panes verified with `get_errors` clean; backend migration applied locally via `python manage.py migrate core`.
+- Branch `roles-new` pushed to origin (the previous `roles` branch had divergent history after pull/stash conflicts).
+
+**Start tomorrow with:**
+
+1. Verify per-stream capacity migration applies cleanly on Neon/staging (it was hand-written; double-check `ClassStream` row backfill for any existing senior classes).
+2. End-to-end smoke test: create senior class with 3 streams → set distinct capacities → reload page → confirm values persist.
+3. Apply the same `ConfirmDeleteDialog` pattern to other modules that still use native `confirm()` (Staff module, Students module, Fees structures) — quick win for UI consistency.
+4. Audit `config/exception_handler.py` for other Django exceptions that may also silently 500: `PermissionDenied`, `NotAuthenticated`, `SuspiciousOperation`, `ImproperlyConfigured`.
+
+**New bugs found:**
+
+- **Custom DRF exception handlers must explicitly handle `django.http.Http404`** — otherwise it falls through to a 500 even though DRF's default handler would have converted it. Same risk exists for any other non-DRF exception class.
+- **Django can't `AlterField` an M2M to add `through=`** — you must `RemoveField` then `CreateModel through_table` then `AddField` with the new `through`. Auto-generated `makemigrations` produced a broken migration; hand-edit required.
+- **Windows case-insensitive filesystem vs. git case-sensitive index** — `team_context.md` (lowercase) and `TEAM_CONTEXT.md` (uppercase) were both tracked at different times. Running `git rm team_context.md` on Windows physically deleted the on-disk file (same inode as `TEAM_CONTEXT.md`); had to `git checkout HEAD -- TEAM_CONTEXT.md` to restore. Lesson: when resolving "deleted by us" conflicts on Windows, always check whether the index still tracks a differently-cased sibling before `git rm`.

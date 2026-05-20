@@ -1,18 +1,22 @@
 import re
 from rest_framework import serializers
 from .models import (
-    AcademicYear, Class, ClassPeriod, ClassRoom, Section, Subject, 
+    AcademicYear, Class, ClassPeriod, ClassRoom, ClassStream, Section, Stream, Subject, 
     Vehicle, TransportRoute, AssignVehicle,
     BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate,
     VehicleDriverAssignment, TransportNotificationLog, RoutePerformanceLog,
     ItemCategory, ItemStore, Supplier, Item, ItemReceive, ItemReceiveChild,
-    ItemIssue, ItemSell, ItemSellChild
+    ItemIssue, ItemSell, ItemSellChild,
+    Holiday,
 )
 
 
 class AcademicYearSerializer(serializers.ModelSerializer):
     YEAR_NAME_REGEX = re.compile(r"^\d{4}-\d{4}$")
     MIN_DURATION_DAYS = 270  # ~9 months
+
+    # `name` is auto-generated from start/end dates inside validate(); not required from client.
+    name = serializers.CharField(max_length=64, required=False, allow_blank=True)
 
     def _school_id(self):
         request = self.context.get("request")
@@ -90,7 +94,7 @@ class AcademicYearSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AcademicYear
-        fields = ["id", "school", "name", "start_date", "end_date", "is_current", "created_at", "updated_at"]
+        fields = ["id", "school", "name", "start_date", "end_date", "is_current", "is_active", "created_at", "updated_at"]
         read_only_fields = ["id", "school", "created_at", "updated_at"]
 
 
@@ -160,14 +164,147 @@ class SectionSerializer(serializers.ModelSerializer):
 
 
 class ClassSerializer(serializers.ModelSerializer):
+    MIN_CAPACITY = 1
+    MAX_CAPACITY = 200
+
     sections = SectionSerializer(many=True, read_only=True)
     total_students = serializers.SerializerMethodField()
+    capacity = serializers.IntegerField(required=False, write_only=True)
+    streams = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Stream.objects.all(),
+        required=False,
+    )
+    stream_capacities = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        write_only=True,
+        help_text="[{stream: <id>, capacity: <int 1-200>}, ...] — used for Senior Secondary (Grade 11/12).",
+    )
+    stream_details = serializers.SerializerMethodField(read_only=True)
 
     def get_total_students(self, obj):
         if hasattr(obj, '_total_students'):
             return obj._total_students
         from apps.students.models import Student
         return Student.objects.filter(current_class=obj, is_active=True).count()
+
+    def get_stream_details(self, obj):
+        rows = ClassStream.objects.filter(school_class=obj).select_related("stream").order_by("stream__name")
+        return [
+            {"id": r.stream.id, "name": r.stream.name, "is_active": r.stream.is_active, "capacity": r.capacity}
+            for r in rows
+        ]
+
+    def validate_streams(self, value):
+        school_id = self._school_id()
+        if school_id:
+            for stream in value:
+                if stream.school_id != school_id:
+                    raise serializers.ValidationError("Selected stream does not belong to your school.")
+        return value
+
+    def validate_stream_capacities(self, value):
+        school_id = self._school_id()
+        cleaned = []
+        seen_ids = set()
+        for idx, entry in enumerate(value or []):
+            if not isinstance(entry, dict):
+                raise serializers.ValidationError(f"Entry #{idx + 1} must be an object with stream and capacity.")
+            try:
+                stream_id = int(entry.get("stream"))
+            except (TypeError, ValueError):
+                raise serializers.ValidationError(f"Entry #{idx + 1} is missing a valid stream id.")
+            if stream_id in seen_ids:
+                raise serializers.ValidationError(f"Stream id {stream_id} is listed more than once.")
+            seen_ids.add(stream_id)
+            try:
+                stream_obj = Stream.objects.get(pk=stream_id)
+            except Stream.DoesNotExist:
+                raise serializers.ValidationError(f"Stream id {stream_id} does not exist.")
+            if school_id and stream_obj.school_id != school_id:
+                raise serializers.ValidationError(f"Stream '{stream_obj.name}' does not belong to your school.")
+            try:
+                capacity_value = int(entry.get("capacity"))
+            except (TypeError, ValueError):
+                raise serializers.ValidationError(
+                    f"Stream '{stream_obj.name}' capacity must be a whole number."
+                )
+            if capacity_value < self.MIN_CAPACITY or capacity_value > self.MAX_CAPACITY:
+                raise serializers.ValidationError(
+                    f"Stream '{stream_obj.name}' capacity must be between {self.MIN_CAPACITY} and {self.MAX_CAPACITY}."
+                )
+            cleaned.append({"stream": stream_obj, "capacity": capacity_value})
+        return cleaned
+
+    def validate_capacity(self, value):
+        try:
+            value_int = int(value)
+        except (TypeError, ValueError):
+            raise serializers.ValidationError("Capacity must be a whole number.")
+        if value_int < self.MIN_CAPACITY or value_int > self.MAX_CAPACITY:
+            raise serializers.ValidationError(
+                f"Capacity must be between {self.MIN_CAPACITY} and {self.MAX_CAPACITY} students per section."
+            )
+        return value_int
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        name = attrs.get("name") or (self.instance.name if self.instance else "")
+        normalized = Class.normalize_name(name) or name
+        is_senior = normalized in ("Grade 11", "Grade 12")
+
+        stream_caps = attrs.get("stream_capacities")
+        streams_field = attrs.get("streams")
+
+        if (stream_caps or streams_field) and not is_senior:
+            raise serializers.ValidationError({
+                "streams": "Streams can only be assigned to Grade 11 or Grade 12."
+            })
+
+        # If stream_capacities provided, ignore streams + class-level capacity for senior classes.
+        if stream_caps:
+            attrs["streams"] = None  # signal to skip plain ID set
+        return attrs
+
+    def _apply_stream_capacities(self, instance, stream_caps):
+        # Replace existing ClassStream rows for this class.
+        ClassStream.objects.filter(school_class=instance).delete()
+        for entry in stream_caps:
+            ClassStream.objects.create(
+                school_class=instance,
+                stream=entry["stream"],
+                capacity=entry["capacity"],
+            )
+
+    def create(self, validated_data):
+        validated_data.pop("capacity", None)
+        stream_caps = validated_data.pop("stream_capacities", None)
+        streams = validated_data.pop("streams", None)
+        instance = super().create(validated_data)
+        if stream_caps:
+            self._apply_stream_capacities(instance, stream_caps)
+        elif streams is not None:
+            # Backward-compat: ids without capacities — use default 35.
+            self._apply_stream_capacities(
+                instance,
+                [{"stream": s, "capacity": 35} for s in streams],
+            )
+        return instance
+
+    def update(self, instance, validated_data):
+        validated_data.pop("capacity", None)
+        stream_caps = validated_data.pop("stream_capacities", None)
+        streams = validated_data.pop("streams", None)
+        instance = super().update(instance, validated_data)
+        if stream_caps is not None:
+            self._apply_stream_capacities(instance, stream_caps)
+        elif streams is not None:
+            self._apply_stream_capacities(
+                instance,
+                [{"stream": s, "capacity": 35} for s in streams],
+            )
+        return instance
 
     def _school_id(self):
         request = self.context.get("request")
@@ -194,8 +331,42 @@ class ClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Class
-        fields = ["id", "school", "name", "numeric_order", "sections", "total_students", "created_at"]
-        read_only_fields = ["id", "school", "numeric_order", "sections", "total_students", "created_at"]
+        fields = ["id", "school", "name", "numeric_order", "is_active", "sections", "total_students", "capacity", "streams", "stream_capacities", "stream_details", "created_at"]
+        read_only_fields = ["id", "school", "numeric_order", "sections", "total_students", "stream_details", "created_at"]
+
+
+class StreamSerializer(serializers.ModelSerializer):
+    NAME_REGEX = re.compile(r"^[A-Za-z][A-Za-z0-9 /&.\-]{0,49}$")
+
+    def _school_id(self):
+        request = self.context.get("request")
+        if self.instance and self.instance.school_id:
+            return self.instance.school_id
+        if request and getattr(request.user, "school_id", None):
+            return request.user.school_id
+        return None
+
+    def validate_name(self, value):
+        cleaned = " ".join((value or "").strip().split())
+        if not cleaned:
+            raise serializers.ValidationError("Stream name is required.")
+        if not self.NAME_REGEX.fullmatch(cleaned):
+            raise serializers.ValidationError(
+                "Stream name must start with a letter and contain only letters, numbers, spaces, / & . -."
+            )
+        school_id = self._school_id()
+        if school_id:
+            duplicate_qs = Stream.objects.filter(school_id=school_id, name__iexact=cleaned)
+            if self.instance is not None:
+                duplicate_qs = duplicate_qs.exclude(pk=self.instance.pk)
+            if duplicate_qs.exists():
+                raise serializers.ValidationError("A stream with this name already exists.")
+        return cleaned
+
+    class Meta:
+        model = Stream
+        fields = ["id", "school", "name", "is_active", "created_at"]
+        read_only_fields = ["id", "school", "created_at"]
 
 
 class SubjectSerializer(serializers.ModelSerializer):
@@ -284,6 +455,14 @@ class ClassPeriodSerializer(serializers.ModelSerializer):
 
 class ClassRoomSerializer(serializers.ModelSerializer):
     ROOM_NO_REGEX = re.compile(r"^[A-Z0-9][A-Z0-9\- ]{0,49}$")
+    section_label = serializers.SerializerMethodField()
+
+    def get_section_label(self, obj):
+        if obj.section_id and obj.section:
+            cls = getattr(obj.section, "school_class", None)
+            cls_name = getattr(cls, "name", "") if cls else ""
+            return f"{cls_name} - {obj.section.name}".strip(" -")
+        return ""
 
     def _school_id(self):
         request = self.context.get("request")
@@ -333,12 +512,19 @@ class ClassRoomSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(errors)
 
         attrs["room_no"] = room_no
+        if "floor" in attrs:
+            attrs["floor"] = (attrs.get("floor") or "").strip()
+
+        section = attrs.get("section")
+        if section and school_id and section.school_class.school_id != school_id:
+            raise serializers.ValidationError({"section": ["Section does not belong to this school."]})
+
         return attrs
 
     class Meta:
         model = ClassRoom
-        fields = ["id", "school", "room_no", "capacity", "active_status", "created_at", "updated_at"]
-        read_only_fields = ["id", "school", "created_at", "updated_at"]
+        fields = ["id", "school", "room_no", "floor", "capacity", "section", "section_label", "active_status", "created_at", "updated_at"]
+        read_only_fields = ["id", "school", "section_label", "created_at", "updated_at"]
 
 
 # ===== TRANSPORT MODULE SERIALIZERS =====
@@ -567,3 +753,73 @@ class ItemSellSerializer(serializers.ModelSerializer):
         model = ItemSell
         fields = ["id", "school", "sell_date", "total_amount", "discount", "tax", "payment_status", "paid_amount", "reference_no", "notes", "sold_to", "line_items", "created_by", "created_by_name", "created_at", "updated_at"]
         read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+
+class HolidaySerializer(serializers.ModelSerializer):
+    type_label = serializers.SerializerMethodField()
+    duration_days = serializers.SerializerMethodField()
+
+    def get_type_label(self, obj):
+        return dict(Holiday.TYPE_CHOICES).get(obj.holiday_type, obj.holiday_type)
+
+    def get_duration_days(self, obj):
+        if obj.end_date and obj.end_date > obj.date:
+            return (obj.end_date - obj.date).days + 1
+        return 1
+
+    def _school_id(self):
+        request = self.context.get("request")
+        if self.instance and getattr(self.instance, "school_id", None):
+            return self.instance.school_id
+        if request and getattr(request.user, "school_id", None):
+            return request.user.school_id
+        return None
+
+    def validate_name(self, value):
+        cleaned = (value or "").strip()
+        if not cleaned:
+            raise serializers.ValidationError("Holiday name is required.")
+        if len(cleaned) < 2:
+            raise serializers.ValidationError("Holiday name must be at least 2 characters.")
+        if len(cleaned) > 120:
+            raise serializers.ValidationError("Holiday name must be 120 characters or less.")
+        if len(set(cleaned.replace(" ", "").lower())) == 1 and len(cleaned.replace(" ", "")) >= 2:
+            raise serializers.ValidationError("Please enter a real holiday name.")
+        return cleaned
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        date = attrs.get("date", getattr(self.instance, "date", None))
+        end_date = attrs.get("end_date", getattr(self.instance, "end_date", None))
+        name = attrs.get("name", getattr(self.instance, "name", ""))
+
+        errors = {}
+        if not date:
+            errors["date"] = ["Date is required."]
+        if end_date and date and end_date < date:
+            errors["end_date"] = ["End date cannot be before start date."]
+        if end_date and date and (end_date - date).days > 60:
+            errors["end_date"] = ["Holiday span cannot exceed 60 days."]
+
+        school_id = self._school_id()
+        if school_id and date and name:
+            dup_qs = Holiday.objects.filter(school_id=school_id, date=date, name__iexact=name.strip())
+            if self.instance is not None:
+                dup_qs = dup_qs.exclude(pk=self.instance.pk)
+            if dup_qs.exists():
+                errors["name"] = [f'A holiday named "{name}" already exists on {date}.']
+
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
+
+    class Meta:
+        model = Holiday
+        fields = [
+            "id", "school", "academic_year", "name", "date", "end_date",
+            "holiday_type", "type_label", "description",
+            "active_status", "duration_days",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "school", "type_label", "duration_days", "created_at", "updated_at"]
+

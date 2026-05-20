@@ -1178,7 +1178,7 @@ function SectionsSection() {
     }
 
     if (!Number.isInteger(capacityValue) || capacityValue < SECTION_MIN_CAPACITY || capacityValue > SECTION_MAX_CAPACITY) {
-      nextErrors.capacity = "Enter valid section capacity";
+      nextErrors.capacity = `Capacity must be between ${SECTION_MIN_CAPACITY} and ${SECTION_MAX_CAPACITY} students per section.`;
     }
 
     if (!editingId && schoolClassId && names.length) {
@@ -1236,8 +1236,9 @@ function SectionsSection() {
           setError("Section name already exists");
           setFieldErrors({ name: "Section name already exists" });
         } else if (message.toLowerCase().includes("capacity")) {
-          setError("Enter valid section capacity");
-          setFieldErrors({ capacity: "Enter valid section capacity" });
+          const msg = `Capacity must be between ${SECTION_MIN_CAPACITY} and ${SECTION_MAX_CAPACITY} students per section.`;
+          setError(msg);
+          setFieldErrors({ capacity: msg });
         } else {
           setError(message);
         }

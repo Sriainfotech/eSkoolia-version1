@@ -12,6 +12,7 @@ from .models import (
     ClassOptionalSubjectSetup,
     ClassRoutineSlot,
     ClassSubjectAssignment,
+    ClassSubjectEntry,
     ClassTeacherAssignment,
     Homework,
     HomeworkSubmission,
@@ -23,6 +24,16 @@ from .models import (
     OptionalSubjectAssignment,
     UploadedContent,
 )
+
+
+class ClassSubjectEntrySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClassSubjectEntry
+        fields = [
+            "id", "school", "school_class", "name", "code",
+            "subject_type", "periods_per_week", "active_status", "created_at",
+        ]
+        read_only_fields = ["id", "school", "created_at"]
 
 
 class LegacyAliasMixin(serializers.ModelSerializer):

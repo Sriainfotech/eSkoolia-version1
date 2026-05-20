@@ -1,4 +1,5 @@
 import math
+from datetime import date
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -11,10 +12,11 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.db.models import Avg, Count, Q
 from config.pagination import ApiPageNumberPagination
-from .models import AcademicYear, Class, ClassPeriod, ClassRoom, Section, Subject, Vehicle, TransportRoute, AssignVehicle
+from .models import AcademicYear, Class, ClassPeriod, ClassRoom, Section, Stream, Subject, Vehicle, TransportRoute, AssignVehicle
 from .models import BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate
 from .models import VehicleDriverAssignment, TransportNotificationLog, RoutePerformanceLog
 from .models import ItemCategory, ItemStore, Supplier, Item, ItemReceive, ItemIssue, ItemSell
+from .models import Holiday
 from .services.parent_notifications import send_email_sendgrid, send_sms_twilio, safe_guardian_phone
 from .serializers import (
     AcademicYearSerializer,
@@ -41,6 +43,7 @@ from .serializers import (
     ItemIssueSerializer,
     ItemSellSerializer,
 )
+from .serializers import HolidaySerializer, StreamSerializer
 
 
 class TenantQueryMixin:
@@ -57,7 +60,16 @@ class TenantQueryMixin:
         return qs.none()
 
     def perform_create(self, serializer):
-        serializer.save(school=self.request.user.school)
+        school = getattr(self.request.user, "school", None)
+        if school is None:
+            from rest_framework.exceptions import ValidationError as DRFValidationError
+            raise DRFValidationError({
+                "school": [
+                    "Your account is not linked to a school. "
+                    "Please ask an administrator to assign your user to a school before adding records."
+                ]
+            })
+        serializer.save(school=school)
 
 
 class PermissionScopedViewSet(viewsets.ModelViewSet):
@@ -153,6 +165,51 @@ class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
             if "school_classes.school_id" in message and "school_classes.name" in message:
                 raise ValidationError({"name": ["Class name already exists"]})
             raise ValidationError({"detail": "Unable to update class due to data integrity rules."})
+
+
+class StreamViewSet(TenantQueryMixin, viewsets.ModelViewSet):
+    model = Stream
+    serializer_class = StreamSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser:
+            return Stream.objects.all().order_by("name")
+        if user.school_id:
+            # Lazily seed the default streams for this school on first access.
+            try:
+                school = getattr(user, "school", None)
+                if school is not None:
+                    Stream.ensure_defaults(school)
+            except Exception:
+                pass
+            return Stream.objects.filter(school_id=user.school_id).order_by("name")
+        return Stream.objects.none()
+
+    def create(self, request, *args, **kwargs):
+        try:
+            return super().create(request, *args, **kwargs)
+        except DjangoValidationError as exc:
+            raise ValidationError(getattr(exc, "message_dict", {"name": exc.messages}))
+        except IntegrityError:
+            raise ValidationError({"name": ["A stream with this name already exists."]})
+
+    def update(self, request, *args, **kwargs):
+        try:
+            return super().update(request, *args, **kwargs)
+        except DjangoValidationError as exc:
+            raise ValidationError(getattr(exc, "message_dict", {"name": exc.messages}))
+        except IntegrityError:
+            raise ValidationError({"name": ["A stream with this name already exists."]})
+
+    def partial_update(self, request, *args, **kwargs):
+        try:
+            return super().partial_update(request, *args, **kwargs)
+        except DjangoValidationError as exc:
+            raise ValidationError(getattr(exc, "message_dict", {"name": exc.messages}))
+        except IntegrityError:
+            raise ValidationError({"name": ["A stream with this name already exists."]})
 
 
 class SectionViewSet(viewsets.ModelViewSet):
@@ -397,13 +454,28 @@ class ClassRoomViewSet(TenantQueryMixin, viewsets.ModelViewSet):
             return Response(payload, status=status.HTTP_400_BAD_REQUEST)
 
         try:
+            user_school = getattr(request.user, "school", None)
+            if not user_school:
+                return Response(
+                    {
+                        "success": False,
+                        "message": "Your account is not linked to a school. Contact your administrator.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             self.perform_create(serializer)
-        except IntegrityError:
+        except IntegrityError as exc:
+            msg = str(exc).lower()
+            if "uq_class_room_school_room_no" in msg or "room_no" in msg:
+                friendly = "Room already exists"
+            elif "section" in msg:
+                friendly = "Selected section is invalid."
+            elif "school" in msg:
+                friendly = "Could not determine your school. Please re-login."
+            else:
+                friendly = "Could not save room due to a database constraint."
             return Response(
-                {
-                    "success": False,
-                    "message": "Room already exists",
-                },
+                {"success": False, "message": friendly},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(
@@ -428,11 +500,18 @@ class ClassRoomViewSet(TenantQueryMixin, viewsets.ModelViewSet):
 
         try:
             self.perform_update(serializer)
-        except IntegrityError:
+        except IntegrityError as exc:
+            msg = str(exc).lower()
+            if "uq_class_room_school_room_no" in msg or "room_no" in msg:
+                friendly = "Room already exists"
+            elif "section" in msg:
+                friendly = "Selected section is invalid."
+            else:
+                friendly = "Could not update room due to a database constraint."
             return Response(
                 {
                     "success": False,
-                    "message": "Room already exists",
+                    "message": friendly,
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -1467,3 +1546,216 @@ class ItemSellViewSet(TenantQueryMixin, PermissionScopedViewSet):
         if not school:
             raise PermissionDenied("School context is required.")
         serializer.save(school=school, created_by=self.request.user)
+
+
+class HolidayViewSet(TenantQueryMixin, viewsets.ModelViewSet):
+    model = Holiday
+    serializer_class = HolidaySerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        academic_year = self.request.query_params.get("academic_year")
+        year = self.request.query_params.get("year")
+        htype = self.request.query_params.get("type")
+        if academic_year:
+            try:
+                queryset = queryset.filter(academic_year_id=int(academic_year))
+            except (TypeError, ValueError):
+                pass
+        if year:
+            try:
+                queryset = queryset.filter(date__year=int(year))
+            except (TypeError, ValueError):
+                pass
+        if htype:
+            queryset = queryset.filter(holiday_type=htype)
+        return queryset.order_by("-date", "name")
+
+    @action(detail=False, methods=["get"], url_path="sample-defaults")
+    def sample_defaults(self, request):
+        """Return a static list of common holidays (no DB writes) for empty-state seeding."""
+        year_param = request.query_params.get("year")
+        try:
+            year = int(year_param) if year_param else date.today().year
+        except (TypeError, ValueError):
+            year = date.today().year
+        samples = [
+            {"name": "New Year's Day",       "month": 1,  "day": 1,  "holiday_type": "public",    "description": "Start of the calendar year"},
+            {"name": "Republic Day",         "month": 1,  "day": 26, "holiday_type": "national",  "description": "National holiday"},
+            {"name": "Holi",                 "month": 3,  "day": 14, "holiday_type": "religious", "description": "Festival of colours"},
+            {"name": "Good Friday",          "month": 4,  "day": 18, "holiday_type": "religious", "description": ""},
+            {"name": "Labour Day",           "month": 5,  "day": 1,  "holiday_type": "public",    "description": ""},
+            {"name": "Independence Day",     "month": 8,  "day": 15, "holiday_type": "national",  "description": "National holiday"},
+            {"name": "Gandhi Jayanti",       "month": 10, "day": 2,  "holiday_type": "national",  "description": ""},
+            {"name": "Dussehra",             "month": 10, "day": 2,  "holiday_type": "religious", "description": ""},
+            {"name": "Diwali",               "month": 11, "day": 1,  "holiday_type": "religious", "description": "Festival of lights"},
+            {"name": "Christmas",            "month": 12, "day": 25, "holiday_type": "religious", "description": ""},
+        ]
+        out = []
+        for item in samples:
+            try:
+                d = date(year, item["month"], item["day"])
+            except ValueError:
+                continue
+            out.append({
+                "name": item["name"],
+                "date": d.isoformat(),
+                "end_date": None,
+                "holiday_type": item["holiday_type"],
+                "description": item["description"],
+            })
+        return Response({"success": True, "year": year, "count": len(out), "results": out})
+
+    @action(detail=False, methods=["post"], url_path="copy-from-year")
+    def copy_from_year(self, request):
+        """Copy holidays from a source academic year into a target academic year.
+
+        Body: { "source_academic_year": <id>, "target_academic_year": <id>, "shift_year": true|false }
+        - If shift_year is true (default), dates are shifted by (target.start_year - source.start_year) years.
+        - Skips holidays that would collide with existing (date, name) entries.
+        """
+        if not getattr(request.user, "school", None):
+            return Response(
+                {"success": False, "message": "Your account is not linked to a school."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        src_id = request.data.get("source_academic_year")
+        tgt_id = request.data.get("target_academic_year")
+        shift_year = request.data.get("shift_year", True)
+        if not src_id or not tgt_id:
+            return Response(
+                {"success": False, "message": "source_academic_year and target_academic_year are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            src = AcademicYear.objects.get(pk=int(src_id), school=request.user.school)
+            tgt = AcademicYear.objects.get(pk=int(tgt_id), school=request.user.school)
+        except (AcademicYear.DoesNotExist, ValueError, TypeError):
+            return Response(
+                {"success": False, "message": "Source or target academic year not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if src.id == tgt.id:
+            return Response(
+                {"success": False, "message": "Source and target academic year must differ."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        year_offset = 0
+        if shift_year:
+            try:
+                year_offset = tgt.start_date.year - src.start_date.year
+            except AttributeError:
+                year_offset = 0
+
+        source_holidays = Holiday.objects.filter(school=request.user.school, academic_year=src)
+        created, skipped = 0, 0
+        for h in source_holidays:
+            try:
+                new_date = h.date.replace(year=h.date.year + year_offset) if year_offset else h.date
+                new_end = h.end_date.replace(year=h.end_date.year + year_offset) if (h.end_date and year_offset) else h.end_date
+            except ValueError:
+                # Feb 29 → Feb 28 fallback
+                new_date = h.date.replace(year=h.date.year + year_offset, day=28) if year_offset else h.date
+                new_end = h.end_date.replace(year=h.end_date.year + year_offset, day=28) if (h.end_date and year_offset) else h.end_date
+
+            if Holiday.objects.filter(school=request.user.school, date=new_date, name__iexact=h.name).exists():
+                skipped += 1
+                continue
+            try:
+                Holiday.objects.create(
+                    school=request.user.school,
+                    academic_year=tgt,
+                    name=h.name,
+                    date=new_date,
+                    end_date=new_end,
+                    holiday_type=h.holiday_type,
+                    description=h.description,
+                    active_status=h.active_status,
+                )
+                created += 1
+            except IntegrityError:
+                skipped += 1
+
+        return Response({
+            "success": True,
+            "message": f"Copied {created} holiday{'s' if created != 1 else ''}"
+                       + (f", skipped {skipped} duplicate{'s' if skipped != 1 else ''}." if skipped else "."),
+            "created": created,
+            "skipped": skipped,
+        })
+
+    def _normalized_errors(self, serializer_errors):
+        if isinstance(serializer_errors, dict):
+            for key in ("name", "date", "end_date", "holiday_type"):
+                vals = serializer_errors.get(key)
+                if isinstance(vals, list) and vals:
+                    return serializer_errors, str(vals[0])
+            non_field = serializer_errors.get("non_field_errors")
+            if isinstance(non_field, list) and non_field:
+                return serializer_errors, str(non_field[0])
+            cleaned = {}
+            for key, value in serializer_errors.items():
+                cleaned[key] = [str(item) for item in value] if isinstance(value, list) else [str(value)]
+            return cleaned, "Please correct the highlighted fields."
+        return {}, "Validation failed"
+
+    def create(self, request, *args, **kwargs):
+        if not getattr(request.user, "school", None):
+            return Response(
+                {"success": False, "message": "Your account is not linked to a school. Contact your administrator."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            errors, message = self._normalized_errors(serializer.errors)
+            return Response({"success": False, "message": message, "errors": errors},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            self.perform_create(serializer)
+        except IntegrityError as exc:
+            msg = str(exc).lower()
+            if "uq_holiday_school_date_name" in msg or ("date" in msg and "name" in msg):
+                friendly = "A holiday with this name already exists on that date."
+            else:
+                friendly = "Could not save holiday due to a database constraint."
+            return Response({"success": False, "message": friendly}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"success": True, "message": f'Holiday "{serializer.data.get("name")}" added.', "data": serializer.data},
+            status=status.HTTP_201_CREATED,
+        )
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        if not serializer.is_valid():
+            errors, message = self._normalized_errors(serializer.errors)
+            return Response({"success": False, "message": message, "errors": errors},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            self.perform_update(serializer)
+        except IntegrityError as exc:
+            msg = str(exc).lower()
+            if "uq_holiday_school_date_name" in msg or ("date" in msg and "name" in msg):
+                friendly = "A holiday with this name already exists on that date."
+            else:
+                friendly = "Could not update holiday due to a database constraint."
+            return Response({"success": False, "message": friendly}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"success": True, "message": "Holiday updated.", "data": serializer.data},
+            status=status.HTTP_200_OK,
+        )
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        name = instance.name
+        self.perform_destroy(instance)
+        return Response({"success": True, "message": f'Holiday "{name}" deleted.'},
+                        status=status.HTTP_200_OK)
+

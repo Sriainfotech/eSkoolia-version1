@@ -554,3 +554,38 @@ class LessonPlanTopic(models.Model):
     class Meta:
         db_table = "lesson_plan_topics"
         ordering = ["id"]
+
+
+class ClassSubjectEntry(models.Model):
+    """Simplified per-class subject catalog used during Foundation setup."""
+
+    TYPE_CORE = "core"
+    TYPE_CO_CURRICULAR = "co_curricular"
+    TYPE_OPTIONAL = "optional"
+    TYPE_CHOICES = [
+        (TYPE_CORE, "Core"),
+        (TYPE_CO_CURRICULAR, "Co-curricular"),
+        (TYPE_OPTIONAL, "Optional"),
+    ]
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="class_subject_entries")
+    school_class = models.ForeignKey("core.Class", on_delete=models.CASCADE, related_name="subject_entries")
+    name = models.CharField(max_length=200)
+    code = models.CharField(max_length=20, blank=True)
+    subject_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default=TYPE_CORE)
+    periods_per_week = models.PositiveSmallIntegerField(default=5)
+    active_status = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "class_subject_entries"
+        ordering = ["school_class_id", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "school_class", "code"],
+                name="uq_class_subject_entry",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.school_class} - {self.name}"

@@ -5,6 +5,7 @@ from .views import (
     ClassRoomViewSet,
     ClassViewSet,
     SectionViewSet,
+    StreamViewSet,
     SubjectViewSet,
     VehicleViewSet,
     TransportRouteViewSet,
@@ -24,11 +25,13 @@ from .views import (
     ItemIssueViewSet,
     ItemSellViewSet,
 )
+from .views import HolidayViewSet
 
 router = DefaultRouter()
 router.register("academic-years", AcademicYearViewSet, basename="academic-year")
 router.register("classes", ClassViewSet, basename="class")
 router.register("sections", SectionViewSet, basename="section")
+router.register("streams", StreamViewSet, basename="stream")
 router.register("subjects", SubjectViewSet, basename="subject")
 router.register("class-periods", ClassPeriodViewSet, basename="class-period")
 router.register("class-rooms", ClassRoomViewSet, basename="class-room")
@@ -55,5 +58,8 @@ router.register("items", ItemViewSet, basename="item")
 router.register("item-receives", ItemReceiveViewSet, basename="item-receive")
 router.register("item-issues", ItemIssueViewSet, basename="item-issue")
 router.register("item-sells", ItemSellViewSet, basename="item-sell")
+
+# Holiday Calendar
+router.register("holidays", HolidayViewSet, basename="holiday")
 
 urlpatterns = router.urls
