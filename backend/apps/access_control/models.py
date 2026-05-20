@@ -25,8 +25,9 @@ class Permission(models.Model):
 
 class Role(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="roles", null=True, blank=True)
-    name = models.CharField(max_length=120)
+    name = models.CharField(max_length=30)
     is_system = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
     permissions = models.ManyToManyField(Permission, through="RolePermission", related_name="roles")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -35,7 +36,13 @@ class Role(models.Model):
         db_table = "roles"
         ordering = ["name"]
         constraints = [
-            models.UniqueConstraint(fields=["school", "name"], name="uq_role_school_name"),
+            # nulls_distinct=False makes PostgreSQL 15 treat (NULL,"X") and (NULL,"X") as
+            # duplicates — fixing the standard NULL != NULL loophole in unique constraints.
+            models.UniqueConstraint(
+                fields=["school", "name"],
+                name="uq_role_school_name",
+                nulls_distinct=False,
+            ),
         ]
 
     def __str__(self) -> str:

@@ -200,6 +200,29 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
             height: "100%",
           }}
         >
+          {/* Back button — shown on all pages except home */}
+          {!isHome && (
+            <button
+              type="button"
+              onClick={() => router.back()}
+              title="Go back"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: "4px 2px",
+                borderRadius: 6,
+                flexShrink: 0,
+                color: "var(--ink-3)",
+              }}
+            >
+              <ChevronLeft size={14} strokeWidth={1.5} />
+            </button>
+          )}
+
           {/* Logo */}
           <Link
             href="/home"
@@ -211,13 +234,6 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
               flexShrink: 0,
             }}
           >
-            {!isHome && (
-              <ChevronLeft
-                size={14}
-                strokeWidth={1.5}
-                style={{ color: "var(--ink-3)" }}
-              />
-            )}
             <span
               style={{
                 width: 32,

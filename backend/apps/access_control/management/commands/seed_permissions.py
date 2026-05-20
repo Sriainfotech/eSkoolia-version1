@@ -70,6 +70,10 @@ PERMISSIONS = [
     ("student_info.sms_sending_time.view", "SMS Sending Time", "student_info"),
 
     ("academics.core_setup.view", "Core Setup", "academics"),
+    ("academics.assign_class_teacher.view", "Assign Class Teacher", "academics"),
+    ("academics.assign_subject.view", "Assign Subject", "academics"),
+    ("academics.class_room.view", "Class Room", "academics"),
+    ("academics.class_routine.view", "Class Routine", "academics"),
     ("academics.lesson.view", "Lesson", "academics"),
     ("academics.topic.view", "Topic", "academics"),
     ("academics.lesson_planner.view", "Lesson Planner", "academics"),

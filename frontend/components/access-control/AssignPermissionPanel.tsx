@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Manrope, Playfair_Display } from "next/font/google";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { TopToast } from "@/components/common/TopToast";
 
 const playfairDisplay = Playfair_Display({
   subsets: ["latin"],
@@ -24,7 +25,7 @@ type PermAction = "view" | "add" | "edit" | "delete";
 interface SubFeatureRow { key: string; label: string; view?: PermissionNode; add?: PermissionNode; edit?: PermissionNode; delete?: PermissionNode; }
 type OperationLevel = "none" | "view" | "create_edit" | "full";
 interface AssignPermissionPanelProps { roleId: number | string | null | undefined; onBack: () => void; }
-interface RoleItem { id: number; name: string; description?: string; }
+interface RoleItem { id: number; name: string; description?: string; is_active?: boolean; is_system?: boolean; }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -215,7 +216,8 @@ function ModuleList(props: ModuleListProps) {
 
         {showNewRoleForm && (
           <div style={{ marginTop: "10px", borderTop: "1px solid #D8D4FF", paddingTop: "10px" }}>
-            <input type="text" placeholder="Role name *" value={newRoleName} onChange={(e) => onNewRoleNameChange(e.target.value)}
+            <input type="text" placeholder="Role name *" value={newRoleName}
+              onChange={(e) => onNewRoleNameChange(e.target.value.replace(/[^A-Za-z ]/g, ""))}
               style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1.5px solid #D8D4FF", fontSize: "13px", marginBottom: "6px", boxSizing: "border-box", outline: "none" }} />
             <input type="text" placeholder="Description (optional)" value={newRoleDesc} onChange={(e) => onNewRoleDescChange(e.target.value)}
               style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1.5px solid #D8D4FF", fontSize: "13px", marginBottom: "8px", boxSizing: "border-box", outline: "none" }} />
@@ -542,12 +544,14 @@ function ReviewModal({ modules, enabledModules, operationLevels, selectedIds, on
 
 // ── Role CRUD Modals ───────────────────────────────────────────────────────────
 
-function RoleFormModal({ title, icon, name, desc, onNameChange, onDescChange, onConfirm, onCancel, confirmLabel, confirmDisabled }: {
-  title: string; icon: string; name: string; desc: string;
+function RoleFormModal({ title, icon, name, desc, nameError, isActive, onNameChange, onDescChange, onIsActiveChange, onConfirm, onCancel, confirmLabel, confirmDisabled }: {
+  title: string; icon: string; name: string; desc: string; nameError?: string;
+  isActive?: boolean; onIsActiveChange?: (v: boolean) => void;
   onNameChange: (v: string) => void; onDescChange: (v: string) => void;
   onConfirm: () => void; onCancel: () => void;
   confirmLabel: string; confirmDisabled: boolean;
 }) {
+  const MAX = 30;
   return (
     <ModalOverlay>
       <div style={{ background: "#fff", borderRadius: "20px", padding: "32px", maxWidth: "480px", width: "100%", boxShadow: "0 24px 64px rgba(0,0,0,.18)" }}>
@@ -555,17 +559,30 @@ function RoleFormModal({ title, icon, name, desc, onNameChange, onDescChange, on
           <div style={{ width: "48px", height: "48px", borderRadius: "14px", background: "#EEEAFF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "22px", flexShrink: 0 }}>{icon}</div>
           <div>
             <p style={{ margin: 0, fontWeight: 700, fontSize: "18px", color: "#15172A" }}>{title}</p>
-            <p style={{ margin: "3px 0 0", fontSize: "13px", color: "#9A9DB0" }}>Fill in the details below and save</p>
+            <p style={{ margin: "3px 0 0", fontSize: "13px", color: "#9A9DB0" }}>Letters and spaces only &mdash; no numbers or special characters</p>
           </div>
         </div>
         <label style={{ display: "block", marginBottom: "16px" }}>
           <span style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#5B5E72", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>Role Name *</span>
           <input
             type="text" autoFocus placeholder="e.g. Class Teacher, Lab Assistant, Principal…"
-            value={name} onChange={(e) => onNameChange(e.target.value)}
+            value={name}
+            maxLength={MAX}
+            onChange={(e) => {
+              // Strip numbers and special characters as user types
+              const cleaned = e.target.value.replace(/[^A-Za-z ]/g, "").slice(0, MAX);
+              onNameChange(cleaned);
+            }}
             onKeyDown={(e) => { if (e.key === "Enter" && !confirmDisabled) onConfirm(); }}
-            style={{ width: "100%", padding: "10px 14px", borderRadius: "8px", border: "1.5px solid #D8D4FF", fontSize: "14px", outline: "none", boxSizing: "border-box" as const, color: "#15172A" }}
+            style={{ width: "100%", padding: "10px 14px", borderRadius: "8px", border: `1.5px solid ${nameError ? "#dc2626" : "#D8D4FF"}`, fontSize: "14px", outline: "none", boxSizing: "border-box" as const, color: "#15172A" }}
           />
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: "4px" }}>
+            {nameError
+              ? <span style={{ fontSize: "12px", color: "#dc2626", fontWeight: 500 }}>{nameError}</span>
+              : <span style={{ fontSize: "12px", color: "#9A9DB0" }}> </span>
+            }
+            <span style={{ fontSize: "12px", color: name.length >= MAX ? "#dc2626" : "#9A9DB0" }}>{name.length}/{MAX}</span>
+          </div>
         </label>
         <label style={{ display: "block", marginBottom: "24px" }}>
           <span style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#5B5E72", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "6px" }}>Description</span>
@@ -620,6 +637,7 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
 
   // Permission selections
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -639,21 +657,25 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
   const [showNewRoleForm, setShowNewRoleForm] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
   const [newRoleDesc, setNewRoleDesc] = useState("");
+  const [newRoleNameError, setNewRoleNameError] = useState("");
   const [creatingRole, setCreatingRole] = useState(false);
 
   // Role CRUD dialogs
   const [editingRole, setEditingRole] = useState<RoleItem | null>(null);
   const [editRoleName, setEditRoleName] = useState("");
   const [editRoleDesc, setEditRoleDesc] = useState("");
+  const [editRoleIsActive, setEditRoleIsActive] = useState(true);
+  const [editRoleNameError, setEditRoleNameError] = useState("");
   const [savingEditRole, setSavingEditRole] = useState(false);
   const [deletingRole, setDeletingRole] = useState<RoleItem | null>(null);
   const [deletingRoleInProgress, setDeletingRoleInProgress] = useState(false);
   const [hoveredRoleId, setHoveredRoleId] = useState<number | null>(null);
+  const [togglingRoleId, setTogglingRoleId] = useState<number | null>(null);
 
   // ── Load all roles (for switcher) ───────────────────────────────────────────
   useEffect(() => {
     apiRequestWithRefresh<{ results?: RoleItem[]; data?: RoleItem[] } | RoleItem[]>(
-      "/api/v1/access-control/roles/?page_size=200"
+      "/api/v1/access-control/roles/?page_size=200&minimal=1&show_inactive=1"
     )
       .then((res) => {
         const list = Array.isArray(res)
@@ -720,40 +742,86 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
     setShowRoleSwitcher(false);
   }
 
+  const ROLE_NAME_RE = /^[A-Za-z ]+$/;
+  const REPEATED_CHARS_RE = /(.)(\1){2,}/i;  // 3+ consecutive identical letters
+
   async function createNewRole() {
-    if (!newRoleName.trim()) return;
+    const trimmed = newRoleName.trim();
+    if (!trimmed) {
+      setNewRoleNameError("Role name is required.");
+      return;
+    }
+    if (!ROLE_NAME_RE.test(trimmed)) {
+      setNewRoleNameError("Only letters and spaces are allowed. No numbers or special characters.");
+      return;
+    }
+    if (REPEATED_CHARS_RE.test(trimmed)) {
+      setNewRoleNameError('Avoid repeating the same letter more than twice (e.g. "wwwwww")');
+      return;
+    }
+    setNewRoleNameError("");
     setCreatingRole(true);
     try {
       const res = await apiRequestWithRefresh<{ id: number; name: string; data?: { id: number; name: string } }>(
         "/api/v1/access-control/roles/",
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: newRoleName.trim(), description: newRoleDesc.trim() }) }
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed, description: newRoleDesc.trim() }) }
       );
       const newRole = (res as { data?: { id: number; name: string } }).data ?? (res as { id: number; name: string });
       setAllRoles((prev) => [...prev, newRole]);
       setNewRoleName("");
       setNewRoleDesc("");
+      setNewRoleNameError("");
       setShowNewRoleForm(false);
+      setToast({ message: `Role "${newRole.name}" created successfully.`, tone: "success" });
       switchRole(newRole.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create role.");
+      const msg = err instanceof Error ? err.message : "Failed to create role.";
+      // Show name-related errors inline in the form; others as toast.
+      if (msg.toLowerCase().includes("name") || msg.toLowerCase().includes("already exists") || msg.toLowerCase().includes("deactivated")) {
+        setNewRoleNameError(msg);
+      } else {
+        setToast({ message: msg, tone: "error" });
+      }
     } finally {
       setCreatingRole(false);
     }
   }
 
   async function saveEditRole() {
-    if (!editingRole || !editRoleName.trim()) return;
+    if (!editingRole) return;
+    const trimmed = editRoleName.trim();
+    if (!trimmed) {
+      setEditRoleNameError("Role name is required.");
+      return;
+    }
+    if (!ROLE_NAME_RE.test(trimmed)) {
+      setEditRoleNameError("Only letters and spaces are allowed. No numbers or special characters.");
+      return;
+    }
+    if (REPEATED_CHARS_RE.test(trimmed)) {
+      setEditRoleNameError('Avoid repeating the same letter more than twice (e.g. "wwwwww")');
+      return;
+    }
+    setEditRoleNameError("");
     setSavingEditRole(true);
     try {
       await apiRequestWithRefresh(
         `/api/v1/access-control/roles/${editingRole.id}/`,
-        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: editRoleName.trim(), description: editRoleDesc.trim() }) }
+        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed, description: editRoleDesc.trim(), is_active: editRoleIsActive }) }
       );
-      setAllRoles((prev) => prev.map((r) => r.id === editingRole.id ? { ...r, name: editRoleName.trim(), description: editRoleDesc.trim() } : r));
-      if (roleData?.id === editingRole.id) setRoleData((prev) => prev ? { ...prev, name: editRoleName.trim() } : prev);
+      setAllRoles((prev) => prev.map((r) => r.id === editingRole.id ? { ...r, name: trimmed, description: editRoleDesc.trim(), is_active: editRoleIsActive } : r));
+      if (roleData?.id === editingRole.id) setRoleData((prev) => prev ? { ...prev, name: trimmed } : prev);
+      setToast({ message: `Role "${trimmed}" updated successfully.`, tone: "success" });
       setEditingRole(null);
+      setEditRoleNameError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update role.");
+      const msg = err instanceof Error ? err.message : "Failed to update role.";
+      // Show name-related errors inline in the form; others as toast.
+      if (msg.toLowerCase().includes("name") || msg.toLowerCase().includes("already exists") || msg.toLowerCase().includes("deactivated")) {
+        setEditRoleNameError(msg);
+      } else {
+        setToast({ message: msg, tone: "error" });
+      }
     } finally {
       setSavingEditRole(false);
     }
@@ -766,11 +834,32 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
       await apiRequestWithRefresh(`/api/v1/access-control/roles/${deletingRole.id}/`, { method: "DELETE" });
       setAllRoles((prev) => prev.filter((r) => r.id !== deletingRole.id));
       if (String(activeRoleId) === String(deletingRole.id)) { setActiveRoleId(""); setRoleData(null); }
+      setToast({ message: `Role "${deletingRole.name}" deleted.`, tone: "success" });
       setDeletingRole(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete role.");
+      setToast({ message: err instanceof Error ? err.message : "Failed to delete role.", tone: "error" });
     } finally {
       setDeletingRoleInProgress(false);
+    }
+  }
+
+  async function toggleRoleActive(role: RoleItem) {
+    setTogglingRoleId(role.id);
+    const nextActive = !(role.is_active ?? true);
+    try {
+      await apiRequestWithRefresh(
+        `/api/v1/access-control/roles/${role.id}/`,
+        { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ is_active: nextActive }) }
+      );
+      setAllRoles((prev) => prev.map((r) => r.id === role.id ? { ...r, is_active: nextActive } : r));
+      setToast({
+        message: nextActive ? `"${role.name}" activated successfully.` : `"${role.name}" deactivated successfully.`,
+        tone: "success",
+      });
+    } catch (err) {
+      setToast({ message: err instanceof Error ? err.message : "Failed to update role status.", tone: "error" });
+    } finally {
+      setTogglingRoleId(null);
     }
   }
 
@@ -909,10 +998,19 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
         {showNewRoleForm && (
           <RoleFormModal
             title="Create New Role" icon="✨"
-            name={newRoleName} desc={newRoleDesc}
-            onNameChange={setNewRoleName} onDescChange={setNewRoleDesc}
+            name={newRoleName} desc={newRoleDesc} nameError={newRoleNameError}
+            onNameChange={(v) => {
+              setNewRoleName(v);
+              if (!v.trim()) { setNewRoleNameError(""); return; }
+              if (REPEATED_CHARS_RE.test(v)) {
+                setNewRoleNameError('Avoid repeating the same letter more than twice (e.g. "wwwwww")');
+              } else if (newRoleNameError) {
+                setNewRoleNameError("");
+              }
+            }}
+            onDescChange={setNewRoleDesc}
             onConfirm={() => void createNewRole()}
-            onCancel={() => { setShowNewRoleForm(false); setNewRoleName(""); setNewRoleDesc(""); }}
+            onCancel={() => { setShowNewRoleForm(false); setNewRoleName(""); setNewRoleDesc(""); setNewRoleNameError(""); }}
             confirmLabel={creatingRole ? "Creating…" : "Create & Configure →"}
             confirmDisabled={!newRoleName.trim() || creatingRole}
           />
@@ -920,10 +1018,20 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
         {editingRole && (
           <RoleFormModal
             title={`Edit Role`} icon="✏️"
-            name={editRoleName} desc={editRoleDesc}
-            onNameChange={setEditRoleName} onDescChange={setEditRoleDesc}
+            name={editRoleName} desc={editRoleDesc} nameError={editRoleNameError}
+            isActive={editRoleIsActive} onIsActiveChange={setEditRoleIsActive}
+            onNameChange={(v) => {
+              setEditRoleName(v);
+              if (!v.trim()) { setEditRoleNameError(""); return; }
+              if (REPEATED_CHARS_RE.test(v)) {
+                setEditRoleNameError('Avoid repeating the same letter more than twice (e.g. "wwwwww")');
+              } else if (editRoleNameError) {
+                setEditRoleNameError("");
+              }
+            }}
+            onDescChange={setEditRoleDesc}
             onConfirm={() => void saveEditRole()}
-            onCancel={() => setEditingRole(null)}
+            onCancel={() => { setEditingRole(null); setEditRoleNameError(""); }}
             confirmLabel={savingEditRole ? "Saving…" : "Save Changes"}
             confirmDisabled={!editRoleName.trim() || savingEditRole}
           />
@@ -964,6 +1072,7 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
         </div>
 
         {error && <div role="alert" className="flash error">{error}</div>}
+        {toast && <TopToast message={toast.message} tone={toast.tone} onClose={() => setToast(null)} />}
 
         {/* NO ROLE SELECTED — inline role picker */}
         {!activeRoleId ? (
@@ -974,13 +1083,21 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "12px" }}>
                 {allRoles.map((r) => (
-                  <div key={r.id} style={{ position: "relative", background: "#fff", border: "1.5px solid #E8E8EE", borderRadius: "12px", padding: "18px 20px 14px", transition: "all 0.15s", display: "flex", flexDirection: "column", gap: "6px" }}
-                    onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "#6D4AFF"; (e.currentTarget as HTMLDivElement).style.background = "#FAFAFF"; setHoveredRoleId(r.id); }}
-                    onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "#E8E8EE"; (e.currentTarget as HTMLDivElement).style.background = "#fff"; setHoveredRoleId(null); }}>
+                  <div key={r.id}
+                    style={{
+                      position: "relative",
+                      background: r.is_active === false ? "#F9F9FC" : "#fff",
+                      border: `1.5px solid ${r.is_active === false ? "#ECEEF5" : "#E8E8EE"}`,
+                      borderRadius: "12px", padding: "18px 20px 14px",
+                      transition: "all 0.15s", display: "flex", flexDirection: "column", gap: "6px",
+                      opacity: r.is_active === false ? 0.65 : 1,
+                    }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = "#6D4AFF"; (e.currentTarget as HTMLDivElement).style.background = "#FAFAFF"; (e.currentTarget as HTMLDivElement).style.opacity = "1"; setHoveredRoleId(r.id); }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLDivElement).style.borderColor = r.is_active === false ? "#ECEEF5" : "#E8E8EE"; (e.currentTarget as HTMLDivElement).style.background = r.is_active === false ? "#F9F9FC" : "#fff"; (e.currentTarget as HTMLDivElement).style.opacity = r.is_active === false ? "0.65" : "1"; setHoveredRoleId(null); }}>
                     {/* Action buttons — visible only on hover */}
                     <div style={{ position: "absolute", top: "10px", right: "10px", display: "flex", gap: "4px", opacity: hoveredRoleId === r.id ? 1 : 0, transition: "opacity 0.15s", pointerEvents: hoveredRoleId === r.id ? "auto" : "none" }}>
                       <button type="button" title="Edit role"
-                        onClick={(e) => { e.stopPropagation(); setEditRoleName(r.name); setEditRoleDesc(r.description ?? ""); setEditingRole(r); }}
+                        onClick={(e) => { e.stopPropagation(); setEditRoleName(r.name); setEditRoleDesc(r.description ?? ""); setEditRoleIsActive(r.is_active ?? true); setEditingRole(r); }}
                         style={{ width: "26px", height: "26px", borderRadius: "6px", border: "1px solid #E8E8EE", background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", color: "#6D4AFF", zIndex: 1 }}>
                         ✏️
                       </button>
@@ -994,12 +1111,44 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
                     <button type="button" onClick={() => switchRole(r.id)}
                       style={{ background: "transparent", border: "none", padding: 0, textAlign: "left", cursor: "pointer", display: "flex", flexDirection: "column", gap: "6px", flex: 1 }}>
                       <span style={{ display: "flex", alignItems: "center", gap: "8px", paddingRight: "52px" }}>
-                        <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#6D4AFF", flexShrink: 0 }} />
+                        <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: r.is_active === false ? "#9CA3AF" : "#6D4AFF", flexShrink: 0, transition: "background 0.2s" }} />
                         <span style={{ fontWeight: 700, fontSize: "14px", color: "#15172A" }}>{r.name}</span>
                       </span>
                       {r.description && <span style={{ fontSize: "12px", color: "#9A9DB0", paddingLeft: "16px" }}>{r.description}</span>}
                       <span style={{ fontSize: "12px", color: "#6D4AFF", fontWeight: 600, paddingLeft: "16px", marginTop: "4px" }}>Configure permissions →</span>
                     </button>
+                    {/* ── Active / Inactive toggle ── */}
+                    <div
+                      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: "10px", borderTop: "1px solid #F0F0F5" }}
+                      onClick={(e) => e.stopPropagation()}>
+                      <span style={{ fontSize: "11px", fontWeight: 600, color: r.is_active === false ? "#9CA3AF" : "#16a34a", letterSpacing: "0.02em" }}>
+                        {r.is_active === false ? "Inactive" : "Active"}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={r.is_system === true || togglingRoleId === r.id}
+                        onClick={(e) => { e.stopPropagation(); void toggleRoleActive(r); }}
+                        title={r.is_system ? "System roles cannot be deactivated" : (r.is_active === false ? "Activate role" : "Deactivate role")}
+                        style={{
+                          position: "relative", width: "36px", height: "20px", borderRadius: "10px",
+                          background: r.is_active === false ? "#D1D5DB" : "#16a34a",
+                          border: "none", padding: 0,
+                          cursor: r.is_system ? "not-allowed" : togglingRoleId === r.id ? "wait" : "pointer",
+                          transition: "background 0.25s",
+                          opacity: togglingRoleId === r.id ? 0.55 : r.is_system ? 0.35 : 1,
+                          flexShrink: 0,
+                        }}
+                      >
+                        <span style={{
+                          position: "absolute", top: "2px",
+                          left: r.is_active === false ? "2px" : "18px",
+                          width: "16px", height: "16px", borderRadius: "50%",
+                          background: "#fff", transition: "left 0.25s",
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
+                          display: "block",
+                        }} />
+                      </button>
+                    </div>
                   </div>
                 ))}
                 <button type="button" onClick={() => setShowNewRoleForm(true)} style={{

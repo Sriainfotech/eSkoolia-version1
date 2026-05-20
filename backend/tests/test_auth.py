@@ -64,6 +64,42 @@ class TestAuthentication:
         }, format="json")
         assert response.status_code in (400, 401)
 
+    def test_login_prefers_password_match_across_duplicate_identifiers(self, api_client, school):
+        """Duplicate email/phone should not fail early on a blocked non-matching account."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        shared_email = "shared.login@test.com"
+
+        User.objects.create_user(
+            username="blocked_duplicate",
+            email=shared_email,
+            password="WrongPass@123",
+            school=school,
+            is_active=False,
+        )
+        allowed_user = User.objects.create_user(
+            username="allowed_duplicate",
+            email=shared_email,
+            password="RightPass@123",
+            school=school,
+            is_active=True,
+            access_status=True,
+            due_fees_login_blocked=False,
+        )
+
+        response = api_client.post("/api/auth/login/", {
+            "username": shared_email,
+            "password": "RightPass@123",
+        }, format="json")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "access" in data
+
+        allowed_user.refresh_from_db()
+        assert allowed_user.last_login is not None
+
 
 @pytest.mark.smoke
 class TestMultiTenancy:

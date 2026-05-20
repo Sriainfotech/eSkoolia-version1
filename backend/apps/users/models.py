@@ -3,6 +3,7 @@ from django.db import models
 
 
 class User(AbstractUser):
+    email = models.EmailField(blank=True, default="")
     school = models.ForeignKey(
         "tenancy.School",
         null=True,
@@ -18,6 +19,14 @@ class User(AbstractUser):
 
     class Meta:
         db_table = "users"
+        constraints = [
+            # Unique email only when non-empty — allows multiple users with no email.
+            models.UniqueConstraint(
+                fields=["email"],
+                condition=models.Q(email__gt=""),
+                name="users_email_nonempty_uniq",
+            ),
+        ]
 
     def get_permission_codes(self) -> set[str]:
         if self.is_superuser:

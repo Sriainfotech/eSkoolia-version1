@@ -18,6 +18,21 @@ export default function AuthGate({ children }: AuthGateProps) {
       const refresh = getRefreshToken();
 
       if (access) {
+        // Check if user must change password
+        if (pathname !== '/change-password') {
+          try {
+            const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me/`, {
+              headers: { Authorization: `Bearer ${access}` },
+            });
+            if (meRes.ok) {
+              const me = await meRes.json() as { must_change_password?: boolean };
+              if (me.must_change_password) {
+                router.replace('/change-password');
+                return;
+              }
+            }
+          } catch { /* non-blocking */ }
+        }
         setReady(true);
         return;
       }

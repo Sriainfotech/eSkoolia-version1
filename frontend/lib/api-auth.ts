@@ -80,6 +80,13 @@ function extractApiErrorMessage(body: unknown, status: number): string {
   if (body && typeof body === "object") {
     const payload = body as Record<string, unknown>;
 
+    // Check `message` first — the backend mixin already extracts the most-relevant
+    // human-readable message into this field, so prefer it over field-prefixed errors.
+    const fromMessage = firstErrorMessage(payload.message);
+    if (fromMessage) {
+      return fromMessage;
+    }
+
     const fromErrors = extractFieldMessage(payload.errors);
     if (fromErrors) {
       return fromErrors;
@@ -93,11 +100,6 @@ function extractApiErrorMessage(body: unknown, status: number): string {
     const fromErrorMessage = firstErrorMessage((payload.error as Record<string, unknown> | undefined)?.message);
     if (fromErrorMessage) {
       return fromErrorMessage;
-    }
-
-    const fromMessage = firstErrorMessage(payload.message);
-    if (fromMessage) {
-      return fromMessage;
     }
 
     const fromDetail = firstErrorMessage(payload.detail);
