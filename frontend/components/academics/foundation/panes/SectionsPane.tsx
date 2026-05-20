@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import type { SchoolClass, Section, Toast } from "../types";
+import ConfirmDeleteDialog from "../ConfirmDeleteDialog";
 
 interface Props {
   classes: SchoolClass[];
@@ -35,6 +36,7 @@ export default function SectionsPane({ classes, loading, onRefresh, showToast, o
   const [renamingId, setRenamingId]   = useState<number | null>(null);
   const [renameVal, setRenameVal]     = useState("");
   const [deletingId, setDeletingId]   = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Section | null>(null);
 
   const preview = PATTERNS[pattern].slice(0, Math.max(1, Math.min(count, 10)));
 
@@ -122,13 +124,28 @@ export default function SectionsPane({ classes, loading, onRefresh, showToast, o
   }
 
   async function deleteSection(sec: Section) {
-    if (!confirm(`Delete section "${sec.name}"?`)) return;
+    setPendingDelete(sec);
+  }
+
+  async function confirmDeleteSection() {
+    const sec = pendingDelete;
+    if (!sec) return;
     setDeletingId(sec.id);
     try {
       await apiRequestWithRefresh(`/api/v1/core/sections/${sec.id}/`, { method: "DELETE" });
       showToast(`Section "${sec.name}" deleted.`);
+      setPendingDelete(null);
       onRefresh();
-    } catch { showToast("Failed to delete section.", "error"); }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (/\b404\b|not[_ ]?found/i.test(msg)) {
+        showToast("This section no longer exists. Refreshing the list\u2026", "error");
+        setPendingDelete(null);
+        onRefresh();
+      } else {
+        showToast("Failed to delete section.", "error");
+      }
+    }
     finally { setDeletingId(null); }
   }
 
@@ -301,6 +318,20 @@ export default function SectionsPane({ classes, loading, onRefresh, showToast, o
           </div>
         )}
       </div>
+
+      <ConfirmDeleteDialog
+        open={!!pendingDelete}
+        title="Delete Section"
+        message={
+          <>
+            Are you sure you want to delete section <strong>“{pendingDelete?.name}”</strong>? Any students
+            currently assigned to this section will be unlinked.
+          </>
+        }
+        loading={deletingId === pendingDelete?.id}
+        onConfirm={() => void confirmDeleteSection()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import type { Toast } from "../types";
+import ConfirmDeleteDialog from "../ConfirmDeleteDialog";
 
 interface Props {
   showToast: (msg: string, tone?: Toast["tone"]) => void;
@@ -57,6 +58,7 @@ export default function RoomsPane({ showToast, onBack, onNext }: Props) {
   const [error, setError]         = useState("");
 
   const [deletingId, setDelId]    = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Room | null>(null);
   const [togglingId, setTogId]    = useState<number | null>(null);
   const roomNoRef                  = useRef<HTMLInputElement>(null);
 
@@ -207,13 +209,28 @@ export default function RoomsPane({ showToast, onBack, onNext }: Props) {
   }
 
   async function deleteRoom(r: Room) {
-    if (!confirm(`Delete room "${r.room_no}"?`)) return;
+    setPendingDelete(r);
+  }
+
+  async function confirmDeleteRoom() {
+    const r = pendingDelete;
+    if (!r) return;
     setDelId(r.id);
     try {
       await apiRequestWithRefresh(`${API}${r.id}/`, { method: "DELETE" });
       setRooms((prev) => prev.filter((x) => x.id !== r.id));
       showToast(`Room "${r.room_no}" removed.`);
-    } catch (err: unknown) { showToast(parseError(err), "error"); }
+      setPendingDelete(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (/\b404\b|not[_ ]?found/i.test(msg)) {
+        showToast("This room no longer exists. Refreshing the list\u2026", "error");
+        setRooms((prev) => prev.filter((x) => x.id !== r.id));
+        setPendingDelete(null);
+      } else {
+        showToast(parseError(err), "error");
+      }
+    }
     finally { setDelId(null); }
   }
 
@@ -438,6 +455,20 @@ export default function RoomsPane({ showToast, onBack, onNext }: Props) {
           )}
         </div>
       </div>
+
+      <ConfirmDeleteDialog
+        open={!!pendingDelete}
+        title="Delete Room"
+        message={
+          <>
+            Are you sure you want to delete room <strong>“{pendingDelete?.room_no}”</strong>? This room
+            will no longer be available for class assignments.
+          </>
+        }
+        loading={deletingId === pendingDelete?.id}
+        onConfirm={() => void confirmDeleteRoom()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

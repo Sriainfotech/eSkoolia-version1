@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import type { SchoolClass, ClassSubjectEntry, ClassSubjectEntryType, Toast } from "../types";
+import ConfirmDeleteDialog from "../ConfirmDeleteDialog";
 
 /* ── Props ──────────────────────────────────────────────────── */
 interface Props {
@@ -91,6 +92,7 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
   /* actions */
   const [saving, setSaving]         = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<ClassSubjectEntry | null>(null);
   const [resetting, setResetting]   = useState(false);
   const [loadingDef, setLoadingDef] = useState(false);
 
@@ -194,14 +196,28 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
   }
 
   /* ── Delete single entry ── */
-  async function handleDelete(id: number) {
-    setDeletingId(id);
+  async function handleDelete(entry: ClassSubjectEntry) {
+    setPendingDelete(entry);
+  }
+
+  async function confirmDelete() {
+    const entry = pendingDelete;
+    if (!entry) return;
+    setDeletingId(entry.id);
     try {
-      await apiRequestWithRefresh(`${API}${id}/`, { method: "DELETE" });
-      setEntries((prev) => prev.filter((e) => e.id !== id));
+      await apiRequestWithRefresh(`${API}${entry.id}/`, { method: "DELETE" });
+      setEntries((prev) => prev.filter((e) => e.id !== entry.id));
       showToast("Subject removed.", "success");
+      setPendingDelete(null);
     } catch (e) {
-      showToast(parseErr(e), "error");
+      const msg = e instanceof Error ? e.message : "";
+      if (/\b404\b|not[_ ]?found/i.test(msg)) {
+        showToast("This subject no longer exists.", "error");
+        setEntries((prev) => prev.filter((x) => x.id !== entry.id));
+        setPendingDelete(null);
+      } else {
+        showToast(parseErr(e), "error");
+      }
     } finally {
       setDeletingId(null);
     }
@@ -710,7 +726,7 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
 
                       {/* Delete */}
                       <button
-                        onClick={() => void handleDelete(entry.id)}
+                        onClick={() => void handleDelete(entry)}
                         disabled={deletingId === entry.id}
                         className="w-7 h-7 flex items-center justify-center rounded-md text-[#9FA6AD] hover:text-red-500 hover:bg-red-50 disabled:opacity-50 transition-all"
                         title="Remove subject"
@@ -734,6 +750,21 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
           )}
         </div>
       </div>
+
+      <ConfirmDeleteDialog
+        open={!!pendingDelete}
+        title="Remove Subject"
+        message={
+          <>
+            Remove <strong>“{pendingDelete?.name}”</strong> from this class? Any teacher assignments
+            and related links for this subject will also be removed.
+          </>
+        }
+        confirmLabel="Remove"
+        loading={deletingId === pendingDelete?.id}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

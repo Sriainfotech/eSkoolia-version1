@@ -3,6 +3,7 @@ import { useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import type { AcademicYear, Toast } from "../types";
 import HolidayCalendarCard from "./HolidayCalendarCard";
+import ConfirmDeleteDialog from "../ConfirmDeleteDialog";
 
 interface Props {
   years: AcademicYear[];
@@ -54,6 +55,7 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
   const [error, setError]      = useState("");
   const [deletingId, setDelId] = useState<number | null>(null);
   const [makingId, setMaking]  = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<AcademicYear | null>(null);
 
   const name = derivedName(form.start_date, form.end_date);
 
@@ -110,13 +112,28 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
   }
 
   async function handleDelete(y: AcademicYear) {
-    if (!confirm(`Delete "${y.name}"? This cannot be undone.`)) return;
+    setPendingDelete(y);
+  }
+
+  async function confirmDelete() {
+    const y = pendingDelete;
+    if (!y) return;
     setDelId(y.id);
     try {
       await apiRequestWithRefresh(`/api/v1/core/academic-years/${y.id}/`, { method: "DELETE" });
       showToast(`"${y.name}" deleted.`);
+      setPendingDelete(null);
       onRefresh();
-    } catch { showToast("Failed to delete.", "error"); }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (/\b404\b|not[_ ]?found/i.test(msg)) {
+        showToast("This academic year no longer exists. Refreshing the list\u2026", "error");
+        setPendingDelete(null);
+        onRefresh();
+      } else {
+        showToast("Failed to delete.", "error");
+      }
+    }
     finally { setDelId(null); }
   }
 
@@ -334,6 +351,20 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
         years={years}
         currentYear={years.find((y) => y.is_current)}
         showToast={showToast}
+      />
+
+      <ConfirmDeleteDialog
+        open={!!pendingDelete}
+        title="Delete Academic Year"
+        message={
+          <>
+            Are you sure you want to delete <strong>“{pendingDelete?.name}”</strong>? All holidays
+            and related data linked to this year will also be removed.
+          </>
+        }
+        loading={deletingId === pendingDelete?.id}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDelete(null)}
       />
     </div>
   );

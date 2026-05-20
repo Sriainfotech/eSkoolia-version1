@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import type { SchoolClass, Stream, Toast } from "../types";
+import ConfirmDeleteDialog from "../ConfirmDeleteDialog";
 
 interface Props {
   classes: SchoolClass[];
@@ -87,6 +88,7 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
   const [deletingId, setDelId]    = useState<number | null>(null);
   const [togglingId, setTogId]    = useState<number | null>(null);
   const [editingClassId, setEditCls] = useState<number | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<SchoolClass | null>(null);
 
   // ── Stream state (Senior Secondary only) ──
   const [streamsList, setStreamsList] = useState<Stream[]>([]);
@@ -273,13 +275,28 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
   }
 
   async function deleteClass(cls: SchoolClass) {
-    if (!confirm(`Delete class "${cls.name}"? All sections will be removed.`)) return;
+    setPendingDelete(cls);
+  }
+
+  async function confirmDeleteClass() {
+    const cls = pendingDelete;
+    if (!cls) return;
     setDelId(cls.id);
     try {
       await apiRequestWithRefresh(`/api/v1/core/classes/${cls.id}/`, { method: "DELETE" });
       showToast(`"${cls.name}" deleted.`);
+      setPendingDelete(null);
       onRefresh();
-    } catch { showToast("Failed to delete.", "error"); }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (/\b404\b|not[_ ]?found|No Class matches/i.test(msg)) {
+        showToast("This class no longer exists. Refreshing the list\u2026", "error");
+        setPendingDelete(null);
+        onRefresh();
+      } else {
+        showToast("Failed to delete.", "error");
+      }
+    }
     finally { setDelId(null); }
   }
 
@@ -368,6 +385,14 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
       onRefresh();
     } catch (err: unknown) {
       if (err instanceof Error) {
+        // 404 → row was deleted server-side; refresh and bail out cleanly.
+        if (/\b404\b|not[_ ]?found|No Class matches/i.test(err.message)) {
+          const msg = "This class no longer exists. Refreshing the list…";
+          showToast(msg, "error");
+          cancelEditClass();
+          onRefresh();
+          return;
+        }
         try { setError(flatErrors(JSON.parse(err.message) as unknown)); return; } catch { /**/ }
         setError(err.message);
       } else setError("Failed to update.");
@@ -735,6 +760,20 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
           </div>
         )}
       </div>
+
+      <ConfirmDeleteDialog
+        open={!!pendingDelete}
+        title="Delete Class"
+        message={
+          <>
+            Are you sure you want to delete <strong>“{pendingDelete?.name}”</strong>? All sections,
+            stream links and other related records under this class will be removed.
+          </>
+        }
+        loading={deletingId === pendingDelete?.id}
+        onConfirm={() => void confirmDeleteClass()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

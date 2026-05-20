@@ -8,6 +8,7 @@ import logging
 from django.db.utils import IntegrityError as DjangoIntegrityError
 from django.db.utils import OperationalError as DjangoOperationalError
 from django.db.utils import ProgrammingError as DjangoProgrammingError
+from django.http import Http404
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.exceptions import APIException, ValidationError as DRFValidationError
@@ -124,6 +125,20 @@ def custom_exception_handler(exc, context):
                 },
             },
             status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Handle Http404 (e.g. get_object_or_404 from generics/get_object)
+    if isinstance(exc, Http404):
+        return Response(
+            {
+                "success": False,
+                "status": status.HTTP_404_NOT_FOUND,
+                "error": {
+                    "code": "not_found",
+                    "message": "The requested record was not found. It may have been deleted — please refresh and try again.",
+                },
+            },
+            status=status.HTTP_404_NOT_FOUND,
         )
 
     # Return a clean validation message with no nested non_field_errors structure.
