@@ -349,7 +349,7 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
     setError("");
   }
 
-  async function updateClass() {
+  async function updateClass() { // Fix #2F — PATCH the class being edited (editingClassId is set by openEditClass)
     if (!name || !editingClassId) return;
     const isSenior = level === "senior";
     setSaving(true); setError("");
@@ -593,8 +593,9 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
           </div>
         )}
 
-        {/* ── Maximum Student Capacity (hidden for Senior Secondary — use per-stream capacities instead) ── */}
-        {level !== "senior" && (
+        {/* ── Maximum Student Capacity (hidden for Senior Secondary — use per-stream capacities instead;
+             also hidden in edit mode since capacity is write-only in the API and cannot be pre-populated) ── */}  {/* Fix #W3 */}
+        {level !== "senior" && !editingClassId && (
           <div className="mb-3.5">
             <label className="text-[11px] font-semibold text-[#6F767E] uppercase tracking-wide block mb-1">Maximum Student Capacity</label>
             <div className="flex items-center gap-2">

@@ -37,6 +37,8 @@ export default function FoundationWorkspace({ initialTab = "foundation" }: Props
     years, classes, subjects,
     loadingYears, loadingClasses, loadingSubjects,
     fetchYears, fetchClasses, fetchSubjects,
+    subjectEntriesExist, setSubjectEntriesExist, // Fix #W1
+    roomsExist, setRoomsExist,                   // Fix #W2
     toast, showToast,
   } = useFoundationData();
 
@@ -44,7 +46,8 @@ export default function FoundationWorkspace({ initialTab = "foundation" }: Props
   if (years.length > 0)                                     done.add(1);
   if (classes.length > 0)                                   done.add(2);
   if (classes.some((c) => (c.sections?.length ?? 0) > 0))  done.add(3);
-  if (subjects.length > 0)                                  done.add(4);
+  if (subjectEntriesExist)                                  done.add(4); // Fix #W1 — use ClassSubjectEntry count, not global subjects
+  if (roomsExist)                                           done.add(5); // Fix #W2 — rooms now tracked
 
   const completedCount = [1, 2, 3, 4, 5].filter((n) => done.has(n as WizStep)).length;
 
@@ -185,14 +188,14 @@ export default function FoundationWorkspace({ initialTab = "foundation" }: Props
                 classes={classes}
                 showToast={showToast}
                 onBack={() => setWzStep(3)}
-                onComplete={() => setWzStep(5)}
+                onComplete={() => { setSubjectEntriesExist(true); setWzStep(5); }} // Fix #W1 — mark step 4 done
               />
             )}
             {wzStep === 5 && (
               <RoomsPane
                 showToast={showToast}
                 onBack={() => setWzStep(4)}
-                onNext={() => showToast("Foundation setup complete!", "success")}
+                onNext={() => { setRoomsExist(true); showToast("Foundation setup complete!", "success"); }} // Fix #W2 — mark step 5 done
               />
             )}
           </>

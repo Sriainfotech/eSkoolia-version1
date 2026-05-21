@@ -33,6 +33,7 @@ export default function SectionsPane({ classes, loading, onRefresh, showToast, o
   const [count, setCount]             = useState(3);
   const [pattern, setPattern]         = useState<Pattern>("alpha");
   const [creating, setCreating]       = useState(false);
+  const [sectionCapacity, setSectionCapacity] = useState(40); // Fix #3F
   const [renamingId, setRenamingId]   = useState<number | null>(null);
   const [renameVal, setRenameVal]     = useState("");
   const [deletingId, setDeletingId]   = useState<number | null>(null);
@@ -65,7 +66,7 @@ export default function SectionsPane({ classes, loading, onRefresh, showToast, o
           await apiRequestWithRefresh("/api/v1/core/sections/", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ school_class: classId, name: secName, capacity: 40 }),
+            body: JSON.stringify({ school_class: classId, name: secName, capacity: sectionCapacity }), // Fix #3F
           });
           ok++;
         } catch (err: unknown) {
@@ -222,6 +223,22 @@ export default function SectionsPane({ classes, loading, onRefresh, showToast, o
           </div>
         </div>
 
+        {/* Fix #3F — capacity per section input */}
+        <div className="mb-3">
+          <label className="text-[11px] font-semibold text-[#6F767E] block mb-1">Capacity per Section</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              value={sectionCapacity}
+              min={1}
+              max={200}
+              onChange={(e) => setSectionCapacity(Math.max(1, Math.min(200, Number(e.target.value) || 1)))}
+              className="w-24 bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[10px] px-2.5 py-1.5 text-[13px] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors text-center"
+            />
+            <span className="text-[12px] text-[#9FA6AD]">students · default 40 · max 200</span>
+          </div>
+        </div>
+
         {/* Preview chips */}
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <span className="text-[12px] text-[#6F767E]">Preview:</span>
@@ -251,7 +268,7 @@ export default function SectionsPane({ classes, loading, onRefresh, showToast, o
           >
             Select All Classes
           </button>
-          <button onClick={onNext} className="px-3 py-[7px] rounded-[10px] border border-[#E8ECEF] text-[13px] text-[#6F767E] hover:bg-[#F0F2F5] transition-colors">Next: Rooms →</button>
+          <button onClick={onNext} className="px-3 py-[7px] rounded-[10px] border border-[#E8ECEF] text-[13px] text-[#6F767E] hover:bg-[#F0F2F5] transition-colors">Next: Subjects →</button> {/* Fix #3E */}
         </div>
       </div>
 

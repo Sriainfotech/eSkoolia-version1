@@ -159,10 +159,7 @@ export default function RoomsPane({ showToast, onBack, onNext }: Props) {
     if (!trimmed) { setError("Room number is required."); return; }
     const liveErr = validateRoomNo(trimmed);
     if (liveErr) { setError(liveErr); return; }
-    if (!/[0-9]/.test(trimmed)) {
-      setError("Room number must contain at least one digit.");
-      return;
-    }
+    // Fix #5D — removed forced digit guard; rooms like LAB, OFFICE, LIBRARY are valid without digits
     const cap = parseInt(capacity);
     if (!cap || cap <= 0) { setError("Capacity must be a positive number."); return; }
     if (cap > 200) { setError("Capacity must not exceed 200."); return; }
@@ -297,7 +294,7 @@ export default function RoomsPane({ showToast, onBack, onNext }: Props) {
               onKeyDown={(e) => { if (e.key === "Enter") void save(); }}
               placeholder="e.g. 101, A-02, LAB1"
               className="w-full bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[9px] px-2.5 py-[6px] text-[12px] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors" />
-            <p className="text-[10px] text-[#9FA6AD] mt-0.5">Letters, numbers, hyphens — saved as UPPERCASE. Max 10 chars, must include a digit.</p>
+            <p className="text-[10px] text-[#9FA6AD] mt-0.5">Letters, numbers, hyphens — saved as UPPERCASE. Max 10 chars.</p> {/* Fix #5D */}
           </div>
 
           <div className="mb-2.5">
@@ -344,7 +341,12 @@ export default function RoomsPane({ showToast, onBack, onNext }: Props) {
                 ))}
               </select>
             </div>
-            <p className="text-[10px] text-[#9FA6AD] mt-1">Optional — pick a class, then a section.</p>
+            {/* Fix #5E — show helper when no sections exist yet */}
+            {availableClasses.length === 0 ? (
+              <p className="text-[10px] text-[#F59E0B] mt-1">No sections found. Add sections in Step 3 first.</p>
+            ) : (
+              <p className="text-[10px] text-[#9FA6AD] mt-1">Optional — pick a class, then a section.</p>
+            )}
           </div>
 
           {error && <p className="text-[11px] text-[#B91C1C] bg-[#FEE2E2] border border-[#FCA5A5] rounded-[8px] px-2.5 py-1.5 mb-2.5">{error}</p>}

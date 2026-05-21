@@ -22,6 +22,11 @@ export function useFoundationData() {
   const [classes, setClasses] = useState<SchoolClass[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
 
+  // Fix #W1 — ClassSubjectEntry existence check (step 4 progress indicator)
+  const [subjectEntriesExist, setSubjectEntriesExist] = useState(false);
+  // Fix #W2 — rooms existence check (step 5 progress indicator)
+  const [roomsExist, setRoomsExist] = useState(false);
+
   const [loadingYears, setLoadingYears] = useState(true);
   const [loadingClasses, setLoadingClasses] = useState(true);
   const [loadingSubjects, setLoadingSubjects] = useState(true);
@@ -77,10 +82,36 @@ export function useFoundationData() {
     }
   }, [showToast]);
 
+  // Fix #W1 — lightweight count-only fetch to know if ClassSubjectEntries exist (step 4 done indicator)
+  const checkSubjectEntriesExist = useCallback(async () => {
+    try {
+      const res = await apiRequestWithRefresh<{ count?: number; results?: unknown[] } | unknown[]>(
+        "/api/v1/academics/class-subject-entries/?page_size=1"
+      );
+      setSubjectEntriesExist(
+        Array.isArray(res) ? res.length > 0 : ((res.count ?? 0) > 0 || (res.results?.length ?? 0) > 0)
+      );
+    } catch { /* non-blocking */ }
+  }, []);
+
+  // Fix #W2 — lightweight count-only fetch to know if rooms exist (step 5 done indicator)
+  const checkRoomsExist = useCallback(async () => {
+    try {
+      const res = await apiRequestWithRefresh<{ count?: number; results?: unknown[] } | unknown[]>(
+        "/api/v1/core/class-rooms/?page_size=1"
+      );
+      setRoomsExist(
+        Array.isArray(res) ? res.length > 0 : ((res.count ?? 0) > 0 || (res.results?.length ?? 0) > 0)
+      );
+    } catch { /* non-blocking */ }
+  }, []);
+
   useEffect(() => {
     void fetchYears();
     void fetchClasses();
     void fetchSubjects();
+    void checkSubjectEntriesExist(); // Fix #W1
+    void checkRoomsExist();          // Fix #W2
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Derived stats ─────────────────────────────────────────────────────────
@@ -99,6 +130,8 @@ export function useFoundationData() {
     years, setYears,
     classes, setClasses,
     subjects, setSubjects,
+    subjectEntriesExist, setSubjectEntriesExist, // Fix #W1
+    roomsExist, setRoomsExist,                   // Fix #W2
     loadingYears, loadingClasses, loadingSubjects, loading,
     fetchYears, fetchClasses, fetchSubjects,
     stats,

@@ -178,10 +178,24 @@ class ClassSubjectAssignmentViewSet(TenantScopedModelViewSet):
 class ClassSubjectEntryViewSet(TenantScopedModelViewSet):
     """Foundation-step per-class subject catalog."""
 
+    class _Pagination(ApiPageNumberPagination):
+        # Fix #4G — allow up to 1000 entries per page so the wizard can
+        # fetch all subjects in a single request (?page_size=1000)
+        max_page_size = 1000
+        page_size = 50
+
     model = ClassSubjectEntry
     serializer_class = ClassSubjectEntrySerializer
-    pagination_class = None
-    permission_codes = {"*": "academics.core_setup.view"}
+    pagination_class = _Pagination  # Fix #4G — paginated (not None), but allows large page_size
+    permission_codes = {  # Fix #4F — split view/write permissions
+        "list": "academics.core_setup.view",
+        "retrieve": "academics.core_setup.view",
+        "create": "academics.core_setup.write",
+        "update": "academics.core_setup.write",
+        "partial_update": "academics.core_setup.write",
+        "destroy": "academics.core_setup.write",
+        "reset_class": "academics.core_setup.write",
+    }
 
     def get_queryset(self):
         qs = super().get_queryset().select_related("school_class")

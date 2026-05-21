@@ -17,9 +17,10 @@ interface YearForm {
   start_date: string;
   end_date: string;
   is_current: boolean;
+  is_active: boolean; // Fix #1E
 }
 
-const EMPTY: YearForm = { start_date: "", end_date: "", is_current: false };
+const EMPTY: YearForm = { start_date: "", end_date: "", is_current: false, is_active: true }; // Fix #1E
 
 function derivedName(s: string, e: string) {
   if (!s || !e) return "";
@@ -53,6 +54,7 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
   const [editingId, setEditId] = useState<number | null>(null);
   const [saving, setSaving]    = useState(false);
   const [error, setError]      = useState("");
+  const [dateWarning, setDateWarning] = useState(""); // Fix #1D
   const [deletingId, setDelId] = useState<number | null>(null);
   const [makingId, setMaking]  = useState<number | null>(null);
   const [pendingDelete, setPendingDelete] = useState<AcademicYear | null>(null);
@@ -60,11 +62,31 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
   const name = derivedName(form.start_date, form.end_date);
 
   function openEdit(y: AcademicYear) {
-    setForm({ start_date: y.start_date, end_date: y.end_date, is_current: y.is_current });
+    setForm({ start_date: y.start_date, end_date: y.end_date, is_current: y.is_current, is_active: y.is_active ?? true }); // Fix #1E; ?? true Fix #W4
     setEditId(y.id);
     setError("");
+    setDateWarning(""); // Fix #1D
   }
-  function cancelEdit() { setForm(EMPTY); setEditId(null); setError(""); }
+  function cancelEdit() { setForm(EMPTY); setEditId(null); setError(""); setDateWarning(""); } // Fix #1D
+
+  // Fix #1D — compute inline date warnings (warnings only, not blockers — user can still submit)
+  function computeDateWarning(start: string, end: string): string {
+    if (!start || !end) return "";
+    const s = new Date(start);
+    const e = new Date(end);
+    if (isNaN(s.getTime()) || isNaN(e.getTime()) || e <= s) return "";
+    const nineMonths = new Date(s);
+    nineMonths.setMonth(nineMonths.getMonth() + 9);
+    if (e < nineMonths) return "Academic year must be at least 9 months.";
+    const others = years.filter((y) => y.id !== editingId);
+    if (others.length > 0) {
+      const latestEnd = others.map((y) => new Date(y.end_date)).reduce((a, b) => (a > b ? a : b));
+      const limit = new Date(latestEnd);
+      limit.setMonth(limit.getMonth() + 3);
+      if (s > limit) return "Year should start close to when the previous year ends.";
+    }
+    return "";
+  }
 
   async function save() {
     if (!form.start_date || !form.end_date) { setError("Both dates are required."); return; }
@@ -80,7 +102,7 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
       await apiRequestWithRefresh(url, {
         method: editingId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_date: form.start_date, end_date: form.end_date, is_current: form.is_current }),
+        body: JSON.stringify({ start_date: form.start_date, end_date: form.end_date, is_current: form.is_current, is_active: form.is_active }), // Fix #1E
       });
       showToast(editingId ? "Academic year updated." : `Year ${name} created.`);
       cancelEdit();
@@ -180,7 +202,7 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
             <input
               type="date"
               value={form.start_date}
-              onChange={(e) => setForm((f) => ({ ...f, start_date: e.target.value }))}
+              onChange={(e) => { setForm((f) => ({ ...f, start_date: e.target.value })); setDateWarning(computeDateWarning(e.target.value, form.end_date)); }} // Fix #1D
               className="w-full bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[10px] px-2.5 py-1.5 text-[13px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
             />
           </div>
@@ -191,11 +213,18 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
             <input
               type="date"
               value={form.end_date}
-              onChange={(e) => setForm((f) => ({ ...f, end_date: e.target.value }))}
+              onChange={(e) => { setForm((f) => ({ ...f, end_date: e.target.value })); setDateWarning(computeDateWarning(form.start_date, e.target.value)); }} // Fix #1D
               className="w-full bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[10px] px-2.5 py-1.5 text-[13px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
             />
           </div>
         </div>
+
+        {/* Fix #1D — inline date warning (warning only, user can still submit) */}
+        {dateWarning && (
+          <p className="text-[11px] text-[#92400E] bg-[#FEF3C7] border border-[#FCD34D] rounded-[10px] px-3 py-2 mb-3">
+            ⚠ {dateWarning}
+          </p>
+        )}
 
         <label className="flex items-center gap-2 text-[13px] text-[#6F767E] cursor-pointer select-none mb-3">
           <input
@@ -206,6 +235,19 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
           />
           Set as current academic year
         </label>
+
+        {/* Fix #1E — is_active toggle, only shown in edit mode */}
+        {editingId && (
+          <label className="flex items-center gap-2 text-[13px] text-[#6F767E] cursor-pointer select-none mb-3">
+            <input
+              type="checkbox"
+              checked={form.is_active}
+              onChange={(e) => setForm((f) => ({ ...f, is_active: e.target.checked }))}
+              className="accent-[#5B4FCF]"
+            />
+            Active (uncheck to soft-deactivate this year)
+          </label>
+        )}
 
         {error && (
           <p className="text-[12px] text-[#B91C1C] bg-[#FEE2E2] border border-[#FCA5A5] rounded-[10px] px-3 py-2 mb-3">

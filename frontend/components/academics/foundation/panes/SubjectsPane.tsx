@@ -101,8 +101,11 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
   const [editName, setEditName]   = useState("");
   const [editCode, setEditCode]   = useState("");
   const [editType, setEditType]   = useState<SubjectType>("core");
+  const [editPeriods, setEditPeriods] = useState(5); // Fix #4H
   const [editSaving, setEditSaving] = useState(false);
   const [togglingId, setTogglingId] = useState<number | null>(null);
+
+  const [globalSubjectNames, setGlobalSubjectNames] = useState<string[]>([]); // Fix #4E
 
   /* init: pick first class */
   useEffect(() => {
@@ -113,8 +116,9 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiRequestWithRefresh<ClassSubjectEntry[]>(API);
-      setEntries(Array.isArray(data) ? data : []);
+      // Fix #4G — handle paginated response; request up to 1000 entries (backend _Pagination.max_page_size = 1000)
+      const data = await apiRequestWithRefresh<{ results?: ClassSubjectEntry[] } | ClassSubjectEntry[]>(`${API}?page_size=1000`);
+      setEntries(Array.isArray(data) ? data : (data.results ?? []));
     } catch (e) {
       showToast(parseErr(e), "error");
     } finally {
@@ -123,6 +127,17 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
   }, [showToast]);
 
   useEffect(() => { void fetchAll(); }, [fetchAll]);
+
+  // Fix #4E — fetch global subjects catalog for name autocomplete (best-effort, non-blocking)
+  useEffect(() => {
+    void (async () => {
+      try {
+        const data = await apiRequestWithRefresh<{ results?: { name: string }[] } | { name: string }[]>("/api/v1/core/subjects/?page_size=200");
+        const list = Array.isArray(data) ? data : (data.results ?? []);
+        setGlobalSubjectNames(list.map((s) => s.name));
+      } catch { /* ignore — datalist is best-effort */ }
+    })();
+  }, []);
 
   /* ── Derived ── */
   const countsByClass = entries.reduce<Record<number, number>>((acc, e) => {
@@ -229,10 +244,11 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
     setEditName(entry.name);
     setEditCode(entry.code);
     setEditType(entry.subject_type);
+    setEditPeriods(entry.periods_per_week ?? 5); // Fix #4H
   }
   function cancelEdit() {
     setEditingId(null);
-    setEditName(""); setEditCode(""); setEditType("core");
+    setEditName(""); setEditCode(""); setEditType("core"); setEditPeriods(5); // Fix #4H
   }
 
   /* ── Save inline edit ── */
@@ -247,6 +263,7 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
           name: editName.trim(),
           code: editCode.trim().toUpperCase(),
           subject_type: editType,
+          periods_per_week: editPeriods, // Fix #4H
         }),
       });
       setEntries((prev) => prev.map((e) => (e.id === id ? { ...e, ...updated } : e)));
@@ -426,6 +443,7 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
               onChange={(e) => setFname(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && void handleAdd()}
               placeholder="e.g. Mathematics"
+              list="global-subjects-list" // Fix #4E — autocomplete from global subjects catalog
               className="h-9 px-3 rounded-lg border border-[#E8ECEF] text-[13px] text-[#1A1D1F] focus:outline-none focus:border-[#5B4FCF] transition-colors"
             />
           </div>
@@ -617,6 +635,15 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
                           <option value="co_curricular">Co-curricular</option>
                           <option value="optional">Optional</option>
                         </select>
+                        {/* Fix #4H — periods per week editable in inline edit */}
+                        <input
+                          type="number"
+                          value={editPeriods}
+                          min={1}
+                          title="Periods per week"
+                          onChange={(e) => setEditPeriods(Math.max(1, parseInt(e.target.value) || 1))}
+                          className="w-14 h-8 px-2 rounded-md border border-[#E8ECEF] bg-white text-[12px] text-center focus:outline-none focus:border-[#5B4FCF]"
+                        />
                       </div>
                       <div className="flex justify-end gap-2">
                         <button
@@ -750,6 +777,11 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
           )}
         </div>
       </div>
+
+      {/* Fix #4E — datalist for global subject name autocomplete */}
+      <datalist id="global-subjects-list">
+        {globalSubjectNames.map((n) => <option key={n} value={n} />)}
+      </datalist>
 
       <ConfirmDeleteDialog
         open={!!pendingDelete}
