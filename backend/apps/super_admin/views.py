@@ -294,6 +294,16 @@ def _policy_groups():
     return grouped
 
 
+def normalize_board(value: str) -> str:
+    """Fix #12 – normalize board values: uppercase + replace spaces with underscores.
+
+    Collapses variants like "SSC AP" and "SSC_AP" to a single consistent key.
+    """
+    if not value:
+        return "OTHER"
+    return value.strip().upper().replace(" ", "_")
+
+
 class DashboardKPIView(SuperAdminBaseAPIView):
     def get(self, request):
         tenants = self._public_queryset(SchoolTenant)
@@ -318,12 +328,17 @@ class DashboardKPIView(SuperAdminBaseAPIView):
         if previous_mrr:
             mrr_trend = round(((current_mrr - previous_mrr) / previous_mrr) * 100, 2)
 
+        # Fix #12 – normalise board names and merge variants (e.g. "SSC AP" / "SSC_AP")
+        _raw_board_rows = list(tenants.values("board").annotate(count=Count("id")))
+        _board_counts: dict = {}
+        for row in _raw_board_rows:
+            key = normalize_board(row.get("board") or "")
+            _board_counts[key] = _board_counts.get(key, 0) + (row.get("count") or 0)
         board_breakdown = []
-        for row in tenants.values("board").annotate(count=Count("id")).order_by("board"):
-            board_count = row.get("count") or 0
+        for board_key, board_count in sorted(_board_counts.items()):
             board_breakdown.append(
                 {
-                    "board": row.get("board") or "OTHER",
+                    "board": board_key,
                     "count": board_count,
                     "percent": round((board_count / total_schools) * 100, 2) if total_schools else 0,
                 }
@@ -332,8 +347,16 @@ class DashboardKPIView(SuperAdminBaseAPIView):
         overdue_invoices = invoices.filter(status="overdue").count()
         blocked_tenants = tenants.filter(status__in=["suspended", "archived"]).count()
 
+        # Fix #5 – prefetch all school names in a single query to eliminate N+1
+        audit_logs = list(self._public_queryset(TenantAuditLog).order_by("-created_at")[:10])
+        _tenant_ids = [log.tenant_id for log in audit_logs if log.tenant_id]
+        _school_name_map = dict(
+            self._public_queryset(SchoolTenant)
+            .filter(tenant_id__in=_tenant_ids)
+            .values_list("tenant_id", "name")
+        )
         recent_events = []
-        for log in self._public_queryset(TenantAuditLog).order_by("-created_at")[:10]:
+        for log in audit_logs:
             details = log.details if isinstance(log.details, dict) else {}
             recent_events.append(
                 {
@@ -344,7 +367,7 @@ class DashboardKPIView(SuperAdminBaseAPIView):
                     "detail": details.get("message") or log.action,
                     "severity": "error" if log.status == "failed" else ("warning" if log.status == "partial" else "info"),
                     "tenantId": log.tenant_id,
-                    "schoolName": details.get("school_name") or self._school_name_for_tenant(log.tenant_id),
+                    "schoolName": details.get("school_name") or _school_name_map.get(log.tenant_id),
                 }
             )
 
@@ -357,6 +380,37 @@ class DashboardKPIView(SuperAdminBaseAPIView):
             'starter': 4500, 'standard': 9000, 'premium': 19500,
             'enterprise': 34500, 'trial': 0, 'custom': 0,
         }
+
+        def normalize_state(value: str) -> str:
+            """Fix #10 – accept both GST numeric codes and full state names stored in SchoolTenant.state."""
+            if not value:
+                return "Unknown"
+            # If already a known state name, use it directly
+            if value in _STATE_NAMES.values():
+                return value
+            # Otherwise treat as a GST state code and look it up
+            return _STATE_NAMES.get(value.strip(), value)
+
+        # Fix #7 – compute MoM new-student enrollment trend
+        current_month_students = Student.objects.using("default").filter(
+            created_at__gte=current_start, created_at__lt=current_end
+        ).count()
+        previous_month_students = Student.objects.using("default").filter(
+            created_at__gte=previous_start, created_at__lt=previous_end
+        ).count()
+        if previous_month_students:
+            students_trend = round(
+                ((current_month_students - previous_month_students) / previous_month_students) * 100, 1
+            )
+        else:
+            students_trend = 0.0
+
+        # Fix #6 – compute actual MRR per plan from current-month invoices
+        # Fall back to _PLAN_PRICING estimate only for plans that have no invoices yet
+        actual_mrr_by_plan: dict = {}
+        for inv in current_month_invoices.select_related("tenant"):
+            plan_key = (inv.tenant.plan if inv.tenant else "trial").lower()
+            actual_mrr_by_plan[plan_key] = actual_mrr_by_plan.get(plan_key, 0.0) + _invoice_grand_total(inv)
 
         # Build a subquery for live student counts per school
         _student_sq = (
@@ -375,7 +429,7 @@ class DashboardKPIView(SuperAdminBaseAPIView):
         ).order_by("-count"):
             code = (row.get("state") or "").strip()
             state_breakdown.append({
-                "state": _STATE_NAMES.get(code, code) if code else "Unknown",
+                "state": normalize_state(code),  # Fix #10
                 "code": code,
                 "count": row.get("count") or 0,
                 "students": row.get("students") or 0,
@@ -387,10 +441,15 @@ class DashboardKPIView(SuperAdminBaseAPIView):
         ).order_by("-count"):
             plan_key = (row.get("plan") or "trial").lower()
             plan_count = row.get("count") or 0
+            # Fix #6 – prefer actual invoice revenue; fall back to plan pricing for new installs with no invoices
+            if plan_key in actual_mrr_by_plan:
+                mrr_val = actual_mrr_by_plan[plan_key]
+            else:
+                mrr_val = float(plan_count * _PLAN_PRICING.get(plan_key, 0))
             plan_breakdown.append({
                 "plan": plan_key.capitalize(),
                 "count": plan_count,
-                "mrr": plan_count * _PLAN_PRICING.get(plan_key, 0),
+                "mrr": mrr_val,
                 "students": row.get("students") or 0,
             })
 
@@ -411,7 +470,7 @@ class DashboardKPIView(SuperAdminBaseAPIView):
             "blockedCount": blocked_tenants,
             "boardBreakdown": board_breakdown,
             "trends": {
-                "students": 0,
+                "students": students_trend,  # Fix #7 – real MoM enrollment change
                 "mrr": mrr_trend,
             },
             "recentEvents": recent_events,

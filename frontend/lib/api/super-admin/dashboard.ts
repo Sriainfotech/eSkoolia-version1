@@ -12,6 +12,7 @@ import { apiRequestWithRefresh } from '@/lib/api-auth';
  */
 export async function getDashboard(): Promise<DashboardData> {
   try {
+    // Fix #20 – verified against config/urls.py: path("api/super-admin/", include("apps.super_admin.urls")) + "dashboard/"
     return await apiRequestWithRefresh<DashboardData>('/api/super-admin/dashboard/');
   } catch (error) {
     console.error('Error fetching dashboard:', error);

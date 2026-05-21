@@ -1,24 +1,13 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link'; // Fix #4 #9
+import { useRouter } from 'next/navigation'; // Fix #2
 import {
-  AlertTriangle, CheckCircle2, Mail, XCircle, Download, Plus,
+  AlertTriangle, CheckCircle2, Mail, XCircle, Download, Plus, RefreshCw,
 } from 'lucide-react';
 import { getDashboard } from '@/lib/api/super-admin/dashboard';
 import type { DashboardData } from '@/types/super-admin';
-
-// ── Sparkline ──────────────────────────────────────────────────────────────
-function Spark({ color = '#6D4AFF', down }: { color?: string; down?: boolean }) {
-  const pts = (down
-    ? [14, 11, 13, 9, 12, 8, 10, 7, 9, 6, 8, 5, 7, 4]
-    : [4, 7, 5, 9, 6, 11, 8, 10, 9, 13, 10, 12, 11, 14]
-  ).map((y, i) => `${i * 9},${16 - y}`).join(' ');
-  return (
-    <svg width="118" height="32" viewBox="0 0 118 32" fill="none">
-      <polyline points={pts} stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
-    </svg>
-  );
-}
 
 // ── Activity icon ──────────────────────────────────────────────────────────
 function ActivityIcon({ action, severity }: { action: string; severity: string }) {
@@ -35,14 +24,16 @@ function ActivityIcon({ action, severity }: { action: string; severity: string }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-function relativeTime(iso: string): string {
+function relativeTime(iso: string): string { // Fix #16 – show date for events older than 7 days
   const diff = Date.now() - new Date(iso).getTime();
   const m = Math.floor(diff / 60000);
   if (m < 1) return 'just now';
-  if (m < 60) return `${m} min`;
+  if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
+  const d = Math.floor(h / 24);
+  if (d <= 7) return `${d}d`;
+  return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
 }
 
 function fmtINR(n: number): string {
@@ -79,6 +70,33 @@ const ACTION_LABELS: Record<string, string> = {
 function actionLabel(action: string): string {
   if (ACTION_LABELS[action]) return ACTION_LABELS[action];
   return action.replace(/_/g, ' ').replace(/\./g, ' \u00b7 ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// ── Export helper ────────────────────────────────────────────────────────
+// Fix #1 – wire Export button to generate a CSV from current dashboard state
+function exportDashboardCsv(d: DashboardData) {
+  const rows: (string | number)[][] = [
+    ['Metric', 'Value'],
+    ['Total Schools', d.totalSchools],
+    ['Active Schools', d.activeSchools],
+    ['Total Students', d.totalStudents],
+    ['Active Students', d.activeStudents ?? ''],
+    ['Inactive Students', d.inactiveStudents ?? ''],
+    ['Total Staff', d.totalStaff],
+    ['MRR (INR)', d.mrr.current],
+    ['MRR Trend (%)', d.mrr.trend],
+    ['Alert Count', d.alertCount],
+    ['Overdue Invoices', d.overdueCount ?? ''],
+    ['Blocked Tenants', d.blockedCount ?? ''],
+  ];
+  const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `eskoolia-dashboard-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -144,11 +162,12 @@ function DashboardSkeleton() {
 
 // ── Page ───────────────────────────────────────────────────────────────────
 export default function SuperAdminDashboardPage() {
+  const router = useRouter(); // Fix #2
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
-
-
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null); // Fix #18
+  const [lastUpdatedLabel, setLastUpdatedLabel] = useState(''); // Fix #18
 
   const loadDashboard = useCallback(async () => {
     setLoading(true);
@@ -156,9 +175,10 @@ export default function SuperAdminDashboardPage() {
     try {
       const res = await getDashboard();
       setData(res);
+      setLastUpdated(new Date()); // Fix #18 – record last successful load time
     } catch (err) {
+      // Fix #8 – do not populate zero-filled fallback; let the error state render instead
       setError(err instanceof Error ? err.message : 'Failed to load dashboard.');
-      setData(FALLBACK);
     } finally {
       setLoading(false);
     }
@@ -166,7 +186,43 @@ export default function SuperAdminDashboardPage() {
 
   useEffect(() => { void loadDashboard(); }, [loadDashboard]);
 
+  // Fix #18 – auto-refresh every 5 minutes
+  useEffect(() => {
+    const interval = setInterval(() => { void loadDashboard(); }, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [loadDashboard]);
+
+  // Fix #18 – update "Last updated" label every minute
+  useEffect(() => {
+    if (!lastUpdated) return;
+    const update = () => {
+      const mins = Math.round((Date.now() - lastUpdated.getTime()) / 60000);
+      setLastUpdatedLabel(mins < 1 ? 'just now' : `${mins} min ago`);
+    };
+    update();
+    const t = setInterval(update, 60000);
+    return () => clearInterval(t);
+  }, [lastUpdated]);
+
   if (loading && data === null) return <DashboardSkeleton />;
+
+  // Fix #8 – show an explicit error state instead of zero-filled KPI cards
+  if (error && data === null) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 20px', gap: 16 }}>
+        <AlertTriangle size={36} color="#D97706" />
+        <p style={{ fontSize: 16, fontWeight: 600, color: '#111827', margin: 0 }}>Unable to load dashboard data</p>
+        <p style={{ fontSize: 13, color: '#6B7280', margin: 0, maxWidth: 400, textAlign: 'center' }}>{error}</p>
+        <button
+          type="button"
+          onClick={() => { void loadDashboard(); }}
+          style={{ marginTop: 8, height: 36, padding: '0 20px', borderRadius: 9, border: 'none', background: '#6D28D9', fontSize: 13, fontWeight: 600, color: '#fff', cursor: 'pointer' }}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   const d         = data ?? FALLBACK;
   const boardRows = d.boardBreakdown ?? [];
@@ -177,9 +233,9 @@ export default function SuperAdminDashboardPage() {
   const maxState    = Math.max(...stateRows.map(s => s.count), 1);
   const planMrrTotal = planRows.reduce((sum, p) => sum + p.mrr, 0);
   const effectiveMrr = d.mrr.current > 0 ? d.mrr.current : planMrrTotal;
-  const maxPlan     = Math.max(...planRows.map(p => p.mrr > 0 ? p.mrr : p.count), 1);
-  const mrrTrend  = d.mrr.trend !== 0 ? `${d.mrr.trend > 0 ? '+' : ''}${d.mrr.trend.toFixed(1)}%` : '\u2014';
-  const studentsMoM = d.trends?.students;
+  const revenueRows = planRows.filter(p => p.mrr > 0); // Fix #14 – exclude ₹0 Trial plans from the MRR chart
+  const maxPlan     = Math.max(...revenueRows.map(p => p.mrr), 1); // Fix #14
+  const mrrTrend  = d.mrr.trend != null ? `${d.mrr.trend > 0 ? '+' : ''}${d.mrr.trend.toFixed(1)}%` : '\u2014'; // Fix #11 – show 0.0% when trend is exactly 0, not —
   const gstAmt    = Math.round(effectiveMrr * 0.18);
 
   // shared card style
@@ -208,20 +264,29 @@ export default function SuperAdminDashboardPage() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center' }}>
-          {error && (
-            <span style={{ fontSize: 12, color: '#92400E', background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 8, padding: '5px 10px', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <AlertTriangle size={13} /> Showing cached data
-            </span>
-          )}
+          {/* Fix #8 – removed misleading "Showing cached data" banner */}
+          {lastUpdated && (
+            <span style={{ fontSize: 11, color: '#9CA3AF', whiteSpace: 'nowrap' }}>Updated {lastUpdatedLabel}</span>
+          )} {/* Fix #18 – last updated label */}
           <button
             type="button"
+            onClick={() => { void loadDashboard(); }} // Fix #18 – manual refresh
+            disabled={loading}
+            title="Refresh dashboard"
+            style={{ height: 36, width: 36, borderRadius: 9, border: '1px solid #E5E7EB', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.5 : 1 }}
+          >
+            <RefreshCw size={14} color="#374151" />
+          </button>
+          <button
+            type="button"
+            onClick={() => exportDashboardCsv(d)} // Fix #1 – wire Export to CSV download
             style={{ height: 36, padding: '0 14px', borderRadius: 9, border: '1px solid #E5E7EB', background: '#fff', fontSize: 13, fontWeight: 500, color: '#374151', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
           >
             <Download size={14} /> Export
           </button>
           <button
             type="button"
-            onClick={() => { window.location.href = '/super-admin/schools'; }}
+            onClick={() => router.push('/super-admin/schools')} // Fix #2 – use router.push instead of window.location.href
             style={{ height: 36, padding: '0 14px', borderRadius: 9, border: 'none', background: '#6D28D9', fontSize: 13, fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
           >
             <Plus size={14} /> Add school
@@ -234,9 +299,8 @@ export default function SuperAdminDashboardPage() {
 
         {/* Total Schools */}
         <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #E5E7EB', padding: '18px 20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+          <div style={{ marginBottom: 6 }}>{/* Fix #3 – sparkline removed (was hardcoded fake data) */}
             <p style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', lineHeight: 1, margin: 0 }}>Total Schools</p>
-            <span style={{ opacity: 0.65, flexShrink: 0, marginTop: -4 }}><Spark color="#5836E0" /></span>
           </div>
           <p style={{ fontSize: 50, fontFamily: 'var(--font-instrument-serif), serif', fontWeight: 400, lineHeight: 0.95, letterSpacing: '-1.5px', color: '#111827', margin: '0 0 8px' }}>
             {d.totalSchools}
@@ -249,9 +313,8 @@ export default function SuperAdminDashboardPage() {
 
         {/* Students Served */}
         <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #E5E7EB', padding: '18px 20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+          <div style={{ marginBottom: 6 }}>{/* Fix #3 – sparkline removed */}
             <p style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', lineHeight: 1, margin: 0 }}>Students Served</p>
-            <span style={{ opacity: 0.65, flexShrink: 0, marginTop: -4 }}><Spark color="#0E9F6E" /></span>
           </div>
           <p style={{ fontSize: 50, fontFamily: 'var(--font-instrument-serif), serif', fontWeight: 400, lineHeight: 0.95, letterSpacing: '-1.5px', color: '#111827', margin: '0 0 8px' }}>
             {fmtStudents(d.activeStudents ?? d.totalStudents)}
@@ -271,9 +334,8 @@ export default function SuperAdminDashboardPage() {
 
         {/* Monthly Recurring */}
         <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #E5E7EB', padding: '18px 20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+          <div style={{ marginBottom: 6 }}>{/* Fix #3 – sparkline removed */}
             <p style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', lineHeight: 1, margin: 0 }}>Monthly Recurring</p>
-            <span style={{ opacity: 0.65, flexShrink: 0, marginTop: -4 }}><Spark color="#0369A1" /></span>
           </div>
           <p style={{ fontSize: 50, fontFamily: 'var(--font-instrument-serif), serif', fontWeight: 400, lineHeight: 0.95, letterSpacing: '-1.5px', color: '#111827', margin: '0 0 8px' }}>
             {fmtINR(effectiveMrr)}
@@ -284,20 +346,21 @@ export default function SuperAdminDashboardPage() {
           <p style={{ fontSize: 11, color: '#9CA3AF', margin: 0 }}>GST collected this month {'\u00b7'} {fmtINR(gstAmt)}</p>
         </div>
 
-        {/* Needs Attention */}
-        <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #E5E7EB', padding: '18px 20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-            <p style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', lineHeight: 1, margin: 0 }}>Needs Attention</p>
-            <span style={{ opacity: 0.65, flexShrink: 0, marginTop: -4 }}><Spark color="#E0463A" down /></span>
+        {/* Needs Attention – Fix #4: card navigates to overdue billing; Fix #3: sparkline removed */}
+        <Link href="/super-admin/billing?status=overdue" style={{ textDecoration: 'none' }}>
+          <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #E5E7EB', padding: '18px 20px', cursor: 'pointer' }}>
+            <div style={{ marginBottom: 6 }}>
+              <p style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', lineHeight: 1, margin: 0 }}>Needs Attention</p>
+            </div>
+            <p style={{ fontSize: 50, fontFamily: 'var(--font-instrument-serif), serif', fontWeight: 400, lineHeight: 0.95, letterSpacing: '-1.5px', color: '#111827', margin: '0 0 8px' }}>
+              {d.alertCount}
+            </p>
+            <p style={{ fontSize: 11.5, fontWeight: 600, color: d.alertCount > 0 ? '#DC2626' : '#9CA3AF', margin: '0 0 2px' }}>
+              {d.alertCount > 0 ? `\u2299 ${d.overdueCount ?? 0} billing \u00b7 ${d.blockedCount ?? 0} blocked` : '\u2014 All clear'}
+            </p>
+            <p style={{ fontSize: 11, color: '#9CA3AF', margin: 0 }}>Open across all tenants</p>
           </div>
-          <p style={{ fontSize: 50, fontFamily: 'var(--font-instrument-serif), serif', fontWeight: 400, lineHeight: 0.95, letterSpacing: '-1.5px', color: '#111827', margin: '0 0 8px' }}>
-            {d.alertCount}
-          </p>
-          <p style={{ fontSize: 11.5, fontWeight: 600, color: d.alertCount > 0 ? '#DC2626' : '#9CA3AF', margin: '0 0 2px' }}>
-            {d.alertCount > 0 ? `\u2299 ${d.overdueCount ?? 0} billing \u00b7 ${d.blockedCount ?? 0} blocked` : '\u2014 All clear'}
-          </p>
-          <p style={{ fontSize: 11, color: '#9CA3AF', margin: 0 }}>Open across all tenants</p>
-        </div>
+        </Link>
 
       </div>
 
@@ -383,9 +446,17 @@ export default function SuperAdminDashboardPage() {
             <div style={{ marginTop: 20, paddingTop: 14, borderTop: '1px dashed #E5E7EB' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                 <span style={{ color: '#9CA3AF' }}>Place of supply (GST)</span>
-                <span style={{ color: '#374151', fontWeight: 500 }}>
-                  {stateRows.map(s => `${s.code}-${s.state}`).join(' \u00b7 ')}
-                </span>
+                {/* Fix #13 – show first 3 states + "+N more"; full list in title tooltip */}
+                {(() => {
+                  const full = stateRows.map(s => `${s.code}-${s.state}`).join(', ');
+                  const shown = stateRows.slice(0, 3).map(s => s.state).join(', ');
+                  const extra = stateRows.length > 3 ? ` +${stateRows.length - 3} more` : '';
+                  return (
+                    <span style={{ color: '#374151', fontWeight: 500 }} title={full}>
+                      {shown}{extra}
+                    </span>
+                  );
+                })()}
               </div>
             </div>
           )}
@@ -407,13 +478,13 @@ export default function SuperAdminDashboardPage() {
               {mrrTrend} MoM
             </span>
           </div>
-          {planRows.length === 0 ? (
-            <p style={{ textAlign: 'center', padding: '32px 0', fontSize: 13, color: '#9CA3AF' }}>No plan data yet.</p>
+          {revenueRows.length === 0 ? ( // Fix #14 – only show paid plans in MRR chart
+            <p style={{ textAlign: 'center', padding: '32px 0', fontSize: 13, color: '#9CA3AF' }}>No revenue data yet.</p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {planRows.map(p => {
+              {revenueRows.map(p => { // Fix #14
                 const color  = PLAN_COLOR[p.plan] ?? '#6B7280';
-                const barPct = Math.max(2, Math.round(((p.mrr > 0 ? p.mrr : p.count) / maxPlan) * 100));
+                const barPct = Math.max(2, Math.round((p.mrr / maxPlan) * 100));
                 return (
                   <div key={p.plan}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -421,7 +492,7 @@ export default function SuperAdminDashboardPage() {
                         <span style={{ fontSize: 13, fontWeight: 550, color: '#111827' }}>{p.plan}</span>
                         <span style={{ fontSize: 11, color: '#9CA3AF' }}>{'\u00b7'} {p.count}</span>
                       </div>
-                      <span style={{ fontSize: 15, fontFamily: 'var(--font-instrument-serif), serif', color: '#111827' }}>{p.mrr > 0 ? fmtINR(p.mrr) : 'Trial'}</span>
+                      <span style={{ fontSize: 15, fontFamily: 'var(--font-instrument-serif), serif', color: '#111827' }}>{fmtINR(p.mrr)}</span>
                     </div>
                     <div style={{ height: 7, borderRadius: 999, background: '#F3F4F6', overflow: 'hidden' }}>
                       <div style={{ height: '100%', borderRadius: 999, background: color, width: `${barPct}%`, transition: 'width 0.7s ease' }} />
@@ -440,34 +511,40 @@ export default function SuperAdminDashboardPage() {
               <h2 style={{ fontSize: 15, fontWeight: 600, color: '#111827', margin: '0 0 4px', letterSpacing: '-0.1px' }}>Recent activity</h2>
               <p style={{ fontSize: 12, color: '#9CA3AF', margin: 0 }}>Cross-tenant audit events</p>
             </div>
-            <a href="/super-admin/audit" style={{ fontSize: 12, fontWeight: 600, color: '#6D28D9', textDecoration: 'none', flexShrink: 0 }}>View all {'\u2192'}</a>
+            <Link href="/super-admin/audit" style={{ fontSize: 12, fontWeight: 600, color: '#6D28D9', textDecoration: 'none', flexShrink: 0 }}>View all {'\u2192'}</Link> {/* Fix #9 – replaced <a> with Next.js <Link> */}
           </div>
           {events.length === 0 ? (
             <p style={{ textAlign: 'center', padding: '32px 0', fontSize: 13, color: '#9CA3AF' }}>No recent activity.</p>
           ) : (
             <div>
               {events.slice(0, 5).map((ev, i) => (
-                <div
+                <Link
                   key={ev.id}
-                  style={{
-                    display: 'flex', alignItems: 'flex-start', gap: 12,
-                    padding: '12px 0',
-                    borderBottom: i < Math.min(events.length, 5) - 1 ? '1px solid #F9FAFB' : 'none',
-                  }}
+                  href={`/super-admin/audit?event=${ev.id}`} // Fix #15 – activity items navigate to audit detail
+                  style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
                 >
-                  <span style={{ fontSize: 11, color: '#9CA3AF', flexShrink: 0, minWidth: 32, paddingTop: 8, lineHeight: 1 }}>
-                    {relativeTime(ev.timestamp)}
-                  </span>
-                  <ActivityIcon action={ev.action} severity={ev.severity} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ fontSize: 12.5, fontWeight: 600, color: '#111827', lineHeight: 1.3, margin: '0 0 2px' }}>
-                      {actionLabel(ev.action)}{ev.tenantId ? ` \u00b7 ${ev.tenantId}` : ''}
-                    </p>
-                    <p style={{ fontSize: 11.5, color: '#9197AE', margin: 0, lineHeight: 1.4 }}>
-                      {ev.schoolName || (ev.detail !== ev.action ? ev.detail : '')}
-                    </p>
+                  <div
+                    style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 12,
+                      padding: '12px 0',
+                      borderBottom: i < Math.min(events.length, 5) - 1 ? '1px solid #F9FAFB' : 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span style={{ fontSize: 11, color: '#9CA3AF', flexShrink: 0, minWidth: 32, paddingTop: 8, lineHeight: 1 }}>
+                      {relativeTime(ev.timestamp)}
+                    </span>
+                    <ActivityIcon action={ev.action} severity={ev.severity} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ fontSize: 12.5, fontWeight: 600, color: '#111827', lineHeight: 1.3, margin: '0 0 2px' }}>
+                        {actionLabel(ev.action)}{ev.schoolName ? ` \u00b7 ${ev.schoolName}` : ''} {/* Fix #19 – use schoolName not raw UUID */}
+                      </p>
+                      <p style={{ fontSize: 11.5, color: '#9197AE', margin: 0, lineHeight: 1.4 }}>
+                        {ev.schoolName || (ev.detail !== ev.action ? ev.detail : '')}
+                      </p>
+                    </div>
                   </div>
-                </div>
+                </Link>
               ))}
             </div>
           )}

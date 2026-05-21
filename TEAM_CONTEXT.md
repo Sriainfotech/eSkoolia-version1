@@ -471,3 +471,68 @@ Worked on Academics → **Foundation Setup** wizard (Academic Year → Classes �
 - **Custom DRF exception handlers must explicitly handle `django.http.Http404`** — otherwise it falls through to a 500 even though DRF's default handler would have converted it. Same risk exists for any other non-DRF exception class.
 - **Django can't `AlterField` an M2M to add `through=`** — you must `RemoveField` then `CreateModel through_table` then `AddField` with the new `through`. Auto-generated `makemigrations` produced a broken migration; hand-edit required.
 - **Windows case-insensitive filesystem vs. git case-sensitive index** — `team_context.md` (lowercase) and `TEAM_CONTEXT.md` (uppercase) were both tracked at different times. Running `git rm team_context.md` on Windows physically deleted the on-disk file (same inode as `TEAM_CONTEXT.md`); had to `git checkout HEAD -- TEAM_CONTEXT.md` to restore. Lesson: when resolving "deleted by us" conflicts on Windows, always check whether the index still tracks a differently-cased sibling before `git rm`.
+
+---
+
+## Day 6 Update — Person 3 (2026-05-21)
+
+Worked on the **Super Admin Dashboard** — full code audit of the `dashboard` module (fixes #1–#20). All 20 bugs identified and resolved across 4 files.
+
+**Files changed:**
+
+- Frontend
+  - [frontend/app/(dashboard)/super-admin/dashboard/page.tsx](frontend/app/(dashboard)/super-admin/dashboard/page.tsx) — 15 targeted fixes (see below)
+  - [frontend/lib/api/super-admin/dashboard.ts](frontend/lib/api/super-admin/dashboard.ts) — URL path verification comment added (Fix #20)
+  - [frontend/types/super-admin/index.ts](frontend/types/super-admin/index.ts) — removed 3 dead fields; added sync-guard comment (Fix #17)
+- Backend
+  - [backend/apps/super_admin/views.py](backend/apps/super_admin/views.py) — `normalize_board()` helper + board aggregation rewrite (Fix #12); N+1 eliminated (Fix #5); actual MRR from invoices (Fix #6); real MoM student trend (Fix #7); `normalize_state()` (Fix #10)
+
+**Fixes applied — Session 1 (#1–#10):**
+
+| # | Area | Fix |
+|---|------|-----|
+| 1 | Export button | Wired to `exportDashboardCsv()` — generates and downloads a real CSV from live `DashboardData` |
+| 2 | Add School button | `window.location.href` → `router.push('/super-admin/schools')` (no full-page reload) |
+| 3 | Fake sparklines | Removed all hardcoded sparkline `<Spark>` components from all 4 KPI cards |
+| 4 | Needs Attention card | Wrapped in `<Link href="/super-admin/billing?status=overdue">` so the card navigates |
+| 5 | N+1 in recent events | Prefetch all school names with a single query into `_school_name_map` dict |
+| 6 | MRR from pricing table | `actual_mrr_by_plan` now computed from current-month invoices; `_PLAN_PRICING` is fallback only |
+| 7 | Student trend | `students_trend` is real MoM % from `Student.created_at`; was hardcoded `0` |
+| 8 | Error → zero-filled UI | Error state shows "Unable to load dashboard data" + Retry button; no more fake zeros |
+| 9 | `<a>` → `<Link>` | "View all →" in Recent Activity changed to Next.js `<Link>` for client-side navigation |
+| 10 | State normalization | `normalize_state()` accepts both GST numeric codes (`"36"`) and full names (`"Telangana"`) |
+
+**Fixes applied — Session 2 (#11–#20):**
+
+| # | Area | Fix |
+|---|------|-----|
+| 11 | MRR trend = 0 | `d.mrr.trend !== 0` → `d.mrr.trend != null` — trend of 0.0% now displays as "0.0%" not "—" |
+| 12 | Board normalization | `normalize_board()` added (module-level); collapses `"SSC AP"` / `"SSC_AP"` variants by post-aggregation merge |
+| 13 | Geographic footer | First 3 states shown + `+N more`; full list accessible via `title` tooltip on hover |
+| 14 | Trial in MRR chart | `revenueRows = planRows.filter(p => p.mrr > 0)` — Trial (₹0) rows excluded from chart and `maxPlan` scaling |
+| 15 | Activity items clickable | Each activity item wrapped in `<Link href="/super-admin/audit?event={id}">` with `cursor: pointer` |
+| 16 | `relativeTime()` >7 days | Returns `"DD MMM"` locale string for events older than 7 days (was `"Xd"` indefinitely) |
+| 17 | Dead TS fields | Removed `active_schools_count`, `new_schools_today`, `api_uptime_percent` from `DashboardData` |
+| 18 | No refresh mechanism | Added manual `<RefreshCw>` button, 5-min `setInterval` auto-refresh, and "Updated X min ago" label |
+| 19 | Raw UUID in activity | `ev.tenantId` → `ev.schoolName` in activity label; UUID was leaking into the UI |
+| 20 | API URL verification | Confirmed `/api/super-admin/dashboard/` matches `config/urls.py` prefix; added comment |
+
+**Fixed today:**
+
+- All 20 audit findings resolved; zero TypeScript errors after final `get_errors` check.
+- `mrrTrend` now correctly shows `"0.0%"` when MoM change is exactly zero (was `"—"`, misleading).
+- Board breakdown no longer double-counts tenants with inconsistent casing/spacing in the `board` field.
+- Activity panel no longer leaks internal UUIDs into the visible label.
+- Dashboard now auto-refreshes every 5 minutes and shows a manual refresh button.
+
+**Still in progress / known follow-ups:**
+
+- Audit page (`/super-admin/audit`) does not yet filter by `?event=` query param — activity item deep-links (Fix #15) will land on the unfiltered audit list until that page is wired.
+- `normalize_board()` normalizes on read; the underlying DB values remain mixed-case. A one-time data migration to standardize the `board` column is recommended.
+- Fix #18 `lastUpdatedLabel` ticks every 60 s client-side; if the tab is backgrounded for >5 min, the interval fires but the label may drift until the next visible tick — acceptable for a dashboard.
+
+**Start next with:**
+
+1. Wire the Audit page to accept `?event=` query param and scroll to / highlight the matching event row.
+2. Run a one-time SQL to normalize `SchoolTenant.board` column (uppercase + underscores) so `normalize_board()` reads clean data, not just post-processes dirty data.
+3. Audit the **Billing** module (next module in the super-admin nav after Dashboard).

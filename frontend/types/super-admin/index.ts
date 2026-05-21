@@ -125,6 +125,7 @@ export interface RecentActivityEvent {
   schoolName?: string;
 }
 
+// Synced with views.py DashboardKPIView response — do not add fields not returned by backend
 export interface DashboardData {
   totalSchools: number;
   activeSchools: number;
@@ -145,11 +146,8 @@ export interface DashboardData {
   stateBreakdown?: Array<{ state: string; code: string; count: number; students: number }>;
   planBreakdown?: Array<{ plan: string; count: number; mrr: number; students: number }>;
   // Raw API fields (snake_case from backend)
-  active_schools_count?: number;
-  new_schools_today?: number;
-  suspended_schools_count?: number;
+  suspended_schools_count?: number;  // Fix #17 – removed active_schools_count, new_schools_today, api_uptime_percent (dead fields)
   outstanding_amount?: number;
-  api_uptime_percent?: number;
 }
 
 // ============================================================================
