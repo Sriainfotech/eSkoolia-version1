@@ -14,6 +14,14 @@ export interface PaginatedResponse<T> {
   next: string | null;
   previous: string | null;
   results: T[];
+  health_flags_counts?: HealthFlagsCounts;
+}
+
+export interface HealthFlagsCounts {
+  billing_overdue: number;
+  storage_80: number;
+  trial_ending: number;
+  gstin_missing: number;
 }
 
 export type ApiStatus = 'idle' | 'loading' | 'success' | 'error';
@@ -360,6 +368,7 @@ export interface SchoolFilters {
   search?: string;
   page?: number;
   page_size?: number;
+  health_flag?: string;
 }
 
 export interface AuditFilters {

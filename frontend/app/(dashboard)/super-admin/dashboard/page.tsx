@@ -286,7 +286,7 @@ export default function SuperAdminDashboardPage() {
           </button>
           <button
             type="button"
-            onClick={() => router.push('/super-admin/schools')} // Fix #2 – use router.push instead of window.location.href
+            onClick={() => router.push('/super-admin/schools?add=1')} // Fix #2 – navigate with ?add=1 to auto-open the Add School accordion
             style={{ height: 36, padding: '0 14px', borderRadius: 9, border: 'none', background: '#6D28D9', fontSize: 13, fontWeight: 600, color: '#fff', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
           >
             <Plus size={14} /> Add school

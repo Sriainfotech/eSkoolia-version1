@@ -12,6 +12,7 @@ import json
 import secrets
 import string
 from collections import OrderedDict
+from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -555,10 +556,74 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
             if normalized in allowed:
                 queryset = queryset.order_by(f"-{normalized}" if is_desc else normalized)
 
+        # ── Health-flag filter ────────────────────────────────────────────────
+        health_flag = self.request.query_params.get("health_flag")
+        if health_flag:
+            today = timezone.now().date()
+            if health_flag == "billing_overdue":
+                overdue_ids = (
+                    SuperAdminInvoice.objects.using("default")
+                    .filter(
+                        Q(status="overdue")
+                        | Q(due_date__lt=today, status__in=["draft", "sent"])
+                    )
+                    .exclude(tenant__isnull=True)
+                    .values_list("tenant_id", flat=True)
+                )
+                queryset = queryset.filter(pk__in=list(overdue_ids))
+            elif health_flag == "trial_ending":
+                cutoff_start = today - timedelta(days=37)
+                cutoff_end = today - timedelta(days=23)
+                queryset = queryset.filter(
+                    plan="trial",
+                    provisioned_at__date__gte=cutoff_start,
+                    provisioned_at__date__lte=cutoff_end,
+                )
+            elif health_flag == "gstin_missing":
+                queryset = queryset.filter(Q(gstin="") | Q(gstin__isnull=True))
+            elif health_flag == "storage_80":
+                # No per-tenant storage tracking yet — return empty
+                queryset = queryset.none()
+
         return queryset
 
+    def _health_flags_counts(self):
+        """Return health-flag counts over ALL non-archived tenants."""
+        today = timezone.now().date()
+        base = self._public_queryset(SchoolTenant).exclude(status="archived")
+
+        overdue_ids = (
+            SuperAdminInvoice.objects.using("default")
+            .filter(
+                Q(status="overdue")
+                | Q(due_date__lt=today, status__in=["draft", "sent"])
+            )
+            .exclude(tenant__isnull=True)
+            .values_list("tenant_id", flat=True)
+        )
+        billing_overdue = base.filter(pk__in=list(overdue_ids)).count()
+
+        cutoff_start = today - timedelta(days=37)
+        cutoff_end = today - timedelta(days=23)
+        trial_ending = base.filter(
+            plan="trial",
+            provisioned_at__date__gte=cutoff_start,
+            provisioned_at__date__lte=cutoff_end,
+        ).count()
+
+        gstin_missing = base.filter(Q(gstin="") | Q(gstin__isnull=True)).count()
+
+        return {
+            "billing_overdue": billing_overdue,
+            "storage_80": 0,          # placeholder — no storage field yet
+            "trial_ending": trial_ending,
+            "gstin_missing": gstin_missing,
+        }
+
     def get(self, request):
-        return self._paginate(request, self.get_queryset(), SchoolTenantListSerializer)
+        resp = self._paginate(request, self.get_queryset(), SchoolTenantListSerializer)
+        resp.data["health_flags_counts"] = self._health_flags_counts()
+        return resp
 
 
 class SchoolTenantProvisionView(SuperAdminBaseAPIView):

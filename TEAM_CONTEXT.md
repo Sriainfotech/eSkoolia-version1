@@ -608,3 +608,77 @@ Build verified clean: `npm run build` → 184 pages, 0 errors, 0 warnings.
 1. Wire the Foundation Wizard "step complete" callbacks (`onComplete`, `onNext`) to also re-trigger the existence checks so the progress strip refreshes after mutations within the same session.
 2. Consider adding a `capacity` field to `SchoolClass` type if `ClassSerializer` is updated to return it (currently `write_only`).
 3. Audit `ClassSubjectAssignmentViewSet` — currently uses the default `ApiPageNumberPagination` (max_page_size=100) which may truncate large schools.
+
+---
+
+## Day 6 Update — Gowtham (2026-05-21)
+
+### Fix: "Add School" Button in Dashboard Not Opening the Form
+
+**Problem:** The **Add school** button on the Super-Admin dashboard (`app/(dashboard)/super-admin/dashboard/page.tsx`) used `router.push('/super-admin/schools')` which navigated to the Schools page but did **not** open the Add School accordion — users landed on the list with no visible form.
+
+**Root cause:** The Schools page initialises `accAddOpen` as `false`. Without a signal from the caller, there was no way for the page to know it should auto-open the form. No URL parameter was being passed.
+
+**Fix — two files only:**
+
+- **`frontend/app/(dashboard)/super-admin/dashboard/page.tsx`**
+  - Changed `router.push('/super-admin/schools')` → `router.push('/super-admin/schools?add=1')` on the "Add school" button `onClick`.
+
+- **`frontend/app/(dashboard)/super-admin/schools/page.tsx`**
+  - Added `useRouter` and `useSearchParams` imports from `next/navigation`.
+  - Added `const router = useRouter()` and `const searchParams = useSearchParams()` inside the page component.
+  - Added a `useEffect` (runs once on mount) that:
+    1. Checks `searchParams.get('add') === '1'`.
+    2. Sets `accAddOpen(true)`.
+    3. Calls `router.replace('/super-admin/schools', { scroll: false })` to clean the URL (no history entry added).
+    4. After 120 ms smooth-scrolls to `#acc-add` so the open accordion is visible.
+
+**No backend changes required** — this is purely a frontend navigation / state concern.
+
+**Verification:** `get_errors` on both files → no TypeScript or lint errors.
+
+---
+
+### Fix: Health Flag Pills in School Management Not Filtering Data
+
+**Problem:** The health-flag filter pills in the Schools list accordion ("Billing overdue", "Storage 80%+", "Trial ending <7d", "GSTIN missing") had hardcoded fake counts and `onClick={() => {}}` no-ops. Clicking them did nothing — no filter was sent to the backend and no schools were filtered.
+
+**Root cause:** The pills were pure UI stubs with static data. No state, no API call, no backend query support.
+
+**Fix — backend (`apps/super_admin/views.py`):**
+
+- Added `from datetime import timedelta` import.
+- In `SchoolTenantListView.get_queryset()`, added a `health_flag` query-param branch after existing filters:
+  | Flag param value | Filter applied |
+  |---|---|
+  | `billing_overdue` | Schools with any `SuperAdminInvoice` where `status='overdue'` OR `due_date < today AND status IN ['draft','sent']` |
+  | `trial_ending` | `plan='trial'` AND `provisioned_at` between `today−37d` and `today−23d` (30-day trial convention, ending within 7 days) |
+  | `gstin_missing` | `gstin=''` OR `gstin IS NULL` |
+  | `storage_80` | Returns empty queryset (no per-tenant storage tracking field yet) |
+
+- Added `_health_flags_counts()` method that computes counts across all non-archived tenants (independent of current filter state).
+- Overrode `get()` to call `_paginate()` then inject `health_flags_counts: {...}` into the response envelope.
+
+**Fix — frontend types (`frontend/types/super-admin/index.ts`):**
+
+- Added `HealthFlagsCounts` interface: `{ billing_overdue, storage_80, trial_ending, gstin_missing: number }`.
+- Added `health_flags_counts?: HealthFlagsCounts` to `PaginatedResponse<T>`.
+- Added `health_flag?: string` to `SchoolFilters`.
+
+**Fix — API client (`frontend/lib/api/super-admin/schools.ts`):**
+
+- `getSchools()` now appends `health_flag` to the query string when present.
+
+**Fix — page component (`frontend/app/(dashboard)/super-admin/schools/page.tsx`):**
+
+- Imported `HealthFlagsCounts` type.
+- Added `healthFlagFilter: string` state (empty = no flag active).
+- Added `healthFlagCounts: HealthFlagsCounts` state, initialised to all zeros.
+- `loadSchools()` now passes `health_flag: healthFlagFilter || undefined` in filters and, on success, calls `setHealthFlagCounts(res.health_flags_counts)` if present.
+- Added `healthFlagFilter` to `loadSchools` `useCallback` deps and to the `useEffect` that resets `page` to 1.
+- Replaced the four static stubs with real `FilterPill` components using live `healthFlagCounts` values; clicking toggles the active flag (click same pill again to clear).
+
+**Verification:** `python -c "py_compile.compile('views.py')"` → OK; `get_errors` on all three frontend files → no errors.
+
+**Remaining caveat:** `storage_80` always returns 0 and an empty list — a `storage_used_gb` / `storage_cap_gb` field would need to be added to `SchoolTenant` + a migration before this flag can be populated.
+
