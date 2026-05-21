@@ -478,6 +478,15 @@ CELERY_BEAT_SCHEDULE = {
 
 # Optional AI suggestion settings for student category descriptions
 CATEGORY_AI_SUGGESTION_ENABLED = os.getenv("CATEGORY_AI_SUGGESTION_ENABLED", "False").lower() == "true"
+
+# ── Email / SMTP ────────────────────────────────────────────────────────────
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = "smtp.gmail.com"
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or "noreply@eskoolia.com"
 CATEGORY_AI_OPENAI_API_KEY = os.getenv("CATEGORY_AI_OPENAI_API_KEY", "").strip()
 CATEGORY_AI_OPENAI_ENDPOINT = os.getenv(
     "CATEGORY_AI_OPENAI_ENDPOINT",
