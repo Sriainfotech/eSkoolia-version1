@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'react-toastify';
 import {
   Archive, BookOpen, Bus, Calendar, ChevronDown, Check, CheckCheck, Copy, Download,
@@ -10,7 +11,7 @@ import {
 } from 'lucide-react';
 import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSchool, uploadSchoolLogo } from '@/lib/api/super-admin/schools';
 import type {
-  BoardType, PaginatedResponse, PlanType, ProvisionSchoolRequest, ProvisionSchoolResponse,
+  BoardType, HealthFlagsCounts, PaginatedResponse, PlanType, ProvisionSchoolRequest, ProvisionSchoolResponse,
   SchoolFilters, SchoolTenant, SchoolStatus,
 } from '@/types/super-admin';
 
@@ -420,6 +421,8 @@ function ConfirmDialog({
 
 // PAGE
 export default function SuperAdminSchoolsPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [response, setResponse] = useState<PaginatedResponse<SchoolTenant>>(DEFAULT_SCHOOLS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -437,6 +440,22 @@ export default function SuperAdminSchoolsPage() {
   const [accAddOpen, setAccAddOpen] = useState(false);
   const [accFiltersOpen, setAccFiltersOpen] = useState(true);
   const [accListOpen, setAccListOpen] = useState(true);
+
+  const [healthFlagFilter, setHealthFlagFilter] = useState<string>('');
+  const [healthFlagCounts, setHealthFlagCounts] = useState<HealthFlagsCounts>({
+    billing_overdue: 0, storage_80: 0, trial_ending: 0, gstin_missing: 0,
+  });
+
+  // Auto-open "Add School" accordion when navigated here with ?add=1
+  useEffect(() => {
+    if (searchParams.get('add') === '1') {
+      setAccAddOpen(true);
+      // Remove the query param without adding a history entry
+      router.replace('/super-admin/schools', { scroll: false });
+      setTimeout(() => document.getElementById('acc-add')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [provisioning, setProvisioning] = useState(false);
   const [provisionError, setProvisionError] = useState<string | null>(null);
@@ -480,19 +499,22 @@ export default function SuperAdminSchoolsPage() {
       plan: planFilter as PlanType || undefined,
       board: boardFilter as BoardType || undefined,
       state: stateFilter || undefined,
+      health_flag: healthFlagFilter || undefined,
     };
     try {
-      setResponse(await getSchools(filters));
+      const res = await getSchools(filters);
+      setResponse(res);
+      if (res.health_flags_counts) setHealthFlagCounts(res.health_flags_counts);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load schools.');
       setResponse(DEFAULT_SCHOOLS);
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter, planFilter, boardFilter, stateFilter]);
+  }, [page, search, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
 
   useEffect(() => { void loadSchools(); }, [loadSchools]);
-  useEffect(() => { setPage(1); }, [search, statusFilter, planFilter, boardFilter, stateFilter]);
+  useEffect(() => { setPage(1); }, [search, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
 
   // Fetch global stats — extracted so it can be re-called after any status change
   const loadGlobalStats = useCallback(() => {
@@ -1415,13 +1437,21 @@ export default function SuperAdminSchoolsPage() {
             <div>
               <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-[var(--ink-2)]">Health flags</div>
               <div className="flex flex-wrap gap-1.5">
-                {[
-                  { label: 'Billing overdue', count: 1 },
-                  { label: 'Storage 80%+',    count: 2 },
-                  { label: 'Trial ending <7d',count: 1 },
-                  { label: 'GSTIN missing',   count: 2 },
-                ].map(o => (
-                  <FilterPill key={o.label} label={o.label} count={o.count} active={false} onClick={() => {}} />
+                {(
+                  [
+                    { key: 'billing_overdue', label: 'Billing overdue', count: healthFlagCounts.billing_overdue },
+                    { key: 'storage_80',      label: 'Storage 80%+',    count: healthFlagCounts.storage_80 },
+                    { key: 'trial_ending',    label: 'Trial ending <7d', count: healthFlagCounts.trial_ending },
+                    { key: 'gstin_missing',   label: 'GSTIN missing',   count: healthFlagCounts.gstin_missing },
+                  ] as const
+                ).map(o => (
+                  <FilterPill
+                    key={o.key}
+                    label={o.label}
+                    count={o.count}
+                    active={healthFlagFilter === o.key}
+                    onClick={() => setHealthFlagFilter(prev => prev === o.key ? '' : o.key)}
+                  />
                 ))}
               </div>
             </div>

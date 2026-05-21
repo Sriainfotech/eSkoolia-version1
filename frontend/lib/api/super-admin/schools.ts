@@ -28,6 +28,7 @@ export async function getSchools(filters?: SchoolFilters): Promise<PaginatedResp
     if (filters?.plan) params.append('plan', filters.plan);
     if (filters?.region) params.append('region', filters.region);
     if (filters?.state) params.append('state', filters.state);
+    if (filters?.health_flag) params.append('health_flag', filters.health_flag);
 
     const queryString = params.toString();
     const url = `/api/super-admin/schools/${queryString ? '?' + queryString : ''}`;
