@@ -402,7 +402,121 @@ GET  /api/login-permission/users/export/      ΓåÆ CSV download
 
 ---
 
-## How to Run (Dev)
+## Day 6 — 2026-05-21 — Auth UX: Forgot Password, OTP Reset, Error Messages & Login UI Fix
+
+**Branch:** `login/21-05`  
+**Commit:** `login functionality added-21/05`
+
+---
+
+### 1. Gmail SMTP — Forgot Password via Email OTP
+
+**Backend files changed:**
+
+- [backend/config/settings/base.py](backend/config/settings/base.py) — appended Gmail SMTP config:
+  ```python
+  EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+  EMAIL_HOST = "smtp.gmail.com"
+  EMAIL_PORT = 587
+  EMAIL_USE_TLS = True
+  EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+  EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+  DEFAULT_FROM_EMAIL = EMAIL_HOST_USER or "noreply@eskoolia.com"
+  ```
+- [backend/.env](backend/.env) — added `EMAIL_HOST_USER` and `EMAIL_HOST_PASSWORD` (Gmail App Password).
+- [backend/apps/users/views.py](backend/apps/users/views.py) — three new views:
+  - `ForgotPasswordView` — POST `{email}` → generates 6-digit OTP via `random.randint(100000, 999999)`, stores in Django cache (`pwd_reset_otp_{email}`, 600 s TTL), sends email. Returns 404 if email not found; 500 with exception message on SMTP failure.
+  - `VerifyResetCodeView` — POST `{email, code}` → validates OTP from cache without consuming it.
+  - `ResetPasswordView` — POST `{email, code, new_password}` → validates + consumes OTP, sets new password.
+- [backend/apps/users/urls.py](backend/apps/users/urls.py) — added three routes:
+  ```python
+  path("forgot-password/", ForgotPasswordView.as_view()),
+  path("verify-reset-code/", VerifyResetCodeView.as_view()),
+  path("reset-password/", ResetPasswordView.as_view()),
+  ```
+
+**Frontend files changed:**
+
+- [frontend/app/forgot-password/page.tsx](frontend/app/forgot-password/page.tsx) — submits email, on success shows: *"We've sent a 6-digit reset code to {email}. Enter the code on the next screen to set a new password."* + "ENTER RESET CODE" button navigating to `/reset-password?email=...`.
+- [frontend/app/reset-password/page.tsx](frontend/app/reset-password/page.tsx) — 2-step flow:
+  - **Step 1 (`code`)** — 6-digit OTP input, calls `apiVerifyResetCode`. Progress bar segment 1 active.
+  - **Step 2 (`password`)** — New Password + Confirm Password fields with strength meter, calls `apiResetPassword`. Progress bar both segments teal on success.
+
+---
+
+### 2. Inline OTP Resend (no page navigation)
+
+**Problem:** "Didn't receive a code? Resend" was navigating to `/forgot-password` (full page redirect), losing the email context.
+
+**Fix in [frontend/app/reset-password/page.tsx](frontend/app/reset-password/page.tsx):**
+- Added `resendCooldown` state (starts at 60 s, counts down via `useEffect` + `setTimeout`).
+- Added `handleResend()` — calls `apiForgotPassword(emailFromQuery)` inline, shows inline success/error message, resets timer to 60 s, clears the old code input.
+- Button shows greyed-out `"Resend available in 58s"` while cooling down; turns into active teal link at 0.
+- No page navigation at any point.
+
+---
+
+### 3. Proper Error & Success Messages Everywhere
+
+**Problem:** Wrong credentials showed raw `"Request failed (401)"` instead of a human-readable message.
+
+**Root cause:** The custom exception handler (`backend/config/exception_handler.py`) wraps all errors as:
+```json
+{ "error": { "code": "authentication_failed", "message": "Invalid password." } }
+```
+But `extractError()` in auth-context only checked if `body.error` was a **string** — never looked inside the nested object.
+
+**Fix in [frontend/lib/auth-context.tsx](frontend/lib/auth-context.tsx) — `extractError()`:**
+```typescript
+// Now digs into nested { "error": { "message": "..." } }
+if (v && typeof v === "object" && !Array.isArray(v)) {
+  const nested = (v as Record<string, unknown>).message;
+  if (typeof nested === "string" && nested.trim()) return nested.trim();
+}
+// Friendly HTTP status fallbacks
+const fallbacks: Record<number, string> = {
+  400: "Invalid request. Please check your input.",
+  401: "Invalid credentials. Please try again.",
+  403: "You don't have permission to perform this action.",
+  404: "The requested resource was not found.",
+  409: "A record with this information already exists.",
+  429: "Too many requests. Please wait a moment and try again.",
+  500: "Server error. Please try again later.",
+  503: "Service unavailable. Please try again in a moment.",
+};
+return fallbacks[status] ?? "Something went wrong. Please try again.";
+```
+
+**Fix in [frontend/app/change-password/page.tsx](frontend/app/change-password/page.tsx):**
+- The standalone raw `fetch` call now checks `data.error?.message` before `data.detail`/`data.message`.
+
+---
+
+### 4. Login Screen CSS Fixes
+
+**Problem:** The login page left panel was not rendering correctly — faculty trust strip was invisible and campus image was barely visible.
+
+**Fixes in [frontend/app/globals.css](frontend/app/globals.css):**
+
+| Selector | Before | After |
+|----------|--------|-------|
+| `.trust-strip` | `display: none` | `display: flex; align-items: center; gap: 16px; position: relative; z-index: 1` |
+| `.campus-image-wrap` | `opacity: 0.15; filter: grayscale(1)` | `opacity: 0.28; filter: grayscale(0.4); pointer-events: none` |
+| `.identity-panel` background | `rgba(255,255,255,0.4)` | `linear-gradient(135deg, rgba(13,148,136,0.06), rgba(49,46,129,0.04))` — teal-to-indigo gradient fallback |
+
+The login page now shows:
+- Faculty avatars strip at the bottom-left of the hero panel ("Built for India's Future Leaders").
+- Campus image visible with mild color tint instead of near-invisible grayscale.
+- Left panel has visible background even when the external image doesn't load.
+
+---
+
+### Environment notes added today
+- Gmail App Password stored in `backend/.env` as `EMAIL_HOST_USER` + `EMAIL_HOST_PASSWORD`.
+- OTP storage uses Django's `LocMemCache` in dev (`cache.set(...)`) — switch to Redis in production.
+- `apiForgotPassword`, `apiVerifyResetCode`, `apiResetPassword` all exported from `frontend/lib/auth-context.tsx`.
+
+---
 
 ```bash
 # Frontend
