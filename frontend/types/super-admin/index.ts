@@ -15,6 +15,7 @@ export interface PaginatedResponse<T> {
   previous: string | null;
   results: T[];
   health_flags_counts?: HealthFlagsCounts;
+  status_counts?: StatusCounts;
 }
 
 export interface HealthFlagsCounts {
@@ -22,6 +23,14 @@ export interface HealthFlagsCounts {
   storage_80: number;
   trial_ending: number;
   gstin_missing: number;
+}
+
+export interface StatusCounts {
+  all: number;
+  active: number;
+  trial: number;
+  suspended: number;
+  archived: number;
 }
 
 export type ApiStatus = 'idle' | 'loading' | 'success' | 'error';

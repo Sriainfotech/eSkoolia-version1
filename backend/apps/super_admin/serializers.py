@@ -164,6 +164,37 @@ class SchoolTenantUpdateSerializer(serializers.ModelSerializer):
             "last_activity_at",
         ]
 
+    def validate_gstin(self, value):
+        import re
+        if not value:
+            return value
+        pattern = r'^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$'
+        if not re.match(pattern, value):
+            raise serializers.ValidationError(
+                "Invalid GSTIN format. Must be 15 characters, e.g. 27AABCU9603R1ZX"
+            )
+        return value
+
+    def validate_pan(self, value):
+        import re
+        if not value:
+            return value
+        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]{1}$', value):
+            raise serializers.ValidationError(
+                "Invalid PAN format. Must be 10 characters, e.g. AABCU9603R"
+            )
+        return value
+
+    _VALID_STATUSES = {"active", "suspended", "archived", "pending", "onboarding", "provisioning"}
+
+    def validate_status(self, value):
+        if value and value not in self._VALID_STATUSES:
+            raise serializers.ValidationError(
+                f"Invalid status '{value}'. Must be one of: "
+                + ", ".join(sorted(self._VALID_STATUSES))
+            )
+        return value
+
 
 class ProvisionSchoolRequestSerializer(serializers.Serializer):
     name = serializers.CharField(max_length=255)
