@@ -58,7 +58,20 @@ def get_tenant_from_request(request):
         except Domain.DoesNotExist:
             logger.warning(f"Domain not found: {subdomain}")
             raise Http404(f"Tenant {subdomain} not found")
-    
+
+    # Production domain: {subdomain}.eskoolia.com (e.g. springdale.eskoolia.com)
+    if ".eskoolia.com" in host:
+        subdomain = host.replace(".eskoolia.com", "")
+        # Block reserved/root subdomains — these are not tenant schools
+        if subdomain in ("www", "admin", "api", "mail", "app", ""):
+            return None
+        try:
+            domain = Domain.objects.select_related("tenant").get(domain=subdomain)
+            return domain.tenant
+        except Domain.DoesNotExist:
+            logger.warning(f"Tenant not found for subdomain: {subdomain}")
+            raise Http404(f"School '{subdomain}' not found")
+
     # Priority 3: Fallback to legacy X-School-Id for backward compatibility
     school_id = request.META.get("HTTP_X_SCHOOL_ID")
     if school_id:

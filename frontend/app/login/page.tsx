@@ -3,11 +3,30 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
+import { API_BASE_URL } from "@/lib/api";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const SCHOOL_NAME = process.env.NEXT_PUBLIC_SCHOOL_NAME ?? "eSkoolia";
 const SCHOOL_EMAIL_DOMAIN = process.env.NEXT_PUBLIC_SCHOOL_EMAIL_DOMAIN ?? "school.edu.in";
+
+// ─── Subdomain helper ─────────────────────────────────────────────────────────
+
+/** Returns the tenant subdomain from the current hostname, or null.
+ *  e.g. "springdale.eskoolia.com" → "springdale"
+ *       "localhost:3000"          → null
+ */
+function getSubdomainFromHost(): string | null {
+  if (typeof window === "undefined") return null;
+  const hostname = window.location.hostname;  // e.g. "springdale.eskoolia.com"
+  const parts = hostname.split(".");
+  // Valid tenant: at least 3 parts and the second part is "eskoolia"
+  if (parts.length >= 3 && parts[1] === "eskoolia") {
+    const sub = parts[0];
+    if (!["www", "admin", "api", "app", "mail", ""].includes(sub)) return sub;
+  }
+  return null;
+}
 
 const MANDALA_IMAGE =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuAs0iss4Nb-47Ty-FMzbmeTvANKZGL49QmIltz2KqUSaZ2RfYqr7QEuLFKbMPmAHH5uVw-fRU7gmHxDk10F6OhF5OSICU-m2vZOlWzRJ5JVa6cVbnyuT5oqi3Iif7ofYPCFDSuHp0D73s9os187aLZSyCwqhP9YNYUK0-q-Rn3NcCu_hz9sgeDxdg6T8eJzL-qbegjI7ZCl9Y7tBPcrMknDATqVweE_Eil-L6lSWiVaJQWd_SzsskD1ksq9izhrMBJ8Xk3jpaYYIi4";
@@ -46,6 +65,26 @@ function LoginPage() {
   const [blobOffset, setBlobOffset] = useState({ x: 0, y: 0 });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Subdomain-based school branding
+  const [subdomain] = useState<string | null>(() => getSubdomainFromHost());
+  const [schoolInfo, setSchoolInfo] = useState<{
+    name: string;
+    logo_url: string | null;
+    brand_color: string;
+  } | null>(null);
+
+  // Fetch school name + branding from the public API when on a tenant subdomain.
+  useEffect(() => {
+    if (!subdomain) return;
+    fetch(`${API_BASE_URL}/api/v1/tenancy/school-info/?subdomain=${encodeURIComponent(subdomain)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (data) setSchoolInfo(data); })
+      .catch(() => { /* silently ignore — fall back to env var */ });
+  }, [subdomain]);
+
+  // Derive display name: use full name from backend, or fall back to env var constant.
+  const displaySchoolName = schoolInfo?.name ?? SCHOOL_NAME;
 
   // Redirect already-authenticated users away from login.
   useEffect(() => {
@@ -120,7 +159,7 @@ function LoginPage() {
         <div className="glass-panel header-panel">
           <div className="brand-stack">
             <h1 className="school-brand">
-              {SCHOOL_NAME} <span>School</span>
+              {displaySchoolName}
             </h1>
             <div className="header-divider" />
             <p className="header-kicker">Digital Atrium</p>
@@ -150,7 +189,7 @@ function LoginPage() {
           {/* Left: identity / hero panel */}
           <div className="identity-panel">
             <div className="campus-image-wrap">
-              <img alt={`${SCHOOL_NAME} campus`} src={CAMPUS_IMAGE} />
+              <img alt={`${displaySchoolName} campus`} src={CAMPUS_IMAGE} />
             </div>
 
             <div className="identity-content">
@@ -167,7 +206,7 @@ function LoginPage() {
                 </h2>
                 <p>
                   Welcome to your unified institutional workspace. Securely access the
-                  complete academic ecosystem designed for the modern {SCHOOL_NAME} family.
+                  complete academic ecosystem designed for the modern {displaySchoolName} family.
                 </p>
               </div>
 

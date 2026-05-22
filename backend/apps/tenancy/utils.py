@@ -6,8 +6,9 @@ from django.db import connection
 
 logger = logging.getLogger(__name__)
 
-TENANT_MAIN_MIDDLEWARE = "django_tenants.middleware.main.TenantMainMiddleware"
+TENANT_MAIN_MIDDLEWARE = "apps.tenancy.middleware.TenantMainMiddleware"
 JWT_AUTH_CLASS = "rest_framework_simplejwt.authentication.JWTAuthentication"
+JWT_AUTH_CLASS_TENANT = "apps.tenancy.auth.TenantAwareJWTAuthentication"
 TENANCY_MIGRATION_TABLES = {
     "0001_initial": {"schools"},
     "0002_add_tenant_models": {"school_tenants", "tenant_domains"},
@@ -204,11 +205,12 @@ def validate_tenancy_configuration(output=None):
             result["middleware"]["errors"].append(message)
             errors.append(message)
     if session_mw in middleware and TENANT_MAIN_MIDDLEWARE in middleware:
-        if middleware.index(session_mw) > middleware.index(TENANT_MAIN_MIDDLEWARE):
+        if middleware.index(session_mw) < middleware.index(TENANT_MAIN_MIDDLEWARE):
             message = "SessionMiddleware should remain ahead of TenantMainMiddleware for compatibility."
             result["middleware"]["warnings"].append(message)
             warnings.append(message)
-    if JWT_AUTH_CLASS not in getattr(settings, "REST_FRAMEWORK", {}).get("DEFAULT_AUTHENTICATION_CLASSES", []):
+    _auth_classes = set(getattr(settings, "REST_FRAMEWORK", {}).get("DEFAULT_AUTHENTICATION_CLASSES", []))
+    if not _auth_classes.intersection({JWT_AUTH_CLASS, JWT_AUTH_CLASS_TENANT}):
         message = "JWTAuthentication is not present in REST_FRAMEWORK; verify auth compatibility."
         result["middleware"]["warnings"].append(message)
         warnings.append(message)

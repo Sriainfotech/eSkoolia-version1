@@ -968,3 +968,127 @@ Added `validate_gstin` and `validate_pan` methods to `SchoolTenantUpdateSerializ
 - Wired **both** Export buttons (top-right header + inside the school list accordion) to `onClick={() => void handleExportSchoolsXlsx()}`.
 - Buttons show "Exporting…" and are disabled (`disabled:opacity-60 disabled:cursor-not-allowed`) while fetching.
 
+---
+
+## Day 7 — 2026-05-22 — Multi-Tenancy Login Flow & Cross-Tenant Security
+
+**Branch:** `login/21-05`
+
+---
+
+### 1. API Base URL: Subdomain-Aware Routing
+
+**Problem:** `NEXT_PUBLIC_API_URL=http://127.0.0.1:8000` in `frontend/.env.local` was overriding all API calls to hit `127.0.0.1:8000` (no subdomain in `Host` header). After login, `apiGetMe()` hit the bare IP → Django's `TenantAwareJWTAuthentication` rejected the JWT with `"User authentication requires tenant context. Please use tenant subdomain."`.
+
+**Fix — [frontend/lib/api.ts](frontend/lib/api.ts):**
+- Added `pickApiBaseUrl()` function that detects eskoolia subdomains at runtime and returns `DEFAULT_API_BASE_URL` so the browser's own subdomain is preserved as the `Host` header:
+  ```typescript
+  function pickApiBaseUrl(): string {
+    if (typeof window !== "undefined") {
+      const host = window.location.hostname;
+      const onTunnel = /devtunnels\.ms$/i.test(host) || /\.githubpreview\.dev$/i.test(host);
+      if (onTunnel) return DEFAULT_API_BASE_URL;
+      const parts = host.split(".");
+      if (parts.length >= 3 && parts[1] === "eskoolia") return DEFAULT_API_BASE_URL;
+    }
+    return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE_URL;
+  }
+  ```
+- `API_BASE_URL` is now the result of `pickApiBaseUrl()` instead of a plain env var lookup.
+
+---
+
+### 2. Next.js Dev Server Cross-Origin Static Assets
+
+**Problem:** `/_next/static/css/` and JS chunks returned 404 when accessed from `narayana.eskoolia.local:3000` — Next.js dev server was blocking cross-origin requests from the eskoolia subdomain.
+
+**Fix — [frontend/next.config.mjs](frontend/next.config.mjs):**
+```javascript
+allowedDevOrigins: ["*.eskoolia.local"],
+```
+
+---
+
+### 3. School-Info API — Relative URL Fix
+
+**Problem:** `frontend/app/login/page.tsx` fetched `/api/v1/tenancy/school-info/?subdomain=...` as a relative URL, which hit the Next.js dev server at `:3000` instead of the Django backend at `:8000`, returning 404.
+
+**Fix — [frontend/app/login/page.tsx](frontend/app/login/page.tsx):**
+- Added import: `import { API_BASE_URL } from "@/lib/api";`
+- Changed fetch to use the full backend URL:
+  ```typescript
+  fetch(`${API_BASE_URL}/api/v1/tenancy/school-info/?subdomain=${encodeURIComponent(subdomain)}`)
+  ```
+
+---
+
+### 4. Narayana School — Domain Record & Tenant Activation
+
+**Operations performed on Neon DB (via Django shell):**
+- Created `Domain` record: `domain='narayana'` → `SchoolTenant(tenant_id='TNT_B0890DC1', name='Narayana High School')`.
+- Activated the tenant: `SchoolTenant.objects.filter(pk=...).update(status='active')` — **never use `.save()`** (triggers `migrate_schemas` which is not registered in this hybrid setup).
+- Added `127.0.0.1 narayana.eskoolia.local` to Windows `hosts` file.
+
+---
+
+### 5. Cross-Tenant Login Security Fix
+
+**Problem:** A user from school A could log into school B's portal using valid credentials. Nothing prevented cross-school authentication.
+
+**Fix — [backend/apps/users/serializers.py](backend/apps/users/serializers.py):**
+
+**Change 1** — New import:
+```python
+from apps.tenancy.context import get_current_tenant, is_multi_tenancy_enabled
+```
+
+**Change 2** — Tenant-scope check inserted in `LoginTokenObtainPairSerializer.validate()`, between password validation and token issuance:
+```python
+if is_multi_tenancy_enabled() and not user.is_superuser:
+    current_tenant = get_current_tenant()
+    if current_tenant is not None:
+        user_school_id = getattr(user, 'school_id', None)
+        if not user_school_id:
+            raise AuthenticationFailed(
+                "Your account is not assigned to any school. "
+                "Please contact your administrator."
+            )
+        # ... school_matches check against subdomain_url / code / name
+        if not school_matches:
+            raise AuthenticationFailed("Invalid credentials for this school portal.")
+```
+
+**Matching logic (`school_matches`):** True if any of these hold:
+- `user.school.subdomain == current_tenant.subdomain_url`
+- `user.school.code == current_tenant.subdomain_url`
+- `user.school.name == current_tenant.name` (case-insensitive)
+
+**Verified behaviour (tested via Django shell + live dev server):**
+
+| User | Host | HTTP | Result |
+|------|------|------|--------|
+| `testadmin` (no school) | `narayana.eskoolia.local` | 401 | "not assigned to any school" |
+| `testadmin` (no school) | `testschool.eskoolia.local` | 401 | "not assigned to any school" |
+| `testadmin` | `127.0.0.1` (no tenant) | 200 | OK — public schema bypasses check |
+| Superuser | any subdomain | 200 | OK — `is_superuser=True` skips check |
+
+---
+
+### Environment Notes (updated)
+
+- `get_current_tenant()` uses `ContextVar` (not thread-local) — set by `TenantMainMiddleware.process_request()`, visible throughout the request stack.
+- `TenantMainMiddleware` resolves tenants from the `Host` header; lookup: `Domain.objects.get(domain='<subdomain>')`.
+- If `_verify_schema_exists()` fails (schema missing on Neon), the middleware raises `Http404` — provision the schema first.
+- Dev server must be restarted (not just auto-reloaded) after major serializer changes when the old process is from a different session.
+- Always use `py -3.10` for Django commands; `node_modules\.bin\next dev` for frontend (not `npm run dev`).
+
+---
+
+### Start next with:
+
+1. Test the full login flow in browser: navigate to `narayana.eskoolia.local:3000/login`, log in with a Narayana admin — confirm redirect to dashboard with correct tenant context.
+2. Create a real Narayana admin user with `school=Narayana High School` assigned and confirm login succeeds on narayana subdomain but fails on testschool subdomain.
+3. Seed school-assigned users for `narayana` tenant schema if not already present.
+4. Consider adding `amarajyothi.eskoolia.local` Domain record + activation (hosts entry already exists).
+5. Commit the `login/21-05` branch changes: `api.ts`, `next.config.mjs`, `login/page.tsx`, `serializers.py`.
+

@@ -73,9 +73,9 @@ class TenantMainMiddleware(MiddlewareMixin):
                 return None
 
             # Validate tenant
-            if not tenant.is_active:
+            if tenant.status not in ("active", "trial"):
                 logger.warning(
-                    f"Request to inactive tenant: {tenant.tenant_id} ({tenant.name})"
+                    f"Request to inactive tenant: {getattr(tenant, 'tenant_id', None)} ({tenant.name})"
                 )
                 raise Http404(f"Tenant {tenant.name} is not active")
 
