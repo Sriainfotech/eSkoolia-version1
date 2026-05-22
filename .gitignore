@@ -33,3 +33,6 @@ out/
 # OS
 .DS_Store
 Thumbs.db
+
+multi-school-tenant-erp/node_modules/
+multi-school-tenant-erp/.next/
