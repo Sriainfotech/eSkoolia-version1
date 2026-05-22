@@ -42,11 +42,14 @@ const API           = "/api/v1/core/class-rooms/";
 const CLASSES_API   = "/api/v1/core/classes/?page_size=200";
 const SECTIONS_API  = "/api/v1/core/sections/?page_size=500";
 
+const ROOMS_PER_PAGE = 5;
+
 export default function RoomsPane({ showToast, onBack, onNext }: Props) {
   const [rooms, setRooms]         = useState<Room[]>([]);
   const [classes, setClasses]     = useState<SchoolClass[]>([]);
   const [sections, setSections]   = useState<Section[]>([]);
   const [loading, setLoading]     = useState(true);
+  const [roomsPage, setRoomsPage] = useState(0);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [roomNo, setRoomNo]       = useState("");
@@ -187,7 +190,11 @@ export default function RoomsPane({ showToast, onBack, onNext }: Props) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
-        setRooms((prev) => [...prev, resp.data]);
+        setRooms((prev) => {
+          const next = [...prev, resp.data];
+          setRoomsPage(Math.floor((next.length - 1) / ROOMS_PER_PAGE));
+          return next;
+        });
         showToast(`Room "${trimmed}" added.`);
         setRoomNo(""); setFloor(""); setCapacity("35"); setClassId(""); setSectionId("");
         roomNoRef.current?.focus();
@@ -390,8 +397,13 @@ export default function RoomsPane({ showToast, onBack, onNext }: Props) {
               <p className="text-[12px] font-semibold text-[#6F767E]">No rooms yet</p>
               <p className="text-[11px] text-[#9FA6AD] mt-0.5">Rooms appear here as you add them.</p>
             </div>
-          ) : (
-            <div className="overflow-y-auto max-h-[420px] -mx-1 px-1">
+          ) : (() => {
+            const totalPages = Math.ceil(rooms.length / ROOMS_PER_PAGE);
+            const safePage   = Math.min(roomsPage, totalPages - 1);
+            const pageRooms  = rooms.slice(safePage * ROOMS_PER_PAGE, (safePage + 1) * ROOMS_PER_PAGE);
+            return (
+            <>
+            <div className="-mx-1 px-1">
               <table className="w-full text-[12px]">
                 <thead>
                   <tr className="text-[10px] font-bold text-[#6F767E] uppercase tracking-wide border-b border-[#E8ECEF]">
@@ -403,7 +415,7 @@ export default function RoomsPane({ showToast, onBack, onNext }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {rooms.map((r) => {
+                  {pageRooms.map((r) => {
                     const inactive = !r.active_status;
                     return (
                       <tr key={r.id}
@@ -454,7 +466,31 @@ export default function RoomsPane({ showToast, onBack, onNext }: Props) {
                 </tbody>
               </table>
             </div>
-          )}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-[#F0F2F5]">
+                <span className="text-[10px] text-[#9FA6AD]">
+                  {safePage * ROOMS_PER_PAGE + 1}–{Math.min((safePage + 1) * ROOMS_PER_PAGE, rooms.length)} of {rooms.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setRoomsPage((p) => Math.max(0, p - 1))}
+                    disabled={safePage === 0}
+                    className="w-6 h-6 flex items-center justify-center rounded-[6px] border border-[#E8ECEF] text-[#6F767E] hover:bg-[#EEF0FF] hover:text-[#5B4FCF] hover:border-[#C7C2F0] disabled:opacity-30 disabled:cursor-not-allowed transition-all text-[13px] font-bold"
+                    title="Previous page"
+                  >&lt;</button>
+                  <span className="text-[10px] text-[#6F767E] min-w-[40px] text-center">{safePage + 1} / {totalPages}</span>
+                  <button
+                    onClick={() => setRoomsPage((p) => Math.min(totalPages - 1, p + 1))}
+                    disabled={safePage === totalPages - 1}
+                    className="w-6 h-6 flex items-center justify-center rounded-[6px] border border-[#E8ECEF] text-[#6F767E] hover:bg-[#EEF0FF] hover:text-[#5B4FCF] hover:border-[#C7C2F0] disabled:opacity-30 disabled:cursor-not-allowed transition-all text-[13px] font-bold"
+                    title="Next page"
+                  >&gt;</button>
+                </div>
+              </div>
+            )}
+            </>
+            );
+          })()}
         </div>
       </div>
 

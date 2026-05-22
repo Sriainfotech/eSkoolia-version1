@@ -8,9 +8,11 @@ from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from django.db.models import Avg, Count, Q
+from django.db.models.functions import Lower
 from config.pagination import ApiPageNumberPagination
 from .models import AcademicYear, Class, ClassPeriod, ClassRoom, Section, Stream, Subject, Vehicle, TransportRoute, AssignVehicle
 from .models import BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate
@@ -106,6 +108,7 @@ class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
     model = Class
     serializer_class = ClassSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = ApiPageNumberPagination  # 10 per page by default
 
     def get_queryset(self):
         from django.db.models import Count as DbCount
@@ -327,6 +330,143 @@ class SectionViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+
+class SectionReplaceView(APIView):
+    """POST /api/v1/core/sections/replace/
+
+    Delete old-pattern sections and create new-pattern sections for given classes.
+
+    Request body:
+        class_ids  – non-empty list of integer class IDs (must belong to user's school)
+        old_names  – list of section names to delete (case-insensitive, may be empty)
+        new_names  – non-empty list of section names to create (max 10)
+        capacity   – integer 1–200 (default 40)
+
+    Returns: { deleted: N, created: N }
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        data = request.data
+
+        # --- validate class_ids ---
+        class_ids = data.get("class_ids", [])
+        if not class_ids or not isinstance(class_ids, list):
+            raise ValidationError({"class_ids": "Must be a non-empty list of class IDs."})
+        try:
+            class_ids = [int(cid) for cid in class_ids]
+        except (TypeError, ValueError):
+            raise ValidationError({"class_ids": "Must contain valid integer class IDs."})
+
+        # --- validate new_names ---
+        new_names = data.get("new_names", [])
+        if not new_names or not isinstance(new_names, list):
+            raise ValidationError({"new_names": "Must be a non-empty list of section names."})
+        new_names = [str(n).strip() for n in new_names if str(n).strip()]
+        if not new_names:
+            raise ValidationError({"new_names": "Must contain at least one valid section name."})
+        if len(new_names) > 10:
+            raise ValidationError({"new_names": "Maximum 10 sections allowed per class."})
+
+        # --- validate old_names (optional) ---
+        old_names = data.get("old_names", [])
+        if not isinstance(old_names, list):
+            raise ValidationError({"old_names": "Must be a list of section names."})
+        old_names = [str(n).strip() for n in old_names if str(n).strip()]
+
+        # --- validate capacity ---
+        try:
+            capacity = int(data.get("capacity", 40))
+            if not (1 <= capacity <= 200):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ValidationError({"capacity": "Capacity must be an integer between 1 and 200."})
+
+        # --- scope class_ids to the user's school ---
+        if user.is_superuser:
+            base_qs = Class.objects.filter(id__in=class_ids)
+        elif getattr(user, "school_id", None):
+            base_qs = Class.objects.filter(id__in=class_ids, school_id=user.school_id)
+        else:
+            return Response({"detail": "No school access."}, status=status.HTTP_403_FORBIDDEN)
+
+        valid_class_ids = set(base_qs.values_list("id", flat=True))
+        invalid = set(class_ids) - valid_class_ids
+        if invalid:
+            raise ValidationError({"class_ids": f"Classes not found or not accessible: {sorted(invalid)}"})
+
+        old_names_lower = {n.casefold() for n in old_names}
+        deleted_total = 0
+        created_total = 0
+
+        for class_id in valid_class_ids:
+            if old_names_lower:
+                del_count, _ = (
+                    Section.objects.filter(school_class_id=class_id)
+                    .annotate(name_lower=Lower("name"))
+                    .filter(name_lower__in=old_names_lower)
+                    .delete()
+                )
+                deleted_total += del_count
+
+            existing_lower = {
+                n.casefold()
+                for n in Section.objects.filter(school_class_id=class_id).values_list("name", flat=True)
+                if n
+            }
+            for name in new_names:
+                if name.casefold() not in existing_lower:
+                    Section.objects.create(
+                        school_class_id=class_id,
+                        name=name,
+                        capacity=capacity,
+                    )
+                    existing_lower.add(name.casefold())
+                    created_total += 1
+
+        return Response(
+            {
+                "success": True,
+                "message": f"Replaced sections: {deleted_total} deleted, {created_total} created.",
+                "deleted": deleted_total,
+                "created": created_total,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class SectionBulkDeleteView(APIView):
+    """POST /api/v1/core/sections/bulk-delete/
+
+    Bulk-delete sections by ID list.
+
+    Request body: { ids: [1, 2, 3] }
+    Returns:      { deleted: N }
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        ids = request.data.get("ids", [])
+        if not ids or not isinstance(ids, list):
+            raise ValidationError({"ids": "Must be a non-empty list of section IDs."})
+        try:
+            ids = [int(i) for i in ids]
+        except (TypeError, ValueError):
+            raise ValidationError({"ids": "Must contain valid integer section IDs."})
+
+        if user.is_superuser:
+            qs = Section.objects.filter(id__in=ids)
+        elif getattr(user, "school_id", None):
+            qs = Section.objects.filter(id__in=ids, school_class__school_id=user.school_id)
+        else:
+            return Response({"detail": "No school access."}, status=status.HTTP_403_FORBIDDEN)
+
+        count, _ = qs.delete()
+        return Response({"success": True, "deleted": count}, status=status.HTTP_200_OK)
 
 
 class SubjectViewSet(TenantQueryMixin, viewsets.ModelViewSet):
@@ -1552,6 +1692,12 @@ class HolidayViewSet(TenantQueryMixin, viewsets.ModelViewSet):
     model = Holiday
     serializer_class = HolidaySerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    class _Pagination(ApiPageNumberPagination):
+        page_size = 15
+        max_page_size = 200
+
+    pagination_class = _Pagination
 
     def get_queryset(self):
         queryset = super().get_queryset()

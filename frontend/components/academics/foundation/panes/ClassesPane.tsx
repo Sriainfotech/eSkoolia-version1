@@ -66,6 +66,7 @@ function normalizeClassName(raw: string): string {
 
 const MIN_CAPACITY = 1;
 const MAX_CAPACITY = 200;
+const CLASSES_PER_PAGE = 10;
 
 function inferLevel(className: string): string {
   if (["Nursery", "LKG", "UKG"].includes(className)) return "pre";
@@ -89,6 +90,7 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
   const [togglingId, setTogId]    = useState<number | null>(null);
   const [editingClassId, setEditCls] = useState<number | null>(null);
   const [pendingDelete, setPendingDelete] = useState<SchoolClass | null>(null);
+  const [classesPage, setClassesPage] = useState(0);
 
   // ── Stream state (Senior Secondary only) ──
   const [streamsList, setStreamsList] = useState<Stream[]>([]);
@@ -677,7 +679,12 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
             <p className="text-[13px] font-medium">No classes yet</p>
             <p className="text-[11px] mt-1">Use the form or load all defaults.</p>
           </div>
-        ) : (
+        ) : (() => {
+          const totalPages = Math.ceil(classes.length / CLASSES_PER_PAGE);
+          const safePage   = Math.min(classesPage, totalPages - 1);
+          const pageClasses = classes.slice(safePage * CLASSES_PER_PAGE, (safePage + 1) * CLASSES_PER_PAGE);
+          return (
+          <>
           <div className="overflow-x-auto rounded-[10px] border border-[#E8ECEF]">
             <table className="w-full border-collapse text-[13px]">
               <thead className="bg-[#F0F2F5]">
@@ -690,7 +697,7 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
                 </tr>
               </thead>
               <tbody>
-                {classes.map((cls) => (
+                {pageClasses.map((cls) => (
                   <tr
                     key={cls.id}
                     className={[
@@ -759,7 +766,31 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
               </tbody>
             </table>
           </div>
-        )}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-[#F0F2F5]">
+              <span className="text-[10px] text-[#9FA6AD]">
+                {safePage * CLASSES_PER_PAGE + 1}–{Math.min((safePage + 1) * CLASSES_PER_PAGE, classes.length)} of {classes.length}
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setClassesPage((p) => Math.max(0, p - 1))}
+                  disabled={safePage === 0}
+                  className="w-6 h-6 flex items-center justify-center rounded-[6px] border border-[#E8ECEF] text-[#6F767E] hover:bg-[#EEF0FF] hover:text-[#5B4FCF] hover:border-[#C7C2F0] disabled:opacity-30 disabled:cursor-not-allowed transition-all text-[13px] font-bold"
+                  title="Previous page"
+                >&lt;</button>
+                <span className="text-[10px] text-[#6F767E] min-w-[40px] text-center">{safePage + 1} / {totalPages}</span>
+                <button
+                  onClick={() => setClassesPage((p) => Math.min(totalPages - 1, p + 1))}
+                  disabled={safePage === totalPages - 1}
+                  className="w-6 h-6 flex items-center justify-center rounded-[6px] border border-[#E8ECEF] text-[#6F767E] hover:bg-[#EEF0FF] hover:text-[#5B4FCF] hover:border-[#C7C2F0] disabled:opacity-30 disabled:cursor-not-allowed transition-all text-[13px] font-bold"
+                  title="Next page"
+                >&gt;</button>
+              </div>
+            </div>
+          )}
+          </>
+          );
+        })()}
       </div>
 
       <ConfirmDeleteDialog

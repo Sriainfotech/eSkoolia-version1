@@ -1,10 +1,13 @@
 from rest_framework.routers import DefaultRouter
+from django.urls import path
 from .views import (
     AcademicYearViewSet,
     ClassPeriodViewSet,
     ClassRoomViewSet,
     ClassViewSet,
     SectionViewSet,
+    SectionReplaceView,
+    SectionBulkDeleteView,
     StreamViewSet,
     SubjectViewSet,
     VehicleViewSet,
@@ -62,4 +65,8 @@ router.register("item-sells", ItemSellViewSet, basename="item-sell")
 # Holiday Calendar
 router.register("holidays", HolidayViewSet, basename="holiday")
 
-urlpatterns = router.urls
+urlpatterns = [
+    # Section standalone API views (registered before router to take priority)
+    path("sections/replace/", SectionReplaceView.as_view(), name="section-replace"),
+    path("sections/bulk-delete/", SectionBulkDeleteView.as_view(), name="section-bulk-delete"),
+] + router.urls
