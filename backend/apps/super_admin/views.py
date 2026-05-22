@@ -19,7 +19,7 @@ from uuid import uuid4
 import yaml
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse
@@ -1134,24 +1134,30 @@ class BillingInvoiceListCreateView(SuperAdminBaseAPIView):
                 "amount_in_words": _money_words(grand_total),
             }
 
-        invoice = self._public_queryset(SuperAdminInvoice).create(
-            invoice_number=data.get("invoice_number") or build_invoice_number(),
-            tenant=tenant,
-            school_name=data["school_name"],
-            invoice_date=data["invoice_date"],
-            due_date=data["due_date"],
-            status=data.get("status") or "draft",
-            seller_name=data["seller_name"],
-            seller_gstin=data.get("seller_gstin") or "",
-            seller_state=data["seller_state"],
-            buyer_name=data["buyer_name"],
-            buyer_gstin=data.get("buyer_gstin") or "",
-            buyer_state=data["buyer_state"],
-            line_items=line_items,
-            tax_breakdown=tax_breakdown,
-            notes=data.get("notes") or "",
-            terms_conditions=data.get("terms_conditions") or "",
-        )
+        try:
+            invoice = self._public_queryset(SuperAdminInvoice).create(
+                invoice_number=data.get("invoice_number") or build_invoice_number(),
+                tenant=tenant,
+                school_name=data["school_name"],
+                invoice_date=data["invoice_date"],
+                due_date=data["due_date"],
+                status=data.get("status") or "draft",
+                seller_name=data["seller_name"],
+                seller_gstin=data.get("seller_gstin") or "",
+                seller_state=data["seller_state"],
+                buyer_name=data["buyer_name"],
+                buyer_gstin=data.get("buyer_gstin") or "",
+                buyer_state=data["buyer_state"],
+                line_items=line_items,
+                tax_breakdown=tax_breakdown,
+                notes=data.get("notes") or "",
+                terms_conditions=data.get("terms_conditions") or "",
+            )
+        except IntegrityError:
+            return Response(
+                {"error": {"code": "duplicate_invoice", "message": "Invoice number already exists."}},
+                status=status.HTTP_409_CONFLICT,
+            )
 
         log_audit(
             action="invoice.generated",

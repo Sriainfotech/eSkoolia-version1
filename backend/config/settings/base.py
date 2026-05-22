@@ -85,6 +85,8 @@ DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
 ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")]
 # Allow any VS Code / GitHub dev-tunnel host so port-forwarded testing works.
 ALLOWED_HOSTS += [".devtunnels.ms", ".githubpreview.dev"]
+# Production + local staging subdomain routing: springdale.eskoolia.com / springdale.eskoolia.local
+ALLOWED_HOSTS += [".eskoolia.com", ".eskoolia.local"]
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -220,6 +222,8 @@ if MULTI_TENANCY_ENABLED:
 
     # Optionally configure a database router placeholder (guarded by feature flag)
     # Note: database engine override happens below after DATABASES is defined
+    TENANT_MODEL = "tenancy.SchoolTenant"
+    TENANT_DOMAIN_MODEL = "tenancy.Domain"
     DATABASE_ROUTERS = ["apps.tenancy.routers.TenantSyncRouter"]
 else:
     # When MULTI_TENANCY_ENABLED is False, ensure DATABASE_ROUTERS is empty
@@ -229,7 +233,7 @@ else:
     # which reads settings.TENANT_MODEL. Define a safe fallback so it doesn't
     # raise AttributeError on every model delete (e.g. session cleanup in admin).
     TENANT_MODEL = "tenancy.SchoolTenant"
-    TENANT_DOMAIN_MODEL = "tenancy.SchoolTenant"
+    TENANT_DOMAIN_MODEL = "tenancy.Domain"
 
 ROOT_URLCONF = "config.urls"
 
@@ -401,12 +405,13 @@ REDIS_URL = os.getenv("REDIS_URL", "").strip()
 if REDIS_URL:
     CACHES = {
         "default": {
-            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "BACKEND": "django_redis.cache.RedisCache",
             "LOCATION": REDIS_URL,
             "TIMEOUT": int(os.getenv("DJANGO_CACHE_TIMEOUT", "300")),
             "OPTIONS": {
-                "socket_connect_timeout": 3,
-                "socket_timeout": 3,
+                "CLIENT_CLASS": "django_redis.client.DefaultClient",
+                "SOCKET_CONNECT_TIMEOUT": 3,
+                "SOCKET_TIMEOUT": 3,
             },
         }
     }
@@ -459,22 +464,9 @@ except (ValueError, TypeError):
 
 CELERY_BROKER_URL = REDIS_URL or "redis://127.0.0.1:6379/0"
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
-
-# ── Celery Beat — scheduled tasks ────────────────────────────────────────────
-from celery.schedules import crontab  # noqa: E402
-
-CELERY_BEAT_SCHEDULE = {
-    # Run every morning at 8:00 AM (server local time) to generate follow-up reminders
-    "admissions-morning-followup-digest": {
-        "task": "admissions.send_followup_reminders",
-        "schedule": crontab(hour=8, minute=0),
-    },
-    # Recompute lead scores every day at 7:45 AM so fresh data is ready by 8 AM
-    "admissions-compute-lead-scores": {
-        "task": "admissions.compute_lead_scores",
-        "schedule": crontab(hour=7, minute=45),
-    },
-}
+# NOTE: CELERY_BEAT_SCHEDULE is defined in config/celery.py to avoid
+# importing celery.schedules at Django settings load time, which deadlocks
+# on Windows when daphne (or any non-python entry-point) starts the server.
 
 # Optional AI suggestion settings for student category descriptions
 CATEGORY_AI_SUGGESTION_ENABLED = os.getenv("CATEGORY_AI_SUGGESTION_ENABLED", "False").lower() == "true"

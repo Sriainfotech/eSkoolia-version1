@@ -18,6 +18,9 @@ export interface LoginResponse {
   access: string;
   refresh: string;
   must_change_password: boolean;
+  school_code?: string | null;   // e.g. "springdale" — null for super-admin
+  tenant_id?: string | null;     // e.g. "SCH-001"    — null for super-admin
+  is_super_admin?: boolean;
 }
 
 export interface MeResponse {
@@ -192,6 +195,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async (username: string, password: string): Promise<LoginResponse> => {
       const result = await apiLogin(username, password);
       setAuthTokens(result.access, result.refresh);
+      // Persist tenant context so any component can read the active school.
+      if (result.school_code) {
+        sessionStorage.setItem("school_code", result.school_code);
+        sessionStorage.setItem("tenant_id", result.tenant_id ?? "");
+      } else {
+        sessionStorage.removeItem("school_code");
+        sessionStorage.removeItem("tenant_id");
+      }
       const me = await apiGetMe();
       setUser(me);
       return result;
@@ -214,6 +225,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Always clear local tokens even if the server call fails.
     }
     clearAuthTokens();
+    sessionStorage.removeItem("school_code");
+    sessionStorage.removeItem("tenant_id");
     setUser(null);
   }, []);
 

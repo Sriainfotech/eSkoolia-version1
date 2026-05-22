@@ -8,18 +8,28 @@ function deriveApiBaseUrl(): string {
     return `${protocol}//${apiHost}`;
   }
   if (hostname === "localhost") return "http://localhost:8000";
+  // Subdomain-based multi-tenant access: use same hostname on port 8000
+  // so the backend tenant middleware can resolve the tenant from the Host header.
+  // e.g. testschool.eskoolia.local:3000 → http://testschool.eskoolia.local:8000
+  if (hostname !== "127.0.0.1") {
+    return `${protocol}//${hostname}:8000`;
+  }
   return "http://127.0.0.1:8000";
 }
 
 const DEFAULT_API_BASE_URL = deriveApiBaseUrl();
 
-// On the dev tunnel, ignore the localhost env var (set for local dev) so the
-// browser hits the public tunnel URL instead of unreachable 127.0.0.1:8000.
+// On the dev tunnel OR a tenant subdomain, ignore the localhost env var so the
+// browser hits the correct host and the backend tenant middleware sees the subdomain.
 function pickApiBaseUrl(): string {
   if (typeof window !== "undefined") {
     const host = window.location.hostname;
     const onTunnel = /devtunnels\.ms$/i.test(host) || /\.githubpreview\.dev$/i.test(host);
     if (onTunnel) return DEFAULT_API_BASE_URL;
+    // Tenant subdomain (e.g. testschool.eskoolia.local): use derived URL so the
+    // Host header carries the subdomain to the backend tenant middleware.
+    const parts = host.split(".");
+    if (parts.length >= 3 && parts[1] === "eskoolia") return DEFAULT_API_BASE_URL;
   }
   return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE_URL;
 }

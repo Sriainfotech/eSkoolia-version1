@@ -3,6 +3,8 @@
 const nextConfig = {
   reactStrictMode: true,
   basePath: "",
+  // Allow Next.js dev server to serve _next/* assets to eskoolia subdomains
+  allowedDevOrigins: ["*.eskoolia.local"],
   eslint: {
     ignoreDuringBuilds: true,
   },
