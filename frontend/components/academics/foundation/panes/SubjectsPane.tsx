@@ -59,6 +59,7 @@ const DEF_SUBJECTS: { name: string; code: string; subject_type: SubjectType; per
 ];
 
 const API = "/api/v1/academics/class-subject-entries/";
+const CATALOG_PER_PAGE = 10;
 
 /* ── Helpers ────────────────────────────────────────────────── */
 function parseErr(e: unknown): string {
@@ -71,6 +72,70 @@ function parseErr(e: unknown): string {
     }
   } catch { /* noop */ }
   return "An unexpected error occurred.";
+}
+
+/* ── Keyboard-spam detection (horizontal rows + diagonal columns) ── */
+const _DIAG_SPAM = new Set([
+  'qaz','wsx','edc','rfv','tgb','yhn','ujm', // diagonal down-left columns
+  'zaq','xsw','cde','vfr','bgt','nhy','mju', // same columns reversed
+]);
+function hasKeyboardSpam(name: string): boolean {
+  const rows = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm'];
+  const letters = name.toLowerCase().replace(/[^a-z]/g, '');
+  if (letters.length < 3) return false;
+  for (let i = 0; i <= letters.length - 3; i++) {
+    const w = letters.slice(i, i + 3);
+    const wr = w.split('').reverse().join('');
+    if (rows.some(r => r.includes(w) || r.includes(wr))) return true;
+    if (_DIAG_SPAM.has(w) || _DIAG_SPAM.has(wr)) return true;
+  }
+  return false;
+}
+
+/* ── Short all-consonant spam: 3-4 alpha chars with zero vowels (e.g. knm, strg) ── */
+function hasShortNoVowelSpam(name: string): boolean {
+  const vowels = new Set(['a','e','i','o','u']);
+  return name.split(/[^a-zA-Z]+/)
+    .filter(s => s.length > 0)
+    .some(s => s.length >= 3 && s.length <= 4 && ![...s.toLowerCase()].some(c => vowels.has(c)));
+}
+
+/* ── Excessive-consonant detection (5+ in a row = random spam) ── */
+function hasExcessiveConsonants(name: string): boolean {
+  const vowels = new Set(['a', 'e', 'i', 'o', 'u']);
+  let run = 0;
+  for (const ch of name.toLowerCase()) {
+    if (/[a-z]/.test(ch)) {
+      run = vowels.has(ch) ? 0 : run + 1;
+      if (run >= 5) return true;
+    } else {
+      run = 0; // space, &, -, () break the run
+    }
+  }
+  return false;
+}
+
+/* ── Subject name validation ── */
+function validateSubjectName(v: string): string | null {
+  const t = v.trim();
+  if (!t) return "Subject name cannot be empty.";
+  if (t.length < 2) return "Enter a valid subject name.";
+  if (t.length > 50) return "Maximum 50 characters allowed.";
+  // Only letters, digits, single space, &, -, ()
+  if (!/^[a-zA-Z0-9 &\-()]+$/.test(t)) return "Special characters are not allowed.";
+  // Must contain at least one letter (blocks pure numbers like "12345")
+  if (!/[a-zA-Z]/.test(t)) return "Enter a valid subject name.";
+  // No consecutive spaces
+  if (/ {2,}/.test(t)) return "Enter a valid subject name.";
+  // No 4+ consecutive identical characters (e.g. aaaa, 1111)
+  if (/(.)\1{3,}/i.test(t)) return "Too many repeated characters in a row.";
+  // Reject keyboard-row spam patterns (esdf, qwer, asdf, edc, rfv …)
+  if (hasKeyboardSpam(t)) return "Enter a valid subject name.";
+  // Reject random consonant strings (5+ consonants in a row = not a real word)
+  if (hasExcessiveConsonants(t)) return "Enter a valid subject name.";
+  // Reject 3-4 char segments that are entirely consonants (e.g. knm, strg)
+  if (hasShortNoVowelSpam(t)) return "Enter a valid subject name.";
+  return null;
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -94,6 +159,7 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ClassSubjectEntry | null>(null);
   const [resetting, setResetting]   = useState(false);
+  const [pendingReset, setPendingReset] = useState(false);
   const [loadingDef, setLoadingDef] = useState(false);
 
   /* inline edit */
@@ -106,11 +172,15 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
   const [togglingId, setTogglingId] = useState<number | null>(null);
 
   const [globalSubjectNames, setGlobalSubjectNames] = useState<string[]>([]); // Fix #4E
+  const [catalogPage, setCatalogPage] = useState(0);
 
   /* init: pick first class */
   useEffect(() => {
     if (classes.length > 0 && selCls === null) setSelCls(classes[0].id);
   }, [classes, selCls]);
+
+  /* reset catalog to page 0 whenever the selected class changes */
+  useEffect(() => { setCatalogPage(0); }, [selCls]);
 
   /* ── Fetch all entries once ── */
   const fetchAll = useCallback(async () => {
@@ -165,7 +235,17 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
   /* ── Add subject ── */
   async function handleAdd() {
     if (!fname.trim()) { setFormErr("Subject name is required."); return; }
+    const nameErr = validateSubjectName(fname);
+    if (nameErr) { setFormErr(nameErr); return; }
     if (selCls === null) { setFormErr("Select a class first."); return; }
+    const nameNorm = fname.trim().toLowerCase();
+    const duplicate = entries.find(
+      (e) => e.school_class === selCls && e.name.toLowerCase() === nameNorm
+    );
+    if (duplicate) {
+      setFormErr(`A subject named "${fname.trim()}" already exists in this class.`);
+      return;
+    }
     setFormErr("");
     setSaving(true);
     const class_ids = [selCls, ...Array.from(alsoAdd)];
@@ -185,7 +265,13 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
       });
 
       if (resp.data?.length) {
-        setEntries((prev) => [...prev, ...resp.data]);
+        setEntries((prev) => {
+          const next = [...prev, ...resp.data];
+          // jump to the last page so the new subject is visible
+          const classCount = next.filter((e) => e.school_class === selCls).length;
+          setCatalogPage(Math.max(0, Math.ceil(classCount / CATALOG_PER_PAGE) - 1));
+          return next;
+        });
       }
 
       const skippedMsgs = (resp.errors ?? []).map((err) => {
@@ -239,12 +325,15 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
   }
 
   /* ── Start inline edit ── */
-  function startEdit(entry: ClassSubjectEntry) {
+  function startEdit(entry: ClassSubjectEntry, pageEntries: ClassSubjectEntry[]) {
     setEditingId(entry.id);
     setEditName(entry.name);
     setEditCode(entry.code);
     setEditType(entry.subject_type);
     setEditPeriods(entry.periods_per_week ?? 5); // Fix #4H
+    // jump to the page that contains this entry
+    const idx = pageEntries.findIndex((e) => e.id === entry.id);
+    if (idx >= 0) setCatalogPage(Math.floor(idx / CATALOG_PER_PAGE));
   }
   function cancelEdit() {
     setEditingId(null);
@@ -295,9 +384,14 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
   }
 
   /* ── Reset class ── */
-  async function handleReset() {
+  function handleReset() {
     if (selCls === null) return;
-    if (!confirm(`Remove all subjects from ${selClass?.name ?? "this class"}?`)) return;
+    setPendingReset(true);
+  }
+
+  async function doReset() {
+    if (selCls === null) return;
+    setPendingReset(false);
     setResetting(true);
     try {
       await apiRequestWithRefresh(`${API}reset-class/`, {
@@ -444,8 +538,15 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
               onKeyDown={(e) => e.key === "Enter" && void handleAdd()}
               placeholder="e.g. Mathematics"
               list="global-subjects-list" // Fix #4E — autocomplete from global subjects catalog
-              className="h-9 px-3 rounded-lg border border-[#E8ECEF] text-[13px] text-[#1A1D1F] focus:outline-none focus:border-[#5B4FCF] transition-colors"
+              className={`h-9 px-3 rounded-lg border text-[13px] text-[#1A1D1F] focus:outline-none transition-colors ${
+                fname.trim().length > 0 && validateSubjectName(fname) !== null
+                  ? "border-red-400 focus:border-red-500"
+                  : "border-[#E8ECEF] focus:border-[#5B4FCF]"
+              }`}
             />
+            {fname.trim().length > 0 && validateSubjectName(fname) !== null && (
+              <p className="text-[11px] text-red-500 mt-0.5">{validateSubjectName(fname)}</p>
+            )}
           </div>
 
           {/* Code */}
@@ -537,7 +638,7 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
 
             <button
               onClick={() => void handleAdd()}
-              disabled={saving || selCls === null}
+              disabled={saving || selCls === null || validateSubjectName(fname) !== null}
               className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-[#5B4FCF] text-white text-[12px] font-semibold hover:bg-[#4A3FBF] disabled:opacity-50 transition-all"
             >
               {saving ? (
@@ -600,9 +701,14 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
               </p>
               <p className="text-[11px] text-[#9FA6AD]">Use the form on the left to add subjects.</p>
             </div>
-          ) : (
+          ) : (() => {
+            const totalCatalogPages = Math.ceil(classEntries.length / CATALOG_PER_PAGE);
+            const safeCatalogPage   = Math.min(catalogPage, Math.max(0, totalCatalogPages - 1));
+            const pageEntries       = classEntries.slice(safeCatalogPage * CATALOG_PER_PAGE, (safeCatalogPage + 1) * CATALOG_PER_PAGE);
+            return (
+            <>
             <div className="flex flex-col gap-1.5">
-              {classEntries.map((entry) => {
+              {pageEntries.map((entry) => {
                 const isEditing = editingId === entry.id;
                 const inactive  = !entry.active_status;
 
@@ -635,15 +741,6 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
                           <option value="co_curricular">Co-curricular</option>
                           <option value="optional">Optional</option>
                         </select>
-                        {/* Fix #4H — periods per week editable in inline edit */}
-                        <input
-                          type="number"
-                          value={editPeriods}
-                          min={1}
-                          title="Periods per week"
-                          onChange={(e) => setEditPeriods(Math.max(1, parseInt(e.target.value) || 1))}
-                          className="w-14 h-8 px-2 rounded-md border border-[#E8ECEF] bg-white text-[12px] text-center focus:outline-none focus:border-[#5B4FCF]"
-                        />
                       </div>
                       <div className="flex justify-end gap-2">
                         <button
@@ -712,7 +809,7 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
                     <div className="flex items-center gap-1 shrink-0">
                       {/* Edit */}
                       <button
-                        onClick={() => startEdit(entry)}
+                        onClick={() => startEdit(entry, classEntries)}
                         className="w-7 h-7 flex items-center justify-center rounded-md text-[#6F767E] hover:text-[#5B4FCF] hover:bg-[#F5F4FF] transition-all"
                         title="Edit subject"
                       >
@@ -774,7 +871,31 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
                 );
               })}
             </div>
-          )}
+            {totalCatalogPages > 1 && (
+              <div className="flex items-center justify-between pt-2.5 border-t border-[#F0F2F5] mt-1">
+                <span className="text-[10px] text-[#9FA6AD]">
+                  {safeCatalogPage * CATALOG_PER_PAGE + 1}–{Math.min((safeCatalogPage + 1) * CATALOG_PER_PAGE, classEntries.length)} of {classEntries.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setCatalogPage((p) => Math.max(0, p - 1))}
+                    disabled={safeCatalogPage === 0}
+                    className="w-6 h-6 flex items-center justify-center rounded-[6px] border border-[#E8ECEF] text-[#6F767E] hover:bg-[#EEF0FF] hover:text-[#5B4FCF] hover:border-[#C7C2F0] disabled:opacity-30 disabled:cursor-not-allowed transition-all text-[13px] font-bold"
+                    title="Previous page"
+                  >&lt;</button>
+                  <span className="text-[10px] text-[#6F767E] min-w-[40px] text-center">{safeCatalogPage + 1} / {totalCatalogPages}</span>
+                  <button
+                    onClick={() => setCatalogPage((p) => Math.min(totalCatalogPages - 1, p + 1))}
+                    disabled={safeCatalogPage === totalCatalogPages - 1}
+                    className="w-6 h-6 flex items-center justify-center rounded-[6px] border border-[#E8ECEF] text-[#6F767E] hover:bg-[#EEF0FF] hover:text-[#5B4FCF] hover:border-[#C7C2F0] disabled:opacity-30 disabled:cursor-not-allowed transition-all text-[13px] font-bold"
+                    title="Next page"
+                  >&gt;</button>
+                </div>
+              </div>
+            )}
+            </>
+            );
+          })()}
         </div>
       </div>
 
@@ -797,6 +918,20 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
         onConfirm={() => void confirmDelete()}
         onCancel={() => setPendingDelete(null)}
       />
-    </div>
+      <ConfirmDeleteDialog
+        open={pendingReset}
+        title="Reset Class Subjects"
+        message={
+          <>
+            Remove <strong>all subjects</strong> from{" "}
+            <strong>{selClass?.name ?? "this class"}</strong>? This cannot be undone and any
+            teacher assignments linked to these subjects will also be removed.
+          </>
+        }
+        confirmLabel="Reset"
+        loading={resetting}
+        onConfirm={() => void doReset()}
+        onCancel={() => setPendingReset(false)}
+      />    </div>
   );
 }

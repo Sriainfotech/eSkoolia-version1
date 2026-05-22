@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import re
 
 from django.db import transaction
 from django.db.models import Q
@@ -175,14 +176,61 @@ class ClassSubjectAssignmentViewSet(TenantScopedModelViewSet):
         return self.update(request, *args, **kwargs)
 
 
+_DIAG_SPAM = {
+    'qaz', 'wsx', 'edc', 'rfv', 'tgb', 'yhn', 'ujm',  # diagonal down-left columns
+    'zaq', 'xsw', 'cde', 'vfr', 'bgt', 'nhy', 'mju',  # same columns reversed
+}
+
+
+def _has_keyboard_spam(name: str) -> bool:
+    """Return True if the alphabetic part of name contains a 3-key keyboard-row
+    or diagonal-column sequence."""
+    rows = ['qwertyuiop', 'asdfghjkl', 'zxcvbnm']
+    letters = re.sub(r'[^a-z]', '', name.lower())
+    for i in range(len(letters) - 2):
+        w = letters[i:i + 3]
+        wr = w[::-1]
+        if any(w in row or wr in row for row in rows):
+            return True
+        if w in _DIAG_SPAM or wr in _DIAG_SPAM:
+            return True
+    return False
+
+
+def _has_short_no_vowel_spam(name: str) -> bool:
+    """Reject 3-4 char alphabetic segments with zero vowels (e.g. knm, strg)."""
+    vowels = set('aeiou')
+    for seg in re.split(r'[^a-zA-Z]+', name):
+        if 3 <= len(seg) <= 4 and not any(c.lower() in vowels for c in seg):
+            return True
+    return False
+
+
+def _has_excessive_consonants(name: str) -> bool:
+    """Return True if name has 5+ consecutive consonants (y treated as consonant)."""
+    vowels = set('aeiou')
+    run = 0
+    for ch in name.lower():
+        if ch.isalpha():
+            if ch in vowels:
+                run = 0
+            else:
+                run += 1
+                if run >= 5:
+                    return True
+        else:
+            run = 0  # spaces, &, -, () break the run
+    return False
+
+
 class ClassSubjectEntryViewSet(TenantScopedModelViewSet):
     """Foundation-step per-class subject catalog."""
 
     class _Pagination(ApiPageNumberPagination):
-        # Fix #4G — allow up to 1000 entries per page so the wizard can
+        # Default to 10 per page; allow up to 1000 so the wizard can
         # fetch all subjects in a single request (?page_size=1000)
         max_page_size = 1000
-        page_size = 50
+        page_size = 10
 
     model = ClassSubjectEntry
     serializer_class = ClassSubjectEntrySerializer
@@ -241,13 +289,67 @@ class ClassSubjectEntryViewSet(TenantScopedModelViewSet):
 
         if not name:
             return Response(
-                {"success": False, "message": "name is required"},
+                {"success": False, "message": "Subject name cannot be empty."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        if len(name) < 2:
+            return Response(
+                {"success": False, "message": "Enter a valid subject name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(name) > 50:
+            return Response(
+                {"success": False, "message": "Maximum 50 characters allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not re.match(r'^[a-zA-Z0-9 &\-()]+$', name):
+            return Response(
+                {"success": False, "message": "Special characters are not allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not re.search(r'[a-zA-Z]', name):
+            return Response(
+                {"success": False, "message": "Enter a valid subject name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if re.search(r' {2,}', name):
+            return Response(
+                {"success": False, "message": "Enter a valid subject name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if re.search(r'(.)\1{3,}', name, re.IGNORECASE):
+            return Response(
+                {"success": False, "message": "Too many repeated characters in a row."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if _has_keyboard_spam(name):
+            return Response(
+                {"success": False, "message": "Enter a valid subject name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if _has_excessive_consonants(name):
+            return Response(
+                {"success": False, "message": "Enter a valid subject name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if _has_short_no_vowel_spam(name):
+            return Response(
+                {"success": False, "message": "Enter a valid subject name."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # Normalize: collapse any remaining extra internal spaces
+        name = re.sub(r' {2,}', ' ', name)
 
         created = []
         skipped = []
         for cls_id in class_ids:
+            if ClassSubjectEntry.objects.filter(
+                school=school,
+                school_class_id=cls_id,
+                name__iexact=name,
+            ).exists():
+                skipped.append({"class_id": cls_id, "message": f"A subject named '{name}' already exists in this class"})
+                continue
             entry, was_created = ClassSubjectEntry.objects.get_or_create(
                 school=school,
                 school_class_id=cls_id,
@@ -274,7 +376,7 @@ class ClassSubjectEntryViewSet(TenantScopedModelViewSet):
         instance.delete()
         return Response({"success": True, "message": "Subject removed"}, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=["post"])
+    @action(detail=False, methods=["post"], url_path="reset-class")
     def reset_class(self, request):
         class_id = request.data.get("class_id")
         if not class_id:

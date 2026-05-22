@@ -41,6 +41,7 @@ interface SampleHolidaysResponse {
 }
 
 const API = "/api/v1/core/holidays/";
+const HOLIDAYS_PER_PAGE = 15;
 
 const TYPE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "public",    label: "Public Holiday" },
@@ -103,6 +104,7 @@ export default function HolidaysPane({ showToast, onBack, years, currentYear }: 
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [items, setItems] = useState<Holiday[]>([]);
   const [loading, setLoading] = useState(false);
+  const [holidaysPage, setHolidaysPage] = useState(0);
 
   // Modal state
   const [showForm, setShowForm] = useState(false);
@@ -144,6 +146,7 @@ export default function HolidaysPane({ showToast, onBack, years, currentYear }: 
       if (typeFilter) qs.set("type", typeFilter);
       const resp = await apiRequestWithRefresh<HolidayList | Holiday[]>(`${API}?${qs.toString()}`);
       setItems(extractList<Holiday>(resp));
+      setHolidaysPage(0); // reset to first page on every fetch
     } catch (err) {
       showToast(readError(err), "error");
     } finally {
@@ -418,9 +421,8 @@ export default function HolidaysPane({ showToast, onBack, years, currentYear }: 
 
       {/* Table */}
       <div className="bg-white rounded-xl border border-[#E8ECEF] overflow-hidden">
-        <div className="max-h-[500px] overflow-y-auto">
-          <table className="w-full text-[13px]">
-            <thead className="bg-[#F8F9FA] sticky top-0 z-10">
+        <table className="w-full text-[13px]">
+          <thead className="bg-[#F8F9FA]">
               <tr className="text-left text-[11px] uppercase tracking-wide text-[#6F767E]">
                 <th className="px-4 py-3 font-semibold w-[200px]">Date</th>
                 <th className="px-4 py-3 font-semibold">Holiday</th>
@@ -471,9 +473,13 @@ export default function HolidaysPane({ showToast, onBack, years, currentYear }: 
                 </tr>
               )}
 
-              {!loading && items.map((h) => {
-                const badge = TYPE_BADGE[h.holiday_type] ?? TYPE_BADGE.other;
-                return (
+              {!loading && (() => {
+                const totalPages = Math.ceil(items.length / HOLIDAYS_PER_PAGE);
+                const safePage   = Math.min(holidaysPage, Math.max(0, totalPages - 1));
+                const pageItems  = items.slice(safePage * HOLIDAYS_PER_PAGE, (safePage + 1) * HOLIDAYS_PER_PAGE);
+                return pageItems.map((h) => {
+                  const badge = TYPE_BADGE[h.holiday_type] ?? TYPE_BADGE.other;
+                  return (
                   <tr
                     key={h.id}
                     className={`border-t border-[#F1F3F5] hover:bg-[#FAFBFC] ${!h.active_status ? "opacity-50" : ""}`}
@@ -527,11 +533,39 @@ export default function HolidaysPane({ showToast, onBack, years, currentYear }: 
                       </div>
                     </td>
                   </tr>
-                );
-              })}
+                  );
+                });
+              })()}
             </tbody>
           </table>
-        </div>
+
+          {/* Pagination bar */}
+          {!loading && items.length > HOLIDAYS_PER_PAGE && (() => {
+            const totalPages = Math.ceil(items.length / HOLIDAYS_PER_PAGE);
+            const safePage   = Math.min(holidaysPage, totalPages - 1);
+            return (
+              <div className="flex items-center justify-between px-4 py-2.5 border-t border-[#E8ECEF]">
+                <span className="text-[10px] text-[#9FA6AD]">
+                  {safePage * HOLIDAYS_PER_PAGE + 1}–{Math.min((safePage + 1) * HOLIDAYS_PER_PAGE, items.length)} of {items.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setHolidaysPage((p) => Math.max(0, p - 1))}
+                    disabled={safePage === 0}
+                    className="w-6 h-6 flex items-center justify-center rounded-[6px] border border-[#E8ECEF] text-[#6F767E] hover:bg-[#EEF0FF] hover:text-[#5B4FCF] hover:border-[#C7C2F0] disabled:opacity-30 disabled:cursor-not-allowed transition-all text-[13px] font-bold"
+                    title="Previous page"
+                  >&lt;</button>
+                  <span className="text-[10px] text-[#6F767E] min-w-[40px] text-center">{safePage + 1} / {totalPages}</span>
+                  <button
+                    onClick={() => setHolidaysPage((p) => Math.min(totalPages - 1, p + 1))}
+                    disabled={safePage === totalPages - 1}
+                    className="w-6 h-6 flex items-center justify-center rounded-[6px] border border-[#E8ECEF] text-[#6F767E] hover:bg-[#EEF0FF] hover:text-[#5B4FCF] hover:border-[#C7C2F0] disabled:opacity-30 disabled:cursor-not-allowed transition-all text-[13px] font-bold"
+                    title="Next page"
+                  >&gt;</button>
+                </div>
+              </div>
+            );
+          })()}
       </div>
 
       {/* Footer */}

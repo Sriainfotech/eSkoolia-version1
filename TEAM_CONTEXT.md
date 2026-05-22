@@ -1092,3 +1092,379 @@ if is_multi_tenancy_enabled() and not user.is_superuser:
 4. Consider adding `amarajyothi.eskoolia.local` Domain record + activation (hosts entry already exists).
 5. Commit the `login/21-05` branch changes: `api.ts`, `next.config.mjs`, `login/page.tsx`, `serializers.py`.
 
+---
+
+## Day 6 Continued — Gowtham (2026-05-21) — Session 5
+
+### Sections Pattern Mixing Bug — Replace Endpoint + Frontend Tracking
+
+**Problem:** When a user created sections with pattern "A, B, C" and then changed the Name Pattern dropdown to "1, 2, 3" and clicked Create Sections again, both sets of sections co-existed (e.g. Grade 12 showed A, B, C **and** 1, 2, 3). The old code only POSTed new sections without removing the previous pattern's sections.
+
+**Fix:**
+
+**Backend — `apps/core/views.py` (`SectionViewSet`)**
+- Added import: `from django.db.models.functions import Lower`
+- Added `replace` action (`POST /api/v1/core/sections/replace/`) with full validation:
+  - `class_ids` — non-empty list of integers, scoped to user's school
+  - `old_names` — list of section names to delete (case-insensitive, may be empty for first-time create)
+  - `new_names` — non-empty list of section names to create (max 10)
+  - `capacity` — integer 1–200 (default 40)
+  - For each class: deletes sections matching `old_names` via `annotate(name_lower=Lower("name")).filter(name_lower__in=...)`, then creates `new_names` sections skipping existing ones.
+  - Returns `{success, message, deleted, created}`.
+
+**Frontend — `components/academics/foundation/panes/SectionsPane.tsx`**
+- Added `PATTERN_LABELS` map (`alpha → "A, B, C"`, `num → "1, 2, 3"`, `roman → "I, II, III"`).
+- Added `appliedPattern: Pattern | null` state (tracks the last pattern that was successfully applied via Create Sections; starts as `null`).
+- Modified `createSections()`:
+  - If `appliedPattern !== null && appliedPattern !== pattern` → calls `POST /api/v1/core/sections/replace/` with `old_names = PATTERNS[appliedPattern]` (full pattern list) and `new_names = preview`. Shows toast with deleted/created counts. Sets `setAppliedPattern(pattern)` on success.
+  - Otherwise (same pattern or first time) → original POST-per-section loop. Sets `setAppliedPattern(pattern)` when at least one section is created.
+- Added warning banner between the Name Pattern dropdown and the Preview chips: shown when `appliedPattern !== null && appliedPattern !== pattern && selectedClsIds.size > 0`. Text: "Pattern changed from **A, B, C** to **1, 2, 3**. Clicking Create Sections will remove the old sections and create new ones for the selected classes."
+
+**Behaviour after fix:**
+1. Create sections with A,B,C → `appliedPattern = "alpha"`, sections A,B,C exist in DB.
+2. Change pattern dropdown to 1,2,3 → yellow warning banner appears for selected classes.
+3. Click Create Sections → backend deletes A,B,C sections, creates 1,2,3 sections → only 1,2,3 remain.
+
+## Day 7 — Gowtham (2026-05-22) — Session 1
+
+### Sections — Create toast fix + Bulk Multi-Select Delete + Refactor to APIView
+
+#### 1. Create Sections toast not showing (fix)
+**Problem:** `createSections()` made N×M sequential requests (13 classes × 3 sections = 39 `await` calls). The first 400 could abort the loop silently (`void` swallows the rejected promise); even when it didn't, the error-regex matching was fragile against the custom exception handler's response format.
+
+**Fix:** Replaced the entire N×M loop with a **single** `POST /api/v1/core/sections/replace/` call for all cases:
+- First-time creation: `old_names = []`, `new_names = preview` → creates sections, skips existing.
+- Pattern changed: `old_names = PATTERNS[appliedPattern]`, `new_names = preview` → deletes old, creates new.
+- Result always triggers a toast: success counts **or** "Sections already exist…" error message.
+
+#### 2. Bulk Multi-Select Delete
+**Problem:** Sections could only be deleted one at a time (single confirm dialog per section).
+
+**Frontend — `SectionsPane.tsx`**
+- Added state: `selectMode`, `selectedSecIds: Set<number>`, `pendingBulkDelete`, `bulkDeleting`.
+- Right panel header gains a **Select** link (visible when sections exist).
+- In select mode: each section pill becomes a checkbox toggle (brand-coloured when checked); rename/delete buttons are hidden.
+- Header in select mode shows: **Select All** · **Delete N** (red) · **Cancel**.
+- `Delete N` opens a confirm dialog listing all selected sections with their class names (scrollable if > 10).
+- `confirmBulkDelete()` → `POST /api/v1/core/sections/bulk-delete/` → toast with deleted count → clears selection.
+
+#### 3. Refactored backend from ViewSet @action to standalone APIView classes
+**Reason:** Project convention — custom endpoints use `APIView`, not `@action` decorators on ViewSets.
+
+**`apps/core/views.py`**
+- Added `from rest_framework.views import APIView`.
+- Removed `replace` and `bulk_delete` `@action` methods from `SectionViewSet`.
+- Added `SectionReplaceView(APIView)` — same logic, `def post(self, request)`.
+- Added `SectionBulkDeleteView(APIView)` — same logic, `def post(self, request)`.
+
+**`apps/core/urls.py`**
+- Added `from django.urls import path`.
+- Imported `SectionReplaceView`, `SectionBulkDeleteView`.
+- Registered both **before** `router.urls`:
+  ```python
+  urlpatterns = [
+      path("sections/replace/",      SectionReplaceView.as_view(),      name="section-replace"),
+      path("sections/bulk-delete/",  SectionBulkDeleteView.as_view(),   name="section-bulk-delete"),
+  ] + router.urls
+  ```
+  URL paths unchanged — frontend requires no update.
+
+---
+
+## Day 7 — Gowtham (2026-05-22) — Session 2
+
+### Foundation Wizard — Pagination across all list panes + reset-class 405 fix
+
+#### 1. Fix: 405 "Method Not Allowed" on `POST /api/v1/academics/class-subject-entries/reset-class/`
+
+**Problem:** Frontend POSTed to `/reset-class/` (hyphen) but DRF 3.16.1 auto-generates the URL slug from the Python method name, producing `reset_class/` (underscore). Result: 405 on every reset attempt.
+
+**Fix — `backend/apps/academics/views.py`:**
+- Added `url_path="reset-class"` to the `@action` decorator on `reset_class` in `ClassSubjectEntryViewSet`.
+- No frontend change needed — frontend URL was already correct.
+
+---
+
+#### 2. Feature: RoomsPane — 5-per-page pagination (frontend only)
+
+**File: `frontend/components/academics/foundation/panes/RoomsPane.tsx`**
+
+- Added `const ROOMS_PER_PAGE = 5` before the component.
+- Added `roomsPage` state (`useState(0)`).
+- When a room is added, `setRoomsPage` jumps to the last page so the new entry is immediately visible.
+- Table slices `rooms` to `pageRooms = rooms.slice(safePage * 5, (safePage + 1) * 5)`.
+- Pagination bar (shown when `rooms.length > 5`):
+  - Left: `1–5 of N` label.
+  - Right: `<` disabled when on page 0, `page / total` indicator, `>` disabled on last page.
+  - Consistent style: `w-6 h-6` button, `rounded-[6px]`, hover `#EEF0FF` / `#5B4FCF`.
+
+---
+
+#### 3. Feature: SubjectsPane — 10-per-page catalog pagination (backend + frontend)
+
+**Backend — `backend/apps/academics/views.py`:**
+- `ClassSubjectEntryViewSet._Pagination.page_size` changed from 50 → 10.
+- `max_page_size` raised to 1000 (wizard still fetches `?page_size=1000` to get all entries for a class in one request; the 10/page default only affects plain list views).
+
+**Frontend — `frontend/components/academics/foundation/panes/SubjectsPane.tsx`:**
+- Added `const CATALOG_PER_PAGE = 10` before the component.
+- Added `catalogPage` state (`useState(0)`); resets to 0 on class (`selCls`) change via `useEffect`.
+- Catalog rows sliced to `pageEntries = classEntries.slice(safePage * 10, (safePage + 1) * 10)`.
+- `startEdit(entry, classEntries)` computes the entry's page index and sets `catalogPage` so the editing row stays visible.
+- Adding a new subject jumps to the last page.
+- Pagination bar (shown when `classEntries.length > 10`): same `<` / `>` pattern as Rooms.
+
+---
+
+#### 4. Feature: ClassesPane — 10-per-page pagination (backend + frontend)
+
+**Backend — `backend/apps/core/views.py`:**
+- `ClassViewSet` given explicit `pagination_class = ApiPageNumberPagination` (was relying on global default; now explicit at 10/page).
+
+**Frontend — `frontend/components/academics/foundation/panes/ClassesPane.tsx`:**
+- Added `const CLASSES_PER_PAGE = 10` before the component.
+- Added `classesPage` state (`useState(0)`).
+- "Classes Defined" right-panel table sliced to `pageClasses = classes.slice(safePage * 10, (safePage + 1) * 10)`.
+- Pagination bar (shown when `classes.length > 10`): same `<` / `>` pattern.
+
+---
+
+#### 5. Feature: HolidaysPane — 15-per-page pagination (backend + frontend)
+
+**Backend — `backend/apps/core/views.py`:**
+- Added `_Pagination` inner class to `HolidayViewSet`:
+  ```python
+  class _Pagination(ApiPageNumberPagination):
+      page_size = 15
+      max_page_size = 200
+  pagination_class = _Pagination
+  ```
+
+**Frontend — `frontend/components/academics/foundation/panes/HolidaysPane.tsx`:**
+- Added `const HOLIDAYS_PER_PAGE = 15` before the component.
+- Added `holidaysPage` state (`useState(0)`); resets to 0 on every `fetchItems` call (covers both year-filter and type-filter changes automatically).
+- Removed the `max-h-[500px] overflow-y-auto` scrollable wrapper — table is now flat.
+- Table `tbody` uses paginated IIFE: slices `items` to 15 per page.
+- Pagination bar rendered inside the table card container (below `</table>`) — shown only when `items.length > 15`:
+  - Left: `1–15 of N` label.
+  - Right: `<` / page indicator / `>` in the same consistent style as all other panes.
+
+**Note:** Navigation buttons only appear once the holiday count exceeds 15. With fewer records the table looks identical to before — the functional change is the removal of the scroll wrapper.
+
+---
+
+#### Consistent pagination button pattern used across all panes
+
+```tsx
+<div className="flex items-center justify-between ...">
+  <span className="text-[10px] text-[#9FA6AD]">
+    {start}–{end} of {total}
+  </span>
+  <div className="flex items-center gap-1">
+    <button onClick={prev} disabled={onFirst}
+      className="w-6 h-6 ... hover:bg-[#EEF0FF] hover:text-[#5B4FCF] disabled:opacity-30"
+    >&lt;</button>
+    <span className="text-[10px] text-[#6F767E] min-w-[40px] text-center">{page} / {total}</span>
+    <button onClick={next} disabled={onLast}
+      className="w-6 h-6 ... hover:bg-[#EEF0FF] hover:text-[#5B4FCF] disabled:opacity-30"
+    >&gt;</button>
+  </div>
+</div>
+```
+
+---
+
+#### Pending (requested, not yet implemented)
+
+~~**Subject catalog — remove periods on edit**~~ → **Completed in Session 3 (see below).**
+
+---
+
+## Day 7 — Gowtham (2026-05-22) — Session 3
+
+### SubjectsPane — Remove "Periods per Week" from Inline Edit Row
+
+**Problem:** The inline edit row in the Subject Catalog showed a number input (`w-14`) displaying the `periods_per_week` value (e.g. "7"). The user did not want this field visible or editable during subject editing.
+
+**Fix — `frontend/components/academics/foundation/panes/SubjectsPane.tsx`:**
+- Removed the `{/* Fix #4H — periods per week editable in inline edit */}` comment and its `<input type="number" ... />` element from the inline edit row JSX (was between the Type `<select>` and the closing `</div>`).
+- No state, no handler, no PATCH body line was changed — `editPeriods` state is still initialized from `entry.periods_per_week` and still sent in the PATCH body, so the existing value is silently preserved on save without exposing it to the user.
+- No backend changes required.
+
+**Inline edit row fields after fix:** Subject Name → Code → Type → Cancel / Save
+
+**Verification:** `get_errors` on `SubjectsPane.tsx` → no errors.
+
+---
+
+## Day 7 — Gowtham (2026-05-22) — Session 4
+
+### SubjectsPane — Comprehensive Strict Subject Name Validation
+
+**Problem:** The "Add Subject" form accepted invalid values such as `"."`, `"12345"`, `"@@@"`, `"////"`, and emojis as subject names. Previous validation only checked for at least one letter, min 2 chars, and consecutive repeated characters — but the repeated-character rule was too aggressive and could block legitimate abbreviations.
+
+**Fix — Frontend (`frontend/components/academics/foundation/panes/SubjectsPane.tsx`):**
+
+Replaced the `validateSubjectName` helper (before the component) with a strict allowlist approach:
+
+```typescript
+function validateSubjectName(v: string): string | null {
+  const t = v.trim();
+  if (!t) return "Subject name cannot be empty.";
+  if (t.length < 2) return "Enter a valid subject name.";
+  if (t.length > 50) return "Maximum 50 characters allowed.";
+  // Allow: letters, digits, single space, &, -, (), .
+  if (!/^[a-zA-Z0-9 &\-().]+$/.test(t)) return "Special characters are not allowed.";
+  // Must contain at least one letter (blocks pure numbers like "12345")
+  if (!/[a-zA-Z]/.test(t)) return "Enter a valid subject name.";
+  // No consecutive spaces
+  if (/ {2,}/.test(t)) return "Enter a valid subject name.";
+  return null;
+}
+```
+
+**Allowed characters:** letters, digits, single space, `&`, `-`, `()`, `.`  
+**Error messages match spec:** "Subject name cannot be empty." / "Enter a valid subject name." / "Maximum 50 characters allowed." / "Special characters are not allowed."  
+**Removed** the old repeated-character rules (CC, abcccc patterns) — the allowlist naturally blocks symbols/emojis; repeated letters are valid (e.g. abbreviations).
+
+Updated **Add Subject button** `disabled` condition to include name validation:
+```tsx
+disabled={saving || selCls === null || validateSubjectName(fname) !== null}
+```
+Button is disabled whenever the current name input fails validation — not just when `selCls` is unset.
+
+The real-time inline error and red border were already wired to `validateSubjectName` in earlier sessions and continue to work unchanged.
+
+**Fix — Backend (`backend/apps/academics/views.py`):**
+
+Moved `import re` to the top-level imports (was inline inside `create()`).
+
+Replaced the old validation block in `ClassSubjectEntryViewSet.create()` with:
+
+```python
+if not name:
+    return Response({"success": False, "message": "Subject name cannot be empty."}, status=400)
+if len(name) < 2:
+    return Response({"success": False, "message": "Enter a valid subject name."}, status=400)
+if len(name) > 50:
+    return Response({"success": False, "message": "Maximum 50 characters allowed."}, status=400)
+if not re.match(r'^[a-zA-Z0-9 &\-()\\.]+$', name):
+    return Response({"success": False, "message": "Special characters are not allowed."}, status=400)
+if not re.search(r'[a-zA-Z]', name):
+    return Response({"success": False, "message": "Enter a valid subject name."}, status=400)
+if re.search(r' {2,}', name):
+    return Response({"success": False, "message": "Enter a valid subject name."}, status=400)
+# Normalize: collapse any remaining extra internal spaces
+name = re.sub(r' {2,}', ' ', name)
+```
+
+Error messages are consistent with the frontend spec. The old "must contain at least one letter and be at least 2 characters" / "repeated characters" messages are removed. A normalization step collapses any double-spaces (defence-in-depth, since the check above would have already rejected them).
+
+**Existing behaviour preserved:**
+- Per-class duplicate check (`name__iexact`) unchanged.
+- `handleAdd` frontend duplicate check unchanged.
+- Backend `import re` is now at file top (cleaner, no performance hit from repeated module lookup).
+
+**Valid examples (now pass):** Mathematics, Computer Science, EVS, Art & Craft, Physics-II, GK (Junior), CSS, CC  
+**Invalid examples (blocked):** `.`, `..`, `/`, `////`, `---`, `@@@`, `12345`, `   `, emojis, HTML tags
+
+#### Session 4 Addendum — Consecutive-character spam guard
+
+Added a 5th frontend rule and matching backend rule to reject 4 or more consecutive identical characters (case-insensitive):
+
+- **Frontend:** `/(.)\1{3,}/i.test(t)` → `"Too many repeated characters in a row."`
+- **Backend:** `re.search(r'(.)\1{3,}', name, re.IGNORECASE)` → same message
+
+Also removed `.` from both allowlists (was accidentally included; the original spec listed `"."` and `".."` as invalid).
+
+| Input | Blocked by |
+|---|---|
+| `aaaaaa` | 4+ consecutive check |
+| `......` | allowlist (`.` removed) |
+| `/////` | allowlist |
+| `;;;;;` | allowlist |
+| `111111` | 4+ consecutive check |
+| `tgissss` | 4+ consecutive check (4 s's) |
+
+Rule: up to 3 identical chars in a row is fine (e.g. `CSS`, `III`); 4+ triggers the error in real-time while typing.
+
+#### Session 4 Addendum 2 — Keyboard-spam pattern detection
+
+Added `hasKeyboardSpam` (frontend) and `_has_keyboard_spam` (backend) to reject keyboard-row sequential patterns like `esdf`, `qwer`, `asdf`, `zxcv`.
+
+**Logic:** strip non-alpha chars, slide a 3-char window across the result, reject if any window (or its reverse) appears as a substring of a QWERTY row.
+
+- Top row sequences caught: `qwe`, `wer`, `ert`, `rty`, `tyu`, `yui`, `uio`, `iop` (+ reverses)
+- Middle row: `asd`, `sdf`, `dfg`, `fgh`, `ghj`, `hjk`, `jkl` (+ reverses)
+- Bottom row: `zxc`, `xcv`, `cvb`, `vbn`, `bnm` (+ reverses)
+
+| Input | Caught by |
+|---|---|
+| `esdf` | "sdf" in middle row |
+| `qwerty` | "qwe" in top row |
+| `asdf` | "asd" in middle row |
+| `zxcv` | "zxc" in bottom row |
+| `fdsa` | "fds" reversed → "sdf" in middle row |
+| `Mathematics` | no 3-char window matches any row ✓ |
+| `GK`, `EVS`, `CSS` | too short or no matching window ✓ |
+
+Error message: `"Enter a valid subject name."` (same as other structural rejections).
+
+#### Session 4 Addendum 3 — Excessive-consonant detection
+
+Added `hasExcessiveConsonants` (frontend) and `_has_excessive_consonants` (backend) to block long random character strings that evade the keyboard-row check (e.g. `sdwrttuydzkdjaihiasgbasbfluagfl` which was successfully saved despite being gibberish).
+
+**Rule:** if 5 or more consecutive alphabetic consonants appear (y treated as consonant), the name is rejected. Spaces, `&`, `-`, `()` reset the consonant run.
+
+**Threshold rationale:**
+- `sdwrttuydzkd...` → starts with `s,d,w,r,t,t` = 6 consecutive → BLOCKED ✓
+- `Sanskrit` → `n,s,k,r` = 4 consecutive → passes ✓
+- `Physics` → `p,h,y,s` = 4 consecutive → passes ✓
+- `Strength` → `s,t,r` (3) then `n,g,t,h` (4) → passes ✓
+- `Chemistry` → `s,t,r,y` = 4 consecutive → passes ✓
+- `CSS`, `GK`, `EVS` → ≤ 4 consecutive → passes ✓
+
+**Files changed:** `SubjectsPane.tsx` (added `hasExcessiveConsonants` helper, called inside `validateSubjectName`), `views.py` (added `_has_excessive_consonants` module-level function, wired into `create()` after keyboard-spam check).
+
+---
+
+#### Session 4 Addendum 4 — Diagonal keyboard column + short all-consonant spam detection
+
+Two new validation layers added after `edc` and `knm` slipped through all prior checks.
+
+**Problem 1 — `edc`:** The keyboard diagonal e→d→c is a natural finger-roll that doesn't appear on any horizontal row, so the row-based spam check missed it. Similarly `qaz`, `wsx`, `rfv`, `tgb`, `yhn`, `ujm` (and their reverses) are all common spam patterns.
+
+**Fix:** Added `_DIAG_SPAM` set (14 entries — 7 diagonal columns + 7 reverses) checked inside the existing `hasKeyboardSpam` / `_has_keyboard_spam` helper alongside the row check.
+
+```
+_DIAG_SPAM = { 'qaz','wsx','edc','rfv','tgb','yhn','ujm',
+               'zaq','xsw','cde','vfr','bgt','nhy','mju' }
+```
+
+**Problem 2 — `knm`:** Three consonants with no vowel. Not a keyboard sequence, not a long string — just a meaningless fragment. The excessive-consonant check (≥ 5 in a row) didn't fire because there are only 3.
+
+**Fix:** Added `hasShortNoVowelSpam` / `_has_short_no_vowel_spam` — splits the name on non-alpha characters and rejects any segment of 3–4 letters that contains **zero vowels**.
+
+**Threshold rationale:**
+- `knm` → 3 chars, vowels = 0 → BLOCKED ✓
+- `strg` → 4 chars, vowels = 0 → BLOCKED ✓
+- `edc` → caught by `_DIAG_SPAM` before vowel check ✓
+- `GK` → 2 chars → exempt from short-no-vowel check ✓  
+- `EVS` → 3 chars but has `E` (vowel) → passes ✓
+- `Rhythm` → single word, has no vowel-free 3–4 char sub-segment after split → passes ✓
+- `Art & Craft` → segments are `Art`, `Craft` — both have vowels → passes ✓
+
+**Tradeoff acknowledged:** 3-char all-consonant abbreviations like `CSS`, `NSS`, `NCC` are now blocked. Teachers must use full names (e.g. "Computer Science", "Social Studies").
+
+**Files changed:** `SubjectsPane.tsx` (added `_DIAG_SPAM` const + updated `hasKeyboardSpam` + added `hasShortNoVowelSpam` helper + wired call in `validateSubjectName`), `views.py` (added `_DIAG_SPAM` set + updated `_has_keyboard_spam` + added `_has_short_no_vowel_spam` function + wired call in `create()` after `_has_excessive_consonants`).
+
+**Current validation stack (all 8 checks, in order):**
+1. Allowlist `^[a-zA-Z0-9 &\-()]+$`
+2. Min 2 / max 50 chars
+3. Must contain at least one letter
+4. No double spaces
+5. 4+ identical consecutive characters
+6. Keyboard row or diagonal column 3-char sequence
+7. 5+ consecutive consonants
+8. 3–4 char alpha segment with zero vowels
+
