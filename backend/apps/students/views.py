@@ -1476,6 +1476,88 @@ class StudentViewSet(TenantScopedModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @action(detail=False, methods=["get"], url_path="export-xlsx")
+    def export_xlsx(self, request):
+        """Export students as an Excel (.xlsx) file using openpyxl.
+
+        Uses the same filter params as the list view (search, is_active,
+        include_deleted, deleted_only, current_class, current_section).
+        Optional ?ids=1,2,3 restricts export to those specific student IDs.
+        """
+        import io
+        from datetime import datetime
+
+        import openpyxl
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from django.http import HttpResponse
+
+        qs = self.get_queryset().select_related("current_class", "current_section", "guardian")
+
+        # Optional specific-IDs filter
+        ids_param = request.query_params.get("ids", "").strip()
+        if ids_param:
+            id_list = [int(x) for x in ids_param.split(",") if x.strip().isdigit()]
+            if id_list:
+                qs = qs.filter(id__in=id_list)
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Students"
+
+        headers = ["Admission No", "Student", "Class", "Section", "Guardian", "Phone", "DOB", "Status"]
+
+        # Header style
+        header_fill = PatternFill(start_color="5B4FCF", end_color="5B4FCF", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True, size=11)
+        header_align = Alignment(horizontal="center", vertical="center")
+
+        for col_idx, header in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_align
+
+        # Column widths
+        col_widths = [15, 25, 12, 12, 22, 14, 12, 12]
+        for col_idx, width in enumerate(col_widths, start=1):
+            ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = width
+
+        row_align = Alignment(vertical="center")
+        for row_idx, student in enumerate(qs.iterator(chunk_size=500), start=2):
+            full_name = f"{student.first_name or ''} {student.last_name or ''}".strip() or "-"
+            cls = student.current_class.name if student.current_class else "-"
+            sec = student.current_section.name if student.current_section else "-"
+            guardian = student.guardian.full_name if student.guardian else "-"
+            phone = student.phone or "-"
+            dob = student.date_of_birth.strftime("%d/%m/%Y") if student.date_of_birth else "-"
+            if student.is_deleted or getattr(student, "status", None) == "deleted":
+                status_label = "Archived"
+            elif student.is_active:
+                status_label = "Docs pending" if student.is_disabled else "Active"
+            else:
+                status_label = "Inactive"
+
+            row_data = [student.admission_no or "-", full_name, cls, sec, guardian, phone, dob, status_label]
+            for col_idx, value in enumerate(row_data, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.alignment = row_align
+
+        # Freeze header row
+        ws.freeze_panes = "A2"
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        filename = f"students-export-{timestamp}.xlsx"
+        response = HttpResponse(
+            output.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
     @action(detail=False, methods=["get"], url_path="next-admission-no")
     def next_admission_no(self, request):
         """Suggest the next admission number for the current school.

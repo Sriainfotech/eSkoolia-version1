@@ -682,3 +682,175 @@ Build verified clean: `npm run build` → 184 pages, 0 errors, 0 warnings.
 
 **Remaining caveat:** `storage_80` always returns 0 and an empty list — a `storage_used_gb` / `storage_cap_gb` field would need to be added to `SchoolTenant` + a migration before this flag can be populated.
 
+---
+
+## Day 6 Continued — Gowtham (2026-05-21)
+
+### Fix: Remove Duplicate Status Tabs from Smart Filters
+
+**Problem:** The All / Active / Trial / Suspended / Archived status pills appeared **twice** — once inside the "Smart Filters" accordion and again as the quick-tab bar above the schools table. Users were confused seeing the same controls repeated.
+
+**Fix — `frontend/app/(dashboard)/super-admin/schools/page.tsx`:**
+
+- Removed the entire "Status" subsection (the `<div>` containing the `FilterPill` loop over `all/active/trial/suspended/archived`) from the **Smart Filters** accordion body.
+- The Health flags row was the only remaining sibling; its wrapper was changed from `grid grid-cols-2 gap-6` to a single `<div>` (full width) — no other code touched.
+- Status tabs remain in the Schools List accordion (the styled `<button>` tab bar above the table) — the only correct location.
+
+---
+
+### Fix: Remove "Saved Presets" Section from Smart Filters
+
+**Problem:** The Smart Filters accordion had a "Saved presets" bar at the bottom with three hardcoded preset pills ("All active Telangana", "Trial → conversion review", "GSTIN missing"), a "+ Save current" button, and an "Apply" button. These were all static stubs — none of them did anything. They added visual clutter and were misleading.
+
+**Fix — `frontend/app/(dashboard)/super-admin/schools/page.tsx`:**
+
+- Removed the entire `<div className="mt-[18px] flex flex-wrap items-center justify-between gap-2.5 border-t border-dashed ...">` block containing the Saved presets label, preset pills, "+ Save current", and "Apply" buttons.
+- No backend changes required — the `handleApplyFilters` function it called was a no-op.
+
+---
+
+### Feature: GSTIN Validation (Frontend + Backend)
+
+**Context:** The schools list already shows a GSTIN column (and PAN sub-row) — both fields come from `SchoolTenantBaseSerializer` which includes `"gstin"` and `"pan"`. The GSTIN input existed in both the Edit School modal and the Add School accordion's GST & legal section, but there was no format validation — any string up to 15 chars was accepted silently.
+
+**GSTIN format:** `^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$` (e.g. `27AABCU9603R1ZX`)
+
+**Fix — Backend (`backend/apps/super_admin/serializers.py`):**
+
+Added `validate_gstin` and `validate_pan` methods to `SchoolTenantUpdateSerializer`:
+- `validate_gstin(value)` — if non-blank, runs the 15-char GSTIN regex; raises `ValidationError("Invalid GSTIN format. Must be 15 characters, e.g. 27AABCU9603R1ZX")` on mismatch.
+- `validate_pan(value)` — if non-blank, validates `^[A-Z]{5}[0-9]{4}[A-Z]{1}$` (10 chars); raises `ValidationError("Invalid PAN format. Must be 10 characters, e.g. AABCU9603R")`.
+- Both are optional (allow blank) — schools without a GSTIN/PAN are valid.
+
+**Fix — Frontend (`frontend/app/(dashboard)/super-admin/schools/page.tsx`):**
+
+- In `EditSchoolModal` component:
+  - Added `GSTIN_RE` constant and `gstinError` derived string (non-empty when GSTIN is present but invalid).
+  - Added `saveDisabled` flag: `busy || !form.name.trim() || !!gstinError`.
+  - GSTIN input gets a red border class (`border-[var(--danger)]`) when `gstinError` is set.
+  - Inline error `<p className="mt-1 text-[11px] text-[var(--danger)]">` shown below the GSTIN input when invalid.
+  - Save button uses `saveDisabled` instead of the previous `busy || !form.name.trim()`.
+
+- In Add School accordion (GST & legal section, `Fld label="GSTIN"`):
+  - Same inline red-border + error `<p>` pattern applied to the `editFields.gstin` input.
+  - Error renders only while the field has content that doesn't match the pattern (doesn't fire on empty — GSTIN is optional).
+
+**Verification:** `get_errors` on `schools/page.tsx` → no errors; backend `validate_gstin` tested with `py_compile` → OK.
+
+---
+
+## Day 6 Continued — Gowtham (2026-05-21) — Session 2
+
+### Fix: Add "Apply filters" button to Smart Filters accordion
+
+**Problem:** The Smart Filters accordion (plan, board, state selectors) had no submit button. Selecting a plan/board/state had no effect until the user knew to press Enter or wait. The previously-removed Saved Presets block contained an "Apply" button; when that was deleted the button was lost.
+
+**Fix — `frontend/app/(dashboard)/super-admin/schools/page.tsx`:**
+- Added an "Apply filters" `<button>` at the bottom-right of the Smart Filters accordion, separated from Health flags by a dashed border.
+- Button is styled with the primary brand colour (`#5B4FCF` / hover `#4A3FBF`) and calls the existing `handleApplyFilters` callback which commits `pendingPlan`, `pendingBoard`, `pendingState` into the live filter state and resets `page` to 1.
+
+---
+
+### Fix: Schools List Status Tab Filtering Broken
+
+**Root causes identified:**
+1. `status=active` backend filter used `exclude(archived, suspended)` → trial-plan schools appeared in BOTH the "Active" AND "Trial" tabs (overlap).
+2. Tab badge counts were computed **client-side** from a paginated `page_size=200` globalStats fetch, but `max_page_size=100` in `SuperAdminPagination` clamped it to 100 schools — counts were silently wrong if >100 schools exist.
+3. The backend accepted any arbitrary string as a `status` query param (the `else: filter(status=status_value)` branch allowed injection of arbitrary DB filter values).
+4. The `SchoolTenantUpdateSerializer` had no `validate_status` — a PATCH call could set `status='trial'` (a plan value, not a valid status), creating bad DB state that confused the filters.
+5. Frontend had no type-safe set of valid tab values — any string could be set as `statusFilter`.
+
+**Fix — `backend/apps/super_admin/views.py`:**
+- Added `_VALID_STATUS_PARAMS = {"active", "trial", "suspended", "archived"}` in `get_queryset`. Only params in this set are applied; anything else is silently ignored (prevents arbitrary DB filter injection).
+- Changed `status=active` handler: now also `.exclude(plan="trial")` so Active and Trial tabs are mutually exclusive.
+- Changed `status=suspended` / `status=archived` to explicit `elif` branches instead of a catch-all `else`.
+- Added `_status_counts()` method: runs five DB aggregation queries on the unfiltered base queryset → returns `{all, active, trial, suspended, archived}` counts that are always accurate regardless of pagination.
+- Updated `get()`: now includes `resp.data["status_counts"] = self._status_counts()` in every schools list response.
+
+**Fix — `backend/apps/super_admin/serializers.py`:**
+- Added `_VALID_STATUSES = {"active", "suspended", "archived", "pending", "onboarding", "provisioning"}` on `SchoolTenantUpdateSerializer`.
+- Added `validate_status(value)` method: raises `ValidationError` if a PATCH request tries to set `status='trial'` or any other unsupported value.
+
+**Fix — `frontend/types/super-admin/index.ts`:**
+- Added `StatusCounts` interface: `{ all, active, trial, suspended, archived: number }`.
+- Added `status_counts?: StatusCounts` to `PaginatedResponse<T>`.
+
+**Fix — `frontend/app/(dashboard)/super-admin/schools/page.tsx`:**
+- Added `VALID_STATUS_TABS` set and `StatusTab` union type before the page component; `statusFilter` state changed from `SchoolStatus | 'all'` to `StatusTab`.
+- In `loadSchools`: added `safeStatus` guard — validates `statusFilter` against `VALID_STATUS_TABS` before building the API filters object (prevents sending invalid values).
+- Tab badge counts now use `response.status_counts?.{tab}` (server-computed, always correct), falling back to `globalStats` if the backend somehow doesn't return them.
+
+**Verification:** `get_errors` on `schools/page.tsx` and `types/super-admin/index.ts` → no errors.
+
+**Status-to-filter mapping (after fix):**
+| Tab | `status` param sent | Backend filter |
+|---|---|---|
+| All | *(none)* | All schools, no restriction |
+| Active | `active` | `exclude(archived, suspended)` + `exclude(plan=trial)` |
+| Trial | `trial` | `filter(plan=trial)` + `exclude(archived, suspended)` |
+| Suspended | `suspended` | `filter(status=suspended)` |
+| Archived | `archived` | `filter(status=archived)` |
+
+## Day 6 Continued — Gowtham (2026-05-21) — Session 3
+
+### Student List Export — openpyxl XLSX Export (Backend + Frontend)
+
+**Problem:** Clicking "Select All" on the student list only selected the current page (max 25 students). Clicking "Export selected" then only exported those 25 rows, not all students matching current filters. Export was also client-side CSV only — no Excel support.
+
+**Fix:**
+
+**Backend — `apps/students/views.py` (`StudentViewSet`)**
+- Added `export_xlsx` action (`GET /api/v1/students/students/export-xlsx/`) using `openpyxl` (already in `requirements.txt`).
+- Calls `self.get_queryset()` — respects all filter params (search, is_active, include_deleted, deleted_only, current_class, current_section).
+- Optional `?ids=1,2,3` query param restricts export to specific student IDs.
+- Returns `.xlsx` file with:
+  - Styled header row (brand colour `#5B4FCF`, white bold text, centred).
+  - Columns: Admission No, Student, Class, Section, Guardian, Phone, DOB, Status.
+  - Auto-sized column widths; frozen header row (`freeze_panes = "A2"`).
+  - Iterates with `qs.iterator(chunk_size=500)` — no memory spike for large exports.
+- No pagination — all matching rows are returned in one file.
+
+**Frontend — `components/students/StudentListPanel.tsx`**
+- Imported `apiRequestWithRefreshResponse` (returns raw `Response` for blob download).
+- Added `downloadXlsxBlob(queryString, filename)` — calls the export endpoint, gets blob, triggers `<a>` download.
+- Added `buildFilterParams()` — builds `URLSearchParams` matching the same filters as `loadStudents`.
+- Replaced all three export handlers:
+  - `handleExportAll` → calls backend with filter params only (no `ids`) → downloads all filtered students.
+  - `handleExportSelected`:
+    - If `allVisibleSelected && totalCount > students.length` → delegates to `handleExportAll()` (Select All = export all pages).
+    - Otherwise → passes `ids=selectedIds.join(",")` to backend → exports only selected students.
+  - `handleExportVisible` → passes `ids` of current page students to backend → exports exactly what's visible.
+- `exportAllBusy` state blocks double-clicks; button shows "Exporting…" during fetch.
+
+## Day 6 Continued — Gowtham (2026-05-21) — Session 4
+
+### School List Export — openpyxl XLSX Export (Backend + Frontend)
+
+**Problem:** The two Export buttons on the Super-Admin Schools page (`/super-admin/schools`) had no `onClick` — clicking them did nothing.
+
+**Fix:**
+
+**Backend — `apps/super_admin/views.py`**
+- Added `SchoolTenantExportXlsxView(SchoolTenantListView)`:
+  - Inherits `get_queryset()` from `SchoolTenantListView` — all existing filters (search, status, plan, board, state, health_flag) work automatically.
+  - Iterates with `qs.iterator(chunk_size=500)` — no memory spike.
+  - Builds `.xlsx` using `openpyxl` (already in `requirements.txt`).
+  - Columns: School Name, Tenant ID, State, Board, Plan, Status, GSTIN, Students, Staff, Provisioned At.
+  - Styled header row (brand colour `#5B4FCF`), frozen panes (`A2`), auto column widths.
+  - Returns `HttpResponse` with `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`.
+
+**Backend — `apps/super_admin/urls.py`**
+- Imported `SchoolTenantExportXlsxView`.
+- Registered `path("schools/export-xlsx/", ...)` **before** `schools/<str:tenant_id>/` so the slug doesn't swallow it.
+
+**Frontend — `app/(dashboard)/super-admin/schools/page.tsx`**
+- Imported `apiRequestWithRefreshResponse` from `@/lib/api-auth`.
+- Added `exportBusy` state (boolean).
+- Added `handleExportSchoolsXlsx` async function:
+  - Builds `URLSearchParams` matching the same filters as `loadSchools` (status, search, plan, board, state, health_flag).
+  - Calls `apiRequestWithRefreshResponse("/api/super-admin/schools/export-xlsx/?...")`.
+  - Gets blob → triggers `<a>` download → revokes object URL.
+  - Shows `toast.error` on failure; sets `exportBusy` during fetch.
+- Wired **both** Export buttons (top-right header + inside the school list accordion) to `onClick={() => void handleExportSchoolsXlsx()}`.
+- Buttons show "Exporting…" and are disabled (`disabled:opacity-60 disabled:cursor-not-allowed`) while fetching.
+

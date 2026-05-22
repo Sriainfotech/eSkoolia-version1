@@ -10,6 +10,7 @@ import {
   Users, BarChart2, DollarSign, Bell, X,
 } from 'lucide-react';
 import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSchool, uploadSchoolLogo } from '@/lib/api/super-admin/schools';
+import { apiRequestWithRefreshResponse } from '@/lib/api-auth';
 import type {
   BoardType, HealthFlagsCounts, PaginatedResponse, PlanType, ProvisionSchoolRequest, ProvisionSchoolResponse,
   SchoolFilters, SchoolTenant, SchoolStatus,
@@ -254,6 +255,12 @@ function EditSchoolModal({
   });
   const set = (k: keyof typeof form, v: string | number) => setForm(f => ({ ...f, [k]: v }));
 
+  const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+  const gstinError = form.gstin && !GSTIN_RE.test(form.gstin)
+    ? 'Invalid GSTIN — must be 15 chars, e.g. 27AABCU9603R1ZX'
+    : '';
+  const saveDisabled = busy || !form.name.trim() || !!gstinError;
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 backdrop-blur-sm pt-16 pb-8">
       <div className="w-full max-w-lg rounded-2xl border border-[var(--bd)] bg-[var(--bg-1)] p-6 shadow-2xl mx-4">
@@ -317,8 +324,10 @@ function EditSchoolModal({
           </div>
           <div>
             <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">GSTIN</label>
-            <input className={monoInputCls} value={form.gstin} onChange={e => set('gstin', e.target.value.toUpperCase())}
+            <input className={`${monoInputCls}${gstinError ? ' border-[var(--danger)] focus:ring-[var(--danger)]/20' : ''}`}
+              value={form.gstin} onChange={e => set('gstin', e.target.value.toUpperCase())}
               placeholder="27AABCU9603R1ZX" maxLength={15} />
+            {gstinError && <p className="mt-1 text-[11px] text-[var(--danger)]">{gstinError}</p>}
           </div>
           <div>
             <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Seats</label>
@@ -332,7 +341,7 @@ function EditSchoolModal({
             className="rounded-xl border border-[var(--bd)] px-4 py-2 text-sm font-[550] text-[var(--ink-2)] hover:bg-[var(--bg-3)] disabled:opacity-50 transition-colors">
             Cancel
           </button>
-          <button type="button" disabled={busy || !form.name.trim()}
+          <button type="button" disabled={saveDisabled}
             onClick={() => onSave({
               name: form.name.trim(),
               plan: form.plan as SchoolTenant['plan'],
@@ -420,6 +429,10 @@ function ConfirmDialog({
 }
 
 // PAGE
+// Valid status tab values — must stay in sync with backend _VALID_STATUS_PARAMS
+const VALID_STATUS_TABS = new Set(['all', 'active', 'trial', 'suspended', 'archived'] as const);
+type StatusTab = 'all' | 'active' | 'trial' | 'suspended' | 'archived';
+
 export default function SuperAdminSchoolsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -429,13 +442,46 @@ export default function SuperAdminSchoolsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
   const [globalStats, setGlobalStats] = useState({ total: 0, active: 0, trial: 0, attention: 0, archived: 0 });
-  const [statusFilter, setStatusFilter] = useState<SchoolStatus | 'all'>('active');
+  const [statusFilter, setStatusFilter] = useState<StatusTab>('active');
   const [pendingPlan,   setPendingPlan]   = useState('');
   const [pendingBoard,  setPendingBoard]  = useState('');
   const [pendingState,  setPendingState]  = useState('');
   const [planFilter,    setPlanFilter]    = useState('');
   const [boardFilter,   setBoardFilter]   = useState('');
   const [stateFilter,   setStateFilter]   = useState('');
+
+  const [exportBusy, setExportBusy] = useState(false);
+
+  const handleExportSchoolsXlsx = async () => {
+    if (exportBusy) return;
+    setExportBusy(true);
+    try {
+      const params = new URLSearchParams();
+      const safeStatus = VALID_STATUS_TABS.has(statusFilter) ? statusFilter : 'all';
+      if (safeStatus !== 'all') params.set('status', safeStatus);
+      if (search.trim()) params.set('search', search.trim());
+      if (planFilter) params.set('plan', planFilter);
+      if (boardFilter) params.set('board', boardFilter);
+      if (stateFilter) params.set('state', stateFilter);
+      if (healthFlagFilter) params.set('health_flag', healthFlagFilter);
+      const response = await apiRequestWithRefreshResponse(
+        `/api/super-admin/schools/export-xlsx/?${params.toString()}`,
+      );
+      if (!response.ok) throw new Error(`Export failed: ${response.status}`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `schools-export-${Date.now()}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      window.setTimeout(() => { URL.revokeObjectURL(url); link.remove(); }, 0);
+    } catch {
+      toast.error('Failed to export schools. Please try again.');
+    } finally {
+      setExportBusy(false);
+    }
+  };
 
   const [accAddOpen, setAccAddOpen] = useState(false);
   const [accFiltersOpen, setAccFiltersOpen] = useState(true);
@@ -492,10 +538,12 @@ export default function SuperAdminSchoolsPage() {
   const loadSchools = useCallback(async () => {
     setLoading(true);
     setError(null);
+    // Guard: only send a status param for values the backend recognises
+    const safeStatus = VALID_STATUS_TABS.has(statusFilter) ? statusFilter : 'all';
     const filters: SchoolFilters = {
       page, page_size: PAGE_SIZE,
       search: search.trim() || undefined,
-      status: statusFilter === 'all' ? undefined : (statusFilter as SchoolStatus),
+      status: safeStatus === 'all' ? undefined : (safeStatus as SchoolStatus),
       plan: planFilter as PlanType || undefined,
       board: boardFilter as BoardType || undefined,
       state: stateFilter || undefined,
@@ -791,8 +839,8 @@ export default function SuperAdminSchoolsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border border-[var(--bd-2)] bg-[var(--bg-1)] px-3.5 text-[12.5px] font-[550] text-[var(--ink-1)] transition hover:bg-[var(--bg-2)] active:scale-[0.97]">
-            <Download className="h-3.5 w-3.5" /> Export
+          <button type="button" onClick={() => void handleExportSchoolsXlsx()} disabled={exportBusy} className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border border-[var(--bd-2)] bg-[var(--bg-1)] px-3.5 text-[12.5px] font-[550] text-[var(--ink-1)] transition hover:bg-[var(--bg-2)] active:scale-[0.97] disabled:opacity-60 disabled:cursor-not-allowed">
+            <Download className="h-3.5 w-3.5" /> {exportBusy ? 'Exporting…' : 'Export'}
           </button>
           <button
             type="button"
@@ -1112,9 +1160,13 @@ export default function SuperAdminSchoolsPage() {
                 <select className={selectCls} title="GST registration"><option value="yes">GST-registered</option><option value="no">Unregistered (exempt)</option></select>
               </Fld>
               <Fld label="GSTIN" hint="15 chars">
-                <input className={`${monoInputCls} uppercase`} placeholder="36AAACE9988K1ZP" maxLength={15}
+                <input className={`${monoInputCls} uppercase${editFields.gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(editFields.gstin) ? ' border-[var(--danger)]' : ''}`}
+                  placeholder="36AAACE9988K1ZP" maxLength={15}
                   value={editFields.gstin}
                   onChange={e => setEditFields(f => ({ ...f, gstin: e.target.value.toUpperCase() }))} />
+                {editFields.gstin && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(editFields.gstin) && (
+                  <p className="mt-1 text-[11px] text-[var(--danger)]">Invalid GSTIN — must be 15 chars, e.g. 36AAACE9988K1ZP</p>
+                )}
               </Fld>
               <Fld label="PAN" required>
                 <input className={`${monoInputCls} uppercase`} placeholder="AAACE9988K" maxLength={10}
@@ -1418,60 +1470,37 @@ export default function SuperAdminSchoolsPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-6">
-            <div>
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-[var(--ink-2)]">Status</div>
-              <div className="flex flex-wrap gap-1.5">
-                {([
-                  { value: 'all' as const,      label: 'All',       count: globalStats.total     || response.count },
-                  { value: 'active' as const,    label: 'Active',    count: globalStats.active },
-                  { value: 'trial' as const,     label: 'Trial',     count: globalStats.trial },
-                  { value: 'suspended' as const, label: 'Suspended', count: globalStats.attention },
-                  { value: 'archived' as const,  label: 'Archived',  count: globalStats.archived },
-                ] as const).map(o => (
-                  <FilterPill key={o.value} label={o.label} count={o.count}
-                    active={statusFilter === o.value} onClick={() => setStatusFilter(o.value)} />
-                ))}
-              </div>
-            </div>
-            <div>
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-[var(--ink-2)]">Health flags</div>
-              <div className="flex flex-wrap gap-1.5">
-                {(
-                  [
-                    { key: 'billing_overdue', label: 'Billing overdue', count: healthFlagCounts.billing_overdue },
-                    { key: 'storage_80',      label: 'Storage 80%+',    count: healthFlagCounts.storage_80 },
-                    { key: 'trial_ending',    label: 'Trial ending <7d', count: healthFlagCounts.trial_ending },
-                    { key: 'gstin_missing',   label: 'GSTIN missing',   count: healthFlagCounts.gstin_missing },
-                  ] as const
-                ).map(o => (
-                  <FilterPill
-                    key={o.key}
-                    label={o.label}
-                    count={o.count}
-                    active={healthFlagFilter === o.key}
-                    onClick={() => setHealthFlagFilter(prev => prev === o.key ? '' : o.key)}
-                  />
-                ))}
-              </div>
+          <div>
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.04em] text-[var(--ink-2)]">Health flags</div>
+            <div className="flex flex-wrap gap-1.5">
+              {(
+                [
+                  { key: 'billing_overdue', label: 'Billing overdue', count: healthFlagCounts.billing_overdue },
+                  { key: 'storage_80',      label: 'Storage 80%+',    count: healthFlagCounts.storage_80 },
+                  { key: 'trial_ending',    label: 'Trial ending <7d', count: healthFlagCounts.trial_ending },
+                  { key: 'gstin_missing',   label: 'GSTIN missing',   count: healthFlagCounts.gstin_missing },
+                ] as const
+              ).map(o => (
+                <FilterPill
+                  key={o.key}
+                  label={o.label}
+                  count={o.count}
+                  active={healthFlagFilter === o.key}
+                  onClick={() => setHealthFlagFilter(prev => prev === o.key ? '' : o.key)}
+                />
+              ))}
             </div>
           </div>
 
-          <div className="mt-[18px] flex flex-wrap items-center justify-between gap-2.5 border-t border-dashed border-[var(--bd-2)] pt-[14px]">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.05em] text-[var(--ink-3)]">Saved presets</span>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {['All active Telangana','Trial \u2192 conversion review','GSTIN missing'].map(p => (
-                <FilterPill key={p} label={p} active={false} onClick={() => {}} />
-              ))}
-              <button type="button" className="inline-flex h-[30px] cursor-pointer items-center gap-1.5 rounded-full border border-dashed border-[var(--bd)] bg-transparent px-3 text-[12px] text-[var(--pu-deep)] hover:bg-[var(--pu-soft)]">
-                + Save current
-              </button>
-              <button type="button" onClick={handleApplyFilters}
-                className="inline-flex h-[30px] cursor-pointer items-center gap-1.5 rounded-full bg-[var(--pu)] px-3 text-[12px] font-[550] text-white hover:bg-[var(--pu-deep)]">
-                Apply
-              </button>
-            </div>
+          <div className="mt-4 flex justify-end border-t border-dashed border-[var(--bd-2)] pt-4">
+            <button
+              onClick={handleApplyFilters}
+              className="rounded-lg bg-[#5B4FCF] px-5 py-2 text-[13px] font-semibold text-white shadow-sm transition hover:bg-[#4A3FBF] active:scale-95"
+            >
+              Apply filters
+            </button>
           </div>
+
         </div>
       </Accordion>
 
@@ -1494,14 +1523,14 @@ export default function SuperAdminSchoolsPage() {
         }
       >
         <div className="pt-4">
-          {/* ── Status quick tabs ── */}
+          {/* ── Status quick tabs — counts come from server status_counts (always accurate) ── */}
           <div className="mb-4 flex flex-wrap gap-1.5">
             {([
-              { value: 'all'       as const, label: 'All',       count: globalStats.total   || response.count },
-              { value: 'active'    as const, label: 'Active',    count: globalStats.active  || activeCount },
-              { value: 'trial'     as const, label: 'Trial',     count: globalStats.trial   || trialCount },
-              { value: 'suspended' as const, label: 'Suspended', count: globalStats.attention },
-              { value: 'archived'  as const, label: 'Archived',  count: globalStats.archived },
+              { value: 'all'       as const, label: 'All',       count: response.status_counts?.all       ?? globalStats.total   ?? response.count },
+              { value: 'active'    as const, label: 'Active',    count: response.status_counts?.active    ?? globalStats.active },
+              { value: 'trial'     as const, label: 'Trial',     count: response.status_counts?.trial     ?? globalStats.trial },
+              { value: 'suspended' as const, label: 'Suspended', count: response.status_counts?.suspended ?? globalStats.attention },
+              { value: 'archived'  as const, label: 'Archived',  count: response.status_counts?.archived  ?? globalStats.archived },
             ] as const).map(tab => (
               <button
                 key={tab.value}
@@ -1533,8 +1562,8 @@ export default function SuperAdminSchoolsPage() {
               </strong>
             </p>
             <div className="flex gap-1.5">
-              <button type="button" className="inline-flex h-[30px] items-center gap-1.5 rounded-[7px] border border-[var(--bd-2)] bg-[var(--bg-1)] px-[11px] text-[12px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)]">
-                <Download size={12} /> Export
+              <button type="button" onClick={() => void handleExportSchoolsXlsx()} disabled={exportBusy} className="inline-flex h-[30px] items-center gap-1.5 rounded-[7px] border border-[var(--bd-2)] bg-[var(--bg-1)] px-[11px] text-[12px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)] disabled:opacity-60 disabled:cursor-not-allowed">
+                <Download size={12} /> {exportBusy ? 'Exporting…' : 'Export'}
               </button>
               <button type="button" onClick={() => void loadSchools()} className="inline-flex h-[30px] items-center gap-1.5 rounded-[7px] border border-[var(--bd-2)] bg-[var(--bg-1)] px-[11px] text-[12px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)]">
                 <RefreshCw size={12} /> Refresh

@@ -7,7 +7,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Spinner } from "@/components/common/Spinner";
 import { PaginationControls } from "@/components/common/PaginationControls";
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
-import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { apiRequestWithRefresh, apiRequestWithRefreshResponse } from "@/lib/api-auth";
 import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
 import { usePersistentPagination } from "@/hooks/usePersistentPagination";
 import { pluralize } from "@/lib/utils/pluralize";
@@ -191,6 +191,7 @@ export function StudentListPanel() {
   const [sectionFilter, setSectionFilter] = useState("");
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [exportAllBusy, setExportAllBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMeta, setLoadingMeta] = useState(true);
   const [loadingStats, setLoadingStats] = useState(true);
@@ -1104,18 +1105,77 @@ export function StudentListPanel() {
     }, 0);
   };
 
+  const downloadXlsxBlob = async (queryString: string, filename: string) => {
+    const response = await apiRequestWithRefreshResponse(
+      `/api/v1/students/students/export-xlsx/?${queryString}`,
+    );
+    if (!response.ok) throw new Error(`Export failed: ${response.status}`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    window.setTimeout(() => { URL.revokeObjectURL(url); link.remove(); }, 0);
+  };
+
+  const buildFilterParams = () => {
+    const params = new URLSearchParams();
+    if (debouncedSearch) params.set("search", debouncedSearch);
+    if (statusFilter === "active") params.set("is_active", "true");
+    else if (statusFilter === "inactive") params.set("is_active", "false");
+    params.set("include_deleted", "true");
+    if (statusFilter === "archived") params.set("deleted_only", "true");
+    if (classFilter) params.set("current_class", classFilter);
+    if (sectionFilter) params.set("current_section", sectionFilter);
+    return params;
+  };
+
+  const handleExportAll = async () => {
+    if (exportAllBusy) return;
+    setExportAllBusy(true);
+    try {
+      const params = buildFilterParams();
+      await downloadXlsxBlob(params.toString(), `students-all-${Date.now()}.xlsx`);
+      setSuccess("All students exported to Excel.");
+    } catch {
+      setError("Failed to export students. Please try again.");
+    } finally {
+      setExportAllBusy(false);
+    }
+  };
+
   const handleExportSelected = () => {
     if (selectedRows.length === 0) {
       setError("Select at least one student to export.");
       return;
     }
-    buildCsvAndDownload(selectedRows, "students-selected");
-    setSuccess("Selected students exported to CSV.");
+    // Select All checked and there are more students on other pages → export all filtered
+    if (allVisibleSelected && selectedIds.length >= students.length && totalCount > students.length) {
+      void handleExportAll();
+      return;
+    }
+    // Specific students selected → pass their IDs to backend
+    if (exportAllBusy) return;
+    setExportAllBusy(true);
+    const params = buildFilterParams();
+    params.set("ids", selectedIds.join(","));
+    downloadXlsxBlob(params.toString(), `students-selected-${Date.now()}.xlsx`)
+      .then(() => setSuccess(`${selectedRows.length} student${selectedRows.length !== 1 ? "s" : ""} exported to Excel.`))
+      .catch(() => setError("Failed to export selected students. Please try again."))
+      .finally(() => setExportAllBusy(false));
   };
 
   const handleExportVisible = () => {
-    buildCsvAndDownload(students, "students-list");
-    setSuccess("Student list exported to CSV.");
+    if (exportAllBusy) return;
+    setExportAllBusy(true);
+    const params = buildFilterParams();
+    params.set("ids", students.map((s) => s.id).join(","));
+    downloadXlsxBlob(params.toString(), `students-list-${Date.now()}.xlsx`)
+      .then(() => setSuccess("Student list exported to Excel."))
+      .catch(() => setError("Failed to export student list. Please try again."))
+      .finally(() => setExportAllBusy(false));
   };
 
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -1187,7 +1247,7 @@ export function StudentListPanel() {
             <p>Browse, search, and manage every enrolled student · Click any row to see full profile.</p>
           </div>
           <div className="actions">
-            <button className="btn btn-ghost" type="button" title="Export student list" onClick={handleExportVisible}>
+            <button className="btn btn-ghost" type="button" title="Export student list" onClick={handleExportVisible} disabled={exportAllBusy}>
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" width="12" height="12" aria-hidden="true"><path d="M8 2v8m0 0l-3-3m3 3l3-3M3 13h10"/></svg>
               Export
             </button>
@@ -1709,7 +1769,7 @@ export function StudentListPanel() {
                                                         </>
                                                       )}
                                                       <button type="button" className="bulk-btn" title="Message selected guardians (coming soon)" disabled>Message parents</button>
-                                                      <button type="button" className="bulk-btn" title="Export selected students" onClick={handleExportSelected} disabled={bulkBusy}>Export selected</button>
+                                                      <button type="button" className="bulk-btn" title="Export selected students" onClick={handleExportSelected} disabled={bulkBusy || exportAllBusy}>{exportAllBusy ? "Exporting…" : "Export selected"}</button>
                                                       {statusFilter !== "archived" ? (
                                                         <button
                                                           type="button"

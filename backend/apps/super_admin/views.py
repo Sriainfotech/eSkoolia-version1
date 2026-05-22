@@ -531,16 +531,22 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
                 | Q(gstin__icontains=search)
             )
 
+        _VALID_STATUS_PARAMS = {"active", "trial", "suspended", "archived"}
         status_value = self.request.query_params.get("status")
-        if status_value:
+        if status_value and status_value in _VALID_STATUS_PARAMS:
             if status_value == "active":
-                # "active" is a frontend alias meaning non-archived, non-suspended
-                queryset = queryset.exclude(status__in=["archived", "suspended"])
+                # "active" = operational schools that are NOT on a trial plan,
+                # not suspended and not archived. Excludes trial-plan schools
+                # so the Active tab and Trial tab never overlap.
+                queryset = queryset.exclude(status__in=["archived", "suspended"]).exclude(plan="trial")
             elif status_value == "trial":
-                # "trial" maps to the plan field, not status
+                # "trial" maps to plan field — schools on the trial plan that
+                # are not yet suspended or archived.
                 queryset = queryset.filter(plan="trial").exclude(status__in=["archived", "suspended"])
-            else:
-                queryset = queryset.filter(status=status_value)
+            elif status_value == "suspended":
+                queryset = queryset.filter(status="suspended")
+            elif status_value == "archived":
+                queryset = queryset.filter(status="archived")
 
         for field in ["plan", "board", "region", "state"]:
             value = self.request.query_params.get(field)
@@ -620,10 +626,97 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
             "gstin_missing": gstin_missing,
         }
 
+    def _status_counts(self):
+        """Return per-tab counts computed from the DB (no pagination), so tab
+        badges always reflect the real totals regardless of current page."""
+        base = self._public_queryset(SchoolTenant)
+        return {
+            "all":       base.count(),
+            "active":    base.exclude(status__in=["archived", "suspended"]).exclude(plan="trial").count(),
+            "trial":     base.filter(plan="trial").exclude(status__in=["archived", "suspended"]).count(),
+            "suspended": base.filter(status="suspended").count(),
+            "archived":  base.filter(status="archived").count(),
+        }
+
     def get(self, request):
         resp = self._paginate(request, self.get_queryset(), SchoolTenantListSerializer)
         resp.data["health_flags_counts"] = self._health_flags_counts()
+        resp.data["status_counts"] = self._status_counts()
         return resp
+
+
+class SchoolTenantExportXlsxView(SchoolTenantListView):
+    """Export all schools matching the current filters as an Excel (.xlsx) file."""
+
+    def get(self, request):
+        import io
+        from datetime import datetime
+
+        import openpyxl
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from django.http import HttpResponse
+
+        qs = self.get_queryset()
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Schools"
+
+        headers = [
+            "School Name", "Tenant ID", "State", "Board",
+            "Plan", "Status", "GSTIN", "Students", "Staff", "Provisioned At",
+        ]
+
+        header_fill = PatternFill(start_color="5B4FCF", end_color="5B4FCF", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True, size=11)
+        header_align = Alignment(horizontal="center", vertical="center")
+
+        for col_idx, header in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_align
+
+        col_widths = [32, 18, 18, 10, 10, 12, 18, 10, 8, 20]
+        for col_idx, width in enumerate(col_widths, start=1):
+            ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = width
+
+        row_align = Alignment(vertical="center")
+        for row_idx, school in enumerate(qs.iterator(chunk_size=500), start=2):
+            provisioned = (
+                school.provisioned_at.strftime("%d/%m/%Y %H:%M")
+                if school.provisioned_at else "-"
+            )
+            row_data = [
+                school.name or "-",
+                school.tenant_id or "-",
+                school.state or "-",
+                school.board or "-",
+                school.plan or "-",
+                school.status or "-",
+                school.gstin or "-",
+                getattr(school, "live_student_count", school.student_count or 0),
+                getattr(school, "live_staff_count", school.staff_count or 0),
+                provisioned,
+            ]
+            for col_idx, value in enumerate(row_data, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.alignment = row_align
+
+        ws.freeze_panes = "A2"
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        filename = f"schools-export-{timestamp}.xlsx"
+        response = HttpResponse(
+            output.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
 
 
 class SchoolTenantProvisionView(SuperAdminBaseAPIView):
