@@ -12,6 +12,11 @@ function deriveApiBaseUrl(): string {
   // so the backend tenant middleware can resolve the tenant from the Host header.
   // e.g. testschool.eskoolia.local:3000 → http://testschool.eskoolia.local:8000
   if (hostname !== "127.0.0.1") {
+    // Production (*.eskoolia.com): API is behind Nginx on standard ports — no explicit port needed.
+    // Local dev (*.eskoolia.local or similar): Django runs directly on port 8000.
+    if (hostname.endsWith(".eskoolia.com") || hostname === "eskoolia.com") {
+      return `${protocol}//${hostname}`;
+    }
     return `${protocol}//${hostname}:8000`;
   }
   return "http://127.0.0.1:8000";
