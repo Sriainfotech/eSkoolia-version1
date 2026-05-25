@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { API_BASE_URL } from "@/lib/api";
+import { setAuthTokens } from "@/lib/auth";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ function LoginPage() {
   const [blobOffset, setBlobOffset] = useState({ x: 0, y: 0 });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isImpersonating, setIsImpersonating] = useState(false);
 
   // Subdomain-based school branding
   const [subdomain] = useState<string | null>(() => getSubdomainFromHost());
@@ -86,12 +88,24 @@ function LoginPage() {
   // Derive display name: use full name from backend, or fall back to env var constant.
   const displaySchoolName = schoolInfo?.name ?? SCHOOL_NAME;
 
-  // Redirect already-authenticated users away from login.
+  // Impersonation: super-admin opens a school tab with ?impersonate=1&token=ACCESS&refresh=REFRESH.
+  // Read the tokens, store them, then redirect to /home — skipping the login form entirely.
   useEffect(() => {
-    if (!isLoading && isAuthenticated && user && !user.must_change_password) {
-      router.replace("/home");
-    }
-  }, [isLoading, isAuthenticated, user, router]);
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('impersonate') !== '1') return;
+    const access = params.get('token');
+    const refresh = params.get('refresh');
+    if (!access || !refresh) return;
+    setIsImpersonating(true);
+    setAuthTokens(access, refresh);
+    // Remove tokens from URL before navigating so they don't linger in browser history.
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, '', cleanUrl);
+    // Use a full-page redirect (not router.replace) so:
+    // 1. React Strict Mode double-invocation cannot cancel the navigation.
+    // 2. The AuthGate initializes fresh with the tokens already in localStorage.
+    window.location.href = '/home';
+  }, []);
 
   // Subtle parallax effect on background blobs.
   useEffect(() => {
@@ -132,6 +146,19 @@ function LoginPage() {
       setSubmitting(false);
     }
   };
+
+  if (isImpersonating) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0f172a', color: '#94a3b8', fontFamily: 'sans-serif', flexDirection: 'column', gap: '16px' }}>
+        <svg width="40" height="40" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ animation: 'spin 1s linear infinite' }}>
+          <circle cx="20" cy="20" r="16" stroke="#334155" strokeWidth="4" />
+          <path d="M20 4a16 16 0 0 1 16 16" stroke="#38bdf8" strokeWidth="4" strokeLinecap="round" />
+        </svg>
+        <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+        <span>Opening school dashboard…</span>
+      </div>
+    );
+  }
 
   return (
     <div className="gateway-shell">

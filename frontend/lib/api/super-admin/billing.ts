@@ -158,6 +158,7 @@ export interface CreatePlanPayload {
   popular?: boolean;
   features?: string[];
   sort_order?: number;
+  sac_code?: string;
   is_active?: boolean;
 }
 

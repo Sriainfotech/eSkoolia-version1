@@ -32,6 +32,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from django_tenants.utils import schema_context
+
 from apps.access_control.permission_classes import IsSuperAdmin
 from apps.hr.models import Staff
 from apps.students.models import Student
@@ -885,26 +887,31 @@ class SchoolImpersonateView(SuperAdminBaseAPIView):
         User = get_user_model()
         target_username = request.data.get("username")
         target = None
-        if target_username:
-            target = User.objects.filter(username=target_username, school__tenant_id=tenant_id).first()
-        if target is None:
-            target = (
-                User.objects.filter(school__tenant_id=tenant_id, is_staff=True, is_active=True)
-                .order_by("-is_superuser", "id")
-                .first()
-            )
-        if target is None:
-            return Response(
-                {"detail": "No active staff user found for this tenant."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
 
-        refresh = RefreshToken.for_user(target)
-        refresh["impersonated_by"] = request.user.username
-        refresh["tenant_id"] = tenant.tenant_id
-        access = refresh.access_token
-        access["impersonated_by"] = request.user.username
-        access["tenant_id"] = tenant.tenant_id
+        # Look up user AND generate tokens inside the tenant schema so the JWT
+        # user-id resolves correctly when the token is later validated on the
+        # tenant's own domain (e.g. mastermind.eskoolia.local:8000).
+        with schema_context(tenant.schema_name):
+            if target_username:
+                target = User.objects.filter(username=target_username, is_active=True).first()
+            if target is None:
+                target = (
+                    User.objects.filter(is_active=True)
+                    .order_by("-is_school_admin", "-is_superuser", "id")
+                    .first()
+                )
+            if target is None:
+                return Response(
+                    {"detail": "No active staff user found for this tenant."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            refresh = RefreshToken.for_user(target)
+            refresh["impersonated_by"] = request.user.username
+            refresh["tenant_id"] = tenant.tenant_id
+            access = refresh.access_token
+            access["impersonated_by"] = request.user.username
+            access["tenant_id"] = tenant.tenant_id
 
         scheme = "https" if request.is_secure() else "http"
         raw_host = request.get_host()
@@ -1152,6 +1159,7 @@ class BillingInvoiceListCreateView(SuperAdminBaseAPIView):
                 tax_breakdown=tax_breakdown,
                 notes=data.get("notes") or "",
                 terms_conditions=data.get("terms_conditions") or "",
+                reverse_charge=data.get("reverse_charge") or False,
             )
         except IntegrityError:
             return Response(
@@ -1241,6 +1249,7 @@ class BillingPlansView(SuperAdminBaseAPIView):
             features=data.get("features", []),
             sort_order=data.get("sort_order", 0),
             is_active=data.get("is_active", True),
+            sac_code=data.get("sac_code", "998313"),
         )
 
         log_audit(

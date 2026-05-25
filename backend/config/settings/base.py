@@ -88,6 +88,10 @@ ALLOWED_HOSTS += [".devtunnels.ms", ".githubpreview.dev"]
 # Production + local staging subdomain routing: springdale.eskoolia.com / springdale.eskoolia.local
 ALLOWED_HOSTS += [".eskoolia.com", ".eskoolia.local"]
 
+# Silence django-tenants warning about auto_create_schema=False; schema
+# provisioning is handled explicitly by management commands in this project.
+SILENCED_SYSTEM_CHECKS = ["tenancy.W005"]
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
