@@ -287,24 +287,27 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
               const endDate = new Date(y.end_date);
               endDate.setHours(0, 0, 0, 0);
               const isArchived = !y.is_current && endDate < today;
+              const isInactive = y.is_active === false;
 
               return (
                 <div
                   key={y.id}
                   className={[
                     "flex items-center gap-3 px-4 py-3 rounded-xl border-[1.5px] transition-all",
-                    y.is_current
-                      ? "border-[#5B4FCF] bg-[#F5F3FF]"
-                      : isArchived
-                        ? "border-[#E8ECEF] bg-[#FAFBFC]"
-                        : "border-[#E8ECEF] bg-[#F0F2F5] hover:border-[#C7C3F0]",
+                    isInactive
+                      ? "border-[#E8ECEF] bg-[#FFF8F8] opacity-70"
+                      : y.is_current
+                        ? "border-[#5B4FCF] bg-[#F5F3FF]"
+                        : isArchived
+                          ? "border-[#E8ECEF] bg-[#FAFBFC]"
+                          : "border-[#E8ECEF] bg-[#F0F2F5] hover:border-[#C7C3F0]",
                   ].join(" ")}
                 >
                   {/* Status dot */}
                   <span
                     className={[
                       "w-2 h-2 rounded-full flex-shrink-0",
-                      y.is_current ? "bg-[#22C55E]" : isArchived ? "bg-[#D2D7DC]" : "bg-[#9FA6AD]",
+                      isInactive ? "bg-[#FCA5A5]" : y.is_current ? "bg-[#22C55E]" : isArchived ? "bg-[#D2D7DC]" : "bg-[#9FA6AD]",
                     ].join(" ")}
                   />
 
@@ -314,11 +317,16 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
                       <span
                         className={[
                           "text-[13px] font-bold",
-                          y.is_current ? "text-[#5B4FCF]" : "text-[#1A1D1F]",
+                          isInactive ? "text-[#9FA6AD] line-through" : y.is_current ? "text-[#5B4FCF]" : "text-[#1A1D1F]",
                         ].join(" ")}
                       >
                         {y.name}
                       </span>
+                      {isInactive && (
+                        <span className="px-2 py-0.5 rounded-full bg-[#FEE2E2] text-[#B91C1C] text-[10px] font-semibold border border-[#FCA5A5]">
+                          Inactive
+                        </span>
+                      )}
                       {y.is_current && (
                         <span className="inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-[#5B4FCF] text-white text-[10px] font-bold tracking-wide">
                           ✓ CURRENT
@@ -340,6 +348,10 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
                     {y.is_current ? (
                       <span className="text-[11px] text-[#5B4FCF] font-semibold px-1">
                         Current Year
+                      </span>
+                    ) : isInactive ? (
+                      <span className="text-[11px] text-[#9FA6AD] px-1" title="Re-activate this year before making it current">
+                        —
                       </span>
                     ) : (
                       <button

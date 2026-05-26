@@ -1468,3 +1468,47 @@ _DIAG_SPAM = { 'qaz','wsx','edc','rfv','tgb','yhn','ujm',
 7. 5+ consecutive consonants
 8. 3–4 char alpha segment with zero vowels
 
+---
+
+## Session 5 — Academic Year & Classes UI Improvements (25 May 2026)
+
+### Session 5.1 — Academic Year `is_active` visual indicator
+
+**Problem:** The "Active (uncheck to soft-deactivate this year)" checkbox in the Academic Year edit form was saving `is_active=false` to the DB successfully (success toast appeared), but the year card in the list showed no visual change — looked identical to an active year, making it appear as if nothing happened.
+
+**Root cause:** `AcademicYearViewSet` and `AcademicYearSerializer` were correct — `is_active` was in `fields`, not in `read_only_fields`, and the PATCH payload included it. The DB was being updated. The year list card simply had no conditional rendering for `is_active`.
+
+**Fix — `AcademicYearPane.tsx`:** Added `isInactive = y.is_active === false` derived variable in the year list `map`. When true:
+- Card background → faint red (`bg-[#FFF8F8]`), 70% opacity
+- Status dot → red (`bg-[#FCA5A5]`)
+- Year name → grey + strikethrough
+- Red **"Inactive"** badge pill added next to the year name
+- **"Make Current" button hidden** — replaced with a `—` dash (tooltip: "Re-activate this year before making it current"), preventing an inactive year from being set as current
+
+**File changed:** `frontend/components/academics/foundation/panes/AcademicYearPane.tsx`+
+
+---
+
+### Session 5.2 — Streams column in Classes list
+
+**Problem:** The Classes list table (Foundation → Step 2) showed Class, Level, Status columns only. For Grade 11 / 12 (Senior Secondary) with streams configured (e.g. Arts, BIPC, CEC, MEC, MPC), there was no way to see which streams existed without opening the edit form.
+
+**Fix — `ClassesPane.tsx`:**
+
+1. **Added "Streams" column** to the table header between Level and Status.
+
+2. **Streams cell rendering:**
+   - Senior classes with streams → first 3 shown as purple pills
+   - If more than 3 → a `+N` grey badge appears after the 3 pills
+   - Other grades (no streams) → `—` dash
+
+3. **Hover card on `+N` badge:**
+   - Card appears **above** the badge (not below — avoids overlapping the next row)
+   - Downward-pointing arrow connecting card to badge
+   - Smooth fade-in (`opacity-0 group-hover:opacity-100 transition-opacity`)
+   - Card has: "More Streams" header with divider, each remaining stream as a purple pill
+   - Pure CSS using Tailwind `group` / `group-hover` — no JS state
+
+**Data note:** `stream_details` was already returned by the backend serializer (`ClassSerializer` includes it) and typed in `SchoolClass` interface — no backend changes needed.
+
+**File changed:** `frontend/components/academics/foundation/panes/ClassesPane.tsx`
