@@ -66,7 +66,8 @@ def get_tenant_from_request(request):
         if subdomain in ("www", "admin", "api", "mail", "app", ""):
             return None
         try:
-            domain = Domain.objects.select_related("tenant").get(domain=subdomain)
+            # Domain records are stored as full hostnames (e.g. "bhashyam.eskoolia.com")
+            domain = Domain.objects.select_related("tenant").get(domain=host)
             return domain.tenant
         except Domain.DoesNotExist:
             logger.warning(f"Tenant not found for subdomain: {subdomain}")
