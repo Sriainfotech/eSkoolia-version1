@@ -36,6 +36,17 @@ class TenantMainMiddleware(MiddlewareMixin):
     - Existing monolithic behavior preserved
     """
 
+    # Paths that must be reachable before tenant context is established
+    # (login page branding, auth tokens, admin, static assets)
+    _PUBLIC_PATH_PREFIXES = (
+        "/api/v1/tenancy/school-info/",
+        "/api/v1/auth/",
+        "/api/v1/super-admin/",
+        "/admin/",
+        "/static/",
+        "/media/",
+    )
+
     def process_request(self, request: HttpRequest) -> Optional[HttpResponse]:
         """Resolve tenant and set up schema context for this request.
         
@@ -52,6 +63,14 @@ class TenantMainMiddleware(MiddlewareMixin):
         if not is_multi_tenancy_enabled():
             clear_tenant_context()
             request.tenant = None  # Explicitly mark as monolithic
+            request.schema_name = None
+            return None
+
+        # Bypass tenant resolution for public/auth paths — these must be
+        # reachable regardless of whether the subdomain has an active schema.
+        if request.path.startswith(self._PUBLIC_PATH_PREFIXES):
+            clear_tenant_context()
+            request.tenant = None
             request.schema_name = None
             return None
 
