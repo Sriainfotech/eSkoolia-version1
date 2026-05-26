@@ -39,6 +39,7 @@ from apps.hr.models import Staff
 from apps.students.models import Student
 from apps.tenancy.audit import log_audit
 from apps.tenancy.models import (
+    Domain,
     School,
     SchoolTenant,
     SubscriptionPlan,
@@ -774,6 +775,12 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                     code=school_code,
                     subdomain=subdomain,
                     is_active=True,
+                )
+
+                # 3a. Create Domain record so school_info_view can resolve this subdomain
+                Domain.objects.get_or_create(
+                    domain=f"{subdomain}.eskoolia.com",
+                    defaults={"tenant": tenant, "is_primary": True},
                 )
 
                 # 3. Create school admin user

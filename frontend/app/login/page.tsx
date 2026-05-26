@@ -75,12 +75,16 @@ function LoginPage() {
     logo_url: string | null;
     brand_color: string;
   } | null>(null);
+  const [schoolNotFound, setSchoolNotFound] = useState(false);
 
   // Fetch school name + branding from the public API when on a tenant subdomain.
   useEffect(() => {
     if (!subdomain) return;
     fetch(`${API_BASE_URL}/api/v1/tenancy/school-info/?subdomain=${encodeURIComponent(subdomain)}`)
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        if (r.status === 404) { setSchoolNotFound(true); return null; }
+        return r.ok ? r.json() : null;
+      })
       .then((data) => { if (data) setSchoolInfo(data); })
       .catch(() => { /* silently ignore — fall back to env var */ });
   }, [subdomain]);
@@ -146,6 +150,17 @@ function LoginPage() {
       setSubmitting(false);
     }
   };
+
+  if (schoolNotFound) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0f172a', color: '#94a3b8', fontFamily: 'sans-serif', flexDirection: 'column', gap: '16px' }}>
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span style={{ fontSize: '1.2rem', color: '#f1f5f9' }}>School not found</span>
+        <span style={{ fontSize: '0.875rem' }}>The subdomain <strong style={{ color: '#f8fafc' }}>{subdomain}</strong> is not registered.</span>
+        <span style={{ fontSize: '0.875rem' }}>Please contact your administrator.</span>
+      </div>
+    );
+  }
 
   if (isImpersonating) {
     return (
