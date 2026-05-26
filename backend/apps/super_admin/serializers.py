@@ -122,6 +122,13 @@ class SchoolTenantBaseSerializer(serializers.ModelSerializer):
             "seats",
             "staff",
             "lastActivity",
+            "principal_name",
+            "principal_email",
+            "principal_phone",
+            "campus_address",
+            "city",
+            "pin_code",
+            "affiliation_number",
         ]
         read_only_fields = ["tenant_id"]
 
@@ -162,6 +169,13 @@ class SchoolTenantUpdateSerializer(serializers.ModelSerializer):
             "student_count",
             "staff_count",
             "last_activity_at",
+            "principal_name",
+            "principal_email",
+            "principal_phone",
+            "campus_address",
+            "city",
+            "pin_code",
+            "affiliation_number",
         ]
 
     def validate_gstin(self, value):
@@ -201,11 +215,37 @@ class ProvisionSchoolRequestSerializer(serializers.Serializer):
     subdomain_url = serializers.CharField(max_length=128)
     state = serializers.CharField(max_length=64)
     board = serializers.ChoiceField(choices=["CBSE", "SSC_AP", "ICSE", "SSC_TG", "OTHER"])
-    plan = serializers.ChoiceField(choices=["trial", "premium", "enterprise", "custom"])
+    plan = serializers.CharField(max_length=32)
+
+    def validate_plan(self, value):
+        from apps.tenancy.models import SubscriptionPlan
+        valid_codes = set(SubscriptionPlan.objects.values_list('code', flat=True))
+        valid_codes.update(['trial', 'custom'])
+        if value and value not in valid_codes:
+            raise serializers.ValidationError(
+                f'"{value}" is not a valid plan. Valid options: {', '.join(sorted(valid_codes))}'
+            )
+        return value
     shard_region = serializers.CharField(max_length=64, required=False, allow_blank=True)
     storage_region = serializers.CharField(max_length=64, required=False, allow_blank=True)
     backup_retention = serializers.IntegerField(required=False, default=30, min_value=1)
     sso_method = serializers.CharField(max_length=64, required=False, default="native")
+    short_code = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
+    gstin = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
+    pan = serializers.CharField(max_length=10, required=False, allow_blank=True, default="")
+    udise_code = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
+    seats = serializers.IntegerField(required=False, allow_null=True, default=0)
+    brand_color = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
+    logo_url = serializers.CharField(max_length=512, required=False, allow_blank=True, default="")
+    # Contact & address
+    principal_name = serializers.CharField(max_length=128, required=False, allow_blank=True, default="")
+    principal_email = serializers.EmailField(max_length=128, required=False, allow_blank=True, default="")
+    principal_phone = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
+    campus_address = serializers.CharField(required=False, allow_blank=True, default="")
+    city = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
+    pin_code = serializers.CharField(max_length=6, required=False, allow_blank=True, default="")
+    # Board affiliation
+    affiliation_number = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
     # Optional admin credentials — auto-generated if omitted
     admin_username = serializers.CharField(max_length=150, required=False, allow_blank=True, default="")
     admin_password = serializers.CharField(max_length=128, required=False, allow_blank=True, default="")

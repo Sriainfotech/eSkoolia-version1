@@ -101,11 +101,13 @@ function Field({
   label,
   required,
   hint,
+  error,
   children,
 }: {
   label: string;
   required?: boolean;
   hint?: string;
+  error?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -114,7 +116,9 @@ function Field({
         {label} {required && <span className="text-[var(--danger)]">*</span>}
       </span>
       {children}
-      {hint && <span className="text-[11px] text-[var(--ink-3)]">{hint}</span>}
+      {error
+        ? <span className="text-[11px] font-medium text-[var(--danger)]">{error}</span>
+        : hint && <span className="text-[11px] text-[var(--ink-3)]">{hint}</span>}
     </label>
   );
 }
@@ -165,6 +169,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
   const [loadingCatalogs, setLoadingCatalogs] = useState(false);
 
   const [tenantId, setTenantId] = useState('');
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [planCode, setPlanCode] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(toISO(today));
   const [dueDate, setDueDate] = useState(toISO(addDays(today, 15)));
@@ -373,6 +378,15 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
       (!duplicateWarning || forceCreate);
 
   const handleSubmit = useCallback(async () => {
+    if (!isEditMode && !selectedSchool) {
+      setFormErrors({ school: 'Please select a school.' });
+      setTimeout(() => {
+        const el = document.querySelector('[data-field-error="true"]');
+        if (el) (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
+      return;
+    }
+    setFormErrors({});
     if (!canSubmit) return;
     setSubmitting(true);
     try {
@@ -537,13 +551,14 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
             <section className="mb-6">
               <SectionHead num="1" title="Billed to" />
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Field label="School" required>
+                <Field label="School" required error={formErrors.school}>
                   <select
                     title="School"
-                    className={selectCls}
+                    className={`${selectCls}${formErrors.school ? ' !border-[var(--danger)]' : ''}`}
                     value={tenantId}
-                    onChange={(e) => setTenantId(e.target.value)}
+                    onChange={(e) => { setTenantId(e.target.value); if (formErrors.school) setFormErrors(p => ({ ...p, school: '' })); }}
                     disabled={isEditMode}
+                    data-field-error={formErrors.school ? 'true' : undefined}
                   >
                     <option value="">{isEditMode ? (invoice?.school_name || invoice?.buyer_name || 'School') : 'Select a school…'}</option>
                     {schools.map((s) => (

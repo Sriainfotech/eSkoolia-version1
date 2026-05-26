@@ -6,6 +6,7 @@ This resolver supports:
 - API access: X-Tenant header (future)
 """
 import logging
+from django.db.models import Q
 from django.http import Http404
 from apps.tenancy.models import Domain, SchoolTenant
 
@@ -42,12 +43,17 @@ def get_tenant_from_request(request):
     # Check for local staging format: {subdomain}.eskoolia.local
     if ".eskoolia.local" in host:
         subdomain = host.replace(".eskoolia.local", "")
-        try:
-            domain = Domain.objects.select_related("tenant").get(domain=subdomain)
-            return domain.tenant
-        except Domain.DoesNotExist:
-            logger.warning(f"Domain not found: {subdomain}")
+        # Try bare subdomain first, then production-style domain (subdomain.eskoolia.com),
+        # since local dev URLs map to the same tenants registered under .eskoolia.com.
+        domain = (
+            Domain.objects.select_related("tenant")
+            .filter(Q(domain=subdomain) | Q(domain=f"{subdomain}.eskoolia.com"))
+            .first()
+        )
+        if domain is None:
+            logger.warning(f"Domain not found for local subdomain: {subdomain}")
             raise Http404(f"Tenant {subdomain} not found")
+        return domain.tenant
     
     # Check for production format: {subdomain}.eskoolia.app
     if ".eskoolia.app" in host:

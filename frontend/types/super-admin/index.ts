@@ -81,6 +81,15 @@ export interface SchoolTenant {
   pan?: string;
   brand_color?: string;
   logo_url?: string;
+  // Contact & address
+  principal_name?: string;
+  principal_email?: string;
+  principal_phone?: string;
+  campus_address?: string;
+  city?: string;
+  pin_code?: string;
+  // Board affiliation
+  affiliation_number?: string;
 }
 
 export interface ProvisionSchoolRequest {
@@ -100,6 +109,13 @@ export interface ProvisionSchoolRequest {
   seats?: number;
   brand_color?: string;
   logo_url?: string;
+  principal_name?: string;
+  principal_email?: string;
+  principal_phone?: string;
+  campus_address?: string;
+  city?: string;
+  pin_code?: string;
+  affiliation_number?: string;
   admin_username?: string;
   admin_password?: string;
 }

@@ -1610,3 +1610,127 @@ _DIAG_SPAM = { 'qaz','wsx','edc','rfv','tgb','yhn','ujm',
 4. Create a real school-assigned user in `narayana` tenant schema for impersonation testing.
 5. Wire `student_count` / `staff_count` into the School Detail page infrastructure panel.
 
+---
+
+## Day 9 — 2026-05-26 — Super-Admin Schools: Form Validation & Bug Fixes
+
+**Branch:** `tenancy-errors/25-05`
+
+---
+
+### 1. Bug Fix: `"pro" is not a valid choice` — Backend ChoiceField Replaced with Dynamic Validator
+
+**Problem:** Newly created subscription plan codes (e.g. `"pro"`) were rejected by the backend with `"pro" is not a valid choice` on both the provision school and update school endpoints. The serializers used `ChoiceField` with a hardcoded list `["trial", "premium", "enterprise", "custom"]` that never included dynamically created plan codes.
+
+**Files changed:**
+
+- **`backend/apps/tenancy/super_admin/serializers.py`**
+  - `ProvisionSchoolSerializer.plan`: changed from `ChoiceField(choices=["trial","premium","enterprise","custom"])` to `CharField(max_length=32)` with a `validate_plan()` method that queries `SubscriptionPlan.objects.values_list('code', flat=True)` at runtime and adds `{'trial','custom'}` as always-valid fallbacks.
+  - `SchoolTenantUpdateSerializer.plan`: same change (`required=False, allow_blank=True`).
+
+- **`backend/apps/super_admin/serializers.py`**
+  - `ProvisionSchoolRequestSerializer.plan`: same `CharField` + `validate_plan()` change.
+
+---
+
+### 2. Bug Fix: Misleading "School name and state are required" Combined Error
+
+**Problem:** When only the state was missing, the error "School name and state are required." appeared even though the school name was filled. A single combined error string was shown regardless of which fields were actually empty.
+
+**File changed:** `frontend/app/(dashboard)/super-admin/schools/page.tsx`
+
+- `handleProvisionSubmit` now builds a `fieldErrors: Record<string, string>` object and sets per-field messages:
+  - `errors.name = 'School name is required.'` when name is empty.
+  - `errors.state = 'State is required.'` when state is empty.
+- `setFieldErrors(errors)` replaces the old `setProvisionError(...)` call.
+- Auto-scroll: `document.querySelector('[data-field-error="true"]')?.scrollIntoView(...)` fires 50 ms after errors are set.
+- `setFieldErrors({})` is called on successful provision, successful edit-save, and accordion reset.
+
+---
+
+### 3. Bug Fix: Required Fields Not Highlighted / No Auto-Scroll on Validation Failure
+
+**Problem:** When the Save Changes / Add School button was clicked with empty required fields, no visual feedback was shown on the inputs — no red borders, no inline messages, and no scroll to the first error.
+
+**Files changed:** `frontend/app/(dashboard)/super-admin/schools/page.tsx`
+
+**Validation added to `handleProvisionSubmit` (both Add and Edit modes):**
+
+| Field | Condition | Error message |
+|---|---|---|
+| School name | empty | "School name is required." |
+| State | empty | "State is required." |
+| Principal name | empty | "Principal name is required." |
+| Principal email | empty or invalid format | "Principal email is required." / "Enter a valid email address." |
+| PAN | empty or wrong format | "PAN is required." / "PAN must be in format ABCDE1234F." |
+
+**Input behaviour:**
+- Each input/select gets `!border-[var(--danger)]` class and `data-field-error="true"` attribute when its error is set.
+- `Fld` wrapper renders the error message below the field via its `error` prop.
+- Each field clears its own error immediately as the user types (individual `setFieldErrors(p => ({ ...p, fieldKey: '' }))` in `onChange`).
+- Page auto-scrolls to the first `[data-field-error="true"]` element 50 ms after errors are set.
+
+**Fields updated in JSX:**
+- School name `<input>` — `fieldErrors.name` (previously done in prior session)
+- State `<select>` — `fieldErrors.state` (previously done in prior session)
+- Principal name `<input>` — `fieldErrors.principal_name`
+- Principal email `<input>` — `fieldErrors.principal_email`
+- PAN `<input>` — `fieldErrors.pan`
+
+---
+
+### 4. Bug Fix: NewPlanDrawer — No Character Limit, No Counter, No Inline Validation
+
+**Problem:** The plan name input had `maxLength={128}` with no visible counter or message. Submitting without required fields passed `if (!canSubmit) return` silently without showing which fields were invalid.
+
+**File changed:** `frontend/app/(dashboard)/super-admin/billing/NewPlanDrawer.tsx`
+
+- `Field` component updated to accept `error?: string` prop; renders error instead of hint when both are set.
+- Added `const [planErrors, setPlanErrors] = useState<Record<string, string>>({})` state.
+- Plan name `maxLength` reduced from `128` to `50`.
+- Character counter `{name.length}/50` added below the plan name input.
+- `handleSubmit` validates before calling the API:
+  - Name: required, max 50 chars.
+  - Code: required.
+  - Price: must be > 0.
+  - Features: at least one non-empty feature.
+- Invalid inputs get `!border-[var(--danger)]` class; each field's error is cleared on change.
+
+---
+
+### 5. Bug Fix: NewInvoiceDrawer — School Dropdown Not Highlighted on Validation Failure
+
+**Problem:** Clicking "Save Invoice" without selecting a school passed `if (!canSubmit) return` silently — no red border, no message on the School dropdown.
+
+**File changed:** `frontend/app/(dashboard)/super-admin/billing/NewInvoiceDrawer.tsx`
+
+- `Field` component updated to accept `error?: string` prop.
+- Added `const [formErrors, setFormErrors] = useState<Record<string, string>>({})` state.
+- `handleSubmit`: if `!isEditMode && !selectedSchool`, sets `formErrors.school = 'Please select a school.'` and auto-scrolls to `[data-field-error="true"]`; clears errors otherwise.
+- School `<select>` gets `!border-[var(--danger)]` class and `data-field-error="true"` when error is set; error is cleared on school change.
+
+---
+
+### Summary of files changed today
+
+| File | Change |
+|---|---|
+| `backend/apps/tenancy/super_admin/serializers.py` | `plan` field: ChoiceField → CharField + dynamic `validate_plan()` |
+| `backend/apps/super_admin/serializers.py` | Same change for provision serializer |
+| `frontend/app/(dashboard)/super-admin/schools/page.tsx` | Per-field errors for name, state, principal_name, principal_email, PAN; auto-scroll; red borders |
+| `frontend/app/(dashboard)/super-admin/billing/NewPlanDrawer.tsx` | `Field` error prop; `planErrors` state; maxLength 50; char counter; inline validation in `handleSubmit` |
+| `frontend/app/(dashboard)/super-admin/billing/NewInvoiceDrawer.tsx` | `Field` error prop; `formErrors` state; school dropdown red border + error message |
+
+### Still in progress
+
+- Backend migrations `0007`–`0011` still need to be applied on Neon staging.
+- Impersonation end-to-end flow not yet browser-tested with a real tenant user.
+
+### Start next with
+
+1. Apply pending Neon migrations (`0007`–`0011`).
+2. Browser test: Add School form — leave principal email + PAN empty, click Add → confirm per-field red borders and error messages appear, confirm auto-scroll to first error.
+3. Browser test: Create plan without name → confirm `"Plan name is required."` inline message and red border.
+4. Browser test: Create invoice without selecting school → confirm school dropdown turns red.
+5. Commit all changed files on `tenancy-errors/25-05`.
+

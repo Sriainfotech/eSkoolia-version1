@@ -51,7 +51,18 @@ class ProvisionSchoolSerializer(serializers.Serializer):
     subdomain_url = serializers.CharField(max_length=128)
     state = serializers.CharField(max_length=64)
     board = serializers.CharField(max_length=32)
-    plan = serializers.ChoiceField(choices=["trial", "premium", "enterprise", "custom"])
+    plan = serializers.CharField(max_length=32)
+
+    def validate_plan(self, value):
+        from apps.tenancy.models import SubscriptionPlan
+        valid_codes = set(SubscriptionPlan.objects.values_list('code', flat=True))
+        # Always allow built-in fallback values even if no catalog plans exist
+        valid_codes.update(['trial', 'custom'])
+        if value and value not in valid_codes:
+            raise serializers.ValidationError(
+                f'"{value}" is not a valid plan. Valid options: {', '.join(sorted(valid_codes))}'
+            )
+        return value
     shard_region = serializers.CharField(max_length=64, required=False, allow_blank=True)
     storage_region = serializers.CharField(max_length=64, required=False, allow_blank=True)
     backup_retention = serializers.IntegerField(required=False, min_value=1)
@@ -66,7 +77,19 @@ class ProvisionSchoolSerializer(serializers.Serializer):
 
 
 class SchoolTenantUpdateSerializer(serializers.Serializer):
-    plan = serializers.ChoiceField(choices=["trial", "premium", "enterprise", "custom"], required=False)
+    plan = serializers.CharField(max_length=32, required=False, allow_blank=True)
+
+    def validate_plan(self, value):
+        if not value:
+            return value
+        from apps.tenancy.models import SubscriptionPlan
+        valid_codes = set(SubscriptionPlan.objects.values_list('code', flat=True))
+        valid_codes.update(['trial', 'custom'])
+        if value not in valid_codes:
+            raise serializers.ValidationError(
+                f'"{value}" is not a valid plan. Valid options: {', '.join(sorted(valid_codes))}'
+            )
+        return value
     status = serializers.ChoiceField(choices=["onboarding", "active", "trial", "suspended", "archived"], required=False)
     api_access = serializers.BooleanField(required=False)
     board = serializers.CharField(max_length=32, required=False)
