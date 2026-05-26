@@ -4,6 +4,5 @@
 //   return <HrStaffPanel />;
 // }
 
-import ComingSoon from '@/components/shared/ComingSoon';
-
-export default function Page() { return <ComingSoon />; }
+import { redirect } from 'next/navigation';
+export default function Page() { redirect('/hr/onboard'); }

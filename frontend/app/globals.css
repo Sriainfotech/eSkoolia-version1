@@ -42,6 +42,34 @@ div:hover > .pin-remove-btn { opacity: 0.6 !important; }
   --danger: #b91c1c;
   --radius: 14px;
   --card-shadow: 0 24px 60px rgba(15, 23, 42, 0.08);
+  /* HR / HRMS design-system tokens */
+  --brand: #6D4AFF;
+  --strong: #4F35CC;
+  --soft: #EEEAFF;
+  --ink: #15172A;
+  --muted: #5B5E72;
+  --page: #FAFAFB;
+  --bg-1: #FFFFFF;
+  --bg-2: #F5F5FB;
+  --green: #22C55E;
+  --red: #E0463A;
+  --amber: #F59E0B;
+  --blue: #2563EB;
+  --shadow: 0 4px 12px -4px rgba(15,18,34,0.08);
+  --serif: "Playfair Display", Georgia, serif;
+  --sans: Inter, "Segoe UI", Arial, sans-serif;
+}
+@keyframes hr-fade-up {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes hr-slide-in {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes hr-pulse-brand {
+  0%, 100% { opacity: 0.85; transform: scale(0.96); }
+  50%       { opacity: 1;    transform: scale(1.04); }
 }
 
 * {

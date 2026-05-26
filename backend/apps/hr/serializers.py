@@ -9,7 +9,7 @@ from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 from rest_framework import serializers
 
-from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument
+from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, PREDEFINED_DEPARTMENT_TYPES
 
 
 class FileNameCharField(serializers.CharField):
@@ -23,11 +23,62 @@ class FileNameCharField(serializers.CharField):
         return super().to_internal_value(str(data))
 
 
+class DepartmentTypeSerializer(serializers.ModelSerializer):
+    is_predefined = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = DepartmentType
+        fields = ["id", "name", "is_predefined", "created_at"]
+        read_only_fields = ["id", "is_predefined", "created_at"]
+
+    def get_is_predefined(self, obj):
+        return False  # only custom types live in the DB
+
+    def validate_name(self, value):
+        cleaned = (value or "").strip()
+        if not cleaned:
+            raise serializers.ValidationError("Type name is required.")
+        if len(cleaned) > 50:
+            raise serializers.ValidationError("Type name must not exceed 50 characters.")
+        if not re.fullmatch(r"[A-Za-z &\-]+", cleaned):
+            raise serializers.ValidationError("Only letters, spaces, & and hyphens allowed.")
+        predefined_lower = {t.lower() for t in PREDEFINED_DEPARTMENT_TYPES}
+        if cleaned.lower() in predefined_lower:
+            raise serializers.ValidationError(
+                f'"{cleaned}" is a predefined type — select it from the dropdown instead.'
+            )
+        # Check school-scoped uniqueness (case-insensitive)
+        request = self.context.get("request")
+        school = getattr(getattr(request, "user", None), "school", None)
+        if school:
+            qs = DepartmentType.objects.filter(school=school, name__iexact=cleaned)
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(f'A custom type named "{cleaned}" already exists.')
+        return cleaned.title()
+
+
 class DepartmentSerializer(serializers.ModelSerializer):
+    PREDEFINED_TYPES = ["Academic", "Administrative", "Support", "Transport", "Finance"]
+
+    head_id = serializers.PrimaryKeyRelatedField(
+        source="head", queryset=Staff.objects.all(), allow_null=True, required=False
+    )
+    deputy_head_id = serializers.PrimaryKeyRelatedField(
+        source="deputy_head", queryset=Staff.objects.all(), allow_null=True, required=False
+    )
+    head_name = serializers.SerializerMethodField()
+    deputy_head_name = serializers.SerializerMethodField()
+
     class Meta:
         model = Department
-        fields = ["id", "school", "name", "description", "is_active", "created_at", "updated_at"]
-        read_only_fields = ["id", "school", "created_at", "updated_at"]
+        fields = [
+            "id", "school", "name", "dept_type", "description", "is_active",
+            "head_id", "deputy_head_id", "head_name", "deputy_head_name",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "school", "head_name", "deputy_head_name", "created_at", "updated_at"]
         extra_kwargs = {
             "name": {
                 "error_messages": {
@@ -35,6 +86,34 @@ class DepartmentSerializer(serializers.ModelSerializer):
                 }
             }
         }
+
+    def get_head_name(self, obj):
+        return str(obj.head) if obj.head_id else None
+
+    def get_deputy_head_name(self, obj):
+        return str(obj.deputy_head) if obj.deputy_head_id else None
+
+    def validate_dept_type(self, value):
+        cleaned = (value or "").strip()
+        if not cleaned:
+            return cleaned  # optional field
+
+        if len(cleaned) > 50:
+            raise serializers.ValidationError("Department type must not exceed 50 characters.")
+
+        if not re.fullmatch(r"[A-Za-z &\-]+", cleaned):
+            raise serializers.ValidationError(
+                "Department type can only contain letters, spaces, &, and hyphens."
+            )
+
+        # Normalise to canonical casing if it matches a predefined type
+        predefined_map = {t.lower(): t for t in self.PREDEFINED_TYPES}
+        if cleaned.lower() in predefined_map:
+            return predefined_map[cleaned.lower()]
+
+        # For custom types, title-case each word for consistency
+        return cleaned.title()
+
 
     def validate_name(self, value):
         normalized = (value or "").strip()

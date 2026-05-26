@@ -1654,3 +1654,121 @@ _DIAG_SPAM = { 'qaz','wsx','edc','rfv','tgb','yhn','ujm',
 3. Commit all 16 modified + 1 untracked file on `subdomain_login/22-05` with focused commits (backend models/migration, backend impersonate fix, frontend impersonate, frontend school detail, billing fields).
 4. Create a real school-assigned user in `narayana` tenant schema for impersonation testing.
 5. Wire `student_count` / `staff_count` into the School Detail page infrastructure panel.
+
+---
+
+## Day 9 — 2026-05-26 — HR Module: Department Head/Deputy, Error Handling & Toast UX
+
+**Branch:** `tenancy-new` (HR setup page)  
+**Author:** Gowtham
+
+---
+
+### 1. Department Head & Deputy Head — Backend FK Fields
+
+**Problem:** Departments had no way to record their head or deputy head — a core organisational requirement for school HR.
+
+**Backend — `backend/apps/hr/models.py`:**
+- Added `head = ForeignKey("Staff", null=True, blank=True, on_delete=SET_NULL, related_name="headed_departments")` to `Department`.
+- Added `deputy_head = ForeignKey("Staff", null=True, blank=True, on_delete=SET_NULL, related_name="deputy_headed_departments")` to `Department`.
+
+**Backend — `backend/apps/hr/migrations/0016_department_head_deputy_head.py`** (new, applied ✅):
+- Adds both nullable FK columns to `hr_departments`.
+
+**Backend — `backend/apps/hr/serializers.py` (`DepartmentSerializer`):**
+- Added `head_id = PrimaryKeyRelatedField(source="head", queryset=Staff.objects.all(), allow_null=True, required=False)` — writable.
+- Added `deputy_head_id = PrimaryKeyRelatedField(source="deputy_head", …)` — writable.
+- Added `head_name = SerializerMethodField()` — `str(obj.head)` or `None`.
+- Added `deputy_head_name = SerializerMethodField()` — `str(obj.deputy_head)` or `None`.
+- Meta `fields` updated: `["id", "school", "name", "dept_type", "description", "is_active", "head_id", "deputy_head_id", "head_name", "deputy_head_name", "created_at", "updated_at"]`.
+
+**Backend — `backend/apps/hr/views.py` (`DepartmentViewSet`):**
+- `queryset` updated to `Department.objects.select_related("school", "head", "deputy_head").all()` — avoids N+1 queries.
+
+---
+
+### 2. Department Head & Deputy Head — Frontend Wiring
+
+**Frontend — `frontend/types/hr.ts`:**
+- Added `head_id: number | null` and `deputy_head_id: number | null` to `Department` interface.
+- Added `head_name?: string | null` and `deputy_head_name?: string | null`.
+
+**Frontend — `frontend/hooks/useHrApi.ts`:**
+- Added `useStaffList()` → `GET /api/v1/hr/staff/?page_size=200&status=active` — fetches all active staff for dropdown population.
+
+**Frontend — `frontend/app/(dashboard)/hr/setup/page.tsx` (`InlineDeptForm`):**
+- Calls `useStaffList()` inside the form to fetch staff.
+- **Department Head** and **Deputy Head** `HrSelect` dropdowns now dynamically list all active staff.
+- Options display: `full_name` or `first_name + last_name` fallback, or `staff_no` as last resort.
+- Both fields are optional (empty = clear/no head).
+- When editing an existing department, `head_id` / `deputy_head_id` pre-select the correct staff member.
+
+---
+
+### 3. Duplicate Department Name — Proper Error Message
+
+**Problem:** Trying to create a department with a name that already exists showed the generic toast "Failed to save department" instead of a specific error.
+
+**Root cause (frontend):** `createDepartment` threw `new Error(await res.text())` — the raw JSON string — and `handleSave` used `catch { ... }` (no error variable), ignoring the thrown message entirely.
+
+**Backend** was already correct: `DepartmentViewSet.create()` catches `IntegrityError` and raises `ValidationError({"name": "Department already exists"})`. `handle_exception` extracts the first field message and returns `{"message": "Department already exists"}`.
+
+**Fix — `frontend/hooks/useHrApi.ts`:**
+- `createDepartment` and `updateDepartment` now parse the JSON response on error and throw `new Error(data.message ?? data.errors?.name?.[0] ?? "Failed to save department")`.
+
+**Fix — `frontend/app/(dashboard)/hr/setup/page.tsx` (`handleSave`):**
+- Changed `catch { toast("Failed to save department", "error"); }` → `catch (err) { toast(err instanceof Error ? err.message : "Failed to save department", "error"); }`.
+
+**Result:** Users now see **"Department already exists"** in the toast when attempting to create a duplicate.
+
+---
+
+### 4. HR Toast — Moved to Top-Right Corner
+
+**Problem:** HR toasts appeared at the bottom-right of the screen, which conflicted with other bottom-anchored UI elements.
+
+**Fix — `frontend/components/hr/HrUi.tsx` (`HrToastProvider`):**
+- Changed `fixed bottom-4 right-4` → `fixed top-4 right-4` on the toast container div.
+
+**Result:** All HR toasts (success, error, info) now appear in the top-right corner.
+
+---
+
+### Files Changed (Day 9)
+
+| File | Change |
+|---|---|
+| `backend/apps/hr/models.py` | Added `head` + `deputy_head` FK fields to `Department` |
+| `backend/apps/hr/migrations/0016_department_head_deputy_head.py` | New migration (applied ✅) |
+| `backend/apps/hr/serializers.py` | Added `head_id`, `deputy_head_id`, `head_name`, `deputy_head_name` to `DepartmentSerializer` |
+| `backend/apps/hr/views.py` | `DepartmentViewSet.queryset` now `select_related("school", "head", "deputy_head")` |
+| `frontend/types/hr.ts` | Added `head_id`, `deputy_head_id`, `head_name?`, `deputy_head_name?` to `Department` |
+| `frontend/hooks/useHrApi.ts` | Added `useStaffList()`; fixed `createDepartment` + `updateDepartment` error extraction |
+| `frontend/app/(dashboard)/hr/setup/page.tsx` | Wired head/deputy dropdowns; fixed `handleSave` to show actual error message |
+| `frontend/components/hr/HrUi.tsx` | Moved toast container from `bottom-4` to `top-4` (top-right) |
+| `frontend/types/hr.ts` | Removed duplicate `email?: string` alias from `Staff` interface (build fix) |
+
+---
+
+### Build Fix — Duplicate `email` Identifier in `Staff` Interface
+
+**Error:**
+```
+./types/hr.ts:110:3
+Type error: Duplicate identifier 'email'.
+```
+
+**Root cause:** `Staff` interface had `email?: string; // alias` at line 110 AND `email: string` again at line 157 — two declarations of the same field in the same interface.
+
+**Fix — `frontend/types/hr.ts`:**
+- Removed the `email?: string; // alias` line (line 110) — the canonical `email: string` field already existed further down in the same interface.
+
+---
+
+### Start next with
+
+1. Verify head/deputy dropdowns populate correctly on the HR Setup page in the browser.
+2. Test duplicate department name flow — confirm toast shows "Department already exists" not the generic message.
+3. Consider adding a `useStaffList` loading skeleton to the dropdowns while staff fetches.
+4. Commit all Day 9 changes on the current branch.
+

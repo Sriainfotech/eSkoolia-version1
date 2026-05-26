@@ -20,9 +20,10 @@ from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 
-from .models import Department, Designation, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument
+from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument
 from .serializers import (
     DepartmentSerializer,
+    DepartmentTypeSerializer,
     DesignationSerializer,
     LeaveDefineSerializer,
     LeaveRequestSerializer,
@@ -80,7 +81,7 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
 
 
 class DepartmentViewSet(SchoolScopedModelViewSet):
-    queryset = Department.objects.select_related("school").all()
+    queryset = Department.objects.select_related("school", "head", "deputy_head").all()
     serializer_class = DepartmentSerializer
     pagination_class = ApiPageNumberPagination
     filterset_fields = ["is_active"]
@@ -185,6 +186,88 @@ class DepartmentViewSet(SchoolScopedModelViewSet):
         instance = self.get_object()
         self.perform_destroy(instance)
         return self.success_response("Department deleted successfully", data={})
+
+
+class DepartmentTypeViewSet(SchoolScopedModelViewSet):
+    """
+    GET  /department-types/       → predefined types + school's custom types
+    POST /department-types/       → create a custom type for this school
+    DELETE /department-types/{id}/ → delete a custom type
+    """
+
+    PREDEFINED_TYPES = ["Academic", "Administrative", "Support", "Transport", "Finance"]
+
+    queryset = DepartmentType.objects.select_related("school").all()
+    serializer_class = DepartmentTypeSerializer
+    http_method_names = ["get", "post", "delete", "head", "options"]
+    permission_codes = {"*": "human_resource.departments.view"}
+
+    def list(self, request, *args, **kwargs):
+        predefined = [{"id": None, "name": t, "is_predefined": True} for t in self.PREDEFINED_TYPES]
+        custom_qs = self.get_queryset().order_by("name")
+        custom = [
+            {"id": obj.id, "name": obj.name, "is_predefined": False, "created_at": obj.created_at}
+            for obj in custom_qs
+        ]
+        return Response({"success": True, "data": predefined + custom})
+
+    def create(self, request, *args, **kwargs):
+        try:
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            self.perform_create(serializer)
+            return Response(
+                {"success": True, "message": "Department type created.", "data": serializer.data},
+                status=status.HTTP_201_CREATED,
+            )
+        except IntegrityError:
+            raise ValidationError({"name": ["This department type already exists."]})
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.delete()
+        return Response({"success": True, "message": "Department type deleted."}, status=status.HTTP_200_OK)
+
+    def _first_error_message(self, detail):
+        """Extract the first human-readable message from a DRF ValidationError detail."""
+        if isinstance(detail, dict) and detail:
+            first_val = next(iter(detail.values()))
+            if isinstance(first_val, list) and first_val:
+                return str(first_val[0])
+            if isinstance(first_val, str):
+                return first_val
+        if isinstance(detail, list) and detail:
+            return str(detail[0])
+        if isinstance(detail, str):
+            return detail
+        return "Validation failed"
+
+    def handle_exception(self, exc):
+        if isinstance(exc, (NotAuthenticated, AuthenticationFailed)):
+            return Response(
+                {"success": False, "message": "Authentication required."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        if isinstance(exc, PermissionDenied):
+            return Response(
+                {"success": False, "message": "Permission denied."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if isinstance(exc, (NotFound, Http404)):
+            return Response(
+                {"success": False, "message": "Department type not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if isinstance(exc, ValidationError):
+            return Response(
+                {
+                    "success": False,
+                    "message": self._first_error_message(exc.detail),
+                    "errors": exc.detail if isinstance(exc.detail, dict) else {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().handle_exception(exc)
 
 
 class DesignationViewSet(SchoolScopedModelViewSet):

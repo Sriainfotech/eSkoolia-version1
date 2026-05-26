@@ -186,17 +186,7 @@ export const sidebarMenu: SidebarItem[] = [
     id: "human-resource",
     name: "Human Resource",
     icon: "/icons/sidebar/human-resource.svg",
-    children: [
-      { id: "hr-departments", name: "HR Departments", route: "/hr/departments" },
-      { id: "hr-designations", name: "HR Designations", route: "/hr/designations" },
-      { id: "hr-staff", name: "Add Staff", route: "/hr/staff" },
-      { id: "hr-staff-directory", name: "Staff Directory", route: "/hr/staff-directory" },
-      { id: "hr-leave-types", name: "HR Leave Types", route: "/hr/leave-types" },
-      { id: "hr-leave-defines", name: "HR Leave Define", route: "/hr/leave-defines" },
-      { id: "hr-leave-requests", name: "HR Leave Requests", route: "/hr/leave-requests" },
-      { id: "hr-staff-attendance", name: "HR Staff Attendance", route: "/hr/staff-attendance" },
-      { id: "hr-payroll", name: "HR Payroll", route: "/hr/payroll" },
-    ],
+    route: "/hr/setup",
   },
   {
     id: "finance",
