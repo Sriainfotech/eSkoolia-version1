@@ -1512,3 +1512,145 @@ _DIAG_SPAM = { 'qaz','wsx','edc','rfv','tgb','yhn','ujm',
 **Data note:** `stream_details` was already returned by the backend serializer (`ClassSerializer` includes it) and typed in `SchoolClass` interface — no backend changes needed.
 
 **File changed:** `frontend/components/academics/foundation/panes/ClassesPane.tsx`
+
+---
+
+## Day 8 — 2026-05-25 — Impersonation Flow, School Detail Page, Billing Fields & Schools UX Fixes
+
+**Branch:** `subdomain_login/22-05`
+
+---
+
+### 1. Impersonation Flow — End-to-End Fix (Backend + Frontend)
+
+**Problem:** After a super-admin clicked "Impersonate" on a school, the handoff URL pointed to the school's subdomain but the JWT user-id lookup failed because tokens were generated in the `public` schema while the user record lives in the tenant schema. Additionally, the frontend opened the school tab with the raw `data.handoff_url` from the API — which used the server's hostname, not the configured base domain — so the URL resolved incorrectly in local dev.
+
+**Fix — Backend (both `apps/super_admin/views.py` and `apps/tenancy/super_admin/views.py`):**
+- Added `from django_tenants.utils import schema_context`.
+- Wrapped the entire user lookup + `RefreshToken.for_user()` block in `with schema_context(tenant.schema_name):` in `SchoolImpersonateView.post()`.
+- Changed `User.objects.filter(username=…, school__tenant_id=…)` → `User.objects.filter(username=…, is_active=True)` inside the context (no need for cross-schema FK join when already in the right schema).
+- Fallback user priority changed to `order_by("-is_school_admin", "-is_superuser", "id")`.
+
+**Fix — Frontend (`frontend/app/(dashboard)/super-admin/schools/page.tsx`):**
+- Impersonation URL no longer uses `data.handoff_url` from the API.
+- URL now built client-side: `${protocol}//${subdomain}.${baseDomain}${portSuffix}/login?impersonate=1&token=${data.access}&refresh=${data.refresh}` using `process.env.NEXT_PUBLIC_BASE_DOMAIN` (falls back to `window.location.hostname`).
+
+**Fix — Frontend (`frontend/app/login/page.tsx`):**
+- Added `?impersonate=1&token=ACCESS&refresh=REFRESH` handler (runs on mount, before auth checks).
+- Imports `setAuthTokens` from `@/lib/auth`, stores the access + refresh tokens, cleans the URL via `window.history.replaceState`, then does `window.location.href = '/home'` (full-page redirect avoids React Strict Mode double-invocation and ensures `AuthGate` initialises fresh).
+- Added `isImpersonating` state: while `true`, renders a full-screen spinner ("Opening school dashboard…") so the user sees feedback instead of a flash of the login form.
+
+**Fix — Frontend env (`frontend/.env.local`):**
+- Added `NEXT_PUBLIC_BASE_DOMAIN=eskoolia.local` (switch to `eskoolia.com` in production).
+
+---
+
+### 2. School Detail Page — Full Rebuild
+
+**File:** `frontend/app/(dashboard)/super-admin/schools/[tenantId]/page.tsx`
+
+**Before:** Page was a redirect stub — immediately called `router.replace('/super-admin/schools')` with a "Loading tenant…" message.
+
+**After:** Full `SchoolViewPage` component with:
+- Gradient avatar (initials from school name, colour derived from last char of `tenant_id`).
+- School name + `StatusBadge` (Active / Trial / Suspended / Onboarding / Archived).
+- Tenant ID + clickable `{subdomain}.eskoolia.com` link (external, `noopener noreferrer`).
+- Action buttons: **Edit** (links to `[tenantId]/edit/`), **Suspend** / **Reactivate** (confirm dialog + inline status update).
+- Four `SectionCard` panels:
+  - **School Information** — state, board, established year, UDISE code, medium.
+  - **Subscription & Plan** — plan, seats, API access, brand colour swatch.
+  - **Infrastructure** — shard region, storage region, backup retention, schema name.
+  - **GST & Compliance** — GSTIN, PAN, reverse charge status.
+- Sub-components defined inline: `StatusBadge`, `InfoRow`, `SectionCard`, `avatarGradient()`, `schoolInitials()`.
+- Label maps for boards (`CBSE`, `ICSE`, `SSC_TG`, `SSC_AP`), AWS regions, and GST state codes.
+
+---
+
+### 3. Billing Fields — Reverse Charge & SAC Code
+
+**Context:** Indian GST billing — invoices may carry a "Reverse Charge" flag; each subscription plan should record its SAC code.
+
+**Backend — `backend/apps/tenancy/models.py`:**
+- `SuperAdminInvoice`: added `reverse_charge = models.BooleanField(default=False)`.
+- `SubscriptionPlan`: added `sac_code = models.CharField(max_length=16, default='998313', blank=True)`.
+- `auto_create_schema = False` set on `SchoolTenant` — schema provisioning is now explicit (prevents `CommandError` when `django_tenants` is not fully configured, e.g. SQLite or test runs without multi-tenancy).
+
+**Backend — new migration `tenancy/0011_invoice_reverse_charge_plan_sac_code.py`:**
+- `AddField reverse_charge` on `SuperAdminInvoice`.
+- `AddField sac_code` on `SubscriptionPlan`.
+- Depends on `tenancy/0010_domain_tenant`.
+
+**Backend — `backend/apps/super_admin/serializers.py`:**
+- `InvoiceSerializer`: added `"reverse_charge"` to `fields`.
+- `InvoiceCreateSerializer`: added `reverse_charge = BooleanField(default=False)` + cross-field `validate()`: due date cannot be before invoice date.
+- `SubscriptionPlanSerializer`, `SubscriptionPlanCreateSerializer`, `SubscriptionPlanUpdateSerializer`: added `sac_code` field (default `'998313'`).
+
+**Backend — `backend/apps/super_admin/views.py` and `backend/apps/tenancy/super_admin/views.py`:**
+- `BillingInvoiceListCreateView` / `BillingInvoicesView`: pass `reverse_charge` from request data to `SuperAdminInvoice.objects.create()`.
+- `BillingPlansView`: pass `sac_code` from request data to `SubscriptionPlan.objects.create()`.
+
+**Backend — `backend/apps/tenancy/super_admin/serializers.py`:**
+- Added `reverse_charge` field to the invoice serializer.
+
+**Frontend — `frontend/app/(dashboard)/super-admin/billing/NewInvoiceDrawer.tsx`:**
+- Added "Reverse Charge" toggle field in the invoice creation drawer.
+
+**Frontend — `frontend/app/(dashboard)/super-admin/billing/NewPlanDrawer.tsx`:**
+- Added `sac_code` text input in the plan creation drawer (default `998313`).
+
+**Frontend — `frontend/app/(dashboard)/super-admin/billing/page.tsx` and `frontend/lib/api/super-admin/billing.ts` and `frontend/types/super-admin/index.ts`:**
+- `reverse_charge` and `sac_code` propagated through API client and TypeScript types.
+
+---
+
+### 4. Schools List — UX & Correctness Fixes
+
+**File:** `frontend/app/(dashboard)/super-admin/schools/page.tsx`
+
+**a) MonthYearPicker component (new):**
+- Replaced the static `<select>` for "Academic year start" with a custom `MonthYearPicker` — floating panel with a scrollable year column (current year ±3/+10) and a 4-column month grid.
+- Duplicate-entry guard (amber warning when the composed label already exists in the list).
+- Add/Cancel buttons let users append custom academic years; new entries prepend to the `acadYears` array.
+
+**b) Reactivate action added:**
+- `ConfirmDialog` extended with `type: 'reactivate'` — green confirm button, message: "will be reactivated immediately — all users will regain access".
+- `handleConfirmAction`: `reactivate` branch calls `updateSchool(tenantId, { status: 'active' })` and shows success toast.
+- Schools row action menu now shows **Reactivate** (instead of or alongside Restore) for suspended schools.
+
+**c) Impersonation URL fix** (see §1 above).
+
+**d) Plan dropdown cleaned up:**
+- Removed `"starter"` and `"standard"` options (not in use); kept `trial`, `premium`, `enterprise`, `custom`.
+
+**e) Safety guard on confirm actions:**
+- Before running suspend/archive/restore/reactivate, checks `school.tenant_id` is non-empty; shows a descriptive toast and aborts if missing.
+
+**f) Form field improvements:**
+- `subdomain_url` input: `maxLength={63}` (Postgres schema name limit).
+- Established year input: `min={1800}` / `max={currentYear}`.
+- `gst_registered` field added to `editFields` state (seeded from whether `school.gstin` is non-empty on open).
+
+---
+
+### 5. Settings — Silence django-tenants W005
+
+**File:** `backend/config/settings/base.py`
+- Added `SILENCED_SYSTEM_CHECKS = ["tenancy.W005"]` — suppresses the django-tenants warning about `auto_create_schema=False`, which is intentional in this project (provisioning is done explicitly via management commands).
+
+---
+
+### Still in progress / known follow-ups
+
+- Migration `0011_invoice_reverse_charge_plan_sac_code` is uncommitted — needs to be applied on dev + staging Neon.
+- All 16 modified files + 1 untracked migration are uncommitted on `subdomain_login/22-05`.
+- The tenant detail page (`[tenantId]/page.tsx`) does not yet surface student/staff counts — those fields (`student_count`, `staff_count`) exist in `SchoolTenantDetailSerializer` and can be added to the Infrastructure panel.
+- `amarajyothi.eskoolia.local` Domain record + activation not yet created (deferred from Day 7).
+- The impersonation flow has been implemented but not yet end-to-end verified with a real tenant user (needs a school-assigned user in the Narayana schema).
+
+### Start tomorrow with
+
+1. Apply `tenancy/0011_invoice_reverse_charge_plan_sac_code` on dev + staging Neon.
+2. End-to-end test impersonation: super-admin → click Impersonate on `narayana` school → new tab opens `narayana.eskoolia.local:3000/login?impersonate=1&…` → spinner → auto-redirect to `/home` as the school admin.
+3. Commit all 16 modified + 1 untracked file on `subdomain_login/22-05` with focused commits (backend models/migration, backend impersonate fix, frontend impersonate, frontend school detail, billing fields).
+4. Create a real school-assigned user in `narayana` tenant schema for impersonation testing.
+5. Wire `student_count` / `staff_count` into the School Detail page infrastructure panel.

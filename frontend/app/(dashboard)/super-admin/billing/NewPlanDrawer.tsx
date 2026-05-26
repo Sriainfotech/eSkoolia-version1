@@ -83,6 +83,7 @@ export default function NewPlanDrawer({ open, onClose, onCreated, existing }: Ne
   const [popular, setPopular] = useState(false);
   const [sortOrder, setSortOrder] = useState<number>(50);
   const [features, setFeatures] = useState<string[]>(['']);
+  const [sacCode, setSacCode] = useState('998313');
   const [submitting, setSubmitting] = useState(false);
 
   // Reset on open (or prefill when editing)
@@ -98,6 +99,7 @@ export default function NewPlanDrawer({ open, onClose, onCreated, existing }: Ne
       setPopular(!!existing.popular);
       setSortOrder(existing.sort_order ?? 50);
       setFeatures(existing.features && existing.features.length ? [...existing.features] : ['']);
+      setSacCode(existing.sac_code || '998313');
     } else {
       setName('');
       setCode('');
@@ -108,6 +110,7 @@ export default function NewPlanDrawer({ open, onClose, onCreated, existing }: Ne
       setPopular(false);
       setSortOrder(50);
       setFeatures(['']);
+      setSacCode('998313');
     }
   }, [open, existing]);
 
@@ -155,6 +158,7 @@ export default function NewPlanDrawer({ open, onClose, onCreated, existing }: Ne
         popular,
         sort_order: sortOrder,
         features: cleanFeatures,
+        sac_code: sacCode || '998313',
         is_active: true,
       };
       const saved = isEdit
@@ -307,9 +311,20 @@ export default function NewPlanDrawer({ open, onClose, onCreated, existing }: Ne
                 <Field label="Currency">
                   <input title="Currency" className={inputCls} value="INR" readOnly />
                 </Field>
+                <Field label="SAC code" hint="6–8 digit service accounting code (default: 998313).">
+                  <input
+                    title="SAC code"
+                    className={monoInputCls}
+                    value={sacCode}
+                    inputMode="numeric"
+                    maxLength={8}
+                    onChange={(e) => setSacCode(e.target.value.replace(/\D/g, ''))}
+                    placeholder="998313"
+                  />
+                </Field>
               </div>
               <p className="mt-2 text-[11.5px] text-[var(--ink-3)]">
-                GST 18% under SAC 998313 will be applied automatically on invoices that use this plan.
+                GST 18% under SAC {sacCode || '998313'} will be applied automatically on invoices that use this plan.
               </p>
             </section>
 

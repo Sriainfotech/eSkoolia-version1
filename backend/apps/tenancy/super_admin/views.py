@@ -8,6 +8,7 @@ from django.core.cache import cache
 from django.db import connection
 from django.db.models import Count, Q, Sum
 from django.shortcuts import get_object_or_404
+from django_tenants.utils import schema_context
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import status
@@ -513,6 +514,7 @@ class BillingInvoicesView(SuperAdminBaseView):
             },
             notes=payload.get("notes", ""),
             terms_conditions=payload.get("terms_conditions", ""),
+            reverse_charge=payload.get("reverse_charge", False),
         )
 
         audit_super_admin_action(
@@ -1057,26 +1059,31 @@ class SchoolImpersonateView(SuperAdminBaseView):
 
         target_username = request.data.get("username")
         target = None
-        if target_username:
-            target = User.objects.filter(username=target_username, school__tenant_id=tenant_id).first()
-        if target is None:
-            target = (
-                User.objects.filter(school__tenant_id=tenant_id, is_staff=True, is_active=True)
-                .order_by("-is_superuser", "id")
-                .first()
-            )
-        if target is None:
-            return Response(
-                {"detail": "No active staff user available for impersonation in this tenant."},
-                status=status.HTTP_404_NOT_FOUND,
-            )
 
-        refresh = RefreshToken.for_user(target)
-        refresh["impersonated_by"] = request.user.username
-        refresh["tenant_id"] = tenant.tenant_id
-        access = refresh.access_token
-        access["impersonated_by"] = request.user.username
-        access["tenant_id"] = tenant.tenant_id
+        # Look up user AND generate tokens inside the tenant schema so the JWT
+        # user-id resolves correctly when the token is later validated on the
+        # tenant's own domain (e.g. mastermind.eskoolia.local:8000).
+        with schema_context(tenant.schema_name):
+            if target_username:
+                target = User.objects.filter(username=target_username, is_active=True).first()
+            if target is None:
+                target = (
+                    User.objects.filter(is_active=True)
+                    .order_by("-is_school_admin", "-is_superuser", "id")
+                    .first()
+                )
+            if target is None:
+                return Response(
+                    {"detail": "No active staff user available for impersonation in this tenant."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            refresh = RefreshToken.for_user(target)
+            refresh["impersonated_by"] = request.user.username
+            refresh["tenant_id"] = tenant.tenant_id
+            access = refresh.access_token
+            access["impersonated_by"] = request.user.username
+            access["tenant_id"] = tenant.tenant_id
 
         scheme = "https" if request.is_secure() else "http"
         host = request.get_host().split(":")[0]

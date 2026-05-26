@@ -23,11 +23,15 @@ const STATE_CODE: Record<string, string> = {
   'Goa': '30', 'Assam': '18', 'Manipur': '14', 'Meghalaya': '17',
   'Tripura': '16', 'Sikkim': '11',
 };
+// Reverse map: state code → state name (e.g. '29' → 'Karnataka')
+const CODE_STATE: Record<string, string> = Object.fromEntries(
+  Object.entries(STATE_CODE).map(([name, code]) => [code, name]),
+);
 
 const SELLER_DEFAULTS = {
   name: 'Eskoolia Technologies Pvt Ltd',
-  gstin: '29AABCE1234F1ZS',
-  state: 'Karnataka',
+  gstin: '36AABCE1234F1ZS',
+  state: 'Telangana',
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -333,7 +337,10 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
     [lines],
   );
   const gstPercent = plans?.gst_percent ?? 18;
-  const buyerState = selectedSchool?.state || invoice?.buyer_state || '';
+  // Schools store state as a numeric code (e.g. '29') or a name ('Karnataka').
+  // Normalise to state name so comparison with sellerState (always a name) works.
+  const buyerStateRaw = selectedSchool?.state || invoice?.buyer_state || '';
+  const buyerState = CODE_STATE[buyerStateRaw] || buyerStateRaw;
   const sellerState = SELLER_DEFAULTS.state;
   const isInterState = !!buyerState && buyerState.trim().toLowerCase() !== sellerState.trim().toLowerCase();
   const igst = isInterState ? +(subtotal * (gstPercent / 100)).toFixed(2) : 0;
@@ -354,10 +361,11 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
 
   // Validation
   const canSubmit = isEditMode
-    ? !!invoice && !!dueDate && !submitting
+    ? !!invoice && !!dueDate && (!invoice.invoice_date || dueDate >= invoice.invoice_date) && !submitting
     : !!selectedSchool &&
       !!invoiceDate &&
       !!dueDate &&
+      dueDate >= invoiceDate &&
       lines.length > 0 &&
       lines.every((l) => l.description.trim() && (Number(l.quantity) || 0) > 0 && (Number(l.unit_price) || 0) >= 0) &&
       subtotal > 0 &&
@@ -411,7 +419,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
         seller_state: SELLER_DEFAULTS.state,
         buyer_name: selectedSchool.name,
         buyer_gstin: selectedSchool.gstin || '',
-        buyer_state: selectedSchool.state || '',
+        buyer_state: buyerState,
         line_items: lineItems,
         tax_breakdown: {
           subtotal: +subtotal.toFixed(2),
@@ -424,6 +432,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
         },
         notes: notes.trim() || undefined,
         terms_conditions: terms.trim() || undefined,
+        reverse_charge: reverseCharge,
       } as unknown as Partial<Invoice>);
 
       toast.success(`Invoice ${created.invoice_number} ${statusValue === 'sent' ? 'sent' : 'saved as draft'}.`);
@@ -586,7 +595,7 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
                   <input
                     title="State"
                     className={inputCls}
-                    value={selectedSchool?.state || invoice?.buyer_state || ''}
+                    value={buyerState}
                     readOnly
                     placeholder="Auto from school"
                   />
@@ -657,7 +666,14 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
                     type="date"
                     className={`${inputCls} ${isEditMode ? 'cursor-not-allowed bg-[var(--bg-3)] text-[var(--ink-2)]' : ''}`}
                     value={invoiceDate}
-                    onChange={(e) => setInvoiceDate(e.target.value)}
+                    onChange={(e) => {
+                      const newInvoiceDate = e.target.value;
+                      setInvoiceDate(newInvoiceDate);
+                      // Keep due date at least on the invoice date
+                      if (newInvoiceDate && dueDate && dueDate < newInvoiceDate) {
+                        setDueDate(newInvoiceDate);
+                      }
+                    }}
                     readOnly={isEditMode}
                   />
                 </Field>
@@ -667,7 +683,12 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
                     type="date"
                     className={inputCls}
                     value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
+                    min={invoiceDate}
+                    onChange={(e) => {
+                      // Silently clamp: never allow a date before invoice date
+                      const picked = e.target.value;
+                      setDueDate(invoiceDate && picked < invoiceDate ? invoiceDate : picked);
+                    }}
                   />
                 </Field>
                 <Field label="Status">
@@ -747,7 +768,9 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
                               title="SAC code"
                               className={`${monoInputCls} h-9 ${isEditMode ? 'cursor-not-allowed bg-[var(--bg-3)]' : ''}`}
                               value={line.sac_code}
-                              onChange={(e) => updateLine(idx, { sac_code: e.target.value })}
+                              inputMode="numeric"
+                              maxLength={8}
+                              onChange={(e) => updateLine(idx, { sac_code: e.target.value.replace(/\D/g, '') })}
                               readOnly={isEditMode}
                             />
                           </td>
