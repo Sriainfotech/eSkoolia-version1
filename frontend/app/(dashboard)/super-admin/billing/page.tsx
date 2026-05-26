@@ -68,7 +68,21 @@ function fmtDate(iso?: string) {
 }
 
 function isInterState(invoice: Invoice) {
-  return (invoice.seller_state ?? '').trim().toLowerCase() !== (invoice.buyer_state ?? '').trim().toLowerCase();
+  // Normalise state codes ("29") to names ("Karnataka") for backward-compat
+  // with invoices that stored the numeric state code rather than the name.
+  const codeMap: Record<string, string> = {
+    '37': 'andhra pradesh', '12': 'arunachal pradesh', '18': 'assam', '10': 'bihar',
+    '22': 'chhattisgarh', '07': 'delhi', '30': 'goa', '24': 'gujarat', '06': 'haryana',
+    '02': 'himachal pradesh', '20': 'jharkhand', '29': 'karnataka', '32': 'kerala',
+    '23': 'madhya pradesh', '27': 'maharashtra', '21': 'odisha', '03': 'punjab',
+    '08': 'rajasthan', '11': 'sikkim', '33': 'tamil nadu', '36': 'telangana',
+    '16': 'tripura', '09': 'uttar pradesh', '05': 'uttarakhand', '19': 'west bengal',
+  };
+  const norm = (s?: string) => {
+    const t = (s ?? '').trim();
+    return (codeMap[t] ?? t).toLowerCase();
+  };
+  return norm(invoice.seller_state) !== norm(invoice.buyer_state);
 }
 
 function stateCode(name?: string): string {
@@ -431,7 +445,7 @@ function TaxInvoiceCard({
             </p>
             <p className="text-[11px] text-[var(--ink-3)]">{inter ? 'Inter-state supply' : 'Intra-state supply'}</p>
             <p className="mt-1 text-[10.5px] text-[var(--ink-3)]">
-              Reverse charge <span className="text-[var(--ink-1)]">� No</span>
+              Reverse charge <span className="text-[var(--ink-1)]">— {invoice.reverse_charge ? 'Yes' : 'No'}</span>
             </p>
             <p className="text-[10.5px] text-[var(--ink-3)]">
               Currency <span className="text-[var(--ink-1)]">� INR</span>
@@ -516,7 +530,7 @@ function TaxInvoiceCard({
         <div className="mt-3 text-[11px] text-[var(--ink-3)]">
           <p className="text-[9.5px] font-bold uppercase tracking-[0.1em]">Notes</p>
           <p className="mt-1 leading-snug">
-            Whether tax payable under reverse charge � No. This is a computer-generated invoice; signature not required if digitally signed.
+            Whether tax payable under reverse charge — {invoice.reverse_charge ? 'Yes' : 'No'}. This is a computer-generated invoice; signature not required if digitally signed.
           </p>
         </div>
       </div>

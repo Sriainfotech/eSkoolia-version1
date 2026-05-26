@@ -219,6 +219,7 @@ export interface Invoice {
   // Metadata
   notes?: string;
   terms_conditions?: string;
+  reverse_charge?: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -257,6 +258,7 @@ export interface SubscriptionPlan {
   description: string;
   features: string[];
   sort_order?: number;
+  sac_code?: string;
 }
 
 export interface PlansCatalog {

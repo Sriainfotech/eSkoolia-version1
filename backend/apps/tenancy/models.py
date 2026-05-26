@@ -71,7 +71,11 @@ class SchoolTenant(TenantMixin, models.Model):
     # django-tenants uses `schema_name` on TenantMixin. Keep it explicit
     schema_name = models.CharField(max_length=63, unique=True)
 
-    auto_create_schema = True
+    # Schema provisioning is handled explicitly by management commands;
+    # letting TenantMixin.save() call migrate_schemas automatically causes
+    # CommandError when django_tenants is not fully configured (SQLite / no
+    # multi-tenancy).
+    auto_create_schema = False
 
     class Meta:
         db_table = "school_tenants"
@@ -424,6 +428,7 @@ class SuperAdminInvoice(models.Model):
     tax_breakdown = models.JSONField(default=dict, blank=True)
     notes = models.TextField(blank=True)
     terms_conditions = models.TextField(blank=True)
+    reverse_charge = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -466,6 +471,7 @@ class SubscriptionPlan(models.Model):
     features = models.JSONField(default=list, blank=True)
     is_active = models.BooleanField(default=True, db_index=True)
     sort_order = models.PositiveIntegerField(default=0, db_index=True)
+    sac_code = models.CharField(max_length=16, default='998313', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

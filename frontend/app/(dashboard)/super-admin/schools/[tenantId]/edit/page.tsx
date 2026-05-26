@@ -61,6 +61,7 @@ export default function EditSchoolPage({ params }: { params: { tenantId: string 
     board:             'OTHER',
     state:             '',
     region:            '',
+    gst_registered:    'yes',
     gstin:             '',
     pan:               '',
     udise_code:        '',
@@ -90,6 +91,7 @@ export default function EditSchoolPage({ params }: { params: { tenantId: string 
         board:            data.board            ?? 'OTHER',
         state:            data.state            ?? '',
         region:           (data.region as string) ?? '',
+        gst_registered:   data.gstin ? 'yes' : 'no',
         gstin:            data.gstin            ?? '',
         pan:              data.pan              ?? '',
         udise_code:       (data.udiseCode as string) ?? '',
@@ -202,7 +204,7 @@ export default function EditSchoolPage({ params }: { params: { tenantId: string 
           </Field>
           <Field label="Subdomain URL">
             <input className={inputCls} value={form.subdomain_url}
-              onChange={e => set('subdomain_url', e.target.value.toLowerCase())} placeholder="dps-noida" />
+              onChange={e => set('subdomain_url', e.target.value.toLowerCase())} placeholder="dps-noida" maxLength={63} />
           </Field>
         </div>
       </div>
@@ -289,7 +291,7 @@ export default function EditSchoolPage({ params }: { params: { tenantId: string 
           </Field>
           <Field label="UDISE Code">
             <input className={monoInputCls} value={form.udise_code}
-              onChange={e => set('udise_code', e.target.value)} placeholder="36201012801" maxLength={11} />
+              onChange={e => set('udise_code', e.target.value.replace(/\D/g, ''))} placeholder="36201012801" maxLength={11} inputMode="numeric" />
           </Field>
         </div>
       </div>
@@ -298,9 +300,12 @@ export default function EditSchoolPage({ params }: { params: { tenantId: string 
       <div className="sa-panel p-5">
         <SectionHead num="04">GST &amp; legal</SectionHead>
         <div className="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
-          <Field label="GSTIN">
-            <input className={monoInputCls} value={form.gstin}
-              onChange={e => set('gstin', e.target.value.toUpperCase())} placeholder="36AAACE9988K1ZP" maxLength={15} />
+          <Field label="GST registration">
+            <select className={selectCls} value={form.gst_registered} title="GST registration"
+              onChange={e => set('gst_registered', e.target.value)}>
+              <option value="yes">GST-registered</option>
+              <option value="no">Unregistered (exempt)</option>
+            </select>
           </Field>
           <Field label="PAN">
             <input className={monoInputCls} value={form.pan}

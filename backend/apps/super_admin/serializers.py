@@ -267,6 +267,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "tax_breakdown",
             "notes",
             "terms_conditions",
+            "reverse_charge",
             "created_at",
             "updated_at",
         ]
@@ -292,6 +293,15 @@ class InvoiceCreateSerializer(serializers.Serializer):
     tax_breakdown = serializers.DictField(required=False)
     notes = serializers.CharField(required=False, allow_blank=True)
     terms_conditions = serializers.CharField(required=False, allow_blank=True)
+    reverse_charge = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, data):
+        if data.get("due_date") and data.get("invoice_date"):
+            if data["due_date"] < data["invoice_date"]:
+                raise serializers.ValidationError(
+                    {"due_date": "Due date cannot be before the invoice date."}
+                )
+        return data
 
 
 class InvoiceUpdateSerializer(serializers.Serializer):
@@ -325,6 +335,7 @@ class SubscriptionPlanSerializer(serializers.ModelSerializer):
             "features",
             "is_active",
             "sort_order",
+            "sac_code",
         ]
 
 
@@ -345,6 +356,7 @@ class SubscriptionPlanCreateSerializer(serializers.Serializer):
     )
     sort_order = serializers.IntegerField(required=False, min_value=0, default=0)
     is_active = serializers.BooleanField(required=False, default=True)
+    sac_code = serializers.CharField(max_length=16, required=False, default='998313', allow_blank=True)
 
     def validate(self, attrs):
         code = (attrs.get("code") or "").strip()
@@ -376,6 +388,7 @@ class SubscriptionPlanUpdateSerializer(serializers.Serializer):
     )
     sort_order = serializers.IntegerField(required=False, min_value=0)
     is_active = serializers.BooleanField(required=False)
+    sac_code = serializers.CharField(max_length=16, required=False, allow_blank=True)
 
 
 class BillingMrrSerializer(serializers.Serializer):

@@ -108,6 +108,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "tax_breakdown",
             "notes",
             "terms_conditions",
+            "reverse_charge",
             "created_at",
             "updated_at",
         ]
@@ -128,6 +129,15 @@ class InvoiceCreateSerializer(serializers.Serializer):
     line_items = serializers.ListField(child=serializers.DictField(), allow_empty=False)
     notes = serializers.CharField(required=False, allow_blank=True)
     terms_conditions = serializers.CharField(required=False, allow_blank=True)
+    reverse_charge = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, data):
+        if data.get("due_date") and data.get("invoice_date"):
+            if data["due_date"] < data["invoice_date"]:
+                raise serializers.ValidationError(
+                    {"due_date": "Due date cannot be before the invoice date."}
+                )
+        return data
 
 
 class AuditEventSerializer(serializers.ModelSerializer):
