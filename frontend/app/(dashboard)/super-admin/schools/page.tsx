@@ -1049,7 +1049,7 @@ export default function SuperAdminSchoolsPage() {
           if (accAddOpen && editSchool) {
             setEditSchool(null);
             setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
-            setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '' });
+            setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: '' });
             setLogoFile(null);
             setLogoPreview(null);
             setSelectedColor(PALETTE_COLORS[0]!.hex);
@@ -1862,8 +1862,8 @@ export default function SuperAdminSchoolsPage() {
                               { title: 'Archive',     icon: <Archive size={13} />,      action: () => setConfirmDialog({ type: 'archive', school }) },
                             ]).map(btn => (
                               <button key={btn.title} type="button" title={btn.title}
-                                disabled={('loading' in btn && btn.loading) || ('disabled' in btn && btn.disabled)}
-                                onClick={e => { e.stopPropagation(); if (!('disabled' in btn && btn.disabled)) btn.action(); }}
+                                disabled={('loading' in btn && btn.loading === true) || ('disabled' in btn && btn.disabled === true)}
+                                onClick={e => { e.stopPropagation(); if (!('disabled' in btn && btn.disabled === true)) btn.action(); }}
                                 className="inline-flex h-7 w-7 items-center justify-center rounded-[7px] border border-transparent bg-transparent text-[var(--ink-3)] transition-all hover:border-[var(--bd)] hover:bg-[var(--bg-2)] hover:text-[var(--ink-1)] disabled:opacity-40"
                               >
                                 {btn.icon}
