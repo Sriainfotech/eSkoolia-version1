@@ -1637,3 +1637,81 @@ class BillingInvoiceReminderView(SuperAdminBaseAPIView):
                 "reminder_recorded": True,
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# LLM Access Management (Tasks 4 & 5)
+# ---------------------------------------------------------------------------
+
+class SchoolLLMListView(SuperAdminBaseAPIView):
+    """GET /api/v1/super-admin/llm/schools/
+    List all School records with their LLM access status.
+    Supports ?llm_enabled=true|false filter.
+    """
+
+    def get(self, request):
+        qs = School.objects.select_related("llm_enabled_by").order_by("name")
+
+        llm_param = request.query_params.get("llm_enabled")
+        if llm_param is not None:
+            qs = qs.filter(llm_enabled=(llm_param.lower() == "true"))
+
+        # Build name → tenant_id mapping so the frontend can key by tenant_id
+        tenant_by_name = dict(
+            self._public_queryset(SchoolTenant).values_list("name", "tenant_id")
+        )
+
+        data = [
+            {
+                "id": s.id,
+                "name": s.name,
+                "code": s.code,
+                "tenant_id": tenant_by_name.get(s.name, ""),
+                "llm_enabled": s.llm_enabled,
+                "llm_enabled_at": s.llm_enabled_at,
+                "llm_enabled_by": s.llm_enabled_by.username if s.llm_enabled_by_id else None,
+                "is_active": s.is_active,
+            }
+            for s in qs
+        ]
+        return Response({"count": len(data), "results": data})
+
+
+class ToggleSchoolLLMView(SuperAdminBaseAPIView):
+    """POST /api/v1/super-admin/llm/schools/<school_id>/
+    Enable or disable LLM access for a school.
+    Body: {"enabled": true|false}
+    """
+
+    def post(self, request, school_id: int):
+        enabled = bool(request.data.get("enabled"))
+        school = get_object_or_404(School, pk=school_id)
+
+        school.llm_enabled = enabled
+        school.llm_enabled_at = timezone.now() if enabled else None
+        school.llm_enabled_by = request.user if enabled else None
+        school.save(update_fields=["llm_enabled", "llm_enabled_at", "llm_enabled_by"])
+
+        log_audit(
+            action="llm.access_enabled" if enabled else "llm.access_disabled",
+            tenant_id=school.code,
+            status="success",
+            actor_user=request.user,
+            actor_ip=self._client_ip(request),
+            details={
+                "school_id": school.id,
+                "school_name": school.name,
+                "llm_enabled": enabled,
+            },
+        )
+
+        return Response(
+            {
+                "school_id": school.id,
+                "school_name": school.name,
+                "llm_enabled": school.llm_enabled,
+                "llm_enabled_at": school.llm_enabled_at,
+                "llm_enabled_by": request.user.username if enabled else None,
+            },
+            status=status.HTTP_200_OK,
+        )

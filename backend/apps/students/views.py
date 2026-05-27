@@ -1,3 +1,4 @@
+from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 import logging
 import csv
@@ -938,6 +939,8 @@ class StudentViewSet(TenantScopedModelViewSet):
     serializer_class = StudentSerializer
     pagination_class = ApiPageNumberPagination
     permission_codes = {
+        # NOTE: perform_create is overridden below to auto-create a User login
+        # account for every new student (Task 6 — LLM integration).
         "list": "student_info.student_list.view",
         "retrieve": "student_info.student_list.view",
         "create": "student_info.add_student.view",
@@ -957,6 +960,63 @@ class StudentViewSet(TenantScopedModelViewSet):
         "next_roll_no": "student_info.add_student.view",
         "sections_summary": "student_info.add_student.view",
     }
+
+    # ------------------------------------------------------------------
+    # Task 6 (LLM integration): auto-create a User login on admission
+    # ------------------------------------------------------------------
+
+    def _auto_create_student_user(self, student):
+        """Create a User account for the student and link student.user to it.
+
+        Username format:  {admission_no}_{school_code}  (lowercase, max 150 chars)
+        Default password: date of birth as DDMMYYYY, or admission_no if DOB absent.
+        must_change_password is set so the student is forced to change on first login.
+        Failures are logged as warnings; they never rollback the student record.
+        """
+        User = get_user_model()
+        try:
+            student_school = student.school
+            school_code = (student_school.code if student_school else "school").lower()
+            base_username = f"{student.admission_no}_{school_code}"[:150]
+            username = base_username
+            counter = 1
+            while User.objects.filter(username=username).exists():
+                username = f"{base_username}_{counter}"[:150]
+                counter += 1
+
+            default_password = (
+                student.date_of_birth.strftime("%d%m%Y")
+                if student.date_of_birth
+                else student.admission_no
+            )
+
+            user = User(
+                username=username,
+                first_name=student.first_name,
+                last_name=student.last_name,
+                email=student.email or "",
+                school=student_school,
+                must_change_password=True,
+            )
+            user.set_password(default_password)
+            user.save()
+
+            student.user = user
+            student.save(update_fields=["user"])
+        except Exception:
+            logger.warning(
+                "Auto-create user failed for student admission_no=%s; "
+                "student saved without login account.",
+                student.admission_no,
+                exc_info=True,
+            )
+
+    def perform_create(self, serializer):
+        school = self.request.user.school
+        if not school and getattr(self.request, "school", None):
+            school = self.request.school
+        student = serializer.save(school=school) if school else serializer.save()
+        self._auto_create_student_user(student)
 
     def get_serializer_class(self):
         if getattr(self, "action", None) == "list":

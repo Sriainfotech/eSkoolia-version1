@@ -90,6 +90,9 @@ export interface SchoolTenant {
   pin_code?: string;
   // Board affiliation
   affiliation_number?: string;
+  // LLM access
+  id?: number;
+  llm_enabled?: boolean;
 }
 
 export interface ProvisionSchoolRequest {

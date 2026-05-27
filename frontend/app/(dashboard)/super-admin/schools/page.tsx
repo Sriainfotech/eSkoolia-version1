@@ -9,7 +9,8 @@ import {
   Edit2, ExternalLink, FileText, Filter, Info, Pause, Plus, RefreshCw, RotateCcw, Shield, Trash2,
   Users, BarChart2, DollarSign, Bell, X,
 } from 'lucide-react';
-import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSchool, uploadSchoolLogo } from '@/lib/api/super-admin/schools';
+import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSchool, uploadSchoolLogo, getLLMStates, toggleSchoolLLM } from '@/lib/api/super-admin/schools';
+import type { LLMSchoolState } from '@/lib/api/super-admin/schools';
 import { getPlans } from '@/lib/api/super-admin/billing';
 import { apiRequestWithRefreshResponse } from '@/lib/api-auth';
 import type {
@@ -671,6 +672,8 @@ export default function SuperAdminSchoolsPage() {
 
 
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
+  const [llmStates, setLlmStates] = useState<Map<string, LLMSchoolState>>(new Map());
+  const [llmToggling, setLlmToggling] = useState<Set<string>>(new Set());
   const [confirmDialog, setConfirmDialog] = useState<{ type: 'suspend' | 'archive' | 'restore' | 'reactivate' | 'permanent_delete'; school: SchoolTenant } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [editSchool, setEditSchool] = useState<SchoolTenant | null>(null);
@@ -732,6 +735,7 @@ export default function SuperAdminSchoolsPage() {
   }, [page, search, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
 
   useEffect(() => { void loadSchools(); }, [loadSchools]);
+  useEffect(() => { getLLMStates().then(setLlmStates).catch(() => {}); }, []);
   useEffect(() => { setPage(1); }, [search, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
 
   // Fetch global stats — extracted so it can be re-called after any status change
@@ -886,6 +890,23 @@ export default function SuperAdminSchoolsPage() {
       setProvisioning(false);
     }
   }, [editSchool, editFields, loadSchools, loadGlobalStats, provisionForm]);
+
+  const handleLLMToggle = useCallback(async (school: SchoolTenant) => {
+    const llm = llmStates.get(school.tenant_id);
+    if (!llm) return;
+    const newVal = !llm.llm_enabled;
+    setLlmToggling(s => new Set(s).add(school.tenant_id));
+    setLlmStates(m => { const n = new Map(m); n.set(school.tenant_id, { ...llm, llm_enabled: newVal }); return n; });
+    try {
+      await toggleSchoolLLM(llm.id, newVal);
+      toast.success(`LLM ${newVal ? 'enabled' : 'disabled'} for ${school.name}.`);
+    } catch {
+      setLlmStates(m => { const n = new Map(m); n.set(school.tenant_id, llm); return n; });
+      toast.error(`Failed to ${newVal ? 'enable' : 'disable'} LLM for ${school.name}.`);
+    } finally {
+      setLlmToggling(s => { const n = new Set(s); n.delete(school.tenant_id); return n; });
+    }
+  }, [llmStates]);
 
   const handleImpersonate = useCallback(async (school: SchoolTenant) => {
     setImpersonatingId(school.tenant_id);
@@ -1939,9 +1960,9 @@ export default function SuperAdminSchoolsPage() {
               <table className="w-full border-separate border-spacing-0">
                 <thead>
                   <tr>
-                    {['School','Tenant \u00b7 State','Board','GSTIN','Plan \u00b7 Students','Status','Actions'].map((h, i) => (
+                    {['School','Tenant \u00b7 State','Board','GSTIN','Plan \u00b7 Students','Status','LLM','Actions'].map((h, i) => (
                       <th key={h}
-                        className={`border-y border-[var(--bd)] bg-[var(--bg-2)] px-3.5 py-[9px] text-[10.5px] font-semibold uppercase tracking-[0.07em] text-[var(--ink-3)] first:rounded-l-lg first:border-l first:pl-[18px] last:rounded-r-lg last:border-r last:pr-[18px] whitespace-nowrap ${i === 0 ? 'w-[24%]' : ''} ${i === 6 ? 'text-right' : 'text-left'}`}
+                        className={`border-y border-[var(--bd)] bg-[var(--bg-2)] px-3.5 py-[9px] text-[10.5px] font-semibold uppercase tracking-[0.07em] text-[var(--ink-3)] first:rounded-l-lg first:border-l first:pl-[18px] last:rounded-r-lg last:border-r last:pr-[18px] whitespace-nowrap ${i === 0 ? 'w-[24%]' : ''} ${i === 7 ? 'text-right' : 'text-left'}`}
                       >{h}</th>
                     ))}
                   </tr>
@@ -2004,7 +2025,18 @@ export default function SuperAdminSchoolsPage() {
                             <span className="mt-0.5 block text-[11.5px] text-[var(--ink-3)]">{school.lastActivity}</span>
                           ) : null}
                         </td>
-                        <td className="border-b border-[var(--bd)] py-3.5 pl-3.5 pr-[18px] text-right align-middle">
+                        <td className="border-b border-[var(--bd)] px-3.5 py-3.5 align-middle">
+                          <button
+                            type="button"
+                            disabled={llmToggling.has(school.tenant_id) || !llmStates.has(school.tenant_id)}
+                            title={!llmStates.has(school.tenant_id) ? 'School not in LLM registry' : llmStates.get(school.tenant_id)?.llm_enabled ? 'Click to disable LLM' : 'Click to enable LLM'}
+                            onClick={() => void handleLLMToggle(school)}
+                            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none disabled:cursor-not-allowed disabled:opacity-40 ${llmStates.get(school.tenant_id)?.llm_enabled ? 'bg-emerald-500' : 'bg-gray-300'}`}
+                          >
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform duration-200 ${llmStates.get(school.tenant_id)?.llm_enabled ? 'translate-x-4' : 'translate-x-0'}`} />
+                          </button>
+                        </td>
+                        <td className="border-b border-[var(--bd)] px-3.5 py-3.5 align-middle text-right">
                           <span className="inline-flex gap-0.5 opacity-55 transition-opacity group-hover:opacity-100">
                             {(school.status === 'archived' ? [
                               { title: 'Open',             icon: <ExternalLink size={13} />, action: () => window.open(`/super-admin/schools/${school.tenant_id}`, '_blank') },

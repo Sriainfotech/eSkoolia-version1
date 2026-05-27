@@ -10,6 +10,18 @@ class School(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # LLM integration
+    llm_enabled = models.BooleanField(default=False)
+    llm_enabled_at = models.DateTimeField(null=True, blank=True)
+    llm_enabled_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="schools_llm_enabled",
+        help_text="Super admin who enabled LLM for this school",
+    )
+
     class Meta:
         db_table = "schools"
 

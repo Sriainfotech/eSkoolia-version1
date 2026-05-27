@@ -180,6 +180,14 @@ class Student(models.Model):
         blank=True,
         related_name="students",
     )
+    # LLM / login integration — links this student record to a User account
+    user = models.OneToOneField(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="student_profile",
+    )
     is_disabled = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     is_deleted = models.BooleanField(default=False, db_index=True)

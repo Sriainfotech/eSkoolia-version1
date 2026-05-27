@@ -53,6 +53,19 @@ class MeView(APIView):
         role_names = [row.role.name for row in role_rows if row.role]
         role_ids = [row.role_id for row in role_rows if row.role_id]
 
+        school = user.school
+        school_name = school.name if school else None
+        # Super admins have no school — grant them LLM access for preview
+        llm_enabled = school.llm_enabled if school else True
+
+        class_section = None
+        try:
+            student = user.student_profile
+            if student.current_class and student.current_section:
+                class_section = f"{student.current_class.name}{student.current_section.name}"
+        except Exception:
+            pass
+
         return Response(
             {
                 "id": user.id,
@@ -61,12 +74,15 @@ class MeView(APIView):
                 "first_name": user.first_name,
                 "last_name": user.last_name,
                 "school_id": user.school_id,
+                "school_name": school_name,
                 "is_superuser": bool(user.is_superuser),
                 "is_school_admin": bool(getattr(user, "is_school_admin", False)),
                 "role_ids": role_ids,
                 "role_names": role_names,
                 "permission_codes": sorted(user.get_permission_codes()),
                 "must_change_password": bool(getattr(user, "must_change_password", False)),
+                "llm_enabled": llm_enabled,
+                "class_section": class_section,
             },
             status=status.HTTP_200_OK,
         )

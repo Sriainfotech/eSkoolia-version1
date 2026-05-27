@@ -23,10 +23,12 @@ from .views import (
     PoliciesView,
     SchoolImpersonateView,
     SchoolLogoUploadView,
+    SchoolLLMListView,
     SchoolTenantDetailView,
     SchoolTenantExportXlsxView,
     SchoolTenantListView,
     SchoolTenantProvisionView,
+    ToggleSchoolLLMView,
 )
 
 urlpatterns = [
@@ -55,4 +57,7 @@ urlpatterns = [
     path("policies/", PoliciesView.as_view(), name="policies"),
     path("policies/settings/", PolicySettingsView.as_view(), name="policies-settings"),
     path("policies/export/", PoliciesExportView.as_view(), name="policies-export"),
+    # LLM access management (Tasks 4 & 5)
+    path("llm/schools/", SchoolLLMListView.as_view(), name="llm-schools-list"),
+    path("llm/schools/<int:school_id>/", ToggleSchoolLLMView.as_view(), name="llm-schools-toggle"),
 ]

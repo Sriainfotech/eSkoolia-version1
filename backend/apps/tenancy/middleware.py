@@ -36,11 +36,20 @@ class TenantMainMiddleware(MiddlewareMixin):
     - Existing monolithic behavior preserved
     """
 
-    # Paths that must be reachable before tenant context is established
-    # (login page branding, auth tokens, admin, static assets)
+    # Paths that must be reachable before tenant context is established.
+    # IMPORTANT: Only unauthenticated/pre-login endpoints belong here.
+    # DO NOT add "/api/v1/auth/" as a prefix — that would bypass tenant
+    # resolution for /auth/me/, /auth/change-password/, etc., which require
+    # the tenant schema to look up the authenticated user.
     _PUBLIC_PATH_PREFIXES = (
         "/api/v1/tenancy/school-info/",
-        "/api/v1/auth/",
+        "/api/v1/auth/login/",
+        "/api/v1/auth/refresh/",
+        "/api/v1/auth/logout/",
+        "/api/v1/auth/health/",
+        "/api/v1/auth/forgot-password/",
+        "/api/v1/auth/verify-reset-code/",
+        "/api/v1/auth/reset-password/",
         "/api/v1/super-admin/",
         "/admin/",
         "/static/",

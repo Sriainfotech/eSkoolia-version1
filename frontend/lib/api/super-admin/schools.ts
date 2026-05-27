@@ -134,3 +134,44 @@ export async function uploadSchoolLogo(tenantId: string, file: File): Promise<{ 
     { method: 'POST', body: formData }
   );
 }
+
+/** Shape returned by GET /api/super-admin/llm/schools/ */
+export interface LLMSchoolState {
+  id: number;
+  name: string;
+  code: string;
+  tenant_id: string;
+  llm_enabled: boolean;
+  llm_enabled_at: string | null;
+  is_active: boolean;
+}
+
+/**
+ * Fetch LLM enabled/disabled status for all schools.
+ * Returns a Map keyed by school code (matches SchoolTenant.short_code).
+ */
+export async function getLLMStates(): Promise<Map<string, LLMSchoolState>> {
+  const data = await apiRequestWithRefresh<{ count: number; results: LLMSchoolState[] }>(
+    '/api/super-admin/llm/schools/'
+  );
+  const map = new Map<string, LLMSchoolState>();
+  for (const s of data.results) {
+    if (s.tenant_id) map.set(s.tenant_id, s);
+  }
+  return map;
+}
+
+/**
+ * Toggle LLM access for a school.
+ * @param schoolId  Integer primary key of the School object.
+ * @param enabled   New state.
+ */
+export async function toggleSchoolLLM(
+  schoolId: number,
+  enabled: boolean
+): Promise<{ llm_enabled: boolean }> {
+  return apiRequestWithRefresh<{ llm_enabled: boolean }>(
+    `/api/super-admin/llm/schools/${schoolId}/`,
+    { method: 'POST', body: JSON.stringify({ enabled }) }
+  );
+}
