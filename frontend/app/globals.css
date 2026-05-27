@@ -1512,6 +1512,35 @@ tr.date-alert:hover {
 .input-group.teal:focus-within .input-icon { color: var(--aira-teal); }
 .input-group.saffron:focus-within .input-icon { color: var(--saffron); }
 
+.input-eye-toggle {
+  background: none;
+  border: none;
+  color: var(--outline);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  transition: color 0.2s ease;
+}
+.input-eye-toggle:hover { color: var(--on-background); }
+.input-eye-toggle .material-symbols-outlined { font-size: 20px; }
+
+/* Shift input padding-right so text doesn't overlap the eye icon */
+.input-wrap:has(.input-eye-toggle) input {
+  padding-right: 44px;
+}
+
+/* Hide the browser's native password-reveal button (Edge / Chrome) */
+.input-wrap input[type="password"]::-ms-reveal,
+.input-wrap input[type="password"]::-ms-clear {
+  display: none;
+}
+
 .input-group.teal input:focus {
   border-color: var(--aira-teal);
   box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.08);

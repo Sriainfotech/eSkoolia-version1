@@ -1,6 +1,7 @@
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from django.contrib.auth import get_user_model
@@ -28,6 +29,9 @@ class RefreshView(TokenRefreshView):
 
 
 class LogoutView(APIView):
+    # Use standard JWTAuthentication (not TenantAware) — this endpoint runs
+    # in the public-schema path where no tenant context is set.
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -45,6 +49,9 @@ class LogoutView(APIView):
 
 
 class MeView(APIView):
+    # Use standard JWTAuthentication (not TenantAware) — this endpoint runs
+    # in the public-schema path where no tenant context is set.
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -89,16 +96,26 @@ class MeView(APIView):
 
 
 class ChangePasswordView(APIView):
+    # Use standard JWTAuthentication (not TenantAware) — this endpoint runs
+    # in the public-schema path where no tenant context is set.
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         user = request.user
+        old_password = (request.data.get("old_password") or "").strip()
         new_password = (request.data.get("new_password") or "").strip()
 
+        if not old_password:
+            return Response({"detail": "old_password is required."}, status=status.HTTP_400_BAD_REQUEST)
         if not new_password:
             return Response({"detail": "new_password is required."}, status=status.HTTP_400_BAD_REQUEST)
         if len(new_password) < 6:
             return Response({"detail": "Password must be at least 6 characters."}, status=status.HTTP_400_BAD_REQUEST)
+        if not user.check_password(old_password):
+            return Response({"detail": "Current password is incorrect."}, status=status.HTTP_400_BAD_REQUEST)
+        if old_password == new_password:
+            return Response({"detail": "New password must be different from the current password."}, status=status.HTTP_400_BAD_REQUEST)
 
         user.set_password(new_password)
         user.must_change_password = False
@@ -216,6 +233,12 @@ class ResetPasswordView(APIView):
         user = User.objects.filter(email__iexact=email, is_active=True).first()
         if not user:
             return Response({"detail": "Invalid request."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if user.check_password(new_password):
+            return Response(
+                {"detail": "New password must be different from your current password."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         user.set_password(new_password)
         user.must_change_password = False

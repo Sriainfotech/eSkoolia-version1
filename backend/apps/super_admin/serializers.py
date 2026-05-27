@@ -223,7 +223,7 @@ class ProvisionSchoolRequestSerializer(serializers.Serializer):
         valid_codes.update(['trial', 'custom'])
         if value and value not in valid_codes:
             raise serializers.ValidationError(
-                f'"{value}" is not a valid plan. Valid options: {', '.join(sorted(valid_codes))}'
+                f'"{value}" is not a valid plan. Valid options: {", ".join(sorted(valid_codes))}'
             )
         return value
     shard_region = serializers.CharField(max_length=64, required=False, allow_blank=True)

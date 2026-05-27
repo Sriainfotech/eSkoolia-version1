@@ -36,11 +36,13 @@ class TenantMainMiddleware(MiddlewareMixin):
     - Existing monolithic behavior preserved
     """
 
-    # Paths that must be reachable before tenant context is established.
-    # IMPORTANT: Only unauthenticated/pre-login endpoints belong here.
-    # DO NOT add "/api/v1/auth/" as a prefix — that would bypass tenant
-    # resolution for /auth/me/, /auth/change-password/, etc., which require
-    # the tenant schema to look up the authenticated user.
+    # Paths that must be reachable before tenant context is established
+    # (login page branding, auth tokens, admin, static assets).
+    # NOTE: All /api/v1/auth/ endpoints intentionally run against the public
+    # schema so that me/, logout/, change-password/ work for users that still
+    # live in the public schema (pre-schema-migration schools). Those views
+    # declare authentication_classes = [JWTAuthentication] (not the
+    # TenantAwareJWT variant) to avoid the tenant-context check.
     _PUBLIC_PATH_PREFIXES = (
         "/api/v1/tenancy/school-info/",
         "/api/v1/auth/login/",
@@ -54,6 +56,7 @@ class TenantMainMiddleware(MiddlewareMixin):
         "/admin/",
         "/static/",
         "/media/",
+        "/health/",
     )
 
     def process_request(self, request: HttpRequest) -> Optional[HttpResponse]:

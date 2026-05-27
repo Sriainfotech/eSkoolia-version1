@@ -103,10 +103,23 @@ class TenantAwareJWTAuthentication(JWTAuthentication):
             return (tenant_user, validated_token)
         
         except User.DoesNotExist:
-            # User exists in another schema but not in the active tenant schema
+            # User not found in tenant schema — try public schema as a fallback.
+            # This covers schools provisioned manually (outside the normal workflow)
+            # whose users haven't been copied to the tenant schema yet.
+            from django_tenants.utils import schema_context as _schema_context
+            with _schema_context("public"):
+                try:
+                    tenant_user = User.objects.get(id=user.id)
+                    logger.warning(
+                        f"User {user.username} found in public schema (not in tenant "
+                        f"schema {current_schema}); schema migration may be pending"
+                    )
+                    return (tenant_user, validated_token)
+                except User.DoesNotExist:
+                    pass
             logger.warning(
-                f"User {user.username} not found in tenant schema {current_schema}; "
-                f"possible schema mismatch or cross-tenant access attempt"
+                f"User {user.username} not found in tenant schema {current_schema} "
+                f"or public schema; possible cross-tenant access attempt"
             )
             raise AuthenticationFailed(
                 f"User not found in tenant {current_tenant.name}"

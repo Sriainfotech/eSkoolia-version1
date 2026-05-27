@@ -2,8 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AuthProvider, useAuth, apiLogin } from "@/lib/auth-context";
-import { setAuthTokens } from "@/lib/auth";
+import { AuthProvider, useAuth } from "@/lib/auth-context";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -84,6 +83,10 @@ function ChangePasswordPage() {
       setError("New password must be at least 8 characters.");
       return;
     }
+    if (newPassword === tempPassword) {
+      setError("New password must be different from your current password.");
+      return;
+    }
     if (newPassword !== confirmPassword) {
       setError("Passwords do not match.");
       return;
@@ -91,16 +94,9 @@ function ChangePasswordPage() {
 
     setSubmitting(true);
     try {
-      // Verify the temporary password by re-authenticating.
-      const username = user?.username ?? "";
-      const result = await apiLogin(username, tempPassword);
-      setAuthTokens(result.access, result.refresh);
-
-      // Set the permanent password.
-      await changePassword(newPassword);
+      // Pass old password to backend — it verifies it with check_password() before changing.
+      await changePassword(tempPassword, newPassword);
       setSuccess(true);
-
-      // Give the user a moment to read the success state, then redirect.
       setTimeout(() => router.replace("/home"), 1600);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update password. Please try again.");
