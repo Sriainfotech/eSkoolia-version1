@@ -106,11 +106,11 @@ export async function apiGetMe(): Promise<MeResponse> {
   return res.json() as Promise<MeResponse>;
 }
 
-export async function apiChangePassword(newPassword: string): Promise<void> {
+export async function apiChangePassword(oldPassword: string, newPassword: string): Promise<void> {
   const token = getAccessToken();
   await authFetch(
     "/api/v1/auth/change-password/",
-    { method: "POST", body: JSON.stringify({ new_password: newPassword }) },
+    { method: "POST", body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }) },
     token,
   );
 }
@@ -169,7 +169,7 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   login: (username: string, password: string) => Promise<LoginResponse>;
   logout: () => Promise<void>;
-  changePassword: (newPassword: string) => Promise<void>;
+  changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -230,8 +230,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  const changePassword = useCallback(async (newPassword: string): Promise<void> => {
-    await apiChangePassword(newPassword);
+  const changePassword = useCallback(async (oldPassword: string, newPassword: string): Promise<void> => {
+    await apiChangePassword(oldPassword, newPassword);
     const me = await apiGetMe();
     setUser(me);
   }, []);

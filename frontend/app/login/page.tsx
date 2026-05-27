@@ -62,6 +62,7 @@ function LoginPage() {
 
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [rememberDevice, setRememberDevice] = useState(false);
   const [blobOffset, setBlobOffset] = useState({ x: 0, y: 0 });
   const [submitting, setSubmitting] = useState(false);
@@ -308,12 +309,23 @@ function LoginPage() {
                   <span className="input-wrap">
                     <span className="material-symbols-outlined input-icon">key</span>
                     <input
-                      type="password"
+                      type={showPassword ? "text" : "password"}
                       placeholder="••••••••••••"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       autoComplete="current-password"
                     />
+                    <button
+                      type="button"
+                      className="input-eye-toggle"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      onClick={() => setShowPassword((v) => !v)}
+                      tabIndex={-1}
+                    >
+                      <span className="material-symbols-outlined">
+                        {showPassword ? "visibility_off" : "visibility"}
+                      </span>
+                    </button>
                   </span>
                 </label>
 
