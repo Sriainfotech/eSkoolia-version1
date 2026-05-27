@@ -68,6 +68,17 @@ class SchoolTenant(TenantMixin, models.Model):
     staff_count = models.IntegerField(default=0)
     last_activity_at = models.DateTimeField(null=True, blank=True)
 
+    # Contact & address
+    principal_name = models.CharField(max_length=128, null=True, blank=True)
+    principal_email = models.EmailField(max_length=128, null=True, blank=True)
+    principal_phone = models.CharField(max_length=20, null=True, blank=True)
+    campus_address = models.TextField(null=True, blank=True)
+    city = models.CharField(max_length=64, null=True, blank=True)
+    pin_code = models.CharField(max_length=6, null=True, blank=True)
+
+    # Board affiliation
+    affiliation_number = models.CharField(max_length=64, null=True, blank=True)
+
     # django-tenants uses `schema_name` on TenantMixin. Keep it explicit
     schema_name = models.CharField(max_length=63, unique=True)
 

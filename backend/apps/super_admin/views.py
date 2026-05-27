@@ -9,6 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import secrets
 import string
 from collections import OrderedDict
@@ -25,7 +26,7 @@ from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework import status
+from rest_framework import parsers, status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -538,10 +539,8 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
         status_value = self.request.query_params.get("status")
         if status_value and status_value in _VALID_STATUS_PARAMS:
             if status_value == "active":
-                # "active" = operational schools that are NOT on a trial plan,
-                # not suspended and not archived. Excludes trial-plan schools
-                # so the Active tab and Trial tab never overlap.
-                queryset = queryset.exclude(status__in=["archived", "suspended"]).exclude(plan="trial")
+                # "active" = schools with status explicitly set to "active".
+                queryset = queryset.filter(status="active")
             elif status_value == "trial":
                 # "trial" maps to plan field — schools on the trial plan that
                 # are not yet suspended or archived.
@@ -635,7 +634,7 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
         base = self._public_queryset(SchoolTenant)
         return {
             "all":       base.count(),
-            "active":    base.exclude(status__in=["archived", "suspended"]).exclude(plan="trial").count(),
+            "active":    base.filter(status="active").count(),
             "trial":     base.filter(plan="trial").exclude(status__in=["archived", "suspended"]).count(),
             "suspended": base.filter(status="suspended").count(),
             "archived":  base.filter(status="archived").count(),
@@ -747,7 +746,7 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                 tenant = self._public_queryset(SchoolTenant).create(
                     tenant_id=f"TNT_{uuid4().hex[:8].upper()}",
                     name=data["name"],
-                    short_code=data["name"][:10].upper(),
+                    short_code=data.get("short_code") or data["name"][:10].upper(),
                     subdomain_url=subdomain,
                     schema_name=_schema_name_for(subdomain),
                     shard_region=data.get("shard_region") or "default",
@@ -761,9 +760,20 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                     board=data["board"],
                     state=data["state"],
                     region=data.get("shard_region") or "default",
-                    seats=0,
+                    seats=data.get("seats") or 0,
                     student_count=0,
                     staff_count=0,
+                    gstin=data.get("gstin") or "",
+                    pan=data.get("pan") or "",
+                    udise_code=data.get("udise_code") or "",
+                    brand_color=data.get("brand_color") or "",
+                    principal_name=data.get("principal_name") or "",
+                    principal_email=data.get("principal_email") or "",
+                    principal_phone=data.get("principal_phone") or "",
+                    campus_address=data.get("campus_address") or "",
+                    city=data.get("city") or "",
+                    pin_code=data.get("pin_code") or "",
+                    affiliation_number=data.get("affiliation_number") or "",
                 )
 
                 # 2. Create ERP School record (used for login + data isolation)
@@ -945,6 +955,58 @@ class SchoolImpersonateView(SuperAdminBaseAPIView):
             "handoff_url": handoff_url,
             "expires_in": int(access.lifetime.total_seconds()),
         })
+
+
+class SchoolLogoUploadView(SuperAdminBaseAPIView):
+    """Upload or replace a school's logo image."""
+
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser]
+    _ALLOWED_MIME = {"image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"}
+    _MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+
+    def post(self, request, tenant_id: str):
+        school = get_object_or_404(
+            self._public_queryset(SchoolTenant), tenant_id=tenant_id
+        )
+        logo = request.FILES.get("logo")
+        if not logo:
+            return Response(
+                {"error": "No file provided."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if logo.content_type not in self._ALLOWED_MIME:
+            return Response(
+                {"error": "Only PNG, JPEG, WEBP, GIF, or SVG images are allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if logo.size > self._MAX_BYTES:
+            return Response(
+                {"error": "File size exceeds 5 MB limit."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ext = os.path.splitext(logo.name)[1].lower() or ".png"
+        upload_dir = os.path.join(settings.MEDIA_ROOT, "school_logos")
+        os.makedirs(upload_dir, exist_ok=True)
+        filename = f"{tenant_id}{ext}"
+        file_path = os.path.join(upload_dir, filename)
+        with open(file_path, "wb+") as dest:
+            for chunk in logo.chunks():
+                dest.write(chunk)
+
+        logo_url = f"{settings.MEDIA_URL}school_logos/{filename}"
+        school.logo_url = logo_url
+        school.save(update_fields=["logo_url"])
+
+        log_audit(
+            action="school.logo_upload",
+            tenant_id=school.tenant_id,
+            status="success",
+            actor_user=request.user,
+            actor_ip=self._client_ip(request),
+            details={"logo_url": logo_url},
+        )
+        return Response({"logo_url": logo_url}, status=status.HTTP_200_OK)
 
 
 class AuditLogListView(SuperAdminBaseAPIView):

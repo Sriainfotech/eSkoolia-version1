@@ -18,11 +18,13 @@ function Field({
   label,
   required,
   hint,
+  error,
   children,
 }: {
   label: string;
   required?: boolean;
   hint?: string;
+  error?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -31,7 +33,9 @@ function Field({
         {label} {required && <span className="text-[var(--danger)]">*</span>}
       </span>
       {children}
-      {hint && <span className="text-[11px] text-[var(--ink-3)]">{hint}</span>}
+      {error
+        ? <span className="text-[11px] font-medium text-[var(--danger)]">{error}</span>
+        : hint && <span className="text-[11px] text-[var(--ink-3)]">{hint}</span>}
     </label>
   );
 }
@@ -85,6 +89,7 @@ export default function NewPlanDrawer({ open, onClose, onCreated, existing }: Ne
   const [features, setFeatures] = useState<string[]>(['']);
   const [sacCode, setSacCode] = useState('998313');
   const [submitting, setSubmitting] = useState(false);
+  const [planErrors, setPlanErrors] = useState<Record<string, string>>({});
 
   // Reset on open (or prefill when editing)
   useEffect(() => {
@@ -147,6 +152,14 @@ export default function NewPlanDrawer({ open, onClose, onCreated, existing }: Ne
     setFeatures((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== idx)));
 
   const handleSubmit = useCallback(async () => {
+    const errs: Record<string, string> = {};
+    if (!name.trim()) errs.name = 'Plan name is required.';
+    else if (name.trim().length > 50) errs.name = 'Plan name must be 50 characters or fewer.';
+    if (!code.trim()) errs.code = 'Plan code is required.';
+    if (priceInr <= 0) errs.price = 'Price must be greater than 0.';
+    if (cleanFeatures.length === 0) errs.features = 'Add at least one feature.';
+    if (Object.keys(errs).length > 0) { setPlanErrors(errs); return; }
+    setPlanErrors({});
     if (!canSubmit) return;
     setSubmitting(true);
     try {
@@ -226,14 +239,16 @@ export default function NewPlanDrawer({ open, onClose, onCreated, existing }: Ne
             <section className="mb-6">
               <SectionHead num="1" title="Plan basics" />
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Field label="Plan name" required>
+                <Field label="Plan name" required error={planErrors.name}>
                   <input
                     title="Plan name"
-                    className={inputCls}
+                    className={`${inputCls}${planErrors.name ? ' !border-[var(--danger)]' : ''}`}
+                    maxLength={50}
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={(e) => { setName(e.target.value); if (planErrors.name) setPlanErrors(p => ({ ...p, name: '' })); }}
                     placeholder="e.g. Growth"
                   />
+                  <span className="text-[11px] text-[var(--ink-3)] self-end">{name.length}/50</span>
                 </Field>
                 <Field label="Code" required hint={isEdit ? 'Code is immutable after creation.' : 'Auto-generated from name; you can override.'}>
                   <input

@@ -10,13 +10,22 @@ import {
   Users, BarChart2, DollarSign, Bell, X,
 } from 'lucide-react';
 import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSchool, uploadSchoolLogo } from '@/lib/api/super-admin/schools';
+import { getPlans } from '@/lib/api/super-admin/billing';
 import { apiRequestWithRefreshResponse } from '@/lib/api-auth';
 import type {
   BoardType, HealthFlagsCounts, PaginatedResponse, PlanType, ProvisionSchoolRequest, ProvisionSchoolResponse,
-  SchoolFilters, SchoolTenant, SchoolStatus,
+  SchoolFilters, SchoolTenant, SchoolStatus, SubscriptionPlan,
 } from '@/types/super-admin';
 
 const PAGE_SIZE = 10;
+
+const BOARDS = [
+  { value: 'CBSE',   label: 'CBSE — Central Board of Secondary Education' },
+  { value: 'ICSE',   label: 'ICSE / ISC — CISCE' },
+  { value: 'SSC_TG', label: 'SSC — Telangana State Board' },
+  { value: 'SSC_AP', label: 'SSC — Andhra Pradesh State Board' },
+  { value: 'OTHER',  label: 'Other (IB / Cambridge / State)' },
+] as const;
 
 const DEFAULT_SCHOOLS: PaginatedResponse<SchoolTenant> = { count: 0, next: null, previous: null, results: [] };
 
@@ -34,81 +43,125 @@ const AVATAR_GRADIENT_CLS = [
 const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'] as const;
 const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'] as const;
 
+const MONTH_ROWS = [[0,1,2,3],[4,5,6,7],[8,9,10,11]] as const;
+
 function MonthYearPicker({
   value,
   onChange,
+  minValue,
 }: {
   value: { month: string; year: string };
   onChange: (v: { month: string; year: string }) => void;
+  minValue?: { month: string; year: string };
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const cy = new Date().getFullYear();
+  const todayMonth = new Date().getMonth();
   const YEARS = Array.from({ length: 14 }, (_, i) => String(cy - 3 + i));
   const idx = MONTHS.indexOf(value.month as typeof MONTHS[number]);
   const shortLabel = MONTHS_SHORT[idx] ?? value.month.slice(0, 3);
 
+  // Minimum allowed numeric value (year*12 + monthIndex). -Infinity when no min.
+  const minNumeric = minValue
+    ? parseInt(minValue.year) * 12 + MONTHS.indexOf(minValue.month as typeof MONTHS[number])
+    : -Infinity;
+  const minYear = minValue ? parseInt(minValue.year) : -Infinity;
+
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  // When picker opens, scroll so the selected year row is near the top
+  useEffect(() => {
+    if (!open || !scrollRef.current) return;
+    const el = scrollRef.current.querySelector<HTMLElement>(`[data-year="${value.year}"]`);
+    if (el) el.scrollIntoView({ block: 'start', behavior: 'instant' });
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative" ref={wrapRef}>
       <button
         type="button"
         onClick={() => setOpen(o => !o)}
         className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--bd-2)] bg-[var(--bg-1)] px-3 text-[13px] text-[var(--ink-1)] transition hover:border-[var(--pu)] focus:outline-none"
       >
         <Calendar size={13} className="shrink-0 text-[var(--ink-3)]" />
-        <span>{shortLabel} {value.year}</span>
+        <span>{shortLabel}, {value.year}</span>
         <ChevronDown size={12} className={`shrink-0 text-[var(--ink-3)] transition-transform duration-150 ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1.5 flex overflow-hidden rounded-xl border border-[var(--bd-2)] bg-[var(--bg-0)] shadow-xl">
-          {/* Year column */}
-          <div className="w-[68px] overflow-y-auto border-r border-[var(--bd-2)] max-h-[216px]">
-            {YEARS.map(y => (
-              <div
-                key={y}
-                onMouseDown={e => { e.preventDefault(); onChange({ ...value, year: y }); }}
-                className={`cursor-pointer select-none px-3 py-1.5 text-[13px] font-semibold leading-tight transition ${
-                  y === value.year
-                    ? 'bg-[var(--pu)] text-white'
-                    : 'text-[var(--ink-1)] hover:bg-[var(--bg-2)]'
-                }`}
-              >
-                {y}
-              </div>
-            ))}
-          </div>
-          {/* Month grid */}
-          <div className="grid grid-cols-4 gap-1 p-2.5 w-[196px]">
-            {MONTHS_SHORT.map((m, i) => {
-              const isSelected = i === idx;
-              const isToday = i === new Date().getMonth() && value.year === String(cy);
-              return (
-                <button
-                  key={m}
-                  type="button"
-                  onMouseDown={e => { e.preventDefault(); onChange({ ...value, month: MONTHS[i]! }); setOpen(false); }}
-                  className={`rounded-lg py-2 text-[12px] font-semibold transition ${
-                    isSelected
-                      ? 'bg-[var(--pu)] text-white'
-                      : isToday
-                      ? 'ring-2 ring-[var(--pu)] text-[var(--pu)]'
-                      : 'text-[var(--ink-1)] hover:bg-[var(--bg-2)]'
+        <div
+          ref={scrollRef}
+          className="absolute left-0 top-full z-50 mt-1.5 w-[256px] overflow-y-auto rounded-xl border border-[var(--bd-2)] bg-[var(--bg-0)] shadow-xl max-h-[300px]"
+        >
+          {YEARS.map(y => {
+            const isSelectedYear = y === value.year;
+            const isYearDisabled = parseInt(y) < minYear;
+            return (
+              <div key={y}>
+                <div
+                  data-year={y}
+                  onMouseDown={e => {
+                    e.preventDefault();
+                    if (!isYearDisabled) onChange({ ...value, year: y });
+                  }}
+                  className={`select-none bg-gray-100 px-4 py-2.5 text-[13px] font-semibold leading-tight transition ${
+                    isYearDisabled
+                      ? 'cursor-not-allowed text-gray-300 opacity-50'
+                      : 'cursor-pointer text-gray-700 hover:bg-gray-200'
                   }`}
                 >
-                  {m}
-                </button>
-              );
-            })}
-          </div>
+                  {y}
+                </div>
+                {isSelectedYear && !isYearDisabled && (
+                  <div className="bg-white px-2 pb-3 pt-1.5">
+                    {MONTH_ROWS.map((row, ri) => (
+                      <div key={ri} className={`grid grid-cols-4${ri < 2 ? ' mb-2' : ''}`}>
+                        {row.map(i => {
+                          const isSel = i === idx;
+                          const isToday = i === todayMonth && y === String(cy);
+                          // Disable months whose numeric value <= start (end must be strictly after start)
+                          const isMonthDisabled = (parseInt(y) * 12 + i) <= minNumeric;
+                          return (
+                            <button
+                              key={i}
+                              type="button"
+                              disabled={isMonthDisabled}
+                              onMouseDown={e => {
+                                e.preventDefault();
+                                if (!isMonthDisabled) {
+                                  onChange({ ...value, month: MONTHS[i]! });
+                                  setOpen(false);
+                                }
+                              }}
+                              className={`rounded-lg py-2.5 text-[13px] font-semibold transition ${
+                                isMonthDisabled
+                                  ? 'cursor-not-allowed text-gray-300 opacity-40'
+                                  : isSel
+                                  ? 'bg-blue-600 text-white'
+                                  : isToday
+                                  ? 'border-2 border-blue-500 text-blue-600'
+                                  : 'text-gray-500 hover:bg-gray-100 hover:text-gray-800'
+                              }`}
+                            >
+                              {MONTHS_SHORT[i]}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -298,9 +351,9 @@ function SectionHead({ num, children }: { num: string; children: React.ReactNode
 
 // Field
 function Fld({
-  label, required, hint, span, children,
+  label, required, hint, span, error, children,
 }: {
-  label: string; required?: boolean; hint?: string; span?: '2' | '3'; children: React.ReactNode;
+  label: string; required?: boolean; hint?: string; span?: '2' | '3'; error?: string; children: React.ReactNode;
 }) {
   return (
     <label className={`flex flex-col gap-1.5 ${span === '2' ? 'col-span-2' : span === '3' ? 'col-span-3' : ''}`}>
@@ -310,6 +363,7 @@ function Fld({
         {hint ? <span className="ml-auto text-[10.5px] font-normal text-[var(--ink-3)]">{hint}</span> : null}
       </span>
       {children}
+      {error && <span className="text-[11px] font-medium text-[var(--danger)]">{error}</span>}
     </label>
   );
 }
@@ -321,10 +375,11 @@ const lockedInputCls = `${inputCls} cursor-not-allowed bg-[var(--bg-2)] font-mon
 
 // ── Edit school modal ─────────────────────────────────────────────────────────
 function EditSchoolModal({
-  school, busy, onSave, onCancel,
+  school, busy, plans, onSave, onCancel,
 }: {
   school: SchoolTenant;
   busy: boolean;
+  plans: SubscriptionPlan[];
   onSave: (patch: Partial<SchoolTenant>) => void;
   onCancel: () => void;
 }) {
@@ -365,10 +420,17 @@ function EditSchoolModal({
           <div>
             <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Plan</label>
             <select className={selectCls} value={form.plan} onChange={e => set('plan', e.target.value)} title="Plan">
-              <option value="trial">Trial</option>
-              <option value="premium">Premium</option>
-              <option value="enterprise">Enterprise</option>
-              <option value="custom">Custom</option>
+              {plans.length > 0
+                ? plans.map(p => <option key={p.code} value={p.code}>{p.name}</option>)
+                : (
+                  <>
+                    <option value="trial">Trial</option>
+                    <option value="premium">Premium</option>
+                    <option value="enterprise">Enterprise</option>
+                    <option value="custom">Custom</option>
+                  </>
+                )
+              }
             </select>
           </div>
           <div>
@@ -385,11 +447,7 @@ function EditSchoolModal({
           <div>
             <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Board</label>
             <select className={selectCls} value={form.board} onChange={e => set('board', e.target.value)} title="Board">
-              <option value="CBSE">CBSE</option>
-              <option value="ICSE">ICSE</option>
-              <option value="SSC_TG">SSC TG</option>
-              <option value="SSC_AP">SSC AP</option>
-              <option value="OTHER">Other</option>
+              {BOARDS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
             </select>
           </div>
           <div>
@@ -589,8 +647,20 @@ export default function SuperAdminSchoolsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [subscriptionPlans, setSubscriptionPlans] = useState<SubscriptionPlan[]>([]);
+  useEffect(() => {
+    getPlans().then(catalog => {
+      setSubscriptionPlans(catalog.plans);
+      if (catalog.plans.length > 0) {
+        const validCodes = new Set(catalog.plans.map(p => p.code));
+        setProvisionForm(f => validCodes.has(f.plan) ? f : { ...f, plan: catalog.plans[0]!.code as PlanType });
+      }
+    }).catch(() => {});
+  }, []);
+
   const [provisioning, setProvisioning] = useState(false);
   const [provisionError, setProvisionError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [credsResult, setCredsResult] = useState<ProvisionSchoolResponse | null>(null);
   const [credsCopied, setCredsCopied] = useState<'user' | 'pass' | null>(null);
   const [provisionForm, setProvisionForm] = useState<ProvisionSchoolRequest>({
@@ -605,7 +675,7 @@ export default function SuperAdminSchoolsPage() {
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [editSchool, setEditSchool] = useState<SchoolTenant | null>(null);
   const [editBusy, setEditBusy] = useState(false);
-  const [editFields, setEditFields] = useState({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes' });
+  const [editFields, setEditFields] = useState({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' });
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [logoDragging, setLogoDragging] = useState(false);
@@ -689,10 +759,23 @@ export default function SuperAdminSchoolsPage() {
 
   const handleProvisionSubmit = useCallback(async () => {
     setProvisionError(null);
-    if (!provisionForm.name.trim() || !provisionForm.state.trim()) {
-      setProvisionError('School name and state are required.');
+    const errors: Record<string, string> = {};
+    if (!provisionForm.name.trim()) errors.name = 'School name is required.';
+    if (!provisionForm.state.trim()) errors.state = 'State is required.';
+    if (!editFields.principal_name.trim()) errors.principal_name = 'Principal name is required.';
+    if (!editFields.principal_email.trim()) errors.principal_email = 'Principal email is required.';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editFields.principal_email.trim())) errors.principal_email = 'Enter a valid email address.';
+    if (!editFields.pan.trim()) errors.pan = 'PAN is required.';
+    else if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(editFields.pan.trim())) errors.pan = 'PAN must be in format ABCDE1234F.';
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
+      setTimeout(() => {
+        const el = document.querySelector('[data-field-error="true"]');
+        if (el) (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
       return;
     }
+    setFieldErrors({});
 
     // ── EDIT MODE ──────────────────────────────────────────────
     if (editSchool) {
@@ -725,15 +808,23 @@ export default function SuperAdminSchoolsPage() {
           api_access: editFields.api_access === 'enabled',
           brand_color: editFields.brand_color || undefined,
           logo_url: logoUrl,
+          principal_name: editFields.principal_name || undefined,
+          principal_email: editFields.principal_email || undefined,
+          principal_phone: editFields.principal_phone || undefined,
+          campus_address: editFields.campus_address || undefined,
+          city: editFields.city || undefined,
+          pin_code: editFields.pin_code || undefined,
+          affiliation_number: editFields.affiliation_number || undefined,
         });
         toast.success(`${provisionForm.name} updated.`);
         setEditSchool(null);
         setAccAddOpen(false);
         setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
-        setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes' });
+        setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' });
         setLogoFile(null);
         setLogoPreview(null);
         setSelectedColor(PALETTE_COLORS[0]!.hex);
+        setFieldErrors({});
         await loadSchools();
         void loadGlobalStats();
       } catch (err) {
@@ -762,6 +853,13 @@ export default function SuperAdminSchoolsPage() {
         udise_code: editFields.udise_code || undefined,
         seats: editFields.seats ? Number(editFields.seats) : undefined,
         brand_color: editFields.brand_color || undefined,
+        principal_name: editFields.principal_name || undefined,
+        principal_email: editFields.principal_email || undefined,
+        principal_phone: editFields.principal_phone || undefined,
+        campus_address: editFields.campus_address || undefined,
+        city: editFields.city || undefined,
+        pin_code: editFields.pin_code || undefined,
+        affiliation_number: editFields.affiliation_number || undefined,
       });
       // Upload logo after provisioning if a file was selected
       if (logoFile && result.tenant_id) {
@@ -773,10 +871,11 @@ export default function SuperAdminSchoolsPage() {
       }
       setAccAddOpen(false);
       setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
-      setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes' });
+      setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' });
       setLogoFile(null);
       setLogoPreview(null);
       setSelectedColor(PALETTE_COLORS[0]!.hex);
+      setFieldErrors({});
       try { sessionStorage.removeItem('school_add_draft'); } catch { /* ignore */ }
       setCredsResult(result);
       toast.success('School provisioned — admin credentials ready below.');
@@ -894,11 +993,19 @@ export default function SuperAdminSchoolsPage() {
       api_access: school.api_access ? 'enabled' : 'disabled',
       brand_color: school.brand_color ?? '',
       gst_registered: school.gstin ? 'yes' : 'no',
+      principal_name: school.principal_name ?? '',
+      principal_email: school.principal_email ?? '',
+      principal_phone: school.principal_phone ?? '',
+      campus_address: school.campus_address ?? '',
+      city: school.city ?? '',
+      pin_code: school.pin_code ?? '',
+      affiliation_number: school.affiliation_number ?? '',
     });
     setSelectedColor(school.brand_color || PALETTE_COLORS[0]!.hex);
     setLogoPreview(school.logo_url || null);
     setLogoFile(null);
     setProvisionError(null);
+    setFieldErrors({});
     setAccAddOpen(true);
     setTimeout(() => {
       document.getElementById('acc-add')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1049,7 +1156,7 @@ export default function SuperAdminSchoolsPage() {
           if (accAddOpen && editSchool) {
             setEditSchool(null);
             setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
-            setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: '' });
+            setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: '', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' });
             setLogoFile(null);
             setLogoPreview(null);
             setSelectedColor(PALETTE_COLORS[0]!.hex);
@@ -1086,14 +1193,22 @@ export default function SuperAdminSchoolsPage() {
           <div className="border-b border-dashed border-[var(--bd-2)] py-5">
             <SectionHead num="01">School identity</SectionHead>
             <div className="grid grid-cols-3 gap-3.5 max-md:grid-cols-2">
-              <Fld label="School name" required span="2">
-                <input className={inputCls} placeholder="e.g. Vasavi Vidyalaya Public School"
-                  value={provisionForm.name} onChange={e => setProvisionForm(f => ({ ...f, name: e.target.value }))} />
+              <Fld label="School name" required span="2" error={fieldErrors.name}>
+                <input
+                  className={`${inputCls}${fieldErrors.name ? ' !border-[var(--danger)] focus:!border-[var(--danger)]' : ''}`}
+                  data-field-error={fieldErrors.name ? 'true' : undefined}
+                  placeholder="e.g. Vasavi Vidyalaya Public School"
+                  value={provisionForm.name}
+                  onChange={e => {
+                    setProvisionForm(f => ({ ...f, name: e.target.value }));
+                    if (fieldErrors.name) setFieldErrors(f => ({ ...f, name: '' }));
+                  }}
+                />
               </Fld>
               <Fld label="Short code" required hint="Uppercase">
                 <input className={`${monoInputCls} uppercase`} placeholder="VVP-HYD" maxLength={10}
                   value={editFields.short_code}
-                  onChange={e => setEditFields(f => ({ ...f, short_code: e.target.value.toUpperCase() }))} />
+                  onChange={e => setEditFields(f => ({ ...f, short_code: e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, '') }))} />
               </Fld>
               <Fld label="Subdomain URL" required={!editSchool} hint={editSchool ? 'Immutable \u00b7 cannot be changed' : 'Lowercase \u00b7 no spaces'} span="2">
                 <div className={`flex overflow-hidden rounded-lg border border-[var(--bd-2)] bg-[var(--bg-1)] transition ${editSchool ? 'opacity-60' : 'focus-within:border-[var(--pu)] focus-within:shadow-[0_0_0_3px_rgba(109,74,255,.12)]'}`}>
@@ -1128,6 +1243,12 @@ export default function SuperAdminSchoolsPage() {
                 {addingAcadYear ? (() => {
                   const label = `${acadYearDraft.startMonth} ${acadYearDraft.startYear} \u2013 ${acadYearDraft.endMonth} ${acadYearDraft.endYear}`;
                   const isDup = acadYears.includes(label);
+                  const startVal = parseInt(acadYearDraft.startYear) * 12 + MONTHS.indexOf(acadYearDraft.startMonth as typeof MONTHS[number]);
+                  const endVal   = parseInt(acadYearDraft.endYear)   * 12 + MONTHS.indexOf(acadYearDraft.endMonth   as typeof MONTHS[number]);
+                  const isSameMonth   = endVal === startVal;
+                  const isEndBefore   = endVal < startVal;
+                  const isShortSpan   = !isEndBefore && !isSameMonth && (endVal - startVal) < 3;
+                  const hasError = isDup || isSameMonth || isEndBefore;
                   return (
                     <div className="space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1139,15 +1260,25 @@ export default function SuperAdminSchoolsPage() {
                         <MonthYearPicker
                           value={{ month: acadYearDraft.endMonth, year: acadYearDraft.endYear }}
                           onChange={v => setAcadYearDraft(d => ({ ...d, endMonth: v.month, endYear: v.year }))}
+                          minValue={{ month: acadYearDraft.startMonth, year: acadYearDraft.startYear }}
                         />
                       </div>
+                      {isEndBefore && (
+                        <p className="text-[11px] text-red-600 font-medium">&#x26D4; End month must come after start month.</p>
+                      )}
+                      {isSameMonth && (
+                        <p className="text-[11px] text-red-600 font-medium">&#x26D4; Start and end cannot be the same month.</p>
+                      )}
+                      {isShortSpan && (
+                        <p className="text-[11px] text-amber-600">&#x26A0;&#xFE0F; Span is less than 3 months &mdash; is this intentional?</p>
+                      )}
                       {isDup && (
-                        <p className="text-[11px] text-amber-600">⚠️ &ldquo;{label}&rdquo; is already in the list.</p>
+                        <p className="text-[11px] text-amber-600">&#x26A0;&#xFE0F; &ldquo;{label}&rdquo; is already in the list.</p>
                       )}
                       <div className="flex gap-1.5">
-                        <button type="button" disabled={isDup}
+                        <button type="button" disabled={hasError}
                           onClick={() => { setAcadYears(y => [label, ...y]); setAddingAcadYear(false); }}
-                          className="inline-flex h-8 items-center rounded-lg border border-[var(--pu)] bg-[var(--pu)] px-3 text-[12px] font-medium text-white disabled:opacity-40">
+                          className="inline-flex h-8 items-center rounded-lg border border-[var(--pu)] bg-[var(--pu)] px-3 text-[12px] font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed">
                           Add
                         </button>
                         <button type="button" onClick={() => setAddingAcadYear(false)}
@@ -1160,7 +1291,10 @@ export default function SuperAdminSchoolsPage() {
                 })() : (
                   <div className="flex gap-1.5">
                     <select className={`${selectCls} flex-1`} title="Academic year start">
-                      {acadYears.map(yr => <option key={yr} value={yr}>{yr}</option>)}
+                      {Array.from(new Set(acadYears))
+                        .filter(yr => { const m = yr.match(/\d{4}/); return m ? parseInt(m[0]) >= new Date().getFullYear() : true; })
+                        .sort((a, b) => { const ma = a.match(/\d{4}/); const mb = b.match(/\d{4}/); return (mb ? parseInt(mb[0]) : 0) - (ma ? parseInt(ma[0]) : 0); })
+                        .map(yr => <option key={yr} value={yr}>{yr}</option>)}
                     </select>
                     <button type="button" title="Add academic year"
                       onClick={() => setAddingAcadYear(true)}
@@ -1180,26 +1314,33 @@ export default function SuperAdminSchoolsPage() {
               <Fld label="Board" required>
                 <select className={selectCls} title="Board" value={provisionForm.board}
                   onChange={e => setProvisionForm(f => ({ ...f, board: e.target.value as BoardType }))}>
-                  <option value="">Select board\u2026</option>
-                  <option value="CBSE">CBSE \u2014 Central Board of Secondary Education</option>
-                  <option value="ICSE">ICSE / ISC \u2014 CISCE</option>
-                  <option value="SSC_TG">SSC \u2014 Telangana State Board</option>
-                  <option value="SSC_AP">SSC \u2014 Andhra Pradesh State Board</option>
-                  <option value="OTHER">Other (IB / Cambridge / State)</option>
+                  <option value="">Select board…</option>
+                  {BOARDS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
                 </select>
               </Fld>
-              <Fld label="Affiliation number" required>
-                <input className={monoInputCls} placeholder="CBSE/AFF/930451" />
+              <Fld label="Affiliation number">
+                <input className={monoInputCls} placeholder="CBSE/AFF/930451"
+                  maxLength={64}
+                  value={editFields.affiliation_number}
+                  onChange={e => setEditFields(f => ({ ...f, affiliation_number: e.target.value.replace(/[^A-Za-z0-9/\- ]/g, '') }))} />
               </Fld>
-              <Fld label="UDISE+ code" required hint="11 digits">
+              <Fld label="UDISE+ code" hint="11 digits">
                 <input className={monoInputCls} placeholder="36050200101" maxLength={11}
                   inputMode="numeric"
                   value={editFields.udise_code}
                   onChange={e => setEditFields(f => ({ ...f, udise_code: e.target.value.replace(/\D/g, '') }))} />
               </Fld>
-              <Fld label="State" required>
-                <select className={selectCls} title="State" value={provisionForm.state}
-                  onChange={e => setProvisionForm(f => ({ ...f, state: e.target.value }))}>
+              <Fld label="State" required error={fieldErrors.state}>
+                <select
+                  className={`${selectCls}${fieldErrors.state ? ' !border-[var(--danger)] focus:!border-[var(--danger)]' : ''}`}
+                  data-field-error={fieldErrors.state ? 'true' : undefined}
+                  title="State"
+                  value={provisionForm.state}
+                  onChange={e => {
+                    setProvisionForm(f => ({ ...f, state: e.target.value }));
+                    if (fieldErrors.state) setFieldErrors(f => ({ ...f, state: '' }));
+                  }}
+                >
                   <option value="">Select state\u2026</option>
                   {[['36','Telangana'],['37','Andhra Pradesh'],['29','Karnataka'],['33','Tamil Nadu'],['27','Maharashtra'],['07','Delhi']].map(([code, name]) => (
                     <option key={code} value={code}>{name} ({code})</option>
@@ -1207,7 +1348,7 @@ export default function SuperAdminSchoolsPage() {
                 </select>
               </Fld>
               <Fld label="Affiliation valid till">
-                <input type="date" className={inputCls} defaultValue="2030-03-31" title="Affiliation valid till" />
+                <input type="date" className={inputCls} defaultValue="2030-03-31" min={new Date().toISOString().slice(0, 10)} title="Affiliation valid till" />
               </Fld>
             </div>
           </div>
@@ -1224,7 +1365,10 @@ export default function SuperAdminSchoolsPage() {
                     e.preventDefault();
                     setLogoDragging(false);
                     const file = e.dataTransfer.files?.[0];
-                    if (file) { setLogoFile(file); setLogoPreview(URL.createObjectURL(file)); }
+                    if (file) {
+                      if (!file.type.startsWith('image/')) { toast.error('Only image files are accepted (PNG, JPG, SVG). PDF files are not supported.'); return; }
+                      setLogoFile(file); setLogoPreview(URL.createObjectURL(file));
+                    }
                   }}
                   className={`flex cursor-pointer items-center gap-3 rounded-[9px] border border-dashed bg-[var(--bg-2)] p-[10px_12px] transition-colors ${logoDragging ? 'border-[var(--pu)] bg-[rgba(109,74,255,0.06)]' : 'border-[var(--bd-3)]'}`}
                 >
@@ -1247,7 +1391,10 @@ export default function SuperAdminSchoolsPage() {
                     className="hidden"
                     onChange={e => {
                       const file = e.target.files?.[0];
-                      if (file) { setLogoFile(file); setLogoPreview(URL.createObjectURL(file)); }
+                      if (file) {
+                        if (!file.type.startsWith('image/')) { toast.error('Only image files are accepted (PNG, JPG, SVG). PDF files are not supported.'); e.target.value = ''; return; }
+                        setLogoFile(file); setLogoPreview(URL.createObjectURL(file));
+                      }
                     }}
                   />
                 </label>
@@ -1276,14 +1423,23 @@ export default function SuperAdminSchoolsPage() {
           <div className="border-b border-dashed border-[var(--bd-2)] py-5">
             <SectionHead num="04">Principal &amp; primary contact</SectionHead>
             <div className="grid grid-cols-3 gap-3.5 max-md:grid-cols-2">
-              <Fld label="Principal name" required><input className={inputCls} placeholder="Dr. M. Iyer" /></Fld>
+              <Fld label="Principal name" required error={fieldErrors.principal_name}>
+                <input className={`${inputCls}${fieldErrors.principal_name ? ' !border-[var(--danger)]' : ''}`} placeholder="Dr. M. Iyer" value={editFields.principal_name}
+                  data-field-error={fieldErrors.principal_name ? 'true' : undefined}
+                  onChange={e => { setEditFields(f => ({ ...f, principal_name: e.target.value })); if (fieldErrors.principal_name) setFieldErrors(p => ({ ...p, principal_name: '' })); }} />
+              </Fld>
               <Fld label="Designation"><input className={inputCls} defaultValue="Principal" title="Designation" /></Fld>
-              <Fld label="Email" required><input type="email" className={inputCls} placeholder="principal@school.edu.in" /></Fld>
-              <Fld label="Mobile" required>
+              <Fld label="Email" required error={fieldErrors.principal_email}>
+                <input type="email" className={`${inputCls}${fieldErrors.principal_email ? ' !border-[var(--danger)]' : ''}`} placeholder="principal@school.edu.in" value={editFields.principal_email}
+                  data-field-error={fieldErrors.principal_email ? 'true' : undefined}
+                  onChange={e => { setEditFields(f => ({ ...f, principal_email: e.target.value })); if (fieldErrors.principal_email) setFieldErrors(p => ({ ...p, principal_email: '' })); }} />
+              </Fld>
+              <Fld label="Mobile">
                 <div className="flex overflow-hidden rounded-lg border border-[var(--bd-2)] bg-[var(--bg-1)] transition focus-within:border-[var(--pu)] focus-within:shadow-[0_0_0_3px_rgba(109,74,255,.12)]">
                   <span className="flex items-center border-r border-[var(--bd-2)] bg-[var(--bg-2)] px-[11px] font-mono text-[12px] text-[var(--ink-3)]">+91</span>
                   <input type="tel" className="h-9 flex-1 border-none bg-transparent px-3 text-[13px] outline-none" placeholder="98765 43210" maxLength={10} inputMode="numeric"
-                    onInput={e => { (e.target as HTMLInputElement).value = (e.target as HTMLInputElement).value.replace(/\D/g, ''); }} />
+                    value={editFields.principal_phone}
+                    onChange={e => setEditFields(f => ({ ...f, principal_phone: e.target.value.replace(/\D/g, '') }))} />
                 </div>
               </Fld>
               <Fld label="Alternate contact"><input type="tel" className={inputCls} placeholder="+91 98765 43211" inputMode="numeric" maxLength={13}
@@ -1301,20 +1457,23 @@ export default function SuperAdminSchoolsPage() {
           <div className="border-b border-dashed border-[var(--bd-2)] py-5">
             <SectionHead num="05">Campus address &amp; geography</SectionHead>
             <div className="grid grid-cols-3 gap-3.5 max-md:grid-cols-2">
-              <Fld label="Street address" required span="3">
+              <Fld label="Street address" span="3">
                 <textarea className="min-h-[72px] w-full resize-y rounded-lg border border-[var(--bd-2)] bg-[var(--bg-1)] px-3 py-[10px] text-[13px] leading-relaxed outline-none transition focus:border-[var(--pu)] focus:shadow-[0_0_0_3px_rgba(109,74,255,.12)]"
-                  placeholder="Plot 22, Road No. 12, Banjara Hills" />
+                  placeholder="Plot 22, Road No. 12, Banjara Hills"
+                  value={editFields.campus_address}
+                  onChange={e => setEditFields(f => ({ ...f, campus_address: e.target.value }))} />
               </Fld>
-              <Fld label="City" required><input className={inputCls} placeholder="Hyderabad" /></Fld>
-              <Fld label="State" required>
+              <Fld label="City"><input className={inputCls} placeholder="Hyderabad" value={editFields.city} onChange={e => setEditFields(f => ({ ...f, city: e.target.value }))} /></Fld>
+              <Fld label="State">
                 <select className={selectCls} title="State">
                   {[['36','Telangana'],['37','Andhra Pradesh'],['29','Karnataka'],['33','Tamil Nadu'],['27','Maharashtra'],['07','Delhi']].map(([code, name]) => (
                     <option key={code}>{name} ({code})</option>
                   ))}
                 </select>
               </Fld>
-              <Fld label="PIN code" required><input className={monoInputCls} placeholder="500034" maxLength={6} inputMode="numeric"
-                onInput={e => { (e.target as HTMLInputElement).value = (e.target as HTMLInputElement).value.replace(/\D/g, ''); }} /></Fld>
+              <Fld label="PIN code"><input className={monoInputCls} placeholder="500034" maxLength={6} inputMode="numeric"
+                value={editFields.pin_code}
+                onChange={e => setEditFields(f => ({ ...f, pin_code: e.target.value.replace(/\D/g, '') }))} /></Fld>
             </div>
           </div>
 
@@ -1330,10 +1489,11 @@ export default function SuperAdminSchoolsPage() {
                   <option value="no">Unregistered (exempt)</option>
                 </select>
               </Fld>
-              <Fld label="PAN" required>
-                <input className={`${monoInputCls} uppercase`} placeholder="AAACE9988K" maxLength={10}
+              <Fld label="PAN" required error={fieldErrors.pan}>
+                <input className={`${monoInputCls} uppercase${fieldErrors.pan ? ' !border-[var(--danger)]' : ''}`} placeholder="AAACE9988K" maxLength={10}
                   value={editFields.pan}
-                  onChange={e => setEditFields(f => ({ ...f, pan: e.target.value.toUpperCase() }))} />
+                  data-field-error={fieldErrors.pan ? 'true' : undefined}
+                  onChange={e => { setEditFields(f => ({ ...f, pan: e.target.value.toUpperCase() })); if (fieldErrors.pan) setFieldErrors(p => ({ ...p, pan: '' })); }} />
               </Fld>
               <Fld label="Legal entity name"><input className={inputCls} placeholder="Vasavi Educational Trust" /></Fld>
               <Fld label="Entity type">
@@ -1353,17 +1513,23 @@ export default function SuperAdminSchoolsPage() {
               <Fld label="Subscription plan" required span="2">
                 <select className={selectCls} title="Subscription plan" value={provisionForm.plan}
                   onChange={e => setProvisionForm(f => ({ ...f, plan: e.target.value as PlanType }))}>
-                  <option value="trial">Trial</option>
-                  <option value="premium">Premium</option>
-                  <option value="enterprise">Enterprise</option>
-                  <option value="custom">Custom</option>
+                  {subscriptionPlans.length > 0
+                    ? subscriptionPlans.map(p => (
+                        <option key={p.code} value={p.code}>{p.name}</option>
+                      ))
+                    : <>
+                        <option value="starter">Starter</option>
+                        <option value="premium">Premium</option>
+                        <option value="enterprise">Enterprise</option>
+                      </>
+                  }
                 </select>
               </Fld>
               <Fld label="Trial period">
                 <select className={selectCls} title="Trial period"><option>30 days</option><option>14 days</option><option>No trial</option></select>
               </Fld>
               <Fld label="Go-live date">
-                <input type="date" className={inputCls} defaultValue="2026-06-01" title="Go-live date" />
+                <input type="date" className={inputCls} defaultValue="2026-06-01" min={new Date().toISOString().slice(0, 10)} title="Go-live date" />
               </Fld>
               <Fld label="Student seat limit"><input type="number" className={inputCls} title="Student seat limit" placeholder="2000"
                 value={editFields.seats} onChange={e => setEditFields(f => ({ ...f, seats: e.target.value }))} /></Fld>
@@ -1527,7 +1693,7 @@ export default function SuperAdminSchoolsPage() {
             <div className="flex gap-2">
               {editSchool ? (
                 <button type="button"
-                  onClick={() => { setEditSchool(null); setAccAddOpen(false); setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' }); setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes' }); setLogoFile(null); setLogoPreview(null); setSelectedColor(PALETTE_COLORS[0]!.hex); setProvisionError(null); }}
+                  onClick={() => { setEditSchool(null); setAccAddOpen(false); setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' }); setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' }); setLogoFile(null); setLogoPreview(null); setSelectedColor(PALETTE_COLORS[0]!.hex); setProvisionError(null); }}
                   className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border-0 bg-transparent px-3.5 text-[12.5px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)]">
                   Cancel edit
                 </button>
@@ -1536,7 +1702,7 @@ export default function SuperAdminSchoolsPage() {
                   <button type="button" onClick={() => {
                     setAccAddOpen(false);
                     setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
-                    setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes' });
+                    setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' });
                     setLogoFile(null);
                     setLogoPreview(null);
                     setSelectedColor(PALETTE_COLORS[0]!.hex);
@@ -1605,11 +1771,7 @@ export default function SuperAdminSchoolsPage() {
               <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Board</label>
               <select className={selectCls} title="Board" value={pendingBoard} onChange={e => setPendingBoard(e.target.value)}>
                 <option value="">All boards</option>
-                <option value="CBSE">CBSE</option>
-                <option value="ICSE">ICSE</option>
-                <option value="SSC_TG">SSC TG</option>
-                <option value="SSC_AP">SSC AP</option>
-                <option value="OTHER">Other</option>
+                {BOARDS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
               </select>
             </div>
             {/* State */}
