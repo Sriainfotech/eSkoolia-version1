@@ -2,6 +2,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     DepartmentViewSet,
+    DepartmentTypeViewSet,
     DesignationViewSet,
     LeaveDefineViewSet,
     LeaveRequestViewSet,
@@ -14,6 +15,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register("departments", DepartmentViewSet, basename="hr-department")
+router.register("department-types", DepartmentTypeViewSet, basename="hr-department-type")
 router.register("designations", DesignationViewSet, basename="hr-designation")
 router.register("staff", StaffViewSet, basename="hr-staff")
 router.register("staff-documents", StaffDocumentViewSet, basename="hr-staff-document")

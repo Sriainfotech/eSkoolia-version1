@@ -689,7 +689,7 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
             <table className="w-full border-collapse text-[13px]">
               <thead className="bg-[#F0F2F5]">
                 <tr>
-                  {["Class", "Level", "Status", ""].map((h) => (
+                  {["Class", "Level", "Streams", "Status", ""].map((h) => (
                     <th key={h} className="px-3 py-2 text-left text-[11px] font-bold text-[#6F767E] uppercase tracking-wide border-b border-[#E8ECEF] whitespace-nowrap">
                       {h}
                     </th>
@@ -708,6 +708,49 @@ export default function ClassesPane({ classes, loading, onRefresh, showToast, on
                   >
                     <td className="px-3 py-2.5 border-b border-[#E8ECEF] font-semibold text-[#1A1D1F]">{normalizeClassName(cls.name)}</td>
                     <td className="px-3 py-2.5 border-b border-[#E8ECEF] text-[#6F767E]">{levelLabel(inferLevel(normalizeClassName(cls.name)))}</td>
+                    {/* Streams — shown as pills for Senior Secondary, dash otherwise */}
+                    <td className="px-3 py-2.5 border-b border-[#E8ECEF]">
+                      {cls.stream_details && cls.stream_details.length > 0 ? (
+                        <div className="flex items-center gap-1 flex-wrap">
+                          {cls.stream_details.slice(0, 3).map((s) => (
+                            <span key={s.id} className="px-2 py-0.5 rounded-full bg-[#EEF0FF] text-[#5B4FCF] text-[10px] font-semibold border border-[#C7C3F0] whitespace-nowrap">
+                              {s.name}
+                            </span>
+                          ))}
+                          {cls.stream_details.length > 3 && (
+                            <span className="relative group inline-block">
+                              {/* +N badge */}
+                              <span className="px-2 py-0.5 rounded-full bg-[#F0F2F5] text-[#6F767E] text-[10px] font-semibold border border-[#E8ECEF] cursor-pointer select-none whitespace-nowrap">
+                                +{cls.stream_details.length - 3}
+                              </span>
+                              {/* Hover card — appears above the badge */}
+                              <div className="pointer-events-none group-hover:pointer-events-auto absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                                <div className="bg-white border border-[#E8ECEF] rounded-xl shadow-[0_4px_20px_rgba(0,0,0,0.12)] p-3 min-w-[140px]">
+                                  {/* Header */}
+                                  <p className="text-[9px] font-bold text-[#9FA6AD] uppercase tracking-widest mb-2 border-b border-[#F0F2F5] pb-1.5">
+                                    More Streams
+                                  </p>
+                                  {/* Stream pills */}
+                                  <div className="flex flex-col gap-1.5">
+                                    {cls.stream_details.slice(3).map((s) => (
+                                      <span key={s.id} className="px-2.5 py-1 rounded-lg bg-[#EEF0FF] text-[#5B4FCF] text-[11px] font-semibold border border-[#C7C3F0] whitespace-nowrap">
+                                        {s.name}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                                {/* Arrow pointing down */}
+                                <div className="flex justify-center">
+                                  <div className="w-2.5 h-2.5 bg-white border-r border-b border-[#E8ECEF] rotate-45 -mt-1.5" />
+                                </div>
+                              </div>
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-[#D2D7DC] text-[11px]">—</span>
+                      )}
+                    </td>
                     {/* Active / Inactive toggle */}
                     <td className="px-3 py-2.5 border-b border-[#E8ECEF]">
                       <div className="flex items-center gap-1.5">

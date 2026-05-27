@@ -4,9 +4,39 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
+PREDEFINED_DEPARTMENT_TYPES = ["Academic", "Administrative", "Support", "Transport", "Finance"]
+
+
+class DepartmentType(models.Model):
+    """School-scoped custom department types (predefined types are returned from constants, not stored here)."""
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="department_types")
+    name = models.CharField(max_length=50)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "hr_department_types"
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(fields=["school", "name"], name="uq_hr_dept_type_school_name"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class Department(models.Model):
+    PREDEFINED_TYPES = PREDEFINED_DEPARTMENT_TYPES
+
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="departments")
     name = models.CharField(max_length=120)
+    dept_type = models.CharField(max_length=50, blank=True, default="")
+    head = models.ForeignKey(
+        "Staff", null=True, blank=True, on_delete=models.SET_NULL, related_name="headed_departments"
+    )
+    deputy_head = models.ForeignKey(
+        "Staff", null=True, blank=True, on_delete=models.SET_NULL, related_name="deputy_headed_departments"
+    )
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
