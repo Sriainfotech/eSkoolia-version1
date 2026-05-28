@@ -2070,3 +2070,123 @@ No change — already matched reference from previous session.
 4. Connect StepReview "Enroll staff →" to the existing `handleSubmit` function (already wired in the main render but confirm the flow end-to-end with a real backend call).
 5. Consider persisting dynamic list rows (qualifications, emergency contacts, nominees) in the parent `form` state so they survive navigating back and forth between steps.
 
+---
+
+## Day 11 — 2026-05-28 — Invoice Locking, Impersonation 404 Fix, GSTR-1 Excel Export & HR Admin Registration
+
+**Branch:** `tenancy-new`
+
+---
+
+### 1. Invoice Locking — Prevent Editing Paid / Cancelled Invoices
+
+**Problem:** Paid and cancelled invoices could still be edited — the edit button was only disabled for `"cancelled"` status (not `"paid"`), and the backend had no guard to reject PATCH requests on locked invoices.
+
+**Backend — `backend/apps/super_admin/views.py` (`BillingInvoiceDetailView.patch()`):**
+- Added a status guard at the top of `patch()`:
+  ```python
+  if invoice.status in ("paid", "cancelled"):
+      return Response(
+          {"detail": f"Invoice is '{invoice.status}' and cannot be edited. "
+                     "Mark it as draft or void it to make changes."},
+          status=status.HTTP_400_BAD_REQUEST,
+      )
+  ```
+- Returns `400 Bad Request` with a human-readable message for any PATCH attempt on a paid or cancelled invoice.
+
+**Frontend — `frontend/app/(dashboard)/super-admin/billing/page.tsx`:**
+- Edit button `disabled` condition extended: `invoice.status === 'paid' || invoice.status === 'cancelled'` (was only `'cancelled'`).
+
+**Frontend — `frontend/app/(dashboard)/super-admin/billing/NewInvoiceDrawer.tsx`:**
+- Added `isPaidLocked = isEditMode && invoice?.status === 'paid'` derived variable.
+- `canSubmit` now includes `&& !isPaidLocked`.
+- Split the warning banner into two:
+  - **Red "locked" banner** shown when `isPaidLocked`: "This invoice has been paid and is locked. It cannot be edited. Void it first to make changes."
+  - **Amber "editing issued invoice" banner** shown for non-paid invoices in edit mode (unchanged).
+
+---
+
+### 2. Impersonation 404 Fix
+
+**Problem:** Clicking "Impersonate" on schools with no `tenant_id` (e.g. `Sprint1 Demo School`) produced URL `/api/super-admin/schools//impersonate/` — a double-slash URL Django could not route — which returned an HTML 404 page. The frontend parsed the non-JSON response as "Request failed with status 404".
+
+**Root cause:** Some demo/test schools in the DB have an empty `tenant_id` string. The impersonation URL was built as `schools/${school.tenant_id}/impersonate/` without checking for an empty value first.
+
+**Frontend — `frontend/app/(dashboard)/super-admin/schools/page.tsx`:**
+- `handleImpersonate` now guards at the start:
+  ```typescript
+  if (!school.tenant_id) {
+      toast.error("This school has no tenant ID. Impersonation is not available.");
+      return;
+  }
+  ```
+- Impersonate button now `disabled` when `!school.tenant_id || school.status === 'provisioning'` (prevents the request entirely before it can form a malformed URL).
+
+---
+
+### 3. GSTR-1 Export — CSV to Excel (.xlsx)
+
+**Problem:** The GSTR-1 export downloaded a plain CSV file. Accountants and GST filers expect Excel format with styled headers.
+
+**Backend — `backend/apps/super_admin/views.py` (`BillingGSTR1ExportView`):**
+- Completely rewritten from `csv.writer` to `openpyxl` (already in `requirements.txt` as `openpyxl==3.1.5`).
+- Header row styled: brand purple fill (`#5B4FCF`), white bold font, centred alignment.
+- First row frozen (`freeze_panes = "B2"`).
+- 14 columns (5 new vs. old CSV): Invoice #, School, Invoice Date, Due Date, Status, Amount (₹), GST Rate (%), **Buyer GSTIN**, **Place of Supply**, **IGST (₹)**, **CGST (₹)**, **SGST (₹)**, SAC Code, Reverse Charge.
+- Returns `HttpResponse` with `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` and `Content-Disposition: attachment; filename="gstr1-<YYYYMM>.xlsx"`.
+
+**Frontend — `frontend/app/(dashboard)/super-admin/billing/page.tsx`:**
+- Export filename changed from `` `gstr1-${stamp}.csv` `` to `` `gstr1-${stamp}.xlsx` ``.
+
+---
+
+### 4. HR Admin Registration
+
+**Problem:** `backend/apps/hr/admin.py` was empty — no HR models were visible in the Django admin panel.
+
+**Backend — `backend/apps/hr/admin.py`** (written from scratch):
+- Registered all 11 HR models with useful admin configuration:
+
+| Model | list_display | Notable config |
+|---|---|---|
+| `DepartmentType` | name, is_active, created_at | search: name |
+| `Department` | name, dept_type, school, is_active | search: name, filter: dept_type/is_active |
+| `Designation` | name, department, is_active | raw_id_fields: department |
+| `Staff` | staff_no, full_name, school, department, designation, is_active | search: staff_no/name/email, filter: is_active/department |
+| `StaffDocument` | staff, document_type, is_verified | raw_id_fields: staff |
+| `LeaveType` | name, school, days_allowed, is_active | search: name |
+| `LeaveDefine` | leave_type, school, academic_year, days_allowed | raw_id_fields: leave_type |
+| `StaffAttendance` | staff, date, status | date_hierarchy: date, filter: status |
+| `LeaveRequest` | staff, leave_type, start_date, end_date, status | date_hierarchy: start_date, filter: status |
+| `PayrollRecord` | staff, month, year, basic_salary, net_salary | search: staff__staff_no/name, filter: month/year |
+| `PayrollSettings` | school, basic_salary_pct, hra_pct, pf_pct | readonly_fields: school |
+
+---
+
+### Files Changed (Day 11)
+
+| File | Change |
+|---|---|
+| `backend/apps/super_admin/views.py` | `BillingInvoiceDetailView.patch()` — added paid/cancelled guard; `BillingGSTR1ExportView` — rewritten with openpyxl (14 columns, styled header, frozen row) |
+| `frontend/app/(dashboard)/super-admin/billing/page.tsx` | Edit button disabled for `paid` + `cancelled`; export filename changed to `.xlsx` |
+| `frontend/app/(dashboard)/super-admin/billing/NewInvoiceDrawer.tsx` | `isPaidLocked` derived var; `canSubmit` blocked when locked; split warning banner (red locked vs amber edit) |
+| `frontend/app/(dashboard)/super-admin/schools/page.tsx` | `handleImpersonate` guard for missing `tenant_id`; Impersonate button disabled for no `tenant_id` or `provisioning` status |
+| `backend/apps/hr/admin.py` | Written from scratch — all 11 HR models registered with `list_display`, `search_fields`, `list_filter`, `raw_id_fields`/`readonly_fields` |
+
+---
+
+### Still in progress / known follow-ups
+
+- HR onboard wizard (Day 10) smoke-test in browser not yet done — `StepReview` enroll flow not end-to-end verified.
+- Pending Neon migrations (`tenancy/0007`–`0011`) not yet applied on staging.
+- GSTR-1 export IGST/CGST/SGST calculation logic uses simple split — a proper inter-state / intra-state detection pass (using `place_of_supply` vs. company state) should be added before production use.
+- `backend/apps/hr/admin.py` registrations are for local Django admin use only — no API changes involved.
+
+### Start next with
+
+1. Smoke-test all 10 HR onboard wizard steps in the browser.
+2. Apply pending Neon migrations (`0007`–`0011`) on dev + staging.
+3. End-to-end test impersonation: super-admin → Impersonate → new tab → spinner → `/home` as school admin.
+4. Add IGST/CGST/SGST state-of-supply detection to `BillingGSTR1ExportView` for accurate GST filing values.
+5. Commit all Day 11 changes on `tenancy-new` branch.
+

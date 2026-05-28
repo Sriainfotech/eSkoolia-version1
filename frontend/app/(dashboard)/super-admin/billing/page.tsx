@@ -589,7 +589,7 @@ function TaxInvoiceCard({
             <ActionRow
               icon={<Edit3 className="h-3.5 w-3.5" />}
               label="Edit invoice"
-              disabled={invoice.status === 'cancelled'}
+              disabled={invoice.status === 'paid' || invoice.status === 'cancelled'}
               onClick={onEdit}
             />
             <ActionRow
@@ -765,7 +765,7 @@ export default function SuperAdminBillingPage() {
     try {
       const blob = await exportGstr1();
       const stamp = new Date().toISOString().slice(0, 10);
-      downloadFile(blob, `gstr1-${stamp}.csv`);
+      downloadFile(blob, `gstr1-${stamp}.xlsx`);
       toast.success('GSTR-1 exported.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'GSTR export failed.');

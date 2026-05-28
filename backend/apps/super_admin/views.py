@@ -526,14 +526,23 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
             .order_by("-provisioned_at", "name")
         )
 
-        search = self.request.query_params.get("search")
+        search = self.request.query_params.get("search", "").strip()
         if search:
-            queryset = queryset.filter(
-                Q(name__icontains=search)
-                | Q(tenant_id__icontains=search)
-                | Q(subdomain_url__icontains=search)
-                | Q(gstin__icontains=search)
-            )
+            # Always filter by school name.
+            # Only extend to internal identifiers (tenant_id, subdomain,
+            # gstin) when the query is long enough to be intentional
+            # (>=5 chars), avoiding false matches on short queries like
+            # "ab" hitting random hex characters inside tenant IDs.
+            name_q = Q(name__icontains=search)
+            if len(search) >= 5:
+                queryset = queryset.filter(
+                    name_q
+                    | Q(tenant_id__icontains=search)
+                    | Q(subdomain_url__icontains=search)
+                    | Q(gstin__icontains=search)
+                )
+            else:
+                queryset = queryset.filter(name_q)
 
         _VALID_STATUS_PARAMS = {"active", "trial", "suspended", "archived"}
         status_value = self.request.query_params.get("status")
@@ -954,6 +963,72 @@ class SchoolImpersonateView(SuperAdminBaseAPIView):
             "refresh": str(refresh),
             "handoff_url": handoff_url,
             "expires_in": int(access.lifetime.total_seconds()),
+        })
+
+
+class SchoolResetAdminPasswordView(SuperAdminBaseAPIView):
+    """
+    POST /api/super-admin/schools/{tenant_id}/reset-admin-password/
+
+    Generates a new secure password for the school's admin account,
+    applies it immediately, and returns it ONCE to the Super Admin.
+    The password is never stored — only shown in this single response.
+    Works for all schools, including those provisioned before credential
+    vault storage was available.
+    """
+
+    def post(self, request, tenant_id: str):
+        tenant = get_object_or_404(
+            self._public_queryset(SchoolTenant), tenant_id=tenant_id
+        )
+
+        User = get_user_model()
+
+        # Resolve the ERP School record linked to this tenant via subdomain
+        erp_school = School.objects.filter(subdomain=tenant.subdomain_url).first()
+        if not erp_school:
+            return Response(
+                {"detail": "No ERP school record found for this tenant."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Find the primary school admin user
+        admin_user = (
+            User.objects.filter(school=erp_school, is_school_admin=True, is_active=True)
+            .order_by("id")
+            .first()
+        )
+        if not admin_user:
+            return Response(
+                {"detail": "No active school admin user found for this school."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        new_password = _gen_admin_password()
+        admin_user.set_password(new_password)
+        admin_user.save(update_fields=["password"])
+
+        log_audit(
+            action="school.admin_password_reset",
+            tenant_id=tenant_id,
+            status="success",
+            actor_user=request.user,
+            actor_ip=self._client_ip(request),
+            details={
+                "school_name": tenant.name,
+                "target_username": admin_user.username,
+                "reset_by": request.user.username,
+            },
+        )
+
+        return Response({
+            "admin_username": admin_user.username,
+            "admin_password": new_password,
+            "message": (
+                "Password reset successfully. "
+                "Share these credentials with the school. "
+                "This password will not be shown again."
+            ),
         })
 
 
@@ -1388,40 +1463,82 @@ class BillingPlanDetailView(SuperAdminBaseAPIView):
 
 class BillingGSTR1ExportView(SuperAdminBaseAPIView):
     def get(self, request):
+        from datetime import datetime
+        import openpyxl
+        from openpyxl.styles import Alignment, Font, PatternFill
+
         queryset = BillingInvoiceListCreateView()
         queryset.request = request
         invoices = queryset.get_queryset()
 
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow([
-            "invoice_number",
-            "school_name",
-            "tenant_id",
-            "invoice_date",
-            "due_date",
-            "status",
-            "subtotal",
-            "total_tax",
-            "grand_total",
-        ])
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "GSTR-1 Report"
 
-        for invoice in invoices:
-            tax_breakdown = invoice.tax_breakdown or {}
-            writer.writerow([
-                invoice.invoice_number,
-                invoice.school_name,
-                invoice.tenant.tenant_id if invoice.tenant_id and invoice.tenant else "",
-                invoice.invoice_date,
-                invoice.due_date,
-                invoice.status,
-                tax_breakdown.get("subtotal", 0),
-                tax_breakdown.get("total_tax", 0),
-                tax_breakdown.get("grand_total", _invoice_grand_total(invoice)),
-            ])
+        headers = [
+            "Invoice Number",
+            "School Name",
+            "Tenant ID",
+            "Buyer GSTIN",
+            "Place of Supply",
+            "Invoice Date",
+            "Due Date",
+            "Status",
+            "Subtotal (₹)",
+            "IGST (₹)",
+            "CGST (₹)",
+            "SGST (₹)",
+            "Total Tax (₹)",
+            "Grand Total (₹)",
+        ]
 
-        response = HttpResponse(output.getvalue(), content_type="text/csv")
-        response["Content-Disposition"] = 'attachment; filename="gstr1-report.csv"'
+        header_fill = PatternFill(start_color="5B4FCF", end_color="5B4FCF", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True, size=11)
+        header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        for col_idx, header in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_align
+
+        ws.row_dimensions[1].height = 30
+
+        col_widths = [24, 28, 18, 20, 18, 14, 14, 10, 16, 14, 14, 14, 14, 16]
+        for col_idx, width in enumerate(col_widths, start=1):
+            ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = width
+
+        row_align = Alignment(vertical="center")
+        for row_idx, invoice in enumerate(invoices, start=2):
+            tax = invoice.tax_breakdown or {}
+            ws.cell(row=row_idx, column=1,  value=invoice.invoice_number).alignment = row_align
+            ws.cell(row=row_idx, column=2,  value=invoice.school_name or "-").alignment = row_align
+            ws.cell(row=row_idx, column=3,  value=(invoice.tenant.tenant_id if invoice.tenant_id and invoice.tenant else "-")).alignment = row_align
+            ws.cell(row=row_idx, column=4,  value=invoice.buyer_gstin or "Unregistered").alignment = row_align
+            ws.cell(row=row_idx, column=5,  value=invoice.buyer_state or "-").alignment = row_align
+            ws.cell(row=row_idx, column=6,  value=str(invoice.invoice_date) if invoice.invoice_date else "-").alignment = row_align
+            ws.cell(row=row_idx, column=7,  value=str(invoice.due_date) if invoice.due_date else "-").alignment = row_align
+            ws.cell(row=row_idx, column=8,  value=invoice.status or "-").alignment = row_align
+            ws.cell(row=row_idx, column=9,  value=float(tax.get("subtotal", 0))).alignment = row_align
+            ws.cell(row=row_idx, column=10, value=float(tax.get("igst", 0))).alignment = row_align
+            ws.cell(row=row_idx, column=11, value=float(tax.get("cgst", 0))).alignment = row_align
+            ws.cell(row=row_idx, column=12, value=float(tax.get("sgst", 0))).alignment = row_align
+            ws.cell(row=row_idx, column=13, value=float(tax.get("total_tax", 0))).alignment = row_align
+            ws.cell(row=row_idx, column=14, value=float(tax.get("grand_total", _invoice_grand_total(invoice)))).alignment = row_align
+
+        ws.freeze_panes = "A2"
+
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        filename = f"gstr1-report-{timestamp}.xlsx"
+        response = HttpResponse(
+            output.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
         return response
 
 
@@ -1540,6 +1657,12 @@ class BillingInvoiceDetailView(SuperAdminBaseAPIView):
 
     def patch(self, request, invoice_id: str):
         invoice = self._get_invoice(invoice_id)
+        if invoice.status in ("paid", "cancelled"):
+            return Response(
+                {"detail": f"Invoice is '{invoice.status}' and cannot be edited. "
+                           "To make corrections, cancel the invoice and re-issue a new one."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         serializer = InvoiceUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
