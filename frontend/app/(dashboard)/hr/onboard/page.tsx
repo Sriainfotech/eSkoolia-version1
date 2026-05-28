@@ -3,26 +3,26 @@
  * HR Onboard — 10-step wizard matching the mockup design.
  * Layout: page header → QR banner → [252px grouped sidebar | step card] → sticky footer bar
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Camera, Upload, ChevronDown, X, Printer, Sparkles,
   FileText, CheckCircle, QrCode,
 } from "lucide-react";
 import {
-  HrField, HrInput, HrSelect, useHrToast,
+  HrField, HrInput, HrSelect, HrDropdown, useHrToast,
 } from "@/components/hr/HrUi";
+import SearchableSelect from "@/components/hr/SearchableSelect";
 import {
   useAllDepartments, useDesignations, useStaffList, createStaff,
+  useMasterLanguages, useMasterReligions, useMasterCountries, useMasterEmploymentTypes,
 } from "@/hooks/useHrApi";
 import type { Staff } from "@/types/hr";
+import { isValidEmail, isValidPhoneDigits, isValidPin, hasAlphanumeric } from "@/lib/hrValidation";
 
 // --- Constants ---
 const GENDERS        = ["Male", "Female", "Other", "Prefer not to say"] as const;
 const BLOOD_GROUPS   = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] as const;
 const MARITAL_STATUS = ["Single", "Married", "Divorced", "Widowed"] as const;
-const EMP_TYPES      = ["Permanent", "Contract", "Part-time", "Temporary", "Full-time", "Visiting Guest"] as const;
-const RELIGIONS      = ["Islam", "Christianity", "Hinduism", "Buddhism", "Other", "Prefer not to say"] as const;
-const MOTHER_TONGUES = ["English", "Yoruba", "Igbo", "Hausa", "French", "Arabic", "Tamil", "Other"] as const;
 const ROLES          = ["Teacher", "Admin Staff", "Finance", "Support", "Transport / Driver", "Library", "Principal", "Vice Principal"] as const;
 const SALARY_MODES   = ["Monthly", "Bi-monthly", "Weekly", "Daily"] as const;
 const BANKS          = ["GTBank", "Access Bank", "First Bank", "UBA", "Zenith Bank", "Polaris Bank", "Other"] as const;
@@ -124,6 +124,14 @@ type FormData = Partial<
     create_login: string;
     send_welcome: string;
     activate_attendance: string;
+    // Master data "Other" free-text
+    mother_tongue_other: string;
+    religion_other: string;
+    nationality_other: string;
+    employment_type_other: string;
+    // Probation (replaces free-text probation_period)
+    probation_value: string;
+    probation_unit: string;
   }
 >;
 
@@ -209,7 +217,7 @@ function AddRowBtn({ onClick, label }: { onClick: () => void; label: string }) {
 }
 
 // --- Sidebar Nav ---
-function WizardNav({ step, onGo }: { step: number; onGo: (n: number) => void }) {
+function WizardNav({ step, completedSteps, onGo }: { step: number; completedSteps: Set<number>; onGo: (n: number) => void }) {
   return (
     <div className="w-[252px] shrink-0 sticky top-[108px] self-start">
       <div
@@ -222,14 +230,17 @@ function WizardNav({ step, onGo }: { step: number; onGo: (n: number) => void }) 
               {group.group}
             </div>
             {group.steps.map((s) => {
-              const done   = s.num < step;
+              const done   = completedSteps.has(s.num) && s.num !== step;
               const active = s.num === step;
               return (
                 <button
                   key={s.num}
                   type="button"
                   onClick={() => onGo(s.num)}
-                  className="w-full flex items-start gap-3 px-[18px] py-[12px] text-left transition-colors hover:bg-[#F8FAFC]"
+                  className={[
+                    "w-full flex items-start gap-3 px-[18px] py-[12px] text-left transition-colors",
+                    "hover:bg-[#F8FAFC]",
+                  ].join(" ")}
                   style={{
                     background: active ? "var(--soft)" : undefined,
                     borderLeft: active ? "3px solid var(--brand)" : "3px solid transparent",
@@ -274,15 +285,161 @@ function WizardNav({ step, onGo }: { step: number; onGo: (n: number) => void }) 
   );
 }
 
+// --- Name quality guard ---
+function isGibberishName(v: string): boolean {
+  const t = v.trim();
+  if (t.length < 3) return false;
+  // 3+ consecutive identical characters (e.g. "fff", "aaa")
+  if (/(.)(\1){2,}/i.test(t)) return true;
+  // Any alphabetic segment of 3+ chars with zero vowels (e.g. "fss", "ssd")
+  const segs = t.split(/[\s\-'.]+/).filter((s) => /[a-zA-Z]{3,}/.test(s));
+  for (const seg of segs) {
+    if (!/[aeiou]/i.test(seg)) return true;
+  }
+  return false;
+}
+
+/** Adds `years` to a YYYY-MM-DD string, handling leap-day edge cases. */
+function addYears(dateStr: string, years: number): string {
+  const d = new Date(dateStr + "T00:00:00");
+  try {
+    d.setFullYear(d.getFullYear() + years);
+  } catch {
+    // Handles Feb-29 leap-day: fall back to Feb-28
+    d.setMonth(1);
+    d.setDate(28);
+    d.setFullYear(d.getFullYear() + years);
+  }
+  return d.toISOString().split("T")[0];
+}
+
+// --- Per-step required-field validation ---
+function step1Missing(f: FormData): Set<string> {
+  const m = new Set<string>();
+  if (!f.first_name?.trim())  m.add("first_name");
+  if (!f.last_name?.trim())   m.add("last_name");
+  if (!f.gender)              m.add("gender");
+  if (!f.date_of_birth)       m.add("date_of_birth");
+  if (!f.nationality)         m.add("nationality");
+  // Inactive status is treated as an incomplete condition — staff cannot be onboarded as inactive
+  if (f.status === "inactive") m.add("status_inactive");
+  return m;
+}
+
+function step2Missing(f: FormData): Set<string> {
+  const m = new Set<string>();
+  if (!f.department)      m.add("department");
+  if (!f.designation)     m.add("designation");
+  if (!f.role)            m.add("role");
+  if (!f.employment_type) m.add("employment_type");
+  if (!f.joining_date)    m.add("joining_date");
+  return m;
+}
+
+function step3Missing(f: FormData): Set<string> {
+  const m = new Set<string>();
+  if (!f.mobile?.trim())           m.add("mobile");
+  if (!f.personal_email?.trim())   m.add("personal_email");
+  if (!f.preferred_communication)  m.add("preferred_communication");
+  if (!f.current_address?.trim())  m.add("current_address");
+  if (!f.city?.trim())             m.add("city");
+  if (!f.state?.trim())            m.add("state");
+  if (!f.current_pin?.trim())      m.add("current_pin");
+  return m;
+}
+
+/** Returns true when a step's required fields are all valid. */
+function isStepComplete(
+  n: number, f: FormData, todayDate: string, maxDobDate: string, minDobDate: string, highestStep: number,
+): boolean {
+  if (n === 1) {
+    if (step1Missing(f).size > 0) return false;
+    const dob = f.date_of_birth ?? "";
+    if (!dob) return false;
+    if (dob >= todayDate) return false;          // future date
+    if (dob > maxDobDate) return false;          // under 18
+    if (dob < minDobDate) return false;          // over 70
+    if (isGibberishName(f.first_name ?? "") || isGibberishName(f.last_name ?? "")) return false;
+    return true;
+  }
+  if (n === 2) {
+    if (step2Missing(f).size > 0) return false;
+    const joining = f.joining_date ?? "";
+    if (joining) {
+      if (joining > todayDate) return false;     // future joining date
+      const dob = f.date_of_birth ?? "";
+      if (dob) {
+        if (joining <= dob) return false;        // joining before/on DOB
+        if (joining < addYears(dob, 18)) return false; // person under 18 at joining
+      }
+    }
+    return true;
+  }
+  if (n === 3) {
+    if (step3Missing(f).size > 0) return false;
+    if (!isValidEmail(f.personal_email ?? "")) return false;
+    if (!isValidPhoneDigits(f.mobile ?? "")) return false;
+    if (!isValidPin(f.current_pin ?? "")) return false;
+    const wa = (f.whatsapp ?? "").trim();
+    if (wa && !isValidPhoneDigits(wa)) return false;
+    const addr = (f.current_address ?? "").trim();
+    if (addr.length < 5 || !hasAlphanumeric(addr)) return false;
+    return true;
+  }
+  // Steps 4–10: mark complete once the user has moved forward past them
+  return highestStep > n;
+}
+
 // --- Step 1: Staff Identity ---
 function StepIdentity({
   f, set, photoPreview, onPhotoClick,
+  languages, religions, countries,
+  langLoading, relLoading, countryLoading,
+  langError, relError, countryError,
+  maxDob, minDob, todayDate, showErrors,
 }: {
   f: FormData;
   set: (k: string, v: string) => void;
   photoPreview: string | null;
   onPhotoClick: () => void;
+  languages: { id: number; name: string }[];
+  religions: { id: number; name: string }[];
+  countries: { id: number; name: string }[];
+  langLoading: boolean;
+  relLoading: boolean;
+  countryLoading: boolean;
+  langError: string | null;
+  relError: string | null;
+  countryError: string | null;
+  maxDob: string;
+  minDob: string;
+  todayDate: string;
+  showErrors: boolean;
 }) {
+  const dobFuture   = !!f.date_of_birth && f.date_of_birth >= todayDate;
+  const dobTooYoung = !!f.date_of_birth && !dobFuture && f.date_of_birth > maxDob;
+  const dobTooOld   = !!f.date_of_birth && !dobFuture && !dobTooYoung && f.date_of_birth < minDob;
+  const dobError    = !f.date_of_birth && showErrors
+    ? "Date of birth is required."
+    : dobFuture
+      ? "Date of birth cannot be today or a future date."
+      : dobTooYoung
+        ? "Staff age must be at least 18 years."
+        : dobTooOld
+          ? "Please enter a valid date of birth. Age cannot exceed 70 years."
+          : null;
+  const firstNameErr = !f.first_name?.trim() && showErrors
+    ? "First name is required."
+    : isGibberishName(f.first_name ?? "")
+      ? "Enter a valid first name."
+      : null;
+  const middleNameErr = isGibberishName(f.middle_name ?? "") ? "Enter a valid middle name." : null;
+  const lastNameErr = !f.last_name?.trim() && showErrors
+    ? "Last name is required."
+    : isGibberishName(f.last_name ?? "")
+      ? "Enter a valid last name."
+      : null;
+
   return (
     <div className="flex flex-col gap-8">
       {/* Photo upload */}
@@ -364,19 +521,55 @@ function StepIdentity({
               Inactive
             </button>
           </div>
+          {showErrors && f.status === "inactive" && (
+            <p className="mt-1 text-[11px] text-[#dc2626]">Inactive staff cannot continue onboarding. Change status to Active.</p>
+          )}
         </HrField>
       </div>
 
       {/* Row 2: First Name | Middle Name | Last Name */}
       <div className="grid grid-cols-3 gap-6">
         <HrField label="First Name" required>
-          <HrInput value={f.first_name ?? ""} onChange={(e) => set("first_name", e.target.value)} placeholder="e.g. Priya" />
+          <HrInput
+            value={f.first_name ?? ""}
+            onChange={(e) => set("first_name", e.target.value.replace(/[^a-zA-Z\s'\-.]/g, ""))}
+            placeholder="e.g. Priya"
+            maxLength={50}
+          />
+          {firstNameErr
+            ? <p className="mt-1 text-[11px] text-[#dc2626]">{firstNameErr}</p>
+            : (f.first_name?.length ?? 0) > 35
+              ? <p className="mt-1 text-[11px]" style={{ color: (f.first_name?.length ?? 0) >= 50 ? "#dc2626" : "#94A3B8" }}>{f.first_name?.length ?? 0}/50</p>
+              : null
+          }
         </HrField>
         <HrField label="Middle Name">
-          <HrInput value={f.middle_name ?? ""} onChange={(e) => set("middle_name", e.target.value)} placeholder="Optional" />
+          <HrInput
+            value={f.middle_name ?? ""}
+            onChange={(e) => set("middle_name", e.target.value.replace(/[^a-zA-Z\s'\-.]/g, ""))}
+            placeholder="Optional"
+            maxLength={50}
+          />
+          {middleNameErr
+            ? <p className="mt-1 text-[11px] text-[#dc2626]">{middleNameErr}</p>
+            : (f.middle_name?.length ?? 0) > 35
+              ? <p className="mt-1 text-[11px]" style={{ color: (f.middle_name?.length ?? 0) >= 50 ? "#dc2626" : "#94A3B8" }}>{f.middle_name?.length ?? 0}/50</p>
+              : null
+          }
         </HrField>
         <HrField label="Last Name" required>
-          <HrInput value={f.last_name ?? ""} onChange={(e) => set("last_name", e.target.value)} placeholder="e.g. Sharma" />
+          <HrInput
+            value={f.last_name ?? ""}
+            onChange={(e) => set("last_name", e.target.value.replace(/[^a-zA-Z\s'\-.]/g, ""))}
+            placeholder="e.g. Sharma"
+            maxLength={50}
+          />
+          {lastNameErr
+            ? <p className="mt-1 text-[11px] text-[#dc2626]">{lastNameErr}</p>
+            : (f.last_name?.length ?? 0) > 35
+              ? <p className="mt-1 text-[11px]" style={{ color: (f.last_name?.length ?? 0) >= 50 ? "#dc2626" : "#94A3B8" }}>{f.last_name?.length ?? 0}/50</p>
+              : null
+          }
         </HrField>
       </div>
 
@@ -389,12 +582,20 @@ function StepIdentity({
             onChange={(e) => set("date_of_birth", e.target.value)}
             placeholder="dd/mm/yyyy"
           />
+          {dobError ? (
+            <p className="mt-1 text-[11px] text-[#dc2626]">{dobError}</p>
+          ) : f.date_of_birth ? (
+            <p className="mt-1 text-[11px] text-[#16a34a]">✓ Valid</p>
+          ) : null}
         </HrField>
         <HrField label="Gender" required>
           <HrSelect value={f.gender ?? ""} onChange={(e) => set("gender", e.target.value)}>
             <option value="">Select</option>
             {GENDERS.map((g) => <option key={g}>{g}</option>)}
           </HrSelect>
+          {showErrors && !f.gender && (
+            <p className="mt-1 text-[11px] text-[#dc2626]">Gender is required.</p>
+          )}
         </HrField>
         <HrField label="Blood Group">
           <HrSelect value={f.blood_group_input ?? ""} onChange={(e) => set("blood_group_input", e.target.value)}>
@@ -407,29 +608,46 @@ function StepIdentity({
       {/* Row 4: Mother Tongue | Religion | Nationality */}
       <div className="grid grid-cols-3 gap-6">
         <HrField label="Mother Tongue">
-          <HrSelect value={f.mother_tongue ?? ""} onChange={(e) => set("mother_tongue", e.target.value)}>
-            <option value="">Select</option>
-            {MOTHER_TONGUES.map((m) => <option key={m}>{m}</option>)}
-          </HrSelect>
+          <SearchableSelect
+            value={f.mother_tongue ?? ""}
+            onChange={(v) => set("mother_tongue", v)}
+            options={languages}
+            placeholder="Select language"
+            loading={langLoading}
+            error={langError}
+            customValue={f.mother_tongue_other ?? ""}
+            onCustomChange={(v) => set("mother_tongue_other", v)}
+            customPlaceholder="Specify language…"
+          />
         </HrField>
         <HrField label="Religion">
-          <HrSelect value={f.religion ?? ""} onChange={(e) => set("religion", e.target.value)}>
-            <option value="">Prefer not to say</option>
-            {RELIGIONS.map((r) => <option key={r}>{r}</option>)}
-          </HrSelect>
+          <SearchableSelect
+            value={f.religion ?? ""}
+            onChange={(v) => set("religion", v)}
+            options={religions}
+            placeholder="Select religion"
+            loading={relLoading}
+            error={relError}
+            customValue={f.religion_other ?? ""}
+            onCustomChange={(v) => set("religion_other", v)}
+            customPlaceholder="Specify religion…"
+          />
         </HrField>
         <HrField label="Nationality" required>
-          <HrInput
+          <SearchableSelect
             value={f.nationality ?? ""}
-            onChange={(e) => set("nationality", e.target.value)}
-            placeholder="Select Nationality"
-            list="nationality-list"
+            onChange={(v) => set("nationality", v)}
+            options={countries}
+            placeholder="Select country"
+            loading={countryLoading}
+            error={countryError}
+            customValue={f.nationality_other ?? ""}
+            onCustomChange={(v) => set("nationality_other", v)}
+            customPlaceholder="Specify nationality…"
           />
-          <datalist id="nationality-list">
-            {["Nigerian", "Ghanaian", "Kenyan", "South African", "Indian", "British", "American", "Other"].map((n) => (
-              <option key={n} value={n} />
-            ))}
-          </datalist>
+          {showErrors && !f.nationality && (
+            <p className="mt-1 text-[11px] text-[#dc2626]">Nationality is required.</p>
+          )}
         </HrField>
       </div>
     </div>
@@ -439,37 +657,75 @@ function StepIdentity({
 // --- Step 2: Role & Placement ---
 function StepRole({
   f, set, departments, designations, staffList,
+  empTypes, empLoading, empError, showErrors, todayDate,
 }: {
   f: FormData;
   set: (k: string, v: string) => void;
   departments: { id: number; name: string }[];
   designations: { id: number; name: string; department: number }[];
   staffList: { id: number; first_name: string; last_name: string }[];
+  empTypes: { id: number; name: string }[];
+  empLoading: boolean;
+  empError: string | null;
+  showErrors: boolean;
+  todayDate: string;
 }) {
   const filteredDesigs = designations.filter(
     (d) => !f.department || String(d.department) === String(f.department),
   );
+
+  // Joining date cross-validation
+  const joiningDate     = f.joining_date ?? "";
+  const dob             = f.date_of_birth ?? "";
+  const joiningFuture   = !!joiningDate && joiningDate > todayDate;
+  const joiningBeforeDob = !!joiningDate && !!dob && joiningDate <= dob;
+  const joiningTooYoung = !!joiningDate && !!dob && !joiningBeforeDob && joiningDate < addYears(dob, 18);
+  const joiningDateErr  = !joiningDate && showErrors
+    ? "Joining date is required."
+    : joiningFuture
+      ? "Joining date cannot be a future date."
+      : joiningBeforeDob
+        ? "Joining date cannot be earlier than date of birth."
+        : joiningTooYoung
+          ? "Staff must be at least 18 years old at the time of joining."
+          : null;
+  const joiningValid = !!joiningDate && !joiningFuture && !joiningBeforeDob && !joiningTooYoung;
   return (
     <div className="flex flex-col gap-6">
       {/* Row 1: Department | Designation | Role/access */}
       <div className="grid grid-cols-3 gap-6">
         <HrField label="Department" required>
-          <HrSelect value={String(f.department ?? "")} onChange={(e) => set("department", e.target.value)}>
-            <option value="">Select...</option>
-            {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </HrSelect>
+          <HrDropdown
+            value={String(f.department ?? "")}
+            onChange={(v) => set("department", v)}
+            options={departments.map((d) => ({ value: d.id, label: d.name }))}
+            placeholder="Select..."
+          />
+          {showErrors && !f.department && (
+            <p className="mt-1 text-[11px] text-[#dc2626]">Department is required.</p>
+          )}
         </HrField>
         <HrField label="Designation" required>
-          <HrSelect value={String(f.designation ?? "")} onChange={(e) => set("designation", e.target.value)}>
-            <option value="">Select...</option>
-            {filteredDesigs.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </HrSelect>
+          <HrDropdown
+            value={String(f.designation ?? "")}
+            onChange={(v) => set("designation", v)}
+            options={filteredDesigs.map((d) => ({ value: d.id, label: d.name }))}
+            placeholder="Select..."
+          />
+          {showErrors && !f.designation && (
+            <p className="mt-1 text-[11px] text-[#dc2626]">Designation is required.</p>
+          )}
         </HrField>
         <HrField label="Role / Access" required>
-          <HrSelect value={String(f.role ?? "")} onChange={(e) => set("role", e.target.value)}>
-            <option value="">Select...</option>
-            {ROLES.map((r) => <option key={r}>{r}</option>)}
-          </HrSelect>
+          <HrDropdown
+            value={String(f.role ?? "")}
+            onChange={(v) => set("role", v)}
+            options={ROLES.map((r) => ({ value: r, label: r }))}
+            placeholder="Select..."
+          />
+          {showErrors && !f.role && (
+            <p className="mt-1 text-[11px] text-[#dc2626]">Role / Access is required.</p>
+          )}
         </HrField>
       </div>
 
@@ -477,38 +733,204 @@ function StepRole({
       <div className="grid grid-cols-3 gap-6">
         <HrField label="Joining Date" required>
           <HrInput type="date" value={f.joining_date ?? ""} onChange={(e) => set("joining_date", e.target.value)} />
+          {joiningDateErr
+            ? <p className="mt-1 text-[11px] text-[#dc2626]">{joiningDateErr}</p>
+            : joiningValid
+              ? <p className="mt-1 text-[11px] text-[#16a34a]">✓ Valid</p>
+              : null
+          }
         </HrField>
         <HrField label="Employment Type" required>
-          <HrSelect value={f.employment_type ?? ""} onChange={(e) => set("employment_type", e.target.value)}>
-            <option value="">Select...</option>
-            {EMP_TYPES.map((t) => <option key={t}>{t}</option>)}
-          </HrSelect>
+          <SearchableSelect
+            value={f.employment_type ?? ""}
+            onChange={(v) => set("employment_type", v)}
+            options={empTypes}
+            placeholder="Select employment type..."
+            loading={empLoading}
+            error={empError}
+            customValue={f.employment_type_other ?? ""}
+            onCustomChange={(v) => set("employment_type_other", v)}
+            customPlaceholder="Specify employment type..."
+          />
+          {showErrors && !f.employment_type && (
+            <p className="mt-1 text-[11px] text-[#dc2626]">Employment type is required.</p>
+          )}
         </HrField>
-        <HrField label="Probation Period">
-          <HrInput value={f.probation_period ?? ""} onChange={(e) => set("probation_period", e.target.value)} placeholder="e.g. 3 months" />
-        </HrField>
+        {/* Probation Period: grouped input (value + unit share one border) */}
+        {(() => {
+          const probVal   = (f.probation_value ?? "").trim();
+          const probUnit  = f.probation_unit || "months";
+          const maxByUnit: Record<string, number> = { days: 365, months: 24, years: 5 };
+          const probMax   = maxByUnit[probUnit] ?? 24;
+          const probNum   = Number(probVal);
+          const probErr   = probVal
+            ? (!/^\d+$/.test(probVal) || probNum <= 0 || probNum > probMax)
+              ? `Enter valid probation duration (max ${probMax} ${probUnit}).`
+              : null
+            : null;
+          return (
+            <HrField label="Probation Period">
+              {/* Single-border grouped field: [value input] | [unit select] */}
+              <div className="h-[44px] flex items-center border border-[var(--line)] rounded-[11px] bg-white focus-within:border-[#c4b5fd] overflow-hidden transition-colors">
+                <input
+                  className="flex-1 h-full px-3 bg-transparent text-[13px] text-[var(--ink)] outline-none placeholder:text-[#94A3B8] min-w-0"
+                  type="text"
+                  inputMode="numeric"
+                  value={f.probation_value ?? ""}
+                  onChange={(e) => set("probation_value", e.target.value.replace(/[^0-9]/g, ""))}
+                  placeholder="e.g. 6"
+                  maxLength={3}
+                />
+                {/* vertical divider */}
+                <div className="w-px h-[24px] bg-[var(--line)] shrink-0" />
+                {/* unit select with custom arrow */}
+                <div className="relative shrink-0 h-full flex items-center">
+                  <select
+                    className="h-full pl-3 pr-8 bg-transparent text-[13px] text-[var(--ink)] outline-none appearance-none cursor-pointer"
+                    value={f.probation_unit || "months"}
+                    onChange={(e) => set("probation_unit", e.target.value)}
+                  >
+                    <option value="days">Days</option>
+                    <option value="months">Months</option>
+                    <option value="years">Years</option>
+                  </select>
+                  <span className="pointer-events-none absolute right-2 text-[#94A3B8] text-[10px] leading-none">▼</span>
+                </div>
+              </div>
+              {probErr && <p className="mt-1 text-[11px] text-[#dc2626]">{probErr}</p>}
+            </HrField>
+          );
+        })()}
       </div>
 
       {/* Full-width: Reporting Manager */}
-      <HrField label="Reporting Manager" required>
-        <HrSelect value={String(f.reporting_manager ?? "")} onChange={(e) => set("reporting_manager", e.target.value)}>
-          <option value="">Select reporting manager...</option>
-          {staffList.map((s) => (
-            <option key={s.id} value={s.id}>{s.first_name} {s.last_name}</option>
-          ))}
-        </HrSelect>
+      <HrField label="Reporting Manager">
+        <HrDropdown
+          value={String(f.reporting_manager ?? "")}
+          onChange={(v) => set("reporting_manager", v)}
+          options={staffList.map((s) => ({ value: s.id, label: `${s.first_name} ${s.last_name}` }))}
+          placeholder="Select reporting manager..."
+        />
       </HrField>
     </div>
   );
 }
 
 // --- Step 3: Contact & Address ---
-function StepContact({ f, set }: { f: FormData; set: (k: string, v: string) => void }) {
+function StepContact({
+  f, set, showErrors,
+}: {
+  f: FormData;
+  set: (k: string, v: string) => void;
+  showErrors: boolean;
+}) {
   const sameAddr = f.same_address === "true";
+  const [mobileCc,   setMobileCc]   = useState("+91");
+  const [whatsappCc, setWhatsappCc] = useState("+91");
+  const [pinLoading,  setPinLoading]  = useState(false);
+  const [pinAutoFilled, setPinAutoFilled] = useState(false);
+  const prevPinRef = useRef("");
+
   const ccSel = [
     "h-[44px] px-3 border border-[var(--line)] rounded-[11px] bg-white text-[13px]",
     "text-[var(--ink)] outline-none focus:border-[#c4b5fd] shrink-0",
   ].join(" ");
+
+  // ── Validation computed values ───────────────────────────────────────────
+  const mobileRaw   = (f.mobile ?? "").trim();
+  const mobileDigits = mobileRaw.replace(/\D/g, "");
+  const mobileErr = !mobileRaw && showErrors
+    ? "Mobile number is required."
+    : mobileRaw && !/^\d+$/.test(mobileRaw)
+      ? "Enter digits only."
+      : mobileRaw && mobileDigits.length !== 10
+        ? "Enter a valid 10-digit mobile number."
+        : null;
+
+  const emailRaw = (f.personal_email ?? "").trim();
+  const emailErr = !emailRaw && showErrors
+    ? "Personal email is required."
+    : emailRaw && !isValidEmail(emailRaw)
+      ? "Enter a valid email address."
+      : null;
+
+  const officialEmailRaw = (f.official_email ?? "").trim();
+  const officialEmailErr = officialEmailRaw && !isValidEmail(officialEmailRaw)
+    ? "Enter a valid email address."
+    : null;
+
+  const waRaw    = (f.whatsapp ?? "").trim();
+  const waDigits = waRaw.replace(/\D/g, "");
+  const waErr = waRaw && (!/^\d+$/.test(waRaw) || waDigits.length !== 10)
+    ? "Enter a valid 10-digit mobile number."
+    : null;
+
+  const altMobRaw    = (f.alternate_mobile ?? "").trim();
+  const altMobDigits = altMobRaw.replace(/\D/g, "");
+  const altMobErr = altMobRaw && altMobDigits.length !== 10
+    ? "Enter a valid 10-digit mobile number."
+    : null;
+
+  const commErr = !f.preferred_communication && showErrors
+    ? "Select preferred communication method."
+    : null;
+
+  const addrRaw = (f.current_address ?? "").trim();
+  const addrErr = !addrRaw && showErrors
+    ? "Address line 1 is required."
+    : addrRaw && addrRaw.length < 5
+      ? "Address must be at least 5 characters."
+      : addrRaw && !hasAlphanumeric(addrRaw)
+        ? "Address cannot contain only special characters."
+        : null;
+
+  const cityErr  = !f.city?.trim() && showErrors  ? "City is required."  : null;
+  const stateErr = !f.state?.trim() && showErrors ? "State is required." : null;
+
+  const pinRaw = (f.current_pin ?? "").trim();
+  const pinErr = !pinRaw && showErrors
+    ? "PIN code is required."
+    : pinRaw && !/^\d{5,6}$/.test(pinRaw)
+      ? "Enter a valid PIN code (5–6 digits)."
+      : null;
+  const pinIsValid = isValidPin(pinRaw);
+
+  // ── PIN code lookup ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!pinIsValid || pinRaw === prevPinRef.current) return;
+    prevPinRef.current = pinRaw;
+    setPinLoading(true);
+    setPinAutoFilled(false);
+    void (async () => {
+      try {
+        const { lookupPincode } = await import("@/hooks/useHrApi");
+        const result = await lookupPincode(pinRaw);
+        if (result) {
+          set("city",            result.city);
+          set("state",           result.state);
+          set("current_country", result.country);
+          setPinAutoFilled(true);
+        }
+      } catch { /* ignore lookup errors silently */ }
+      finally { setPinLoading(false); }
+    })();
+  }, [pinRaw]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Same-address sync ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!sameAddr) return;
+    set("permanent_address", f.current_address ?? "");
+    set("permanent_city",    f.city            ?? "");
+    set("permanent_state",   f.state           ?? "");
+    set("permanent_pin",     f.current_pin     ?? "");
+    set("permanent_country", f.current_country ?? "");
+  }, [ // eslint-disable-line react-hooks/exhaustive-deps
+    sameAddr,
+    f.current_address, f.city, f.state, f.current_pin, f.current_country,
+  ]);
+
+  const errTxt = (msg: string | null) =>
+    msg ? <p className="mt-1 text-[11px] text-[#dc2626]">{msg}</p> : null;
 
   return (
     <div className="flex flex-col gap-8">
@@ -526,52 +948,64 @@ function StepContact({ f, set }: { f: FormData; set: (k: string, v: string) => v
               Mobile <span className="text-[var(--red)]">*</span>
             </label>
             <div className="flex gap-2">
-              <select className={ccSel}>
-                <option>+91</option><option>+234</option><option>+44</option><option>+1</option>
+              <select className={ccSel} value={mobileCc} onChange={(e) => setMobileCc(e.target.value)}>
+                {CC_OPTIONS.map((cc) => <option key={cc}>{cc}</option>)}
               </select>
               <HrInput
                 className="flex-1 min-w-0"
                 value={f.mobile ?? ""}
-                onChange={(e) => set("mobile", e.target.value)}
+                onChange={(e) => set("mobile", e.target.value.replace(/[^\d]/g, ""))}
                 placeholder="Mobile number"
+                maxLength={10}
               />
             </div>
-            <span className="text-[11px] text-[#94A3B8] -mt-1">Used for WhatsApp</span>
+            {mobileErr
+              ? errTxt(mobileErr)
+              : <span className="text-[11px] text-[#94A3B8] -mt-1">Used for WhatsApp</span>}
           </div>
 
-          <HrField label="Alternate Mobile">
-            <HrInput value={f.alternate_mobile ?? ""} onChange={(e) => set("alternate_mobile", e.target.value)} placeholder="Optional" />
-          </HrField>
+          <div className="flex flex-col gap-[9px]">
+            <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">Alternate Mobile</label>
+            <HrInput
+              value={f.alternate_mobile ?? ""}
+              onChange={(e) => set("alternate_mobile", e.target.value.replace(/[^\d]/g, ""))}
+              placeholder="Optional"
+              maxLength={10}
+            />
+            {errTxt(altMobErr)}
+          </div>
 
           <HrField label="Official Email">
             <HrInput type="email" value={f.official_email ?? ""} onChange={(e) => set("official_email", e.target.value)} placeholder="name@school.edu.in" />
+            {errTxt(officialEmailErr)}
           </HrField>
         </div>
 
         {/* Row 2: Personal Email | WhatsApp | Preferred Communication */}
         <div className="grid grid-cols-3 gap-6">
-          <HrField label="Personal Email">
+          <div className="flex flex-col gap-[9px]">
+            <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">
+              Personal Email <span className="text-[var(--red)]">*</span>
+            </label>
             <HrInput type="email" value={f.personal_email ?? ""} onChange={(e) => set("personal_email", e.target.value)} placeholder="personal@gmail.com" />
-          </HrField>
+            {errTxt(emailErr)}
+          </div>
 
           <div className="flex flex-col gap-[9px]">
             <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">WhatsApp</label>
             <div className="flex gap-2">
-              <select className={ccSel}>
-                <option>+91</option><option>+234</option><option>+44</option><option>+1</option>
+              <select className={ccSel} value={whatsappCc} onChange={(e) => setWhatsappCc(e.target.value)}>
+                {CC_OPTIONS.map((cc) => <option key={cc}>{cc}</option>)}
               </select>
               <HrInput
                 className="flex-1 min-w-0"
                 value={f.whatsapp ?? ""}
-                onChange={(e) => set("whatsapp", e.target.value)}
+                onChange={(e) => set("whatsapp", e.target.value.replace(/[^\d]/g, ""))}
                 placeholder=""
+                maxLength={10}
               />
             </div>
-          </div>
-
-          <div className="flex flex-col gap-[9px]">
-            <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">Preferred Communication</label>
-            <label className="flex items-center gap-[7px] text-[12px] text-[#64748B] cursor-pointer">
+            <label className="flex items-center gap-[7px] text-[12px] text-[#64748B] cursor-pointer -mt-1">
               <input
                 type="checkbox"
                 checked={!!f.mobile && f.whatsapp === f.mobile}
@@ -580,12 +1014,21 @@ function StepContact({ f, set }: { f: FormData; set: (k: string, v: string) => v
               />
               Same as mobile
             </label>
+            {errTxt(waErr)}
+          </div>
+
+          <div className="flex flex-col gap-[9px]">
+            <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">
+              Preferred Communication <span className="text-[var(--red)]">*</span>
+            </label>
             <HrSelect value={f.preferred_communication ?? ""} onChange={(e) => set("preferred_communication", e.target.value)}>
               <option value="">Select...</option>
-              <option>Phone</option>
-              <option>WhatsApp</option>
-              <option>Email</option>
+              <option value="mobile">Mobile</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="personal_email">Personal Email</option>
+              <option value="official_email">Official Email</option>
             </HrSelect>
+            {errTxt(commErr)}
           </div>
         </div>
       </div>
@@ -595,22 +1038,49 @@ function StepContact({ f, set }: { f: FormData; set: (k: string, v: string) => v
         <div className="text-[10.5px] font-[900] text-[#94A3B8] uppercase tracking-[0.1em] pb-3 border-b border-[#F1F5F9]">
           02 · Current Address
         </div>
-        <HrField label="Address Line 1" required>
+        <div className="flex flex-col gap-[9px]">
+          <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">
+            Address Line 1 <span className="text-[var(--red)]">*</span>
+          </label>
           <HrInput value={f.current_address ?? ""} onChange={(e) => set("current_address", e.target.value)} placeholder="House no., Building, Street" />
-        </HrField>
+          {errTxt(addrErr)}
+        </div>
         <HrField label="Address Line 2">
           <HrInput value={f.current_address_line2 ?? ""} onChange={(e) => set("current_address_line2", e.target.value)} placeholder="Area / Locality (optional)" />
         </HrField>
         <div className="grid grid-cols-4 gap-6">
-          <HrField label="City" required>
+          <div className="flex flex-col gap-[9px]">
+            <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">
+              City <span className="text-[var(--red)]">*</span>
+            </label>
             <HrInput value={f.city ?? ""} onChange={(e) => set("city", e.target.value)} placeholder="City" />
-          </HrField>
-          <HrField label="State" required>
+            {errTxt(cityErr)}
+          </div>
+          <div className="flex flex-col gap-[9px]">
+            <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">
+              State <span className="text-[var(--red)]">*</span>
+            </label>
             <HrInput value={f.state ?? ""} onChange={(e) => set("state", e.target.value)} placeholder="State" />
-          </HrField>
-          <HrField label="Pin Code" required>
-            <HrInput value={f.current_pin ?? ""} onChange={(e) => set("current_pin", e.target.value)} placeholder="560001" />
-          </HrField>
+            {errTxt(stateErr)}
+          </div>
+          <div className="flex flex-col gap-[9px]">
+            <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">
+              PIN Code <span className="text-[var(--red)]">*</span>
+            </label>
+            <HrInput
+              value={f.current_pin ?? ""}
+              onChange={(e) => { set("current_pin", e.target.value.replace(/\D/g, "")); setPinAutoFilled(false); }}
+              placeholder="560001"
+              maxLength={6}
+            />
+            {pinErr
+              ? errTxt(pinErr)
+              : pinLoading
+                ? <p className="mt-1 text-[11px] text-[#94A3B8]">Looking up location…</p>
+                : pinAutoFilled
+                  ? <p className="mt-1 text-[11px] text-[#22c55e]">✓ Location auto-filled</p>
+                  : null}
+          </div>
           <HrField label="Country">
             <HrInput value={f.current_country ?? ""} onChange={(e) => set("current_country", e.target.value)} placeholder="India" />
           </HrField>
@@ -627,13 +1097,27 @@ function StepContact({ f, set }: { f: FormData; set: (k: string, v: string) => v
             <input
               type="checkbox"
               checked={sameAddr}
-              onChange={(e) => set("same_address", e.target.checked ? "true" : "false")}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                set("same_address", checked ? "true" : "false");
+                if (checked) {
+                  set("permanent_address", f.current_address ?? "");
+                  set("permanent_city",    f.city            ?? "");
+                  set("permanent_state",   f.state           ?? "");
+                  set("permanent_pin",     f.current_pin     ?? "");
+                  set("permanent_country", f.current_country ?? "");
+                }
+              }}
               className="accent-[var(--brand)] w-[13px] h-[13px] shrink-0"
             />
             Same as current address
           </label>
         </div>
-        {!sameAddr && (
+        {sameAddr ? (
+          <div className="rounded-[10px] bg-[#F8FAFC] border border-[#E2E8F0] px-4 py-3 text-[12.5px] text-[#64748B]">
+            Permanent address will be same as current address.
+          </div>
+        ) : (
           <>
             <HrField label="Address Line 1">
               <HrInput value={f.permanent_address ?? ""} onChange={(e) => set("permanent_address", e.target.value)} placeholder="House no., Building, Street" />
@@ -646,7 +1130,7 @@ function StepContact({ f, set }: { f: FormData; set: (k: string, v: string) => v
                 <HrInput value={f.permanent_state ?? ""} onChange={(e) => set("permanent_state", e.target.value)} placeholder="State" />
               </HrField>
               <HrField label="Pin Code">
-                <HrInput value={f.permanent_pin ?? ""} onChange={(e) => set("permanent_pin", e.target.value)} placeholder="560001" />
+                <HrInput value={f.permanent_pin ?? ""} onChange={(e) => set("permanent_pin", e.target.value.replace(/\D/g, ""))} placeholder="560001" maxLength={6} />
               </HrField>
               <HrField label="Country">
                 <HrInput value={f.permanent_country ?? ""} onChange={(e) => set("permanent_country", e.target.value)} placeholder="India" />
@@ -1382,17 +1866,23 @@ function StepReview({
 
 // --- Main Page ---
 export default function HrOnboardPage() {
-  const [step,         setStep]         = useState(1);
-  const [form,         setForm]         = useState<FormData>({ status: "active" });
-  const [saving,       setSaving]       = useState(false);
-  const [done,         setDone]         = useState(false);
-  const [showQrBanner, setShowQrBanner] = useState(true);
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [step,                 setStep]                 = useState(1);
+  const [form,                 setForm]                 = useState<FormData>({ status: "active" });
+  const [saving,               setSaving]               = useState(false);
+  const [done,                 setDone]                 = useState(false);
+  const [showQrBanner,         setShowQrBanner]         = useState(true);
+  const [photoPreview,         setPhotoPreview]         = useState<string | null>(null);
+  const [showErrors,           setShowErrors]           = useState(false);
+  const [highestStep,          setHighestStep]          = useState(1);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   const { data: allDeptData } = useAllDepartments();
   const { data: desigData }   = useDesignations();
   const { data: staffData }   = useStaffList();
+  const { data: langData,    loading: langLoading,    error: langError    } = useMasterLanguages();
+  const { data: relData,     loading: relLoading,     error: relError     } = useMasterReligions();
+  const { data: countryData, loading: countryLoading, error: countryError } = useMasterCountries();
+  const { data: empTypeData, loading: empTypeLoading, error: empTypeError } = useMasterEmploymentTypes();
   const { toast }             = useHrToast();
 
   const departments  = allDeptData?.results ?? [];
@@ -1401,8 +1891,102 @@ export default function HrOnboardPage() {
   const staffCount   = staffData?.count ?? 0;
 
   const setField = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
-  const goNext   = () => setStep((s) => Math.min(s + 1, TOTAL));
-  const goPrev   = () => setStep((s) => Math.max(s - 1, 1));
+
+  // DOB limits: must be ≥ 18 years old, cannot be a future date
+  const maxDobDate = (() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 18);
+    return d.toISOString().split("T")[0];
+  })();
+  // Staff age must not exceed 70 years
+  const minDobDate = (() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() - 70);
+    return d.toISOString().split("T")[0];
+  })();
+  const todayDate = new Date().toISOString().split("T")[0];
+
+  // Pre-compute which steps show a green checkmark
+  const completedSteps = new Set<number>();
+  for (let n = 1; n <= TOTAL; n++) {
+    if (isStepComplete(n, form, todayDate, maxDobDate, minDobDate, highestStep)) completedSteps.add(n);
+  }
+
+  const navigateTo = (n: number) => {
+    setShowErrors(false);
+    setHighestStep((h) => Math.max(h, n));
+    setStep(n);
+  };
+
+  /** Unconditionally advances to the next step (called after all guards pass). */
+  const advanceStep = () => {
+    setShowErrors(false);
+    setHighestStep((h) => Math.max(h, step + 1));
+    setStep((s) => Math.min(s + 1, TOTAL));
+  };
+
+  const goNext = () => {
+    if (step === 1) {
+      const dob = form.date_of_birth ?? "";
+      if (dob && dob >= todayDate) {
+        setShowErrors(true);
+        toast("Date of birth cannot be today or a future date.", "error");
+        return;
+      }
+      if (dob && dob > maxDobDate) {
+        setShowErrors(true);
+        toast("Staff age must be at least 18 years.", "error");
+        return;
+      }
+      if (dob && dob < minDobDate) {
+        setShowErrors(true);
+        toast("Please enter a valid date of birth. Age cannot exceed 70 years.", "error");
+        return;
+      }
+    }
+    if (step === 2) {
+      const joining = form.joining_date ?? "";
+      const dob = form.date_of_birth ?? "";
+      if (joining && joining > todayDate) {
+        setShowErrors(true);
+        toast("Joining date cannot be a future date.", "error");
+        return;
+      }
+      if (joining && dob && joining <= dob) {
+        setShowErrors(true);
+        toast("Joining date cannot be earlier than date of birth.", "error");
+        return;
+      }
+      if (joining && dob && joining < addYears(dob, 18)) {
+        setShowErrors(true);
+        toast("Staff must be at least 18 years old at the time of joining.", "error");
+        return;
+      }
+    }
+    if (step === 3) {
+      const mob = (form.mobile ?? "").trim();
+      if (mob && !/^\d+$/.test(mob)) { setShowErrors(true); toast("Enter a valid mobile number.", "error"); return; }
+      if (mob && mob.length < 10)    { setShowErrors(true); toast("Enter a valid mobile number.", "error"); return; }
+      const wa  = (form.whatsapp ?? "").trim();
+      if (wa && (!/^\d+$/.test(wa) || wa.replace(/\D/g,"").length < 10)) {
+        setShowErrors(true); toast("Enter a valid WhatsApp number.", "error"); return;
+      }
+      const pe = (form.personal_email ?? "").trim();
+      if (pe && !isValidEmail(pe)) { setShowErrors(true); toast("Enter a valid email address.", "error"); return; }
+    }
+    if (!isStepComplete(step, form, todayDate, maxDobDate, minDobDate, highestStep)) {
+      setShowErrors(true);
+      // Give a specific message when inactive status is the only blocker
+      if (step === 1 && form.status === "inactive" && step1Missing({ ...form, status: "active" }).size === 0) {
+        toast("Inactive staff cannot continue onboarding. Change status to Active.", "error");
+      } else {
+        toast("Please fill in all required fields before continuing.", "error");
+      }
+      return;
+    }
+    advanceStep();
+  };
+  const goPrev = () => { setShowErrors(false); setStep((s) => Math.max(s - 1, 1)); };
 
   const currentStep = ALL_STEPS.find((s: StepDef) => s.num === step) ?? ALL_STEPS[0];
   const progress    = Math.round((step / TOTAL) * 100);
@@ -1447,7 +2031,7 @@ export default function HrOnboardPage() {
         </p>
         <div className="flex justify-center gap-3">
           <button
-            onClick={() => { setForm({ status: "active" }); setStep(1); setDone(false); setPhotoPreview(null); }}
+            onClick={() => { setForm({ status: "active" }); setStep(1); setDone(false); setPhotoPreview(null); setHighestStep(1); setShowErrors(false); }}
             className="px-5 py-2 rounded-[10px] text-[13px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
           >
             Onboard another
@@ -1567,7 +2151,7 @@ export default function HrOnboardPage() {
 
       {/* Sidebar + Step content */}
       <div className="flex gap-6 items-start">
-        <WizardNav step={step} onGo={setStep} />
+        <WizardNav step={step} completedSteps={completedSteps} onGo={navigateTo} />
 
         <div className="flex-1 min-w-0">
           <div
@@ -1605,10 +2189,23 @@ export default function HrOnboardPage() {
                 set={setField}
                 photoPreview={photoPreview}
                 onPhotoClick={() => photoInputRef.current?.click()}
+                languages={langData ?? []}
+                religions={relData ?? []}
+                countries={countryData ?? []}
+                langLoading={langLoading}
+                relLoading={relLoading}
+                countryLoading={countryLoading}
+                langError={langError}
+                relError={relError}
+                countryError={countryError}
+                maxDob={maxDobDate}
+                minDob={minDobDate}
+                todayDate={todayDate}
+                showErrors={showErrors}
               />
             )}
-            {step === 2 && <StepRole f={form} set={setField} departments={departments} designations={designations} staffList={staffList} />}
-            {step === 3 && <StepContact f={form} set={setField} />}
+            {step === 2 && <StepRole f={form} set={setField} departments={departments} designations={designations} staffList={staffList} empTypes={empTypeData ?? []} empLoading={empTypeLoading} empError={empTypeError} showErrors={showErrors} todayDate={todayDate} />}
+            {step === 3 && <StepContact f={form} set={setField} showErrors={showErrors} />}
             {step === 4 && <StepFamily  f={form} set={setField} />}
             {step === 5 && <StepGovId   f={form} set={setField} />}
             {step === 6 && <StepQualifications f={form} set={setField} />}
@@ -1648,7 +2245,7 @@ export default function HrOnboardPage() {
           <span className="text-[12.5px] font-[700] text-[#475569] shrink-0">Step {step} / {TOTAL}</span>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <button
-              onClick={() => { setForm({ status: "active" }); setStep(1); setPhotoPreview(null); }}
+              onClick={() => { setForm({ status: "active" }); setStep(1); setPhotoPreview(null); setHighestStep(1); setShowErrors(false); }}
               className="px-3 py-1.5 text-[12.5px] font-[600] text-[#EF4444] hover:bg-red-50 rounded-[8px] transition-colors"
             >
               Discard

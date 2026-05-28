@@ -1,4 +1,6 @@
 import json
+import calendar
+from datetime import date, timedelta
 from django.db.models import Sum
 from django.core.validators import FileExtensionValidator
 import re
@@ -10,6 +12,22 @@ from apps.students.models import Student
 from rest_framework import serializers
 
 from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, PREDEFINED_DEPARTMENT_TYPES
+
+
+def _is_gibberish_name(value: str) -> bool:
+    """Return True if the name looks like gibberish (repeated chars or vowel-free segments)."""
+    t = value.strip()
+    if len(t) < 3:
+        return False
+    # 3+ consecutive identical characters (e.g. 'fff', 'aaa')
+    if re.search(r'(.)\1{2,}', t, re.IGNORECASE):
+        return True
+    # Any alphabetic segment of 3+ chars with no vowel (e.g. 'fss', 'ssd')
+    for seg in re.split(r"[\s\-'.]+", t):
+        alpha = re.sub(r'[^a-zA-Z]', '', seg)
+        if len(alpha) >= 3 and not re.search(r'[aeiou]', alpha, re.IGNORECASE):
+            return True
+    return False
 
 
 class FileNameCharField(serializers.CharField):
@@ -430,6 +448,34 @@ class StaffSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         data = super().to_representation(instance)
         data["other_document"] = self._normalize_other_documents(getattr(instance, "other_document", []))
+
+        # Compute probation_end_date from custom_field + join_date
+        try:
+            custom = data.get("custom_field") or {}
+            pv = custom.get("probation_value")
+            pu = str(custom.get("probation_unit", "")).lower()
+            jd = getattr(instance, "join_date", None)
+            if pv and pu and jd:
+                pv = int(pv)
+                if not isinstance(jd, date):
+                    jd = date.fromisoformat(str(jd))
+                if pu == "days":
+                    end = jd + timedelta(days=pv)
+                elif pu == "months":
+                    m = jd.month + pv
+                    y = jd.year + (m - 1) // 12
+                    m = (m - 1) % 12 + 1
+                    d = min(jd.day, calendar.monthrange(y, m)[1])
+                    end = date(y, m, d)
+                elif pu == "years":
+                    end = date(jd.year + pv, jd.month, jd.day)
+                else:
+                    end = None
+                if end:
+                    data["probation_end_date"] = end.isoformat()
+        except Exception:
+            pass
+
         return data
 
     def to_internal_value(self, data):
@@ -472,6 +518,20 @@ class StaffSerializer(serializers.ModelSerializer):
         max_size = 2 * 1024 * 1024
         if value.size > max_size:
             raise serializers.ValidationError("File size must be 2MB or less.")
+        return value
+
+    def validate_status(self, value):
+        """Ensure status is one of the allowed choices; block inactive during staff creation (onboarding)."""
+        allowed = {Staff.STATUS_ACTIVE, Staff.STATUS_INACTIVE, Staff.STATUS_TERMINATED}
+        if value not in allowed:
+            raise serializers.ValidationError(
+                f'Invalid status "{value}". Must be one of: {", ".join(sorted(allowed))}.'
+            )
+        # During onboarding (create), prevent inactive status — staff must be active to be onboarded
+        if self.instance is None and value == Staff.STATUS_INACTIVE:
+            raise serializers.ValidationError(
+                "Inactive staff cannot proceed with onboarding. Change status to Active."
+            )
         return value
 
     def _apply_payroll_defaults(self, custom_field, school):
@@ -525,7 +585,7 @@ class StaffSerializer(serializers.ModelSerializer):
         school_id = request.user.school_id if request else None
         today = timezone.localdate()
         min_age_years = 18
-        max_age_years = 80
+        max_age_years = 70
 
         def get_value(field_name):
             if field_name in attrs:
@@ -538,6 +598,8 @@ class StaffSerializer(serializers.ModelSerializer):
         role = get_value("role")
         staff_no = self._normalize_text_input(get_value("staff_no"))
         first_name = self._normalize_text_input(get_value("first_name"))
+        middle_name = self._normalize_text_input(get_value("middle_name"))
+        last_name = self._normalize_text_input(get_value("last_name"))
         email = self._normalize_text_input(get_value("email")).lower()
         phone = self._normalize_text_input(get_value("phone"))
         emergency_mobile = self._normalize_text_input(get_value("emergency_mobile"))
@@ -566,6 +628,24 @@ class StaffSerializer(serializers.ModelSerializer):
             required_errors["role"] = "Role is required."
         if not first_name:
             required_errors["first_name"] = "First name is required."
+        if first_name and len(first_name) > 50:
+            required_errors["first_name"] = "First name cannot exceed 50 characters."
+        elif first_name and not re.match(r"^[a-zA-Z\s'\-.]+$", first_name):
+            required_errors["first_name"] = "First name can only contain letters, spaces, hyphens, and apostrophes."
+        elif first_name and _is_gibberish_name(first_name):
+            required_errors["first_name"] = "Enter a valid first name."
+        if middle_name and len(middle_name) > 50:
+            required_errors["middle_name"] = "Middle name cannot exceed 50 characters."
+        elif middle_name and not re.match(r"^[a-zA-Z\s'\-.]+$", middle_name):
+            required_errors["middle_name"] = "Middle name can only contain letters, spaces, hyphens, and apostrophes."
+        elif middle_name and _is_gibberish_name(middle_name):
+            required_errors["middle_name"] = "Enter a valid middle name."
+        if last_name and len(last_name) > 50:
+            required_errors["last_name"] = "Last name cannot exceed 50 characters."
+        elif last_name and not re.match(r"^[a-zA-Z\s'\-.]+$", last_name):
+            required_errors["last_name"] = "Last name can only contain letters, spaces, hyphens, and apostrophes."
+        elif last_name and _is_gibberish_name(last_name):
+            required_errors["last_name"] = "Enter a valid last name."
         if not email:
             required_errors["email"] = "Email is required."
         if not phone:
@@ -606,6 +686,70 @@ class StaffSerializer(serializers.ModelSerializer):
         bank_mobile_no = self._normalize_text_input(get_value("bank_mobile_no"))
         if bank_mobile_no and not mobile_pattern.fullmatch(bank_mobile_no):
             raise serializers.ValidationError({"bank_mobile_no": "Mobile number must contain digits only and must not exceed 12 digits."})
+
+        # ========== CONTACT STEP VALIDATION ==========
+        custom_field_data = get_value("custom_field") or {}
+        if not isinstance(custom_field_data, dict):
+            custom_field_data = {}
+
+        personal_email = self._normalize_text_input(custom_field_data.get("personal_email"))
+        if personal_email and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}", personal_email):
+            raise serializers.ValidationError({"personal_email": "Enter a valid email address."})
+
+        official_email = self._normalize_text_input(get_value("official_email") or custom_field_data.get("official_email"))
+        if official_email and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}", official_email):
+            raise serializers.ValidationError({"official_email": "Enter a valid email address."})
+
+        whatsapp = self._normalize_text_input(custom_field_data.get("whatsapp"))
+        whatsapp_digits = re.sub(r"\D", "", whatsapp)
+        if whatsapp and len(whatsapp_digits) != 10:
+            raise serializers.ValidationError({"whatsapp": "Enter a valid 10-digit mobile number."})
+
+        alternate_mobile = self._normalize_text_input(custom_field_data.get("alternate_mobile"))
+        alt_mobile_digits = re.sub(r"\D", "", alternate_mobile)
+        if alternate_mobile and len(alt_mobile_digits) != 10:
+            raise serializers.ValidationError({"alternate_mobile": "Enter a valid 10-digit mobile number."})
+
+        current_pin = self._normalize_text_input(custom_field_data.get("current_pin"))
+        if current_pin and not re.fullmatch(r"\d{5,6}", current_pin):
+            raise serializers.ValidationError({"current_pin": "Enter a valid PIN code (5–6 digits)."})
+
+        current_address_val = self._normalize_text_input(get_value("current_address"))
+        if current_address_val and len(current_address_val) < 5:
+            raise serializers.ValidationError({"current_address": "Address must be at least 5 characters."})
+        if current_address_val and not re.search(r"[a-zA-Z0-9]", current_address_val):
+            raise serializers.ValidationError({"current_address": "Address cannot contain only special characters."})
+
+        preferred_communication = self._normalize_text_input(get_value("preferred_communication") or custom_field_data.get("preferred_communication"))
+        valid_comm_methods = {"mobile", "whatsapp", "personal_email", "official_email"}
+        if preferred_communication and preferred_communication not in valid_comm_methods:
+            raise serializers.ValidationError({"preferred_communication": "Select preferred communication method."})
+
+        # ========== PROBATION VALIDATION ==========
+        probation_value_raw = str(self.initial_data.get("probation_value", "")).strip()
+        probation_unit_raw  = str(self.initial_data.get("probation_unit", "")).strip().lower()
+        if probation_value_raw:
+            try:
+                probation_value = int(probation_value_raw)
+            except (TypeError, ValueError):
+                raise serializers.ValidationError({"probation_value": "Enter valid probation duration."})
+            if probation_value <= 0:
+                raise serializers.ValidationError({"probation_value": "Enter valid probation duration."})
+            valid_units = {"days": 365, "months": 24, "years": 5}
+            if probation_unit_raw and probation_unit_raw not in valid_units:
+                raise serializers.ValidationError({"probation_unit": "Invalid probation unit. Must be days, months, or years."})
+            effective_unit = probation_unit_raw if probation_unit_raw in valid_units else "months"
+            max_val = valid_units[effective_unit]
+            if probation_value > max_val:
+                raise serializers.ValidationError({
+                    "probation_value": f"Maximum probation period is {max_val} {effective_unit}."
+                })
+            custom_field_in_attrs = attrs.get("custom_field") or {}
+            if not isinstance(custom_field_in_attrs, dict):
+                custom_field_in_attrs = {}
+            custom_field_in_attrs["probation_value"] = probation_value
+            custom_field_in_attrs["probation_unit"]  = effective_unit
+            attrs["custom_field"] = custom_field_in_attrs
 
         # ========== BANK INFO VALIDATION ==========
         # Account Holder Name: Letters, spaces, and hyphens only - no special characters
@@ -693,19 +837,19 @@ class StaffSerializer(serializers.ModelSerializer):
             eighteenth_birthday = add_years_safe(date_of_birth, min_age_years)
             latest_allowed_dob = add_years_safe(today, -max_age_years)
             if eighteenth_birthday > today:
-                raise serializers.ValidationError({"date_of_birth": "Employee must be at least 18 years old."})
+                raise serializers.ValidationError({"date_of_birth": "Staff age must be at least 18 years."})
             if date_of_birth < latest_allowed_dob:
-                raise serializers.ValidationError({"date_of_birth": f"Employee age should not exceed {max_age_years} years."})
+                raise serializers.ValidationError({"date_of_birth": "Please enter a valid date of birth. Age cannot exceed 70 years."})
 
         if join_date and join_date > today:
-            raise serializers.ValidationError({"join_date": "Joining date cannot be in the future."})
+            raise serializers.ValidationError({"join_date": "Joining date cannot be a future date."})
         if date_of_birth and join_date and join_date < date_of_birth:
             raise serializers.ValidationError({"join_date": "Joining date cannot be earlier than date of birth."})
         if date_of_birth and join_date:
             eighteenth_birthday = add_years_safe(date_of_birth, min_age_years)
             if join_date < eighteenth_birthday:
                 raise serializers.ValidationError(
-                    {"join_date": f"Joining date must be after employee turns {min_age_years}."}
+                    {"join_date": "Staff must be at least 18 years old at the time of joining."}
                 )
 
         if staff_photo:

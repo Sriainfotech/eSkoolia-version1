@@ -99,7 +99,10 @@ export interface Staff {
   role_name: string;
   joining_date: string;
   employment_type: "Full-time" | "Part-time" | "Contract" | "Visiting Guest";
-  probation_period: string;
+  probation_period?: string;   // legacy free-text (deprecated)
+  probation_value?: string;    // numeric part: "6"
+  probation_unit?: string;     // unit: "days" | "months" | "years"
+  probation_end_date?: string; // computed by backend
   reporting_manager: number | null;
   reporting_manager_name: string;
   mobile: string;

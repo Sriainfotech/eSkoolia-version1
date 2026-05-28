@@ -2062,11 +2062,570 @@ No change — already matched reference from previous session.
 
 ---
 
+## Day 11 — 2026-05-28 — HR Onboard: Validations + Master-Data Searchable Dropdowns
+
+### Summary
+Extended the HR onboard wizard with progressive field validations and replaced the static Mother Tongue / Religion / Nationality dropdowns with fully searchable, API-backed comboboxes.
+
+### Validations Added (Frontend + Backend)
+
+| Field | Rule | Layer |
+|---|---|---|
+| First Name / Last Name | Max 50 chars | Frontend (`maxLength`) + Backend (`max_length=50`) + serializer |
+| First Name / Last Name | Letters / spaces / hyphens / apostrophes / dots only | Frontend (`onChange` filter) + Backend regex |
+| First Name / Last Name | Gibberish detection (repeated chars, no vowel segment) | `isGibberishName()` frontend + `_is_gibberish_name()` backend |
+| Date of Birth | Staff must be ≥ 18 years old | Frontend `max` attr + error message + Backend validation already present |
+
+**Backend** (`backend/apps/hr/serializers.py`):
+- Added `_is_gibberish_name()` module-level helper using identical 2-rule logic as frontend.
+- Added `first_name` / `last_name` length, regex, and gibberish checks inside `validate()`.
+
+**Backend** (`backend/apps/hr/models.py`):
+- Changed `first_name` and `last_name` `max_length` from `80` → `50`.
+- **Migration pending**: `python manage.py makemigrations hr && python manage.py migrate`.
+
+### Master Data Backend App
+
+New `backend/apps/master/` app (constants-based, no models/migrations):
+
+| File | Purpose |
+|---|---|
+| `__init__.py` | Empty package marker |
+| `constants.py` | 43 languages, 13 religions, 95 countries |
+| `views.py` | `LanguageListView`, `ReligionListView`, `CountryListView` — each caches response for 24 h |
+| `urls.py` | `GET /api/master/languages/`, `/api/master/religions/`, `/api/master/countries/` |
+
+Registered in `backend/config/settings/base.py` (`INSTALLED_APPS`) and `backend/config/urls.py` (`api/master/` prefix).
+
+### SearchableSelect Component
+
+New reusable component `frontend/components/hr/SearchableSelect.tsx`:
+- Props: `value`, `onChange`, `options: {id, name}[]`, `placeholder`, `loading`, `error`, `customValue`, `onCustomChange`, `customPlaceholder`, `disabled`
+- Search input at top of dropdown (live-filtered)
+- "Other" option pinned at bottom with separator line
+- When "Other" selected → inline free-text input appears below trigger
+- Clear (×) button on trigger
+- Keyboard nav: Arrow Up/Down, Enter, Escape
+- Scrollable list (max-h 200px)
+- Click-outside closes panel
+- Matches HrDropdown styling exactly (border, border-radius, brand focus ring, ink/muted colors)
+
+### StepIdentity — Row 4 Replaced
+
+Mother Tongue, Religion, Nationality fields now use `SearchableSelect` backed by:
+- `useMasterLanguages()` → `GET /api/master/languages/`
+- `useMasterReligions()` → `GET /api/master/religions/`
+- `useMasterCountries()` → `GET /api/master/countries/`
+
+Three extra `FormData` keys added: `mother_tongue_other`, `religion_other`, `nationality_other` (used when "Other" is chosen).
+
+### StepRole — Dropdown Direction Fixed
+
+All four selects (Department, Designation, Role/Access, Reporting Manager) changed from `HrSelect` to `HrDropdown` so the dropdown always opens downward.
+
+### Files Changed (Day 11)
+
+| File | Change |
+|---|---|
+| `backend/apps/master/__init__.py` | New file (package marker) |
+| `backend/apps/master/constants.py` | New file — LANGUAGES, RELIGIONS, COUNTRIES, EMPLOYMENT_TYPES lists |
+| `backend/apps/master/views.py` | New file — four APIViews, all module-level pre-built (no Redis) |
+| `backend/apps/master/urls.py` | New file — URL routing for master endpoints incl. employment-types |
+| `backend/config/settings/base.py` | Added `apps.master` to INSTALLED_APPS |
+| `backend/config/urls.py` | Added `api/master/` prefix route |
+| `backend/config/urls_tenant.py` | Added `api/master/` prefix route (fixes tenant 404) |
+| `backend/apps/hr/serializers.py` | Added `_is_gibberish_name()` + first/middle/last name validation rules |
+| `backend/apps/hr/models.py` | `first_name` and `last_name` max_length 80 → 50 |
+| `frontend/components/hr/SearchableSelect.tsx` | New reusable searchable combobox |
+| `frontend/hooks/useHrApi.ts` | Added `MasterItem`, `useMasterLanguages`, `useMasterReligions`, `useMasterCountries`, `useMasterEmploymentTypes` |
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | Imports updated; FormData extended (employment_type_other); master hooks added; StepIdentity → SearchableSelect for Mother Tongue/Religion/Nationality; StepRole → SearchableSelect for Employment Type; static EMP_TYPES constant removed |
+
+**Zero TypeScript errors.** No backend migrations required for master app. Staff model migration pending.
+
+### API Endpoints (master)
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `GET /api/master/languages/` | GET | List of languages (auth required) |
+| `GET /api/master/religions/` | GET | List of religions (auth required) |
+| `GET /api/master/countries/` | GET | List of countries / nationalities (auth required) |
+| `GET /api/master/employment-types/` | GET | List of employment types (auth required) |
+
+---
+
 ### Start next with
 
-1. Start the frontend dev server and smoke-test all 10 steps in the browser.
-2. Verify StepPayroll Live CTC Preview calculates correctly with sample salary inputs.
-3. Verify StepFamily dynamic emergency contacts and nominees rows add/remove correctly.
-4. Connect StepReview "Enroll staff →" to the existing `handleSubmit` function (already wired in the main render but confirm the flow end-to-end with a real backend call).
-5. Consider persisting dynamic list rows (qualifications, emergency contacts, nominees) in the parent `form` state so they survive navigating back and forth between steps.
+1. Run `python manage.py makemigrations hr && python manage.py migrate` for the Staff model `max_length` change.
+2. Smoke-test Step 2 (StepRole) Employment Type searchable dropdown — especially the "Other" → free-text flow.
+3. Confirm "Other" → free-text works for Mother Tongue / Religion / Nationality in Step 1 as well.
+
+---
+
+## Day 11 — 2026-05-28 — Addendum: Multi-step Form Validation & State Persistence
+
+### Problem
+- Green checkmarks appeared on every step below the current step, even when required fields were empty.
+- Clicking "Next" had no validation guard (except DOB) — users could skip required fields.
+- `showErrors` was never set, so inline required-field messages never appeared.
+
+### Solution
+
+**New module-level helpers (before `StepIdentity`):**
+- `step1Missing(f)` → `Set<string>` of missing required field keys for Step 1
+- `step2Missing(f)` → `Set<string>` for Step 2
+- `isStepComplete(n, f, todayDate, maxDobDate, highestStep)` → `boolean`
+  - Step 1: first_name, last_name, gender, date_of_birth, nationality all filled + DOB valid + no gibberish
+  - Step 2: department, designation, role, employment_type, joining_date all filled
+  - Steps 3–10: complete once `highestStep > n` (visited)
+
+**`WizardNav`** — new prop `completedSteps: Set<number>`:
+- `done` changed from `s.num < step` → `completedSteps.has(s.num) && s.num !== step`
+- Green checkmark only appears when step's required fields are actually filled
+
+**`StepIdentity`** — new prop `showErrors: boolean`:
+- `firstNameErr` / `lastNameErr`: also shows "… is required." when field is empty + showErrors
+- `dobError`: also shows "Date of birth is required." when empty + showErrors
+- Gender: shows "Gender is required." below select when empty + showErrors
+- Nationality: shows "Nationality is required." below SearchableSelect when empty + showErrors
+
+**`StepRole`** — new prop `showErrors: boolean`:
+- Department, Designation, Role/Access: show "… is required." below HrDropdown when empty + showErrors
+- Joining Date: shows "Joining date is required." when empty + showErrors
+- Employment Type: shows "Employment type is required." below SearchableSelect when empty + showErrors
+
+**`HrOnboardPage`** — new state:
+- `showErrors: boolean` — triggers inline error display
+- `highestStep: number` — tracks furthest step reached (for steps 3–10 completion)
+
+**`goNext()` updated:**
+- If step 1: DOB checks first (with `setShowErrors(true)` on failure)
+- Then: `isStepComplete(step, ...)` — if fails, `setShowErrors(true)` + toast + return
+- On success: `setShowErrors(false)`, advance `highestStep`, advance step
+
+**`navigateTo(n)`** helper — wraps `setStep(n)` + `setShowErrors(false)` so sidebar navigation resets inline errors
+
+**Discard / Onboard another** — resets `highestStep` and `showErrors` too
+
+### Files Changed
+
+| File | Change |
+|---|---|
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | Validation functions; WizardNav completedSteps; StepIdentity showErrors; StepRole showErrors; HrOnboardPage state + goNext |
+
+**Zero TypeScript errors.**
+
+### Start next with
+
+1. Smoke-test: fill Step 1 partially → click Next → inline errors must appear → fill all → Next must proceed.
+2. Check Step 1 green checkmark disappears when first_name is cleared while on Step 2.
+3. Run `python manage.py makemigrations hr && python manage.py migrate` for Staff model max_length.
+
+---
+
+## Day 11 — 2026-05-28 — Addendum 2: Strict Inactive-Status Block + Sidebar Forward-Navigation Lock
+
+### Problem
+- Setting status to "Inactive" previously showed a confirmation modal — ambiguous UX and didn't truly block onboarding.
+- Sidebar allowed clicking any step number, enabling forward-jumps that bypassed step validation.
+- Staff could theoretically be POSTed with `status=inactive` via curl even if the UI blocked.
+
+### Solution
+
+#### Frontend (`frontend/app/(dashboard)/hr/onboard/page.tsx`)
+
+**`step1Missing(f)`**: Added `if (f.status === "inactive") m.add("status_inactive")` — inactive status is treated as an incomplete required condition, making step 1 unable to be "complete" while inactive.
+
+**`WizardNav`**: Added `highestStep: number` prop. Steps with `s.num > highestStep` are rendered with `disabled={true}`, `opacity-40`, `cursor-not-allowed`, and a tooltip "Complete previous steps first". They cannot be clicked.
+
+**`StepIdentity`**: Added inline error below the Active/Inactive toggle — shown only when `showErrors && f.status === "inactive"`: `"Inactive staff cannot continue onboarding. Change status to Active."`
+
+**`goNext()`**: Inactive guard replaced — no more modal. Since `status_inactive` is in `step1Missing`, `isStepComplete` already returns `false` when inactive. The error check now detects this specific case and shows a targeted toast: `"Inactive staff cannot continue onboarding. Change status to Active."` The generic "Please fill in all required fields" message is shown only for other missing fields.
+
+**`navigateTo(n)`**: Added forward-navigation guard — if `n > highestStep`, shows toast `"Complete the current step before jumping ahead."` and returns without navigating. Only backwards navigation (to already-reached steps) is allowed.
+
+**State cleanup**: Removed `showInactiveConfirm` state and all modal JSX (modal was from Addendum 1 — fully replaced by hard block).
+
+#### Backend (`backend/apps/hr/serializers.py`)
+
+**`StaffSerializer.validate_status()`**: Updated to reject `"inactive"` status **during CREATE** (when `self.instance is None`):
+```python
+if self.instance is None and value == Staff.STATUS_INACTIVE:
+    raise serializers.ValidationError(
+        "Inactive staff cannot proceed with onboarding. Change status to Active."
+    )
+```
+Update operations (editing existing staff) still allow any valid status including inactive.
+
+### Behaviour Summary
+
+| Action | Result |
+|---|---|
+| Status = Active, all fields filled | Step 1 completes, green ✓ appears, Next navigates to Step 2 |
+| Status = Inactive (any fields) | Step 1 never completes; inline error shown; Next shows specific toast; no confirmation modal |
+| Sidebar click on unvisited future step | Toast: "Complete the current step before jumping ahead." — navigation blocked |
+| Sidebar click on already-visited step | Navigation allowed (backwards + revisit OK) |
+| POST `/api/hr/staff/` with `status=inactive` (create) | 400 with field-level error: "Inactive staff cannot proceed with onboarding." |
+| PATCH/PUT existing staff with `status=inactive` | Allowed (editing staff records supports inactive) |
+
+### Files Changed (Addendum 2)
+
+| File | Change |
+|---|---|
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | `step1Missing` inactive check; `WizardNav` highestStep lock; inline inactive error; `goNext` hard block; `navigateTo` forward guard; removed modal + `showInactiveConfirm` state |
+| `backend/apps/hr/serializers.py` | `validate_status` CREATE guard for inactive |
+
+**Zero TypeScript errors.**
+
+---
+
+## Day 11 — 2026-05-28 — Addendum 3: DOB, Age & Joining Date Validation
+
+### Problem
+- Max staff age was capped at 80 (backend) and not checked at all (frontend).
+- Joining date had no cross-validation against DOB or age-at-joining on the frontend.
+- Frontend toast messages did not match backend error text.
+
+### Solution
+
+#### Frontend (`frontend/app/(dashboard)/hr/onboard/page.tsx`)
+
+**New `addYears(dateStr, years)` helper** (module level): Adds N years to a YYYY-MM-DD string, handling Feb-29 leap-day edge cases.
+
+**`minDobDate`** constant added in `HrOnboardPage` (today minus 70 years). Staff older than 70 cannot be onboarded.
+
+**`isStepComplete` updated:**
+- Step 1: Added `dob < minDobDate` guard (age > 70 → step incomplete)
+- Step 2: Joining date cross-validation — `joining > todayDate` (future), `joining ≤ dob` (before/on DOB), `joining < addYears(dob, 18)` (person under 18 at joining) → all return `false`
+
+**`StepIdentity` updated:**
+- Added `minDob: string` prop
+- `dobTooOld` flag: `dob < minDob && !dobFuture && !dobTooYoung`
+- Error text for age < 18 changed to: `"Staff age must be at least 18 years."`
+- Error text for age > 70: `"Please enter a valid date of birth. Age cannot exceed 70 years."`
+
+**`StepRole` updated:**
+- Added `todayDate: string` prop
+- Computed `joiningFuture`, `joiningBeforeDob`, `joiningTooYoung`, `joiningDateErr`, `joiningValid`
+- Joining Date field shows: specific error → ✓ Valid (green) → blank (in priority order)
+- Date errors (future/before-DOB/too-young) show in real-time; "required" only shows when `showErrors`
+
+**`goNext()` updated:**
+- Step 1: Added `minDobDate` toast for age > 70
+- Step 2: Added specific early-return toasts for all three joining date failure modes
+
+#### Backend (`backend/apps/hr/serializers.py`)
+
+| Change | Old | New |
+|---|---|---|
+| `max_age_years` | `80` | `70` |
+| DOB under-18 message | `"Employee must be at least 18 years old."` | `"Staff age must be at least 18 years."` |
+| DOB over-age message | `f"Employee age should not exceed 80 years."` | `"Please enter a valid date of birth. Age cannot exceed 70 years."` |
+| Join future message | `"Joining date cannot be in the future."` | `"Joining date cannot be a future date."` |
+| Join under-18 message | `f"Joining date must be after employee turns 18."` | `"Staff must be at least 18 years old at the time of joining."` |
+
+### Validation Matrix
+
+| Scenario | Frontend | Backend |
+|---|---|---|
+| DOB is today or future | error + toast | 400 field error |
+| Age < 18 | error + toast | 400 field error |
+| Age > 70 | error + toast | 400 field error |
+| Joining date is future | error + toast | 400 field error |
+| Joining ≤ DOB | error + toast | 400 field error |
+| Age at joining < 18 | error + toast | 400 field error |
+
+### Files Changed (Addendum 3)
+
+| File | Change |
+|---|---|
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | `addYears` helper; `minDobDate`; step-1/step-2 `isStepComplete` guards; `StepIdentity` `minDob`+`dobTooOld`; `StepRole` joining inline errors + `todayDate`; `goNext` new guards |
+| `backend/apps/hr/serializers.py` | `max_age_years` 80→70; all date/age error messages synced to frontend |
+
+**Zero TypeScript errors.**
+
+---
+
+## Day 11 — 2026-05-28 — Addendum 4: Contact & Address Step Validation
+
+### Problem
+Step 3 (Contact & Address) had no validation — any data (or no data) could advance the wizard.
+
+### Solution
+
+#### Shared utility — `frontend/lib/hrValidation.ts` (new file)
+- `isValidEmail(v)` — email regex
+- `isValidPhoneDigits(raw)` — strips non-digits, requires 10–15 digits
+- `isValidPin(pin)` — 5 or 6 digits
+- `hasAlphanumeric(v)` — at least one letter/digit (rejects all-special-char addresses)
+
+#### `step3Missing(f)` (module-level, page.tsx)
+Required fields: `mobile`, `personal_email`, `preferred_communication`, `current_address`, `city`, `state`, `current_pin`
+
+#### `isStepComplete` step 3 case
+All `step3Missing` fields present, plus:
+- `isValidEmail(personal_email)`
+- `isValidPhoneDigits(mobile)` (≥10 digits)
+- `isValidPin(current_pin)` (5–6 digits)
+- If `whatsapp` filled → `isValidPhoneDigits(whatsapp)`
+- `current_address.length ≥ 5` AND `hasAlphanumeric(current_address)`
+
+#### `StepContact` component — rewritten with validation
+**New props:** `showErrors: boolean`
+**New local state:** `mobileCc`, `whatsappCc`, `pinLoading`, `pinAutoFilled`, `prevPinRef`
+**Inline errors shown below every field:**
+- Mobile: digits-only enforcement via `onChange` filter; error if non-digit or < 10 digits
+- Personal Email: required + regex; marked required with `*`
+- WhatsApp: optional; validates if filled; digits-only filter
+- Preferred Communication: marked required with `*`; error if `showErrors` + empty
+- Address Line 1: min 5 chars, no-only-special-chars error
+- City / State: required errors with `showErrors`
+- PIN Code: digits filter, 5–6 digits, triggers lookup
+
+**PIN code lookup (useEffect):**
+- Fires when `isValidPin(pinRaw)` AND pinRaw changed vs `prevPinRef`
+- Calls `lookupPincode(pin)` → `GET /api/v1/core/pincode-lookup/?pincode=xxx`
+- Auto-fills `city`, `state`, `current_country` via `set()`
+- Shows "Looking up location…" spinner / "✓ Location auto-filled" on success
+- Dynamic import (`await import("@/hooks/useHrApi")`) to avoid circular dep
+
+**Same-as-current-address sync:**
+- `useEffect` re-syncs permanent fields whenever any current address field changes while checked
+- Checkbox `onChange` also immediately copies current values on check
+- When checked → shows a read-only pill ("Permanent address will be same as current address") instead of the inputs
+
+**Country code selects:** wired to `mobileCc` / `whatsappCc` local state (previously static)
+
+#### `goNext()` step 3 guards
+Before `isStepComplete` check: specific toasts for non-digit mobile, mobile < 10 digits, invalid email
+
+#### `useHrApi.ts` — `lookupPincode(pincode: string)`
+```typescript
+export async function lookupPincode(pincode: string): Promise<{ city: string; state: string; country: string } | null>
+```
+Calls `/api/v1/core/pincode-lookup/?pincode=...`, returns null on any error.
+
+#### Backend — `PincodeLookupView` (new, `apps/core/views.py`)
+`GET /api/v1/core/pincode-lookup/?pincode=<5-6 digits>`
+- Validates pincode format (5–6 digits)
+- Proxies to `https://api.postalpincode.in/pincode/{pincode}` via `requests`
+- Returns `{ city, state, country }` on success; 404 if not found
+
+Registered in `apps/core/urls.py` as `path("pincode-lookup/", PincodeLookupView.as_view())`.
+
+#### Backend — `StaffSerializer.validate()` additions
+New validations extracted from `custom_field` JSON:
+- `personal_email` → email regex
+- `whatsapp` → digits 10–15
+- `current_pin` → `/\d{5,6}/`
+- `current_address` → min 5 chars, must contain alphanumeric
+
+### Reporting Manager field
+Made optional (removed `required` from `HrField` label; field was already absent from `step2Missing`).
+
+### Files Changed (Addendum 4)
+
+| File | Change |
+|---|---|
+| `frontend/lib/hrValidation.ts` | **New file** — shared validation utils |
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | `useEffect` import; `hrValidation` import; `step3Missing`; `isStepComplete` step 3; `StepContact` full rewrite; call site `showErrors`; `goNext` step 3 guards |
+| `frontend/hooks/useHrApi.ts` | `lookupPincode` async function |
+| `backend/apps/core/views.py` | `PincodeLookupView` + `import requests as http_requests`, `import re` |
+| `backend/apps/core/urls.py` | `pincode-lookup/` path + `PincodeLookupView` import |
+| `backend/apps/hr/serializers.py` | Contact step validations: personal_email, whatsapp, current_pin, current_address |
+
+**Zero TypeScript errors. No backend migrations required.**
+
+---
+
+## Day 11 — 2026-05-28 — Addendum 5: Free Sidebar Navigation + Phone/Email Fixes
+
+### Sidebar Navigation — Free Navigation (no locking)
+
+**Previous behavior:** Steps beyond `highestStep` were `disabled` (opacity 40, cursor-not-allowed, click blocked with toast).
+
+**New behavior:** All sidebar steps are always clickable. User can jump to any step freely in any order.
+
+#### `WizardNav` component (`frontend/app/(dashboard)/hr/onboard/page.tsx`)
+- Removed `highestStep` prop entirely
+- Removed `isLocked` computed variable
+- Removed `disabled={isLocked}` from `<button>`
+- Removed `title={isLocked ? "Complete previous steps first" : undefined}`
+- Removed `opacity-40 cursor-not-allowed` class; all buttons always get `hover:bg-[#F8FAFC]`
+
+#### `navigateTo` function
+- Removed forward-navigation guard (`if (n > highestStep) { toast(...); return; }`)
+- Now calls `setHighestStep((h) => Math.max(h, n))` on every navigation — so visiting a later step marks earlier ones as "visited" (enables green check for steps 4-10)
+- Calls `setShowErrors(false)` and `setStep(n)` directly
+
+#### Step state rules (unchanged visually)
+| State | Display |
+|---|---|
+| Validated complete step (not active) | Green ✓ badge |
+| Current active step | Brand color highlight + left border |
+| Incomplete/unvisited step | Grey number badge |
+| **Locked/disabled step** | **Removed — never disabled** |
+
+#### Validation behavior (unchanged)
+- `isStepComplete` still runs for green-check computation
+- `goNext()` still validates the current step before advancing
+- `showErrors` still triggers inline field errors on failed Next attempt
+- Backend validations on save/submit are unchanged
+
+### Phone/Email Validation Fixes (same day)
+
+#### Mobile, Alternate Mobile, WhatsApp — all three inputs
+- `maxLength={10}` — browser-level cap
+- `onChange` digits-only filter (`replace(/[^\d]/g, "")`)
+- Inline error if filled but not exactly 10 digits: "Enter a valid 10-digit mobile number."
+- `isValidPhoneDigits` updated to `digits.length === 10` (was `>= 10 && <= 15`)
+- Backend: `alternate_mobile` validation added (exactly 10 digits)
+
+#### Official Email
+- Added `officialEmailErr` — real-time format check via `isValidEmail`
+- Error shown inline: "Enter a valid email address."
+- Backend: `official_email` format validated in `StaffSerializer.validate()`
+
+### Files Changed (Addendum 5)
+
+| File | Change |
+|---|---|
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | `WizardNav` — removed `highestStep` prop + locking; `navigateTo` — removed guard, added highestStep visit tracking; `officialEmailErr` + render; `altMobErr` + render; `maxLength={10}` on all phone inputs |
+| `frontend/lib/hrValidation.ts` | `isValidPhoneDigits` — exactly 10 digits (was 10–15) |
+| `backend/apps/hr/serializers.py` | `alternate_mobile` 10-digit check; `official_email` format check |
+
+**Zero TypeScript errors. No backend migrations required.**
+
+---
+
+## Day 11 — 2026-05-28 — Addendum 6: Probation Period Value + Unit Input
+
+### Problem
+Probation Period was a free-text field accepting any string (e.g. "3 months"). No validation, no structure, no filtering capability.
+
+### Solution
+Replaced with a numeric value input + unit dropdown pair, with inline validation and computed `probation_end_date` on the backend.
+
+### Frontend (`frontend/app/(dashboard)/hr/onboard/page.tsx`)
+
+**FormData type extras:**
+```ts
+probation_value: string;   // e.g. "6"
+probation_unit:  string;   // "days" | "months" | "years"
+```
+
+**StepRole — Probation Period field (Row 2, col 3):**
+- Text input (`inputMode="numeric"`, digits-only filter, `maxLength={3}`) for the value
+- `<select>` dropdown (Days / Months / Years) for the unit
+- Default unit: `months`
+- Inline error: `"Enter valid probation duration (max {N} {unit})."` shown in real-time
+
+**Validation rules (frontend):**
+| Unit | Max value |
+|---|---|
+| days | 365 |
+| months | 24 |
+| years | 5 |
+- Value must be > 0
+- Digits only (`/[^0-9]/g` stripped on `onChange`)
+- Error shown if value is filled but fails range check
+
+### `frontend/types/hr.ts`
+```ts
+probation_period?: string;    // legacy free-text (deprecated, now optional)
+probation_value?: string;     // NEW — numeric part
+probation_unit?: string;      // NEW — "days" | "months" | "years"
+probation_end_date?: string;  // NEW — computed by backend (read-only)
+```
+
+### Backend (`backend/apps/hr/serializers.py`)
+
+**New imports:**
+```python
+import calendar
+from datetime import date, timedelta
+```
+
+**`StaffSerializer.validate()` — Probation block (reads from `self.initial_data`):**
+- Reads `probation_value` and `probation_unit` from top-level POST body
+- Validates: must be positive integer; unit must be `days|months|years`; value ≤ max for that unit
+- Stores validated `{"probation_value": int, "probation_unit": str}` into `attrs["custom_field"]`
+
+**`StaffSerializer.to_representation()` — `probation_end_date` computed field:**
+- Reads `custom_field.probation_value` + `custom_field.probation_unit` + `instance.join_date`
+- Computes end date: days → `timedelta`; months → calendar-aware month arithmetic; years → add to year
+- Adds `probation_end_date` ISO string to response (silently skipped if missing data)
+
+### DB / API structure
+```json
+{
+  "probation_value": 6,
+  "probation_unit": "months"
+}
+```
+Stored in `custom_field` JSONField. `probation_end_date` is computed, not stored.
+
+### Files Changed (Addendum 6)
+
+| File | Change |
+|---|---|
+| `frontend/types/hr.ts` | `probation_period` → optional; added `probation_value`, `probation_unit`, `probation_end_date` |
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | FormData extras; StepRole probation replaced with value+unit dual-input + inline validation |
+| `backend/apps/hr/serializers.py` | `import calendar`, `from datetime import date, timedelta`; probation validation block in `validate()`; `probation_end_date` in `to_representation()` |
+
+**Zero TypeScript errors. No backend migrations required (data stored in existing `custom_field` JSONField).**
+
+---
+
+## Day 11 — 2026-05-28 — Addendum 7: Preferred Communication Field Fix
+
+### Problem
+The **Preferred Communication** dropdown in HR Onboarding → Contact & Address (Step 3) had two bugs:
+
+1. **"Same as mobile" checkbox was in the wrong column** — it was placed inside the Preferred Communication column but controls the WhatsApp field, causing visual height mismatch and confusing layout (the dropdown appeared below a checkbox that didn't belong to it).
+2. **Dropdown options were incorrect** — showed generic "Phone / WhatsApp / Email" instead of the proper enum values: `mobile`, `whatsapp`, `personal_email`, `official_email`.
+3. **No backend validation** for `preferred_communication`.
+
+### Changes Made
+
+#### Frontend — `frontend/app/(dashboard)/hr/onboard/page.tsx`
+
+**WhatsApp column (Row 2, col 2):**
+- Moved "Same as mobile" checkbox **into the WhatsApp column**, below the cc-selector + input row.
+- WhatsApp column now: label → `[+91 ▼][input]` → `☐ Same as mobile` → inline error.
+
+**Preferred Communication column (Row 2, col 3):**
+- Removed misplaced checkbox.
+- Column is now clean: label → `HrSelect` → inline error.
+- Fixed dropdown `<option>` values: `mobile`, `whatsapp`, `personal_email`, `official_email` (with display labels: Mobile, WhatsApp, Personal Email, Official Email).
+- Fixed validation message: `"Select preferred communication method."`
+
+**`commErr` logic:**
+```tsx
+const commErr = !f.preferred_communication && showErrors
+  ? "Select preferred communication method."
+  : null;
+```
+
+#### Backend — `backend/apps/hr/serializers.py`
+
+Added enum validation in the `CONTACT STEP VALIDATION` block (inside `validate()`):
+```python
+preferred_communication = self._normalize_text_input(
+    get_value("preferred_communication") or custom_field_data.get("preferred_communication")
+)
+valid_comm_methods = {"mobile", "whatsapp", "personal_email", "official_email"}
+if preferred_communication and preferred_communication not in valid_comm_methods:
+    raise serializers.ValidationError(
+        {"preferred_communication": "Select preferred communication method."}
+    )
+```
+
+### Files Changed (Addendum 7)
+
+| File | Change |
+|---|---|
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | Moved "Same as mobile" checkbox to WhatsApp column; fixed Preferred Communication options + error message |
+| `backend/apps/hr/serializers.py` | Added `preferred_communication` enum validation in `validate()` |
+
+**Zero TypeScript errors. No backend migrations required.**
 
