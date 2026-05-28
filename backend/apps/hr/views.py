@@ -16,6 +16,7 @@ from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated, No
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
@@ -384,6 +385,32 @@ class DesignationViewSet(SchoolScopedModelViewSet):
         instance = self.get_object()
         self.perform_destroy(instance)
         return self.success_response("Designation deleted successfully", data={})
+
+
+class DesignationReorderView(APIView):
+    """POST /api/v1/hr/designations/reorder/
+    Body: { "items": [{"id": 1, "sort_order": 0}, {"id": 2, "sort_order": 1}, ...] }
+    Updates sort_order for each designation (school-scoped).
+    """
+
+    def post(self, request):
+        items = request.data.get("items", [])
+        if not isinstance(items, list) or not items:
+            return Response({"success": False, "message": "items list is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        school_id = getattr(request.user, "school_id", None)
+        updated = 0
+        for item in items:
+            desig_id = item.get("id")
+            new_order = item.get("sort_order")
+            if desig_id is None or new_order is None:
+                continue
+            qs = Designation.objects.filter(id=desig_id)
+            if school_id:
+                qs = qs.filter(school_id=school_id)
+            updated += qs.update(sort_order=new_order)
+
+        return Response({"success": True, "message": f"{updated} designations reordered."})
 
 
 class StaffViewSet(SchoolScopedModelViewSet):

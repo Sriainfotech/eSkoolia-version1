@@ -156,11 +156,17 @@ class DesignationSerializer(serializers.ModelSerializer):
             "invalid": "Department not found",
         },
     )
+    department_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Designation
-        fields = ["id", "school", "department", "name", "is_active", "created_at", "updated_at"]
-        read_only_fields = ["id", "school", "created_at", "updated_at"]
+        fields = [
+            "id", "school", "department", "department_name",
+            "name", "short_code", "role_template", "employment_type",
+            "reports_to", "grade_level", "sort_order",
+            "is_active", "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "school", "department_name", "created_at", "updated_at"]
         extra_kwargs = {
             "name": {
                 "error_messages": {
@@ -168,6 +174,9 @@ class DesignationSerializer(serializers.ModelSerializer):
                 }
             }
         }
+
+    def get_department_name(self, obj):
+        return obj.department.name if obj.department_id else None
 
     def validate_name(self, value):
         normalized = (value or "").strip()

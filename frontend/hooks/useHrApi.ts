@@ -74,6 +74,16 @@ export function useDepartments(page = 1) {
   return useFetch<PaginatedHR<Department>>(`/api/v1/hr/departments/?page_size=10&page=${page}`, [page]);
 }
 
+/** Fetches all departments (up to 200) for use in dropdowns — unpaginated. */
+export function useAllDepartments() {
+  return useFetch<PaginatedHR<Department>>(`/api/v1/hr/departments/?page_size=200`, []);
+}
+
+/** Backend-paginated departments for the designation hierarchy cards (5 per page). */
+export function useHierarchyDepts(page = 1) {
+  return useFetch<PaginatedHR<Department>>(`/api/v1/hr/departments/?page_size=5&page=${page}`, [page]);
+}
+
 export async function createDepartment(body: Partial<Department>) {
   const res = await apiRequestWithRefreshResponse("/api/v1/hr/departments/", {
     method: "POST",
@@ -119,7 +129,10 @@ export async function createDesignation(body: Partial<Designation>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.message ?? data.errors?.name?.[0] ?? "Failed to save designation");
+  }
   return res.json() as Promise<Designation>;
 }
 
@@ -129,13 +142,25 @@ export async function updateDesignation(id: number, body: Partial<Designation>) 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.message ?? data.errors?.name?.[0] ?? "Failed to save designation");
+  }
   return res.json() as Promise<Designation>;
 }
 
 export async function deleteDesignation(id: number) {
   const res = await apiRequestWithRefreshResponse(`/api/v1/hr/designations/${id}/`, { method: "DELETE" });
   if (!res.ok) throw new Error(await res.text());
+}
+
+export async function reorderDesignations(items: { id: number; sort_order: number }[]): Promise<void> {
+  const res = await apiRequestWithRefreshResponse("/api/v1/hr/designations/reorder/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+  if (!res.ok) throw new Error("Failed to reorder");
 }
 
 // ─── Staff ───────────────────────────────────────────────────────────────────

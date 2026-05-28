@@ -1896,3 +1896,177 @@ Type error: Duplicate identifier 'email'.
 3. Consider adding a `useStaffList` loading skeleton to the dropdowns while staff fetches.
 4. Commit all Day 9 changes on the current branch.
 
+---
+
+## Day 10 — 2026-05-27 — HR Onboard Wizard: Full Step Rewrite to Match Reference Design
+
+**Branch:** `tenancy-new`  
+**Author:** Gowtham  
+**File:** `frontend/app/(dashboard)/hr/onboard/page.tsx`
+
+---
+
+### Summary
+
+All 10 step components of the HR onboard wizard were audited against the reference HTML artifact (`eskoolia-hr-focused-artifact.html`) and fully rewritten to match field-for-field. Shared visual helper components were added. The card layout was fixed to eliminate oversized empty gaps on short steps. Zero TypeScript errors throughout.
+
+---
+
+### 1. Shared Visual Helpers Added
+
+Five reusable helper components added before the step functions (used across multiple steps):
+
+| Helper | Purpose |
+|---|---|
+| `WizardBlock` | Section container with a Playfair Display section title (`"01 · Contact"` etc.) + optional right-side slot for an "Add" button |
+| `TipBox` | Coloured info/warn/success banner. `type="info"` → blue; `type="warn"` → amber; `type="success"` → green |
+| `FHG` | FieldHelpGrid — renders a row of small grey hint texts (`text-[11px] text-[#94A3B8]`) aligned to a grid below field rows |
+| `PhoneField` | Country-code `<select>` + `HrInput` side-by-side; accepts `CC_OPTIONS` (+91, +234, +44, +1, +971, +61, +27) |
+| `AddRowBtn` | Branded "+ Add …" button (outline brand colour, hover `var(--soft)`) used for dynamic list rows |
+
+Also added `PF` constant (`var(--font-playfair),"Playfair Display",Georgia,serif`) and `CC_SEL_CLS` constant for the country-code select styling.
+
+---
+
+### 2. Constants Extended
+
+| Constant | Added values |
+|---|---|
+| `DEGREES` | B.Ed, M.Ed, MBA, B.Tech, M.Tech, B.Sc, M.Sc, B.A, M.A, Ph.D, Diploma, Other |
+| `RELATIONSHIPS` | Spouse, Parent, Sibling, Child, Friend, Guardian, Other |
+| `DISABILITY_STATUSES` | None, Physical disability, Visual impairment, Hearing impairment, Speech/language disability, Cognitive/learning disability, Multiple disabilities, Prefer not to say |
+| `CC_OPTIONS` | +91, +234, +44, +1, +971, +61, +27 |
+| `EMP_TYPES` | Added Permanent, Temporary (reference uses these) |
+| `ROLES` | Expanded to include Admin Staff, Transport / Driver, Principal, Vice Principal |
+
+---
+
+### 3. FormData Type Extended
+
+~25 new optional fields added to the `FormData` extra type to support all new step content:
+
+```
+// Family
+num_children, spouse_parent_name
+
+// Gov ID
+pt_registration, ifsc_code, bank_name, account_number, account_name
+
+// Qualifications
+bed_reg_no, ctet_score, subjects_qualified
+
+// Medical
+med_cert_no, med_exam_date, cert_valid_till
+disability_cert_no, disability_pct, disability_authority
+workplace_accommodations, eye_exam_result, colour_blindness, dl_medical_exam
+
+// Payroll
+basic_salary_input, hra_input, da_input
+travel_allowance_input, medical_allowance_input, special_allowance_input
+
+// Review
+create_login, send_welcome, activate_attendance
+```
+
+---
+
+### 4. Step-by-Step Changes
+
+#### Step 1 — Staff identity (StepIdentity)
+No change — already matched reference.
+
+#### Step 2 — Role & placement (StepRole)
+**Before:** Three 2-column grids (Dept/Designation, Employment/Role, Joining/Probation).  
+**After:** Reference layout —
+- `grid3`: Department\* | Designation\* | Role / Access\*
+- `grid3`: Joining Date\* | Employment Type\* | Probation Period
+- Full-width: Reporting Manager\* (populated from `useStaffList()`)
+
+Also accepts new `staffList` prop; main render updated to pass `staffList={staffList}`.
+
+#### Step 3 — Contact & address (StepContact)
+No change — already matched reference from previous session.
+
+#### Step 4 — Family & emergency (StepFamily)
+**Before:** Simple flat emergency contact (3 fields) + marital status (2 fields).  
+**After:** Three `WizardBlock` sections with local `useState` arrays:
+- **"01 · Marital & family"** — `grid3`: Marital status | No. of children | Spouse / parent name
+- **"02 · Emergency contacts"** — dynamic rows (Name\* | Relationship\* | Mobile\* phone-row) + (Alt mobile | Email) + `AddRowBtn`
+- **"03 · Nominees"** — `TipBox info` + dynamic rows (Nominee name\* | Relationship | Share% with `<X>` remove) + `AddRowBtn`
+
+#### Step 5 — Government identity (StepGovId)
+**Before:** Two plain 2-column grids (Aadhaar/PAN, Passport/DL, Pension/ESI) with no structure.  
+**After:** `TipBox warn` + three `WizardBlock` sections:
+- **"01 · Identity documents"** — `grid2`: Aadhaar\* | PAN\* (+ FHG hints) → `grid2`: Passport | Driving licence (+ FHG hints)
+- **"02 · Statutory IDs"** — `grid3`: UAN (PF) | ESI number | PT registration (+ FHG hints)
+- **"03 · Bank details"** — `grid3`: Bank name\* | Account number\* | IFSC code\* (+ FHG hints)
+
+#### Step 6 — Qualifications (StepQualifications)
+**Before:** Single textarea for qualifications + single text input for highest qualification.  
+**After:** Three `WizardBlock` sections with local `useState` arrays:
+- **"01 · Academic qualifications"** — dynamic qual rows (`grid3`: Degree\* | University | Year + `grid2`: Specialisation | Percentage) + `AddRowBtn`
+- **"02 · Teaching certifications"** — `grid3`: B.Ed reg no. | CTET/STET score | Subjects qualified
+- **"03 · Previous employment"** — dynamic employer rows (`grid3`: Employer | Designation | Experience + `grid3`: From | To | Last salary) + `AddRowBtn`
+
+#### Step 7 — Medical & fitness (StepMedical)
+**Before:** Blood group + disability status textarea + 2 certificate fields.  
+**After:** Three `WizardBlock` sections:
+- **"01 · Medical fitness"** — `grid3`: Cert no. | Exam date | Valid till + Upload PDF/JPG button
+- **"02 · Accessibility & special needs"** — `TipBox info` (confidential) + `grid2`: disability status | cert no. + `grid2`: % | authority + Upload + workplace accommodations field
+- **"03 · Transport staff — additional"** — `TipBox info` (applicable if Driver) + `grid3`: Eye exam | Colour blindness | Last DL medical exam
+
+#### Step 8 — Payroll setup (StepPayroll)
+**Before:** Basic salary + payment schedule + bank details + simple 3-column CTC preview (only when basic > 0).  
+**After:** Three `WizardBlock` sections + live CTC preview card (always visible when basic > 0):
+- **"01 · CTC structure"** — `grid3`: Basic\* | HRA | DA (+ FHG hints) → `grid3`: Travel | Medical | Special allowances
+- **"02 · Custom allowances"** — dynamic rows (Allowance name | Amount) with remove buttons + `AddRowBtn`
+- **"03 · Custom deductions"** — dynamic rows (Deduction name | Amount) with remove buttons + `AddRowBtn`
+- **Live CTC Preview card** (dark border, `var(--soft)` background):
+  - `grid2`: Earnings column (Basic, HRA, DA, TA, Medical, Special, custom, **Gross bold**) | Deductions column (PF 12%, ESI 0.75%, PT, TDS, custom, **Total Ded.**)
+  - **Net Take Home** dark box (`#15172A` bg, 24px bold, ₹ symbol)
+
+#### Step 9 — Documents (StepDocuments)
+**Before:** Checkbox tick-list of 7 generic document names (client-only state).  
+**After:** `TipBox success` (role-based, X of N uploaded) + numbered document table (13 documents) with per-row action buttons:
+- **Preview** | **Upload** (toggles status, brand colour when uploaded) | **Pending/Done** pill | **Delete** (red outline)
+- Documents: Aadhaar (self-attested), PAN, Passport photos (3), Bank cheque/passbook, Address proof, 10th Marksheet, 12th Marksheet, Degree, B.Ed/D.El.Ed, Experience letter, NOC, Medical fitness cert, Police verification cert
+
+#### Step 10 — Review & onboard (StepReview)
+**Before:** Plain key-value grid of 12 data points.  
+**After:** Accepts new `set` prop; restructured as:
+- **"Ready to onboard"** green card (`#ecfdf5` bg, `#bbf7d0` border) with Playfair Display heading + help text
+- **`grid2`** summary cards: Profile summary (full name, gender, DOB, mobile, email, nationality) | Operational summary (department, designation, employment type, joining, basic salary, bank) — both with **"Required"** amber pill
+- **`grid3`**: Create Login (select: email/SMS/skip) | Send Welcome Message (select: Email/WhatsApp/Both/No) | Activate Attendance (select: Immediately/From joining date/Manual)
+- "Enroll staff →" button rendered by the main wizard's `step === TOTAL` branch
+
+---
+
+### 5. Layout Fixes
+
+**StepRole gap:** Changed outer `flex flex-col gap-8` → `gap-6` — 3 plain field rows with no section headers looked too spread out with gap-8.
+
+**Card layout — content-height cards:**
+- Added `items-start` to the outer `flex gap-6` sidebar+card row → both children now size to their natural content height rather than stretching to the taller element's height.
+- Removed `flex-1` from the card `<div>` — card is no longer forced to fill the sidebar height.
+- Changed `mt-auto` → `mt-8` on the in-card next button — button now sits a fixed 32px below the last field instead of being pinned to the page bottom, eliminating the large empty gap on short steps (Role & placement, Government identity, etc.).
+
+---
+
+### Files Changed (Day 10)
+
+| File | Change |
+|---|---|
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | All 10 step components rewritten; shared helpers added; constants + FormData extended; layout fixed; `staffList` prop wired to StepRole; `set` prop wired to StepReview |
+
+**No backend changes.** Zero TypeScript errors (`get_errors` → no errors).
+
+---
+
+### Start next with
+
+1. Start the frontend dev server and smoke-test all 10 steps in the browser.
+2. Verify StepPayroll Live CTC Preview calculates correctly with sample salary inputs.
+3. Verify StepFamily dynamic emergency contacts and nominees rows add/remove correctly.
+4. Connect StepReview "Enroll staff →" to the existing `handleSubmit` function (already wired in the main render but confirm the flow end-to-end with a real backend call).
+5. Consider persisting dynamic list rows (qualifications, emergency contacts, nominees) in the parent `form` state so they survive navigating back and forth between steps.
+

@@ -1,15 +1,16 @@
 ﻿"use client";
 import { useState } from "react";
-import { Plus, Upload, ChevronDown, ChevronUp, X } from "lucide-react";
+import { Plus, Upload, ChevronDown, X, GripVertical } from "lucide-react";
 import {
   HrBadge, HrKpiCard, HrModal, HrField,
   HrInput, HrSelect, HrTextarea, HrStepWizard, HrConfirmDialog,
-  HrSkeleton, useHrToast,
+  HrSkeleton, useHrToast, HrDropdown,
 } from "@/components/hr/HrUi";
 import {
-  useDepartments, useDesignations, useDepartmentTypes, useStaffList,
+  useDepartments, useAllDepartments, useHierarchyDepts, useDesignations, useDepartmentTypes, useStaffList,
   createDepartment, updateDepartment,
   deleteDepartment, createDesignation, updateDesignation, deleteDesignation,
+  reorderDesignations,
   createDepartmentType,
 } from "@/hooks/useHrApi";
 import type { Department, Designation } from "@/types/hr";
@@ -34,7 +35,7 @@ const ROLE_TEMPLATES   = ["Teacher", "Admin", "Support", "Finance", "Transport",
 const REPORTS_TO       = ["None", "HOD", "Principal", "Vice Principal"] as const;
 
 const emptyDept  = (): Partial<Department>  => ({ name: "", short_code: "", dept_type: "Academic", status: "active", working_days: "Mon-Fri", email: "", description: "" });
-const emptyDesig = (): Partial<Designation> => ({ name: "", short_code: "", department: undefined, status: "active", reports_to: "None", employment_type: "Full-time", role_template: "Teacher", grade_level: "" });
+const emptyDesig = (): Partial<Designation> => ({ name: "", short_code: "", department: undefined, is_active: true, reports_to: "None", employment_type: "Full-time", role_template: "Teacher", grade_level: "" });
 
 // ─── Inline Department Form ───────────────────────────────────────────────────
 function InlineDeptForm({ initial, onSaved, onCancel, stepLabel = "STEP 1 OF 2" }: {
@@ -286,7 +287,7 @@ function DeptCard({ dept, designationCount, onEdit, onDelete }: {
         style={{ borderLeft: "4px solid var(--brand)" }}
         onClick={() => setExpanded((v) => !v)}>
         <span className="text-[#94A3B8]">
-          {expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+          <ChevronDown size={15} style={{ transform: expanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 250ms ease" }} />
         </span>
         <div className="flex-1 min-w-0">
           <div className="font-[850] text-[14.5px] text-[#15172A]">{dept.name}</div>
@@ -334,114 +335,247 @@ function DeptCard({ dept, designationCount, onEdit, onDelete }: {
   );
 }
 
-// ─── Designation Modal ────────────────────────────────────────────────────────
-function DesignationModal({ isOpen, onClose, initial, departments, onSaved }: {
-  isOpen: boolean;
-  onClose: () => void;
+// ─── Inline Designation Form ──────────────────────────────────────────────────
+function InlineDesigForm({ initial, defaultDeptId, departments, onSaved, onCancel, stepLabel = "STEP 2 OF 2" }: {
   initial?: Partial<Designation>;
+  defaultDeptId?: number;
   departments: Department[];
-  onSaved: () => void;
+  onSaved: (addAnother?: boolean) => void;
+  onCancel?: () => void;
+  stepLabel?: string;
 }) {
   const { toast } = useHrToast();
-  const [form, setForm] = useState<Partial<Designation>>(initial ?? emptyDesig());
+  const initForm = (): Partial<Designation> => ({
+    ...emptyDesig(),
+    ...(defaultDeptId ? { department: defaultDeptId } : {}),
+    ...initial,
+  });
+  const [form, setForm] = useState<Partial<Designation>>(initForm);
   const [saving, setSaving] = useState(false);
   const set = (k: keyof Designation, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+
   const handleSave = async (addAnother?: boolean) => {
-    if (!form.name?.trim() || !form.department) { toast("Department and title required", "error"); return; }
+    if (!form.name?.trim() || !form.department) {
+      toast("Department and designation title are required", "error");
+      return;
+    }
     setSaving(true);
     try {
       if (initial?.id) await updateDesignation(initial.id, form);
       else await createDesignation(form);
-      toast("Designation saved");
-      onSaved();
-      if (addAnother) setForm(emptyDesig());
-      else onClose();
-    } catch { toast("Failed to save designation", "error"); }
-    finally { setSaving(false); }
+      toast(initial?.id ? "Designation updated" : "Designation saved");
+      onSaved(addAnother);
+      if (addAnother) setForm({ ...emptyDesig(), department: form.department });
+    } catch (err: unknown) {
+      toast(err instanceof Error ? err.message : "Failed to save designation", "error");
+    } finally {
+      setSaving(false);
+    }
   };
+
   return (
-    <HrModal isOpen={isOpen} onClose={onClose} title={initial?.id ? "Edit Designation" : "Add Designation"} size="lg">
-      <div className="p-[20px] grid gap-4">
-        <div className="grid grid-cols-[2fr_2fr_1fr_1fr] gap-4">
-          <HrField label="Department" required>
-            <HrSelect value={form.department ?? ""} onChange={(e) => set("department", Number(e.target.value))}>
-              <option value="">Select...</option>
-              {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </HrSelect>
-          </HrField>
-          <HrField label="Designation Title" required>
-            <HrInput value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Senior Teacher" />
-          </HrField>
-          <HrField label="Short Code">
-            <HrInput value={form.short_code ?? ""} maxLength={10}
-              onChange={(e) => set("short_code", e.target.value.toUpperCase())} />
-          </HrField>
-          <HrField label="Status">
-            <HrSelect value={form.status} onChange={(e) => set("status", e.target.value)}>
-              <option value="active">Active</option>
-              <option value="inactive">Inactive</option>
-            </HrSelect>
-          </HrField>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <HrField label="Reports To">
-            <HrSelect value={form.reports_to} onChange={(e) => set("reports_to", e.target.value)}>
-              {REPORTS_TO.map((r) => <option key={r}>{r}</option>)}
-            </HrSelect>
-          </HrField>
-          <HrField label="Employment Type" required>
-            <HrSelect value={form.employment_type} onChange={(e) => set("employment_type", e.target.value)}>
-              {EMPLOYMENT_TYPES.map((t) => <option key={t}>{t}</option>)}
-            </HrSelect>
-          </HrField>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <HrField label="Role Template" required>
-            <HrSelect value={form.role_template} onChange={(e) => set("role_template", e.target.value)}>
-              {ROLE_TEMPLATES.map((r) => <option key={r}>{r}</option>)}
-            </HrSelect>
-          </HrField>
-          <HrField label="Grade Level">
-            <HrInput value={form.grade_level ?? ""} onChange={(e) => set("grade_level", e.target.value)}
-              placeholder="e.g. Senior, Junior" />
-          </HrField>
-        </div>
-        <div className="flex justify-between items-center pt-3 border-t border-[#f1f5f9]">
-          <button onClick={() => void handleSave(true)} disabled={saving}
-            className="text-[13px] font-[600] text-[var(--brand)] hover:underline disabled:opacity-50">
-            Save & add another
-          </button>
-          <div className="flex gap-3">
-            <button onClick={onClose} className="text-[13px] font-[600] text-[#64748b]">Cancel</button>
-            <button onClick={() => void handleSave()} disabled={saving}
-              className="px-5 py-2 rounded-lg text-[13px] font-[700] text-white disabled:opacity-60"
-              style={{ background: "var(--brand)" }}>
-              {saving ? "Saving..." : "Save"}
+    <div className="mb-5 bg-white border border-[#E8E8F0] rounded-[14px] p-[28px]"
+      style={{ boxShadow: "0 2px 8px -2px rgba(15,18,34,0.07)" }}>
+      <div className="text-[10px] font-[800] tracking-[0.12em] text-[#94A3B8] uppercase mb-1">{stepLabel}</div>
+      <h2 className="text-[22px] font-[900] text-[#15172A] m-0 leading-tight mb-1">
+        {initial?.id ? "Edit Designation" : "Add Designations"}
+      </h2>
+      <p className="text-[13px] text-[#5B5E72] m-0 mb-5">
+        Define roles within each department. Each designation becomes a child node in the hierarchy.
+      </p>
+
+      {/* IDENTITY */}
+      <div className="text-[10px] font-[800] tracking-[0.14em] text-[#94A3B8] uppercase mb-3 pb-1 border-b border-[#f1f5f9]">
+        Identity
+      </div>
+      <div className="grid grid-cols-[2fr_2fr_1fr_1fr] gap-4 mb-5">
+        <HrField label="Department" required>
+          <HrDropdown
+            value={form.department ?? ""}
+            onChange={(val) => set("department", val ? Number(val) : undefined)}
+            placeholder="Select department..."
+            options={departments.map((d) => ({ value: d.id, label: d.name }))}
+          />
+        </HrField>
+        <HrField label="Designation Title" required>
+          <HrInput value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Senior Teacher" />
+        </HrField>
+        <HrField label="Short Code">
+          <HrInput value={form.short_code ?? ""} maxLength={10}
+            onChange={(e) => set("short_code", e.target.value.toUpperCase())} placeholder="e.g. SNR-TCH" />
+        </HrField>
+        <HrField label="Status">
+          <HrSelect value={form.is_active ? "active" : "inactive"}
+            onChange={(e) => set("is_active", e.target.value === "active")}>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </HrSelect>
+        </HrField>
+      </div>
+
+      <p className="text-[12px] text-[#94A3B8] m-0 mb-4">
+        Designation becomes a child node under the selected department in your org hierarchy.
+      </p>
+      <div className="flex items-center justify-between border-t border-[#f1f5f9] pt-4">
+        <button onClick={() => void handleSave(true)} disabled={saving}
+          className="text-[13px] font-[600] text-[var(--brand)] hover:underline disabled:opacity-50">
+          Save &amp; add another
+        </button>
+        <div className="flex gap-3">
+          {onCancel && (
+            <button onClick={onCancel}
+              className="px-4 py-2 rounded-lg text-[13px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]">
+              Cancel
             </button>
+          )}
+          <button onClick={() => void handleSave()} disabled={saving}
+            className="px-5 py-2 rounded-lg text-[13px] font-[700] text-white disabled:opacity-60"
+            style={{ background: "var(--brand)" }}>
+            {saving ? "Saving..." : initial?.id ? "Update" : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Designation Dept Accordion Card ─────────────────────────────────────────
+function DesignationDeptCard({ dept, deptDesigs, onAddChild, onEdit, onDelete, onReorder }: {
+  dept: Department;
+  deptDesigs: Designation[];
+  onAddChild: () => void;
+  onEdit: (d: Designation) => void;
+  onDelete: (id: number) => void;
+  onReorder: (items: { id: number; sort_order: number }[]) => Promise<void>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [reordering, setReordering] = useState(false);
+
+  const doReorder = async (fromIdx: number, toIdx: number) => {
+    if (reordering) return;
+    setReordering(true);
+    try {
+      const normalized = deptDesigs.map((d, i) => ({ id: d.id, sort_order: i }));
+      const tmp = normalized[fromIdx].sort_order;
+      normalized[fromIdx].sort_order = normalized[toIdx].sort_order;
+      normalized[toIdx].sort_order = tmp;
+      await onReorder(normalized);
+    } finally {
+      setReordering(false);
+    }
+  };
+
+  return (
+    <div className="bg-white border border-[#E8E8F0] rounded-[14px] overflow-hidden"
+      style={{ boxShadow: "0 1px 4px -1px rgba(15,18,34,0.06)" }}>
+      {/* Department header */}
+      <div className="flex items-center justify-between px-5 py-4 cursor-pointer select-none"
+        style={{ borderLeft: "3px solid var(--brand)" }}
+        onClick={() => setExpanded((e) => !e)}>
+        <div className="flex items-center gap-3 flex-wrap">
+          <div>
+            <div className="font-[800] text-[15px] text-[#15172A]">{dept.name}</div>
+            <div className="text-[11px] text-[#94A3B8]">Parent department</div>
+          </div>
+          <HrBadge variant="purple">
+            {deptDesigs.length} child designation{deptDesigs.length !== 1 ? "s" : ""}
+          </HrBadge>
+          <HrBadge variant={dept.status === "active" ? "green" : "grey"}>
+            {dept.status ?? "active"}
+          </HrBadge>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={(e) => { e.stopPropagation(); onAddChild(); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-[700] text-white"
+            style={{ background: "var(--brand)" }}>
+            <Plus size={12} /> Add child
+          </button>
+          <ChevronDown
+            size={16}
+            className="text-[#94A3B8] transition-transform duration-300"
+            style={{ transform: expanded ? "rotate(180deg)" : "rotate(0deg)" }}
+          />
+        </div>
+      </div>
+
+      {/* Designations list — animated accordion via CSS grid rows */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateRows: expanded ? "1fr" : "0fr",
+          transition: "grid-template-rows 280ms ease",
+        }}
+      >
+        <div style={{ overflow: "hidden" }}>
+          <div className="border-t border-[#f1f5f9]"
+            style={{ opacity: expanded ? 1 : 0, transition: "opacity 200ms ease" }}>
+            {deptDesigs.length === 0 ? (
+              <div className="px-5 py-6 text-center text-[13px] text-[#94A3B8]">
+                No designations yet.{" "}
+                <button onClick={onAddChild} className="text-[var(--brand)] font-[600] hover:underline">
+                  Add the first one
+                </button>
+              </div>
+            ) : (
+              deptDesigs.map((d, idx) => (
+                <div key={d.id}
+                  className="flex items-center gap-3 px-5 py-3 border-b border-[#f8f8fc] last:border-b-0 hover:bg-[#fafafd]">
+                  <GripVertical size={15} className="text-[#CBD5E1] flex-shrink-0" />
+                  <span className="text-[12px] font-[700] text-[#94A3B8] w-5 text-center flex-shrink-0">{idx + 1}</span>
+                  <span className="font-[750] text-[14px] text-[#15172A] flex-1 min-w-0 truncate">{d.name}</span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <HrBadge variant="purple">{dept.name}</HrBadge>
+                    {d.role_template && <HrBadge variant="purple">Role: {d.role_template}</HrBadge>}
+                    <HrBadge variant={d.is_active ? "green" : "grey"}>{d.is_active ? "Active" : "Inactive"}</HrBadge>
+                  </div>
+                  <div className="flex flex-col gap-0 flex-shrink-0">
+                    <button disabled={idx === 0 || reordering} onClick={() => void doReorder(idx, idx - 1)}
+                      className="w-6 h-5 flex items-center justify-center text-[#94A3B8] hover:text-[#475569] disabled:opacity-30 disabled:cursor-not-allowed text-[11px] font-bold">
+                      ↑
+                    </button>
+                    <button disabled={idx === deptDesigs.length - 1 || reordering} onClick={() => void doReorder(idx, idx + 1)}
+                      className="w-6 h-5 flex items-center justify-center text-[#94A3B8] hover:text-[#475569] disabled:opacity-30 disabled:cursor-not-allowed text-[11px] font-bold">
+                      ↓
+                    </button>
+                  </div>
+                  <div className="flex gap-2 flex-shrink-0">
+                    <button onClick={() => onEdit(d)} className="text-[12px] font-[600] text-[#475569] hover:text-[#15172A]">Edit</button>
+                    <button onClick={() => onDelete(d.id)} className="text-[12px] font-[600] text-[#E0463A]">Delete</button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
-    </HrModal>
+    </div>
   );
 }
+
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function HrSetupPage() {
   const [step, setStep] = useState(1);
   const [deptPage, setDeptPage] = useState(1);
+  const [desigDeptPage, setDesigDeptPage] = useState(1);
   const { data: deptData, loading: deptLoading, refetch: refetchDepts } = useDepartments(deptPage);
+  const { data: allDeptData, refetch: refetchAllDepts } = useAllDepartments();
+  const { data: hierDeptData, loading: hierDeptLoading, refetch: refetchHierDepts } = useHierarchyDepts(desigDeptPage);
   const { data: desigData, loading: desigLoading, refetch: refetchDesigs } = useDesignations();
   const { toast } = useHrToast();
-  const departments  = deptData?.results ?? [];
-  const designations = desigData?.results ?? [];
+  const departments    = deptData?.results ?? [];
+  const allDepartments = allDeptData?.results ?? [];
+  const hierDepts      = hierDeptData?.results ?? [];
+  const designations   = desigData?.results ?? [];
 
   const [showAddForm, setShowAddForm]   = useState(false);
   const [editDept, setEditDept]         = useState<Department | null>(null);
   const [deleteDeptId, setDeleteDeptId] = useState<number | null>(null);
   const [deletingDept, setDeletingDept] = useState(false);
 
-  const [addDesigOpen, setAddDesigOpen]   = useState(false);
   const [editDesig, setEditDesig]         = useState<Designation | null>(null);
+  const [desigDefaultDept, setDesigDefaultDept] = useState<number | undefined>(undefined);
   const [deleteDesigId, setDeleteDesigId] = useState<number | null>(null);
   const [deletingDesig, setDeletingDesig] = useState(false);
 
@@ -451,7 +585,7 @@ export default function HrSetupPage() {
     try {
       await deleteDepartment(deleteDeptId);
       toast("Department deleted");
-      void refetchDepts();
+      void refetchDepts(); void refetchAllDepts(); void refetchHierDepts();
       if (departments.length === 1 && deptPage > 1) setDeptPage((p) => p - 1);
     } catch { toast("Failed to delete", "error"); }
     finally { setDeletingDept(false); setDeleteDeptId(null); }
@@ -464,8 +598,16 @@ export default function HrSetupPage() {
       await deleteDesignation(deleteDesigId);
       toast("Designation deleted");
       void refetchDesigs();
+      void refetchHierDepts();
     } catch { toast("Failed to delete", "error"); }
     finally { setDeletingDesig(false); setDeleteDesigId(null); }
+  };
+
+  const handleReorderDesigs = async (items: { id: number; sort_order: number }[]) => {
+    try {
+      await reorderDesignations(items);
+      void refetchDesigs();
+    } catch { toast("Failed to reorder", "error"); }
   };
 
   const desigCountForDept = (deptId: number) =>
@@ -513,7 +655,7 @@ export default function HrSetupPage() {
         <div>
           {showAddForm && !editDept && (
             <InlineDeptForm
-              onSaved={(a) => { void refetchDepts(); if (!a) setShowAddForm(false); }}
+              onSaved={(a) => { void refetchDepts(); void refetchAllDepts(); if (!a) setShowAddForm(false); }}
               onCancel={() => setShowAddForm(false)}
             />
           )}
@@ -521,7 +663,7 @@ export default function HrSetupPage() {
             <InlineDeptForm
               initial={editDept}
               stepLabel="EDIT DEPARTMENT"
-              onSaved={() => { void refetchDepts(); setEditDept(null); }}
+              onSaved={() => { void refetchDepts(); void refetchAllDepts(); setEditDept(null); }}
               onCancel={() => setEditDept(null)}
             />
           )}
@@ -583,59 +725,82 @@ export default function HrSetupPage() {
 
       {/* ── Step 2: Designations ── */}
       {step === 2 && (
-        <div className="bg-white border border-[#E8E8F0] rounded-[14px] p-[24px_28px]"
-          style={{ boxShadow: "0 2px 8px -2px rgba(15,18,34,0.07)" }}>
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="m-0 text-[20px] font-[800]">Designations</h2>
-            <button onClick={() => setAddDesigOpen(true)}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-[700] text-white"
-              style={{ background: "var(--brand)" }}>
-              <Plus size={13} /> Add Designation
-            </button>
-          </div>
-          {desigLoading ? <HrSkeleton /> : designations.length === 0 ? (
-            <div className="text-center py-12 text-[var(--muted)]">No designations yet.</div>
-          ) : (
-            <div className="border border-[#F1F5F9] rounded-[12px] overflow-hidden">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr className="bg-[#fafafa] text-[#64748b] text-[11px] uppercase tracking-[0.08em]">
-                    <th className="px-3 py-[10px] text-left">#</th>
-                    <th className="px-3 py-[10px] text-left">Designation</th>
-                    <th className="px-3 py-[10px] text-left">Department</th>
-                    <th className="px-3 py-[10px] text-left">Type</th>
-                    <th className="px-3 py-[10px] text-left">Status</th>
-                    <th className="px-3 py-[10px] text-left">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {designations.map((d, i) => (
-                    <tr key={d.id} className="border-t border-[#f4f4f8] hover:bg-[#fafafd]">
-                      <td className="px-3 py-3 text-[13px] text-[#94A3B8]">{i + 1}</td>
-                      <td className="px-3 py-3 font-[750] text-[13px]">{d.name}</td>
-                      <td className="px-3 py-3 text-[13px]">{d.department_name}</td>
-                      <td className="px-3 py-3 text-[12.5px]">{d.employment_type}</td>
-                      <td className="px-3 py-3">
-                        <HrBadge variant={d.status === "active" ? "green" : "grey"}>{d.status}</HrBadge>
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex gap-2">
-                          <button onClick={() => setEditDesig(d)}
-                            className="text-[12px] font-[600] text-[#475569] hover:text-[#15172A]">Edit</button>
-                          <button onClick={() => setDeleteDesigId(d.id)}
-                            className="text-[12px] font-[600] text-[#E0463A]">Delete</button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <div>
+          {/* Inline form — always visible; key resets state on edit/dept switch */}
+          <InlineDesigForm
+            key={editDesig ? `edit-${editDesig.id}` : `add-${desigDefaultDept ?? 0}`}
+            initial={editDesig ?? undefined}
+            defaultDeptId={desigDefaultDept}
+            departments={allDepartments}
+            onSaved={(addAnother) => {
+              void refetchDesigs();
+              void refetchHierDepts();
+              setDesigDeptPage(1);
+              if (!addAnother) { setEditDesig(null); setDesigDefaultDept(undefined); }
+            }}
+            onCancel={editDesig ? () => { setEditDesig(null); setDesigDefaultDept(undefined); } : undefined}
+          />
+
+          {/* Hierarchy section header */}
+          {(hierDeptLoading || desigLoading || (hierDeptData?.count ?? 0) > 0) && (
+            <div className="text-[11px] font-[800] tracking-[0.1em] text-[#94A3B8] uppercase mb-3">
+              Designations Added
             </div>
           )}
-          <div className="flex justify-between mt-5">
-            <button onClick={() => setStep(1)} className="text-[13px] font-[600] text-[#475569] hover:text-[#15172A]">Back</button>
+
+          {hierDeptLoading || desigLoading ? (
+            <HrSkeleton />
+          ) : (
+            <>
+              <div className="flex flex-col gap-3">
+                {hierDepts.map((dept) => {
+                  const deptDesigs = designations
+                    .filter((d) => d.department === dept.id)
+                    .sort((a, b) => a.sort_order - b.sort_order);
+                  return (
+                    <DesignationDeptCard
+                      key={dept.id}
+                      dept={dept}
+                      deptDesigs={deptDesigs}
+                      onAddChild={() => { setEditDesig(null); setDesigDefaultDept(dept.id); }}
+                      onEdit={(d) => { setEditDesig(d); setDesigDefaultDept(undefined); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                      onDelete={(id) => setDeleteDesigId(id)}
+                      onReorder={handleReorderDesigs}
+                    />
+                  );
+                })}
+              </div>
+
+              {/* Hierarchy pagination */}
+              {(hierDeptData?.count ?? 0) > 5 && (
+                <div className="flex items-center justify-between mt-4 px-1">
+                  <span className="text-[12.5px] text-[#64748b]">
+                    Showing {(desigDeptPage - 1) * 5 + 1}–{Math.min(desigDeptPage * 5, hierDeptData?.count ?? 0)} of {hierDeptData?.count ?? 0} departments
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled={!hierDeptData?.previous}
+                      onClick={() => setDesigDeptPage((p) => p - 1)}
+                      className="px-3 py-1 rounded-md text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc] disabled:opacity-40 disabled:cursor-not-allowed"
+                    >← Prev</button>
+                    <span className="text-[12.5px] text-[#64748b] tabular-nums">
+                      Page {desigDeptPage} of {Math.ceil((hierDeptData?.count ?? 0) / 5)}
+                    </span>
+                    <button
+                      disabled={!hierDeptData?.next}
+                      onClick={() => setDesigDeptPage((p) => p + 1)}
+                      className="px-3 py-1 rounded-md text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc] disabled:opacity-40 disabled:cursor-not-allowed"
+                    >Next →</button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          <div className="flex justify-between mt-6">
+            <button onClick={() => setStep(1)} className="text-[13px] font-[600] text-[#475569] hover:text-[#15172A]">← Departments</button>
             <button onClick={() => setStep(3)} className="px-5 py-2 rounded-lg text-[13px] font-[700] text-white"
-              style={{ background: "var(--brand)" }}>Review</button>
+              style={{ background: "var(--brand)" }}>Finish Setup →</button>
           </div>
         </div>
       )}
@@ -670,17 +835,6 @@ export default function HrSetupPage() {
         onConfirm={() => void handleDeleteDept()}
         title="Delete Department" message="Staff assigned to it will be unlinked."
         confirmLabel="Yes, Delete" danger loading={deletingDept} />
-
-      <DesignationModal
-        isOpen={addDesigOpen} onClose={() => setAddDesigOpen(false)}
-        departments={departments} onSaved={() => void refetchDesigs()} />
-
-      {editDesig && (
-        <DesignationModal
-          isOpen={!!editDesig} onClose={() => setEditDesig(null)}
-          initial={editDesig} departments={departments}
-          onSaved={() => { void refetchDesigs(); setEditDesig(null); }} />
-      )}
 
       <HrConfirmDialog
         isOpen={!!deleteDesigId} onClose={() => setDeleteDesigId(null)}
