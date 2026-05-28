@@ -57,13 +57,19 @@ class Designation(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="designations")
     department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name="designations")
     name = models.CharField(max_length=120)
+    short_code = models.CharField(max_length=10, blank=True, default="")
+    role_template = models.CharField(max_length=50, blank=True, default="Teacher")
+    employment_type = models.CharField(max_length=30, blank=True, default="Full-time")
+    reports_to = models.CharField(max_length=50, blank=True, default="None")
+    grade_level = models.CharField(max_length=50, blank=True, default="")
+    sort_order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "hr_designations"
-        ordering = ["name"]
+        ordering = ["department_id", "sort_order", "name"]
         constraints = [
             models.UniqueConstraint(fields=["school", "department", "name"], name="uq_hr_desig_scope_name"),
         ]

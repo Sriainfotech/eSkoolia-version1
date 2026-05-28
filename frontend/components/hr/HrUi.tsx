@@ -487,9 +487,9 @@ export function HrField({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-[6px]">
+    <div className="flex flex-col gap-[9px]">
       <label
-        className="text-[11px] uppercase tracking-[0.06em] text-[#64748b] font-[850]"
+        className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]"
       >
         {label}
         {required && <span className="text-[var(--red)] ml-1">*</span>}
@@ -506,7 +506,7 @@ export function HrInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
     <input
       {...props}
       className={[
-        "w-full border border-[var(--line)] rounded-[11px] bg-white min-h-[40px] px-3 text-[var(--ink)] outline-none",
+        "w-full border border-[var(--line)] rounded-[11px] bg-white min-h-[44px] px-4 text-[13px] text-[var(--ink)] outline-none",
         "focus:border-[#c4b5fd] focus:shadow-[0_0_0_3px_rgba(108,60,225,0.12)]",
         props.className ?? "",
       ].join(" ")}
@@ -519,11 +519,85 @@ export function HrSelect(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
     <select
       {...props}
       className={[
-        "w-full border border-[var(--line)] rounded-[11px] bg-white h-[40px] px-3 text-[var(--ink)] outline-none",
+        "w-full border border-[var(--line)] rounded-[11px] bg-white h-[44px] px-4 text-[13px] text-[var(--ink)] outline-none",
         "focus:border-[#c4b5fd] focus:shadow-[0_0_0_3px_rgba(108,60,225,0.12)]",
         props.className ?? "",
       ].join(" ")}
     />
+  );
+}
+
+/** Custom dropdown that always opens downward — use instead of HrSelect when
+ *  the native select flips upward due to viewport constraints. */
+export function HrDropdown({
+  value,
+  onChange,
+  options,
+  placeholder = "Select...",
+  disabled,
+}: {
+  value: string | number;
+  onChange: (val: string) => void;
+  options: { value: string | number; label: string }[];
+  placeholder?: string;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const selected = options.find((o) => String(o.value) === String(value));
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative w-full">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        className={[
+          "w-full flex items-center justify-between border border-[var(--line)] rounded-[11px] bg-white h-[40px] px-3 text-[var(--ink)] outline-none text-left",
+          open ? "border-[#c4b5fd] shadow-[0_0_0_3px_rgba(108,60,225,0.12)]" : "hover:border-[#c4b5fd]",
+          disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
+        ].join(" ")}
+      >
+        <span className={selected ? "text-[var(--ink)]" : "text-[#94A3B8]"} style={{ fontSize: 14 }}>
+          {selected ? selected.label : placeholder}
+        </span>
+        <ChevronDown size={14} className={`text-[#94A3B8] transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <ul
+          className="absolute left-0 top-[calc(100%+4px)] w-full bg-white border border-[#e2e8f0] rounded-[11px] shadow-[0_8px_24px_-4px_rgba(15,18,34,0.14)] z-[200] max-h-[220px] overflow-y-auto py-1"
+        >
+          {placeholder && (
+            <li
+              onClick={() => { onChange(""); setOpen(false); }}
+              className="px-3 py-2 text-[13px] text-[#94A3B8] cursor-pointer hover:bg-[#f8f8fc]">
+              {placeholder}
+            </li>
+          )}
+          {options.map((o) => (
+            <li
+              key={o.value}
+              onClick={() => { onChange(String(o.value)); setOpen(false); }}
+              className={[
+                "px-3 py-2 text-[13px] cursor-pointer hover:bg-[#f3f0ff]",
+                String(o.value) === String(value) ? "bg-[#f3f0ff] font-[700] text-[var(--brand)]" : "text-[var(--ink)]",
+              ].join(" ")}
+            >
+              {o.label}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

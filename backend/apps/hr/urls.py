@@ -1,9 +1,11 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
     DepartmentViewSet,
     DepartmentTypeViewSet,
     DesignationViewSet,
+    DesignationReorderView,
     LeaveDefineViewSet,
     LeaveRequestViewSet,
     LeaveTypeViewSet,
@@ -25,4 +27,6 @@ router.register("leave-requests", LeaveRequestViewSet, basename="hr-leave-reques
 router.register("staff-attendance", StaffAttendanceViewSet, basename="hr-staff-attendance")
 router.register("payroll", PayrollRecordViewSet, basename="hr-payroll")
 
-urlpatterns = router.urls
+urlpatterns = [
+    path("designations/reorder/", DesignationReorderView.as_view(), name="hr-designation-reorder"),
+] + router.urls
