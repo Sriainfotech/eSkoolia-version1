@@ -6,7 +6,7 @@ import { Clock } from 'lucide-react';
 import type { ModuleRoute } from '@/lib/routes';
 
 // Modules that are visible in nav but show Coming Soon on hover
-const COMING_SOON_IDS = new Set(['attendance', 'fees', 'exam', 'reports', 'hr']);
+const COMING_SOON_IDS = new Set(['attendance', 'fees', 'exam', 'reports']);
 
 // Individual sub-pages that show Coming Soon when navigated to
 const COMING_SOON_PATHS = new Set([
@@ -15,6 +15,7 @@ const COMING_SOON_PATHS = new Set([
   '/academics/homework-list', '/academics/other-downloads-list', '/academics/study-material-list',
   '/academics/syllabus-list', '/academics/upload-content', '/academics/assignment-list',
   '/academics/lesson-planner',
+  '/hr/leave', '/hr/attendance', '/hr/offboarding',
 ]);
 
 export function ModulePill({ mod }: { mod: ModuleRoute }) {
@@ -22,6 +23,8 @@ export function ModulePill({ mod }: { mod: ModuleRoute }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [csActive, setCsActive] = useState(false);
+  const csTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const btnRef = useRef<HTMLAnchorElement>(null);
   const dropRef = useRef<HTMLDivElement>(null);
   const enterTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -55,7 +58,7 @@ export function ModulePill({ mod }: { mod: ModuleRoute }) {
   };
   const handleLeave = () => {
     clearTimeout(enterTimer.current);
-    leaveTimer.current = setTimeout(() => setOpen(false), 140);
+    leaveTimer.current = setTimeout(() => { setOpen(false); setCsActive(false); clearTimeout(csTimer.current); }, 140);
   };
 
   return (
@@ -130,14 +133,23 @@ export function ModulePill({ mod }: { mod: ModuleRoute }) {
                 <span>{mod.name}</span>
                 <span style={{ fontFamily: 'monospace', fontSize: 10 }}>{mod.sub.length} pages</span>
               </div>
-              {mod.sub.map(s => {
+              {!csActive && mod.sub.map(s => {
                 const SubIcon = s.icon ?? mod.icon;
                 const subComingSoon = COMING_SOON_PATHS.has(s.path);
                 return (
                   <Link
                     key={s.path}
                     href={s.path}
-                    onClick={() => setOpen(false)}
+                    onClick={(e) => {
+                      if (subComingSoon) {
+                        e.preventDefault();
+                        setCsActive(true);
+                        clearTimeout(csTimer.current);
+                        csTimer.current = setTimeout(() => setCsActive(false), 2500);
+                      } else {
+                        setOpen(false);
+                      }
+                    }}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 10,
                       height: 36, padding: '0 10px', borderRadius: 8,
@@ -164,6 +176,21 @@ export function ModulePill({ mod }: { mod: ModuleRoute }) {
                   </Link>
                 );
               })}
+              {csActive && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 10px' }}>
+                  <div style={{
+                    width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+                    background: 'var(--pu-soft, #EDE9FE)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Clock size={14} strokeWidth={1.75} style={{ color: 'var(--pu, #6D28D9)' }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-1)' }}>Coming Soon</div>
+                    <div style={{ fontSize: 11, color: 'var(--ink-3)', marginTop: 1 }}>This feature is under development</div>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>

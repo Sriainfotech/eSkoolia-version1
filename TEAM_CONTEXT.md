@@ -2629,3 +2629,217 @@ if preferred_communication and preferred_communication not in valid_comm_methods
 
 **Zero TypeScript errors. No backend migrations required.**
 
+---
+
+## Day 12 — 2026-05-29 — HR Onboard: Unified Person-Name Validation + Bug Fixes
+
+**Branch:** `tenancy-new`
+**Author:** Gowtham
+**Files:** `frontend/app/(dashboard)/hr/onboard/page.tsx`, `frontend/lib/hrValidation.ts`, `backend/apps/hr/serializers.py`
+
+---
+
+### Session 1 — Document upload endpoint 404 fix
+
+**Problem:** `POST /api/v1/hr/onboard/documents/` returned 404. The URL was registered correctly in `backend/apps/hr/urls.py` but daphne was serving a stale process that pre-dated the URL addition.
+
+**Fix:** Restart daphne. No code change required — URL routing was already correct. Verified with `python manage.py shell -c "from django.urls import reverse; print(reverse('onboard-doc-upload'))"`.
+
+---
+
+### Session 2 — Only Aadhaar mandatory in document upload
+
+**Problem:** Five documents were marked `required: true` in the frontend `ALL_DOCS` array, forcing users to upload all of them before onboarding could proceed.
+
+**Changes:**
+- **Frontend** (`page.tsx` → `ALL_DOCS`): Set `required: true` only for `aadhaar`; all other 12 documents set to `required: false`.
+- **Backend** (`backend/apps/hr/models.py`): Changed `MANDATORY_KEYS = frozenset(["aadhaar"])` — only Aadhaar is mandatory server-side.
+
+---
+
+### Session 3 — Document preview modal (replace new-tab behaviour)
+
+**Problem:** Clicking Preview opened the document in a new browser tab via `window.open(blobUrl)`. This was awkward UX — users had to switch tabs and close manually.
+
+**Fix — `StepDocuments` in `page.tsx`:**
+- Added `previewUrl: string | null` and `previewMime: string` state.
+- `handlePreview(docKey)` now stores the blob URL in `previewUrl` state instead of calling `window.open`.
+- `closePreview()` revokes the blob URL and resets state.
+- Added a fixed overlay (`z-[9999]`) with a centred modal:
+  - PDF → `<iframe>` filling the modal
+  - Image → `<img>` centred with `max-h-[80vh]`
+  - `×` close button in the top-right corner
+
+---
+
+### Session 4 — Remove "Create Login" from Review & Onboard step
+
+**Problem:** The Review & Onboard step (Step 10) had a `grid-cols-3` layout showing three action fields: "Create Login", "Send Welcome Message", "Activate Attendance". The "Create Login" field was redundant for the onboarding flow.
+
+**Fix — `StepReview` in `page.tsx`:**
+- Changed grid to `grid-cols-2`.
+- Removed the "Create Login" `<HrField>` block entirely.
+- Kept "Send Welcome Message" and "Activate Attendance".
+
+---
+
+### Session 5 — City / State / Country: alpha-only + Permanent Address always visible
+
+**Problem:**
+1. City / State / Country fields accepted digits and special characters.
+2. Permanent address section was hidden when "Same as current address" was checked — backend still received no permanent address data.
+
+**Changes — `StepContact` in `page.tsx`:**
+- All 6 place-name inputs (current city/state/country, permanent city/state/country) now have an `onChange` filter: `.replace(/[^a-zA-Z\s'\-]/g, "")`.
+- Permanent address is now **always rendered**. When `sameAddr` is checked all 5 permanent fields get `disabled={sameAddr}` (values mirror the current address but the DOM is always present).
+
+**Changes — `backend/apps/hr/serializers.py`:**
+- Added `^[A-Za-z\s'\-]+$` regex validation for all 6 place fields: `city`, `state`, `current_country`, `permanent_city`, `permanent_state`, `permanent_country`.
+- Error: `"Only alphabets, spaces, apostrophes, and hyphens are allowed."`
+
+---
+
+### Session 6 — Address field maxLength enforcement
+
+**Problem:** Address Line 1 and Line 2 had no length caps — users could type unlimited characters.
+
+**Changes:**
+- **Frontend** (`page.tsx`): `current_address` `maxLength={150}`, `current_address_line2` `maxLength={100}`, `permanent_address` `maxLength={150}`, `permanent_address_line2` `maxLength={100}`.
+- **Backend** (`serializers.py`): Added explicit length checks — Address Line 1 ≤ 150 chars, Address Line 2 ≤ 100 chars for both current and permanent addresses.
+
+---
+
+### Session 7 — Nominee name validation fix
+
+**Problem:** `isValidContactName` was used for nominee names. It required ≥ 5 chars AND ≥ 2 words — rejecting single-word names like "Veni", "Ravi", "Anil", "Sita".
+
+**Fix — `frontend/lib/hrValidation.ts`:**
+- Added `isValidNomineeName(name)` — regex `^[A-Za-z][A-Za-z .'\-]{1,99}$`, min 2 chars, max 100, no 3+ consecutive identical chars, no keyboard-row 4+, no vowel-free 3+ alpha segments.
+- Added `NOMINEE_NAME_ERR`.
+
+**Fix — `backend/apps/hr/serializers.py`:**
+- Added `_is_valid_nominee_name(value)` module-level function with identical logic.
+- Used in both `nom_name_N` flat-key loop and nested `custom_field.nominees` loop.
+
+---
+
+### Session 8 — Unified person name validation (isValidPersonName)
+
+**Problem:** Multiple name validators existed with inconsistent rules:
+- `isGibberishName` (local, page.tsx) — only 3+ repeated chars and vowel-free segments; too permissive.
+- `isValidContactName` (hrValidation.ts) — required ≥ 5 chars AND ≥ 2 words; too strict, rejected single-word Indian names.
+- `isValidNomineeName` (hrValidation.ts) — separate function added in Session 7.
+- Backend had two different local functions (`_is_gibberish_name`, `_is_valid_full_name_be`) with conflicting rules.
+
+**Requirements:** Min 3 / max 100 chars. Allow letters, spaces, apostrophe, dot, hyphen. Reject numbers. Reject 3+ consecutive identical chars (aaa, bb). Reject keyboard patterns (qwert, asdf, zxcv, 4+ chars). Accept: Veni, Ravi, Raju, Sita, Geeta, Deepa, Kiran, Sai Teja. Error message: "Please enter a valid name using alphabets only."
+
+#### Frontend — `frontend/lib/hrValidation.ts`
+
+- **Removed:** Old `isValidContactName` full implementation (with `_KB_ROWS` constant, 40-line function body, 5-char minimum, 2-word requirement).
+- **Added** `isValidPersonName(name)`:
+  - Regex: `^[A-Za-z][A-Za-z .'\-]{2,99}$`
+  - No 3+ consecutive identical chars: `/(.)\1{2,}/i`
+  - No 4+ keyboard-row chars (qwertyuiop / asdfghjkl / zxcvbnm)
+  - No vowel-free alpha segment of 3+ chars
+- **Added** `PERSON_NAME_ERR = "Please enter a valid name using alphabets only."` 
+- **Kept** thin `@deprecated` aliases: `isValidContactName` and `isValidNomineeName` both delegate to `isValidPersonName`.
+- **`CONTACT_NAME_ERR`** updated to the same string as `PERSON_NAME_ERR`.
+
+#### Frontend — `frontend/app/(dashboard)/hr/onboard/page.tsx`
+
+- **Import line updated:** Removed `isValidFullName`, `isValidContactName`, `CONTACT_NAME_ERR`, `isValidNomineeName`, `NOMINEE_NAME_ERR`; added `isValidPersonName`, `PERSON_NAME_ERR`.
+- **Removed** local `isGibberishName` function (12 lines).
+- **Step 1 valid gate:** `isGibberishName(first_name) || isGibberishName(last_name)` → `!isValidPersonName(first_name) || !isValidPersonName(last_name)`.
+- **Error computations (`firstNameErr`, `middleNameErr`, `lastNameErr`):** Replaced `isGibberishName(x)` with `!isValidPersonName(x)`; error messages now use `PERSON_NAME_ERR`.
+- **Spouse name error:** `isValidContactName` → `isValidPersonName`, `CONTACT_NAME_ERR` → `PERSON_NAME_ERR`.
+- **Emergency contact name error:** Same replacement.
+- **Nominee name error:** `isValidNomineeName` → `isValidPersonName`, `NOMINEE_NAME_ERR` → `PERSON_NAME_ERR`.
+- **Step 4 `goNext` toasts** (ecName + spouse): `isValidContactName` → `isValidPersonName`, updated toast messages.
+
+#### Backend — `backend/apps/hr/serializers.py`
+
+- **Added** module-level `_is_valid_person_name(value)`:
+  - Min 3 / max 100 chars.
+  - Regex: `^[A-Za-z][A-Za-z .'\-]{2,99}$`
+  - No 3+ consecutive identical chars.
+  - No 4+ consecutive keyboard-row chars.
+  - No vowel-free alpha segment of 3+ chars.
+- **`_is_gibberish_name`** kept as a thin alias: `return not _is_valid_person_name(value) if value.strip() else False`.
+- **`_is_valid_nominee_name`** kept as a thin alias: `return _is_valid_person_name(value)`.
+- **`_is_valid_full_name_be` local function** (inside `validate()`) removed.
+- **`first_name` / `last_name` / `middle_name` checks** now use `not _is_valid_person_name(x)` with error: "Please enter a valid name using alphabets only."
+- **`spouse_parent_name` / `emergency_name` checks** now use `_is_valid_person_name`; error message updated.
+- **Nominee loops** now use `_is_valid_person_name`; error message updated.
+- **Duplicate `_is_gibberish_place_name` definition** that was accidentally created during refactor was removed (de-duplicated).
+
+---
+
+### Validation Behaviour — Accepted / Rejected Examples
+
+| Name | Result | Reason |
+|---|---|---|
+| Veni | ✅ Accept | 4 chars, has vowel, starts with letter |
+| Ravi | ✅ Accept | 4 chars, has vowel |
+| Raju | ✅ Accept | 4 chars, has vowel |
+| Sita | ✅ Accept | 4 chars, has vowel |
+| Sai Teja | ✅ Accept | 8 chars, two segments each with vowels |
+| Mary O'Brien | ✅ Accept | apostrophe allowed |
+| Jean-Luc | ✅ Accept | hyphen allowed |
+| Dr. Smith | ✅ Accept | dot allowed |
+| qwerty | ❌ Reject | keyboard-row pattern |
+| aaaaaa | ❌ Reject | 3+ identical consecutive chars |
+| Ravi123 | ❌ Reject | contains digits |
+| ssd | ❌ Reject | 3-char vowel-free segment |
+
+---
+
+### Files Changed (Day 12)
+
+| File | Change |
+|---|---|
+| `frontend/lib/hrValidation.ts` | Replaced `isValidContactName` body + `isValidNomineeName` with unified `isValidPersonName`; added `PERSON_NAME_ERR`; kept deprecated aliases; fixed duplicate function definition error |
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | Updated import; removed local `isGibberishName`; all 6 name fields (first/last/middle/spouse/EC/nominee) use `isValidPersonName` + `PERSON_NAME_ERR`; step-1 gate updated; step-4 goNext toasts updated; preview modal added; "Create Login" removed from Review; grid-cols-3→2; address maxLength; alpha-only filters on place inputs; permanent address always visible+disabled; only Aadhaar required in `ALL_DOCS` |
+| `backend/apps/hr/models.py` | `MANDATORY_KEYS = frozenset(["aadhaar"])` |
+| `backend/apps/hr/serializers.py` | Added `_is_valid_person_name()`; updated aliases; replaced `_is_valid_full_name_be`; updated all name checks to use unified function + consistent error message; alpha-only regex for 6 place fields; address maxLength enforcement |
+
+**Zero TypeScript errors. No new migrations required.**
+
+---
+
+### Start next with
+
+1. Smoke-test all name fields: type "Veni" in First Name → should accept; type "qwerty" → should reject with "Please enter a valid name using alphabets only."
+2. Smoke-test City field: type "123" → digits should be stripped instantly.
+3. Smoke-test permanent address: check "Same as current" → fields should go disabled but remain visible.
+4. Smoke-test document preview: upload a PDF → click Preview → modal should appear with × close button.
+5. Restart daphne after any backend changes and re-verify `/api/v1/hr/onboard/documents/` responds 200.
+
+---
+
+## Day 12 Addendum — 2026-05-29 (Post-Build Fix)
+
+**Build result after Day 12 work:** `npm run build` → Exit code 1
+
+**Error:**
+```
+./app/(dashboard)/hr/onboard/page.tsx:2597:9
+Type error: Type '() => string | null' is not assignable to type '[() => string | null]'.
+```
+
+**Root cause:** Inside `StepSalary` validator gate, `ratioChecks` was typed as `[() => string | null][]` — an array of one-element tuples — instead of an array of functions.
+
+**Fix — `frontend/app/(dashboard)/hr/onboard/page.tsx` line ~2596:**
+```typescript
+// Before (wrong — tuple type):
+const ratioChecks: [() => string | null][] = [
+
+// After (correct — array of functions):
+const ratioChecks: (() => string | null)[] = [
+```
+
+**Result:** `npm run build` → Exit code 0. Zero TypeScript errors. Production build passes.
+
+| File | Change |
+|---|---|
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | Fixed `ratioChecks` type annotation: `[() => string | null][]` → `(() => string | null)[]` |
+

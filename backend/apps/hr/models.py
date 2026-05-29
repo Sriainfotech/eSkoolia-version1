@@ -135,7 +135,7 @@ class Staff(models.Model):
     qualification = models.CharField(max_length=255, blank=True)
     experience = models.CharField(max_length=255, blank=True)
     epf_no = models.CharField(max_length=80, blank=True)
-    bank_account_name = models.CharField(max_length=120, blank=True)
+    bank_account_name = models.CharField(max_length=50, blank=True)
     bank_account_no = models.CharField(max_length=120, blank=True)
     bank_name = models.CharField(max_length=120, blank=True)
     bank_branch = models.CharField(max_length=120, blank=True)
@@ -402,6 +402,58 @@ class PayrollRecord(models.Model):
     def save(self, *args, **kwargs):
         self.net_salary = (self.basic_salary + self.allowance) - self.deduction
         super().save(*args, **kwargs)
+
+
+class StaffOnboardDocument(models.Model):
+    """Temporary documents uploaded during the staff onboarding wizard.
+
+    Each record is scoped to the uploading user + doc_key so there is at most
+    one file per document type per HR officer session.  When the wizard
+    completes and the Staff record is created the documents are copied to
+    StaffDocument and these rows are deleted.
+    """
+
+    MANDATORY_KEYS = frozenset(["aadhaar"])
+
+    uploaded_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.CASCADE,
+        related_name="onboard_documents",
+    )
+    school = models.ForeignKey(
+        "tenancy.School",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="onboard_documents",
+    )
+    doc_key = models.CharField(max_length=64)
+    doc_label = models.CharField(max_length=255)
+    file = models.FileField(upload_to="staff_onboard_docs/%Y/%m/")
+    file_name = models.CharField(max_length=255)
+    file_size = models.PositiveBigIntegerField(default=0)
+    content_type = models.CharField(max_length=100, default="application/octet-stream")
+    status = models.CharField(
+        max_length=20,
+        default="uploaded",
+        choices=[("uploaded", "Uploaded"), ("verified", "Verified"), ("rejected", "Rejected")],
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "hr_staff_onboard_documents"
+        ordering = ["-created_at"]
+        # Enforce one file per (user, doc_key) – re-upload replaces the old record
+        constraints = [
+            models.UniqueConstraint(
+                fields=["uploaded_by", "doc_key"],
+                name="uq_hr_onboard_doc_user_key",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.uploaded_by_id} – {self.doc_key}"
 
 
 class PayrollSettings(models.Model):
