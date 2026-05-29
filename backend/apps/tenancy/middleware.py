@@ -45,13 +45,10 @@ class TenantMainMiddleware(MiddlewareMixin):
     # TenantAwareJWT variant) to avoid the tenant-context check.
     _PUBLIC_PATH_PREFIXES = (
         "/api/v1/tenancy/school-info/",
-        "/api/v1/auth/login/",
-        "/api/v1/auth/refresh/",
-        "/api/v1/auth/logout/",
-        "/api/v1/auth/health/",
-        "/api/v1/auth/forgot-password/",
-        "/api/v1/auth/verify-reset-code/",
-        "/api/v1/auth/reset-password/",
+        # All /api/v1/auth/ endpoints (login, refresh, logout, me,
+        # change-password, forgot/verify/reset-password, health) run against
+        # the public schema — see class docstring above.
+        "/api/v1/auth/",
         "/api/v1/super-admin/",
         "/admin/",
         "/static/",

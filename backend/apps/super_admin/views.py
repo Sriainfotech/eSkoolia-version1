@@ -45,6 +45,7 @@ from apps.tenancy.models import (
     SchoolTenant,
     SubscriptionPlan,
     SuperAdminInvoice,
+    SuperAdminInvoicePayment,
     SuperAdminPolicy,
     TenantAuditLog,
 )
@@ -55,6 +56,8 @@ from .serializers import (
     BillingMrrSerializer,
     DashboardDataSerializer,
     InvoiceCreateSerializer,
+    InvoicePaymentCreateSerializer,
+    InvoicePaymentSerializer,
     InvoiceSerializer,
     InvoiceUpdateSerializer,
     POLICY_GROUP_METADATA,
@@ -1336,8 +1339,16 @@ class BillingMRRView(SuperAdminBaseAPIView):
         previous_mrr = sum(_invoice_grand_total(invoice) for invoice in previous_month)
 
         gst_collected = sum(_invoice_tax_total(invoice) for invoice in current_month if invoice.status == "paid")
-        outstanding_amount = sum(_invoice_grand_total(invoice) for invoice in invoices.filter(status__in=["draft", "sent", "overdue"]))
-        at_risk_amount = sum(_invoice_grand_total(invoice) for invoice in invoices.filter(status="overdue"))
+        # Outstanding = sum of remaining due on every non-cancelled invoice.
+        # Includes partially_paid invoices (only the unpaid remainder counts).
+        outstanding_amount = float(
+            invoices.filter(status__in=["draft", "sent", "partially_paid", "overdue"])
+            .aggregate(total=Coalesce(Sum("due_amount"), Decimal("0")))["total"]
+        )
+        at_risk_amount = float(
+            invoices.filter(status="overdue")
+            .aggregate(total=Coalesce(Sum("due_amount"), Decimal("0")))["total"]
+        )
 
         trend_percent = 0.0
         if previous_mrr:
@@ -1712,13 +1723,41 @@ class BillingInvoiceDetailView(SuperAdminBaseAPIView):
 
 
 class BillingInvoiceMarkPaidView(SuperAdminBaseAPIView):
+    """Shortcut to settle the full outstanding balance via a single payment
+    entry in the ledger. Prefer POST .../payments/ for partial amounts.
+    """
+
     def post(self, request, invoice_id: str):
         invoice = get_object_or_404(
             self._public_queryset(SuperAdminInvoice), id=invoice_id
         )
+        if invoice.status == "cancelled":
+            return Response(
+                {"detail": "Cancelled invoices cannot be marked paid."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         previous_status = invoice.status
-        invoice.status = "paid"
-        invoice.save(update_fields=["status", "updated_at"])
+        with transaction.atomic():
+            invoice = (
+                self._public_queryset(SuperAdminInvoice)
+                .select_for_update()
+                .get(pk=invoice.pk)
+            )
+            outstanding = invoice.grand_total() - (invoice.paid_amount or 0)
+            if outstanding > 0:
+                SuperAdminInvoicePayment.objects.create(
+                    invoice=invoice,
+                    amount=outstanding,
+                    paid_on=timezone.localdate(),
+                    method=request.data.get("method") or "bank_transfer",
+                    reference_no=request.data.get("reference_no") or "",
+                    received_by=request.user if request.user.is_authenticated else None,
+                    notes=request.data.get("notes") or "Full settlement via Mark as paid",
+                )
+            invoice.status = "paid"  # force final state even if grand_total is 0
+            invoice.save(update_fields=["status", "updated_at"])
+            invoice.recalculate()
 
         log_audit(
             action="invoice.mark_paid",
@@ -1729,6 +1768,125 @@ class BillingInvoiceMarkPaidView(SuperAdminBaseAPIView):
             details={
                 "invoice_number": invoice.invoice_number,
                 "previous_status": previous_status,
+            },
+        )
+        return Response(InvoiceSerializer(invoice).data)
+
+
+class BillingInvoicePaymentsView(SuperAdminBaseAPIView):
+    """GET   list payments for an invoice
+    POST  record a new payment (supports partial amounts).
+    """
+
+    def _get_invoice(self, invoice_id: str) -> SuperAdminInvoice:
+        return get_object_or_404(
+            self._public_queryset(SuperAdminInvoice), id=invoice_id
+        )
+
+    def get(self, request, invoice_id: str):
+        invoice = self._get_invoice(invoice_id)
+        return Response(
+            InvoicePaymentSerializer(invoice.payments.all(), many=True).data
+        )
+
+    def post(self, request, invoice_id: str):
+        serializer = InvoicePaymentCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        with transaction.atomic():
+            invoice = (
+                self._public_queryset(SuperAdminInvoice)
+                .select_for_update()
+                .get(id=invoice_id)
+            )
+            if invoice.status == "cancelled":
+                return Response(
+                    {"detail": "Cannot record payments against a cancelled invoice."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            grand = invoice.grand_total()
+            outstanding = grand - (invoice.paid_amount or Decimal("0"))
+            amount = Decimal(str(data["amount"]))
+            if amount > outstanding + Decimal("0.005"):
+                return Response(
+                    {
+                        "detail": (
+                            f"Amount {amount} exceeds outstanding balance "
+                            f"{outstanding}. Adjust the amount or issue a credit note."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            payment = SuperAdminInvoicePayment.objects.create(
+                invoice=invoice,
+                amount=amount,
+                paid_on=data.get("paid_on") or timezone.localdate(),
+                method=data.get("method") or "bank_transfer",
+                reference_no=data.get("reference_no") or "",
+                notes=data.get("notes") or "",
+                received_by=request.user if request.user.is_authenticated else None,
+            )
+            invoice.recalculate()
+
+        log_audit(
+            action="invoice.payment_recorded",
+            tenant_id=invoice.tenant.tenant_id if invoice.tenant_id else None,
+            status="success",
+            actor_user=request.user,
+            actor_ip=self._client_ip(request),
+            details={
+                "invoice_number": invoice.invoice_number,
+                "amount": str(amount),
+                "method": payment.method,
+                "new_status": invoice.status,
+                "remaining_due": str(invoice.due_amount),
+            },
+        )
+        return Response(
+            {
+                "payment": InvoicePaymentSerializer(payment).data,
+                "invoice": InvoiceSerializer(invoice).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class BillingInvoicePaymentDetailView(SuperAdminBaseAPIView):
+    """DELETE a previously recorded payment (e.g. cheque bounced, wrong entry).
+    Reverses ledger entry and recalculates invoice totals.
+    """
+
+    def delete(self, request, invoice_id: str, payment_id: str):
+        with transaction.atomic():
+            invoice = get_object_or_404(
+                self._public_queryset(SuperAdminInvoice).select_for_update(),
+                id=invoice_id,
+            )
+            payment = get_object_or_404(
+                invoice.payments.select_for_update(), id=payment_id
+            )
+            payment_summary = {
+                "amount": str(payment.amount),
+                "method": payment.method,
+                "reference_no": payment.reference_no,
+            }
+            payment.delete()
+            invoice.recalculate()
+
+        log_audit(
+            action="invoice.payment_reversed",
+            tenant_id=invoice.tenant.tenant_id if invoice.tenant_id else None,
+            status="success",
+            actor_user=request.user,
+            actor_ip=self._client_ip(request),
+            details={
+                "invoice_number": invoice.invoice_number,
+                "reversed_payment": payment_summary,
+                "new_status": invoice.status,
+                "remaining_due": str(invoice.due_amount),
             },
         )
         return Response(InvoiceSerializer(invoice).data)

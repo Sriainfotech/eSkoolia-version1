@@ -188,6 +188,58 @@ Brought in 9 demo commits (some authored 2026-05-12 to 2026-05-20 by `shivasurya
 
 ---
 
+## Day 6 Update — Sridevi (2026-05-29)
+Branch: `tenancy-errors/28-05` · Focus: partial-payment ledger for super-admin invoices, school logo display, login hardening, and media-serving fix.
+
+**Backend — partial-payment ledger (super-admin billing):**
+- [backend/apps/tenancy/models.py](backend/apps/tenancy/models.py) — added `partially_paid` status, `paid_amount` / `due_amount` / `last_payment_on` fields and `grand_total()` / `recalculate()` helpers on `SuperAdminInvoice`; new `SuperAdminInvoicePayment` ledger model (UUID PK, method choices: bank_transfer/upi/cheque/cash/razorpay/stripe/adjustment/other, `received_by` FK to user).
+- [backend/apps/tenancy/migrations/0015_invoice_partial_payments.py](backend/apps/tenancy/migrations/0015_invoice_partial_payments.py) — schema + backfill: legacy `paid` invoices get `paid_amount = grand_total` and a synthetic `adjustment` payment row labelled `BACKFILL` so historical receipts survive.
+- [backend/apps/tenancy/migrations/0016_rename_sa_inv_pay_inv_paid_idx_super_admin_invoice_26f535_idx.py](backend/apps/tenancy/migrations/0016_rename_sa_inv_pay_inv_paid_idx_super_admin_invoice_26f535_idx.py) — auto-rename of the `(invoice, paid_on)` index to Django's default naming.
+- [backend/apps/super_admin/serializers.py](backend/apps/super_admin/serializers.py) — `InvoicePaymentSerializer`, `InvoicePaymentCreateSerializer`; `InvoiceSerializer` now exposes `paid_amount`, `due_amount`, `last_payment_on`, nested `payments`; `partially_paid` added to status choices on create/update.
+- [backend/apps/super_admin/views.py](backend/apps/super_admin/views.py) — new `BillingInvoicePaymentsView` (`GET`/`POST`) and `BillingInvoicePaymentDetailView` (`DELETE`); `BillingInvoiceMarkPaidView` rewritten to settle outstanding via a real ledger entry inside `transaction.atomic()` + `select_for_update()`; `BillingMRRView` outstanding/at-risk now aggregate `due_amount` (so `partially_paid` only contributes the unpaid remainder); blocks payments on `cancelled` invoices; rejects overpayments with a clear 400; audit-logs `invoice.payment_recorded` and `invoice.payment_reversed`.
+- [backend/apps/super_admin/urls.py](backend/apps/super_admin/urls.py) — added:
+  - `POST /api/super-admin/billing/invoices/{id}/payments/`
+  - `GET  /api/super-admin/billing/invoices/{id}/payments/`
+  - `DELETE /api/super-admin/billing/invoices/{id}/payments/{payment_id}/`
+
+**Backend — auth / tenancy hardening:**
+- [backend/apps/users/serializers.py](backend/apps/users/serializers.py) — `LoginTokenObtainPairSerializer` now resolves the tenant from the request (subdomain / `X-Tenant`) AND from `user.school_id`, and blocks login with `AuthenticationFailed("Login is disabled for this school…")` when tenant status is not `active`/`trial`. Tenant lookup widened to match by `School.name`, `School.code` (against `subdomain_url` and `short_code`), and `School.subdomain`.
+- [backend/apps/tenancy/middleware.py](backend/apps/tenancy/middleware.py) — `_PUBLIC_PATH_PREFIXES` simplified: every `/api/v1/auth/` endpoint now bypasses the tenant-context check (covers `me`, `change-password`, etc. that were previously slipping through).
+- [backend/apps/super_admin/serializers.py](backend/apps/super_admin/serializers.py) — `SchoolTenantBaseSerializer` exposes `logo_url` and `brand_color`.
+- [backend/config/urls.py](backend/config/urls.py) — also serve `/media/` when `DEBUG=False` (local daphne) so uploaded school logos are reachable; note: real production must serve `/media/` via nginx/CDN.
+- [backend/requirements.txt](backend/requirements.txt) — minor dependency bump.
+
+**Frontend — Record Payment UX:**
+- [frontend/app/(dashboard)/super-admin/billing/RecordPaymentModal.tsx](frontend/app/(dashboard)/super-admin/billing/RecordPaymentModal.tsx) — NEW. Amount pre-filled to outstanding `due_amount`, validates against overpayment, method dropdown (bank_transfer/UPI/cheque/cash/razorpay/stripe/adjustment/other), reference number + notes, "fully settle vs partial" hint.
+- [frontend/app/(dashboard)/super-admin/billing/page.tsx](frontend/app/(dashboard)/super-admin/billing/page.tsx) — replaces one-click `markInvoicePaid` with `RecordPaymentModal` flow via `recordInvoicePayment`; new `partially_paid` status chip (sky); invoice rows now show `Due ₹…` underneath the grand total when a balance remains; table buttons relabelled "Record payment".
+- [frontend/lib/api/super-admin/billing.ts](frontend/lib/api/super-admin/billing.ts) — added `recordInvoicePayment`, `listInvoicePayments`, `deleteInvoicePayment`, plus `RecordInvoicePaymentPayload`.
+- [frontend/types/super-admin/index.ts](frontend/types/super-admin/index.ts) — added `InvoicePayment`, `InvoicePaymentMethod`; `Invoice` extended with `paid_amount`, `due_amount`, `last_payment_on`, `payments`; `InvoiceStatus` now includes `partially_paid`.
+
+**Frontend — Plan / School polish:**
+- [frontend/app/(dashboard)/super-admin/billing/NewPlanDrawer.tsx](frontend/app/(dashboard)/super-admin/billing/NewPlanDrawer.tsx) — plan code slug switched to `snake_case` (matches Stripe/Razorpay identifier style); auto-derive from name continues until the user actually diverges.
+- [frontend/app/(dashboard)/super-admin/schools/page.tsx](frontend/app/(dashboard)/super-admin/schools/page.tsx) — GSTIN field shown/cleared based on `gst_registered`; schools list now renders the uploaded `logo_url` (resolved against `API_BASE_URL` for relative paths) instead of the initials avatar when present.
+
+**Fixed today:**
+- Suspended/inactive schools could still log in — now blocked at the JWT serializer with a clean error message.
+- `/api/v1/auth/me/` and `change-password` were going through tenant middleware unnecessarily — now in the public-prefix list.
+- School logo uploads invisible under daphne (`DEBUG=False`) because Django wasn't serving `/media/` — added a guarded fallback route.
+- `markInvoicePaid` flipped status with no audit trail of how the invoice was settled — now every settlement (full or partial) creates an immutable `SuperAdminInvoicePayment` row.
+- MRR "Outstanding" double-counted invoices that had already received partial payments — now aggregates `due_amount`.
+
+**Still in progress / open:**
+- No UI yet to list / delete individual payments on the invoice detail panel (backend `GET`/`DELETE` ready).
+- GSTR-1 export still groups by `status="paid"` only — needs review for `partially_paid` invoices (should report cash actually received in the period from the payment ledger, not invoice totals).
+- Receipt PDF / email-on-payment is not implemented.
+- Migrations `0015` and `0016` are uncommitted; need to apply on staging Neon and verify backfill creates the right `adjustment` payment rows.
+
+**Start tomorrow with:**
+1. Commit the working tree on `tenancy-errors/28-05` in focused commits (ledger backend, ledger frontend, auth hardening, schools/plan polish).
+2. Apply `tenancy/0015` + `0016` on staging Neon and spot-check `paid_amount` / `due_amount` on existing invoices.
+3. Add a payments table inside the invoice detail drawer (list + delete with confirm).
+4. Audit GSTR-1 export against the new payment ledger.
+
+---
+
 ## Module Reference (current state)
 
 ### Backend ΓÇö Tenancy / Super Admin

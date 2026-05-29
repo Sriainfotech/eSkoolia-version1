@@ -136,30 +136,65 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
         refresh = self.get_token(user)
         update_last_login(None, user)  # keep last_login accurate for the Login Permission UI
 
+        # ── Tenant-status check (suspended/inactive schools) ─────────────────
+        # Block login for any non-superuser whose target tenant is not in an
+        # active/trial status. Try the request-derived tenant first (subdomain
+        # or X-Tenant header) so suspension applies even if the user→school
+        # lookup below fails.
+        def _is_blocked_status(t) -> bool:
+            return (getattr(t, "status", "") or "").lower() not in ("active", "trial")
+
+        request_tenant = None
+        if not user.is_superuser:
+            try:
+                request = self.context.get("request") if hasattr(self, "context") else None
+                if request is not None:
+                    from apps.tenancy.resolvers import get_tenant_from_request
+                    request_tenant = get_tenant_from_request(request)
+            except Exception:
+                request_tenant = None
+
+            if request_tenant is not None and _is_blocked_status(request_tenant):
+                raise AuthenticationFailed(
+                    "Login is disabled for this school. "
+                    "Please contact your administrator."
+                )
+        # ─────────────────────────────────────────────────────────────────────
+
         # Resolve tenant context for subdomain-based frontend routing.
         school_code = None
         tenant_id = None
         if user and not user.is_superuser and getattr(user, "school_id", None):
+            tenant = None
             try:
-                from apps.tenancy.models import SchoolTenant, Domain
-                # Look up a Domain whose subdomain maps to this school's name.
-                # SchoolTenant.name stores the school's full name; match via the
-                # School record linked to the user.
-                from apps.tenancy.models import School
+                from apps.tenancy.models import SchoolTenant, School
                 school = School.objects.filter(id=user.school_id).first()
                 if school:
-                    # Find a tenant whose Domain subdomain matches by school name
-                    tenant = SchoolTenant.objects.filter(name__iexact=school.name).first()
-                    if not tenant:
-                        # Fallback: match by school.code against subdomain_url
-                        tenant = SchoolTenant.objects.filter(
-                            subdomain_url__iexact=school.code
-                        ).first()
-                    if tenant:
-                        school_code = tenant.subdomain_url   # e.g. "springdale"
-                        tenant_id = tenant.tenant_id          # e.g. "SCH-001"
+                    name = (school.name or "").strip()
+                    code = (school.code or "").strip()
+                    subdomain = (school.subdomain or "").strip()
+                    q = Q()
+                    if name:
+                        q |= Q(name__iexact=name)
+                    if code:
+                        q |= Q(subdomain_url__iexact=code) | Q(short_code__iexact=code)
+                    if subdomain:
+                        q |= Q(subdomain_url__iexact=subdomain)
+                    if q:
+                        tenant = SchoolTenant.objects.filter(q).first()
+            except AuthenticationFailed:
+                raise
             except Exception:
-                pass  # Never block login due to tenant lookup failure
+                tenant = None  # Never block login due to tenant lookup failure
+
+            if tenant is not None:
+                if _is_blocked_status(tenant):
+                    raise AuthenticationFailed(
+                        "Login is disabled for this school. "
+                        "Please contact your administrator."
+                    )
+                school_code = tenant.subdomain_url
+                tenant_id = tenant.tenant_id
 
         return {
             "refresh": str(refresh),

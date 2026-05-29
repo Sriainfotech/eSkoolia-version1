@@ -13,6 +13,7 @@ import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSch
 import type { LLMSchoolState } from '@/lib/api/super-admin/schools';
 import { getPlans } from '@/lib/api/super-admin/billing';
 import { apiRequestWithRefreshResponse } from '@/lib/api-auth';
+import { API_BASE_URL } from '@/lib/api';
 import type {
   BoardType, HealthFlagsCounts, PaginatedResponse, PlanType, ProvisionSchoolRequest, ProvisionSchoolResponse,
   SchoolFilters, SchoolTenant, SchoolStatus, SubscriptionPlan,
@@ -1510,11 +1511,30 @@ export default function SuperAdminSchoolsPage() {
               <Fld label="GST registration">
                 <select className={selectCls} title="GST registration"
                   value={editFields.gst_registered}
-                  onChange={e => setEditFields(f => ({ ...f, gst_registered: e.target.value }))}>
+                  onChange={e => setEditFields(f => ({
+                    ...f,
+                    gst_registered: e.target.value,
+                    gstin: e.target.value === 'no' ? '' : f.gstin,
+                  }))}>
                   <option value="yes">GST-registered</option>
                   <option value="no">Unregistered (exempt)</option>
                 </select>
               </Fld>
+              {editFields.gst_registered === 'yes' && (
+                <Fld label="GSTIN" error={fieldErrors.gstin}>
+                  <input
+                    className={`${monoInputCls} uppercase${fieldErrors.gstin ? ' !border-[var(--danger)]' : ''}`}
+                    placeholder="27AABCU9603R1ZX"
+                    maxLength={15}
+                    value={editFields.gstin}
+                    data-field-error={fieldErrors.gstin ? 'true' : undefined}
+                    onChange={e => {
+                      setEditFields(f => ({ ...f, gstin: e.target.value.toUpperCase() }));
+                      if (fieldErrors.gstin) setFieldErrors(p => ({ ...p, gstin: '' }));
+                    }}
+                  />
+                </Fld>
+              )}
               <Fld label="PAN" required error={fieldErrors.pan}>
                 <input className={`${monoInputCls} uppercase${fieldErrors.pan ? ' !border-[var(--danger)]' : ''}`} placeholder="AAACE9988K" maxLength={10}
                   value={editFields.pan}
@@ -1967,13 +1987,27 @@ export default function SuperAdminSchoolsPage() {
                   {rows.map(school => {
                     const initials = schoolInitials(school.name);
                     const gradCls = avatarGradient(school.tenant_id);
+                    const logoSrc = school.logo_url
+                      ? (school.logo_url.startsWith('http')
+                          ? school.logo_url
+                          : `${API_BASE_URL}${school.logo_url}`)
+                      : null;
                     return (
                       <tr key={school.tenant_id} className="group transition-colors hover:bg-[var(--bg-2)]">
                         <td className="border-b border-[var(--bd)] py-3.5 pl-[18px] pr-3.5 align-middle">
                           <div className="flex min-w-[240px] items-center gap-2.5">
-                            <span className={`flex h-[38px] w-[38px] flex-shrink-0 items-center justify-center rounded-[10px] text-[13px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,.15)] ${gradCls}`}>
-                              {initials}
-                            </span>
+                            {logoSrc ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={logoSrc}
+                                alt={`${school.name} logo`}
+                                className="h-[38px] w-[38px] flex-shrink-0 rounded-[10px] object-cover bg-[var(--bg-2)]"
+                              />
+                            ) : (
+                              <span className={`flex h-[38px] w-[38px] flex-shrink-0 items-center justify-center rounded-[10px] text-[13px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,.15)] ${gradCls}`}>
+                                {initials}
+                              </span>
+                            )}
                             <span className="min-w-0 flex-1">
                               <Link
                                 href={`/super-admin/schools/${school.tenant_id}`}

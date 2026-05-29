@@ -1,4 +1,5 @@
 from django.db import models
+from django.conf import settings
 import uuid
 
 
@@ -420,6 +421,7 @@ class SuperAdminInvoice(models.Model):
     STATUS_CHOICES = [
         ("draft", "Draft"),
         ("sent", "Sent"),
+        ("partially_paid", "Partially Paid"),
         ("paid", "Paid"),
         ("overdue", "Overdue"),
         ("cancelled", "Cancelled"),
@@ -453,6 +455,10 @@ class SuperAdminInvoice(models.Model):
     terms_conditions = models.TextField(blank=True)
     reverse_charge = models.BooleanField(default=False)
 
+    paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    due_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    last_payment_on = models.DateField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -465,6 +471,100 @@ class SuperAdminInvoice(models.Model):
 
     def __str__(self):
         return f"{self.invoice_number} ({self.school_name})"
+
+    def grand_total(self):
+        from decimal import Decimal
+        tb = self.tax_breakdown or {}
+        if isinstance(tb, dict) and tb.get("grand_total") is not None:
+            return Decimal(str(tb["grand_total"]))
+        subtotal = Decimal(str(tb.get("subtotal", 0) or 0))
+        total_tax = Decimal(str(tb.get("total_tax", 0) or 0))
+        return subtotal + total_tax
+
+    def recalculate(self, save=True):
+        """Recompute paid_amount, due_amount, last_payment_on, and derive status
+        from the payment ledger. Manual states (draft, cancelled) are preserved.
+        """
+        from decimal import Decimal
+        from django.db.models import Sum, Max
+
+        agg = self.payments.aggregate(
+            paid=Sum("amount"), last=Max("paid_on")
+        )
+        paid = Decimal(str(agg["paid"] or 0))
+        grand = self.grand_total()
+        due = max(grand - paid, Decimal("0"))
+
+        self.paid_amount = paid
+        self.due_amount = due
+        self.last_payment_on = agg["last"]
+
+        if self.status not in ("draft", "cancelled"):
+            if paid <= 0:
+                from django.utils import timezone as _tz
+                today = _tz.localdate()
+                if self.due_date and self.due_date < today:
+                    self.status = "overdue"
+                else:
+                    self.status = "sent"
+            elif paid < grand:
+                self.status = "partially_paid"
+            else:
+                self.status = "paid"
+
+        if save:
+            self.save(update_fields=[
+                "paid_amount", "due_amount", "last_payment_on",
+                "status", "updated_at",
+            ])
+
+
+class SuperAdminInvoicePayment(models.Model):
+    """Payment ledger for SuperAdminInvoice. Enables partial payments,
+    receipts, and an auditable history of how an invoice was settled.
+    """
+
+    METHOD_CHOICES = [
+        ("bank_transfer", "Bank Transfer"),
+        ("upi", "UPI"),
+        ("cheque", "Cheque"),
+        ("cash", "Cash"),
+        ("razorpay", "Razorpay"),
+        ("stripe", "Stripe"),
+        ("adjustment", "Adjustment / Credit Note"),
+        ("other", "Other"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    invoice = models.ForeignKey(
+        SuperAdminInvoice,
+        on_delete=models.CASCADE,
+        related_name="payments",
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    paid_on = models.DateField(db_index=True)
+    method = models.CharField(max_length=24, choices=METHOD_CHOICES, default="bank_transfer")
+    reference_no = models.CharField(max_length=128, blank=True)
+    received_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "super_admin_invoice_payments"
+        ordering = ["-paid_on", "-created_at"]
+        indexes = [
+            models.Index(fields=["invoice", "paid_on"]),
+        ]
+
+    def __str__(self):
+        return f"{self.invoice.invoice_number} \u2190 \u20b9{self.amount} ({self.method})"
 
 
 class SubscriptionPlan(models.Model):

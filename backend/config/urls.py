@@ -36,3 +36,16 @@ urlpatterns = [
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+else:
+    # Local non-DEBUG setups (daphne) still need /media/ served by Django
+    # so uploaded school logos and other user media are reachable.
+    # In real production, serve /media/ via nginx/CDN instead.
+    from django.views.static import serve as _media_serve
+    from django.urls import re_path
+    urlpatterns += [
+        re_path(
+            r"^media/(?P<path>.*)$",
+            _media_serve,
+            {"document_root": settings.MEDIA_ROOT},
+        ),
+    ]
