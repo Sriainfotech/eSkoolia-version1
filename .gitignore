@@ -24,6 +24,13 @@ db.sqlite3
 
 # Env
 .env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+frontend/.env*
+backend/.env
 
 # Next.js / Node
 frontend/node_modules/
