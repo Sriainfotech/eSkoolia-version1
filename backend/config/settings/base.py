@@ -119,6 +119,7 @@ INSTALLED_APPS = [
     "apps.exams",
     "apps.finance",
     "apps.hr",
+    "apps.master",
     "apps.library",
     "apps.behaviour",
     "apps.chat",

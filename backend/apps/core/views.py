@@ -1,4 +1,6 @@
 import math
+import re
+import requests as http_requests
 from datetime import date
 
 from asgiref.sync import async_to_sync
@@ -1905,3 +1907,51 @@ class HolidayViewSet(TenantQueryMixin, viewsets.ModelViewSet):
         return Response({"success": True, "message": f'Holiday "{name}" deleted.'},
                         status=status.HTTP_200_OK)
 
+
+class PincodeLookupView(APIView):
+    """
+    GET /api/v1/core/pincode-lookup/?pincode=500081
+
+    Proxies to the Indian Postal PIN code API and returns:
+        {"city": "...", "state": "...", "country": "India"}
+
+    Returns 404 if the pincode is not found; 400 for invalid input.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        pincode = request.query_params.get("pincode", "").strip()
+        if not pincode:
+            return Response(
+                {"detail": "pincode query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not re.fullmatch(r"\d{5,6}", pincode):
+            return Response(
+                {"detail": "Invalid pincode. Must be 5 or 6 digits."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            resp = http_requests.get(
+                f"https://api.postalpincode.in/pincode/{pincode}",
+                timeout=5,
+            )
+            data = resp.json()
+            if (
+                data
+                and isinstance(data, list)
+                and data[0].get("Status") == "Success"
+                and data[0].get("PostOffice")
+            ):
+                po = data[0]["PostOffice"][0]
+                return Response({
+                    "city":    po.get("District", ""),
+                    "state":   po.get("State", ""),
+                    "country": po.get("Country", "India"),
+                })
+        except Exception:  # noqa: BLE001
+            pass
+        return Response(
+            {"detail": "Location not found for this PIN code."},
+            status=status.HTTP_404_NOT_FOUND,
+        )

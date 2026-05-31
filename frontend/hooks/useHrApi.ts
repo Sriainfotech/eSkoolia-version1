@@ -229,6 +229,24 @@ export function useStaffDocuments(staffId: number) {
   );
 }
 
+// ─── PIN Code Lookup ──────────────────────────────────────────────────────────
+/** Looks up city/state/country for a given PIN code via the backend proxy.
+ *  Returns null if the pincode is not found or the request fails.
+ */
+export async function lookupPincode(
+  pincode: string,
+): Promise<{ city: string; state: string; country: string } | null> {
+  try {
+    const data = await apiRequestWithRefresh<{ city: string; state: string; country: string }>(
+      `/api/v1/core/pincode-lookup/?pincode=${encodeURIComponent(pincode)}`,
+      { method: "GET" },
+    );
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Leave Types ─────────────────────────────────────────────────────────────
 export function useLeaveTypes() {
   return useFetch<PaginatedHR<LeaveType>>("/api/v1/hr/leave-types/?page_size=50");
@@ -378,6 +396,25 @@ export async function completeOffboarding(id: number) {
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<OffboardingRecord>;
+}
+
+// ─── Master Data ──────────────────────────────────────────────────────────────
+export interface MasterItem { id: number; name: string; }
+
+export function useMasterLanguages() {
+  return useFetch<MasterItem[]>("/api/master/languages/");
+}
+
+export function useMasterReligions() {
+  return useFetch<MasterItem[]>("/api/master/religions/");
+}
+
+export function useMasterCountries() {
+  return useFetch<MasterItem[]>("/api/master/countries/");
+}
+
+export function useMasterEmploymentTypes() {
+  return useFetch<MasterItem[]>("/api/master/employment-types/");
 }
 
 

@@ -21,7 +21,7 @@ from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 
-from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument
+from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument
 from .serializers import (
     DepartmentSerializer,
     DepartmentTypeSerializer,
@@ -34,6 +34,7 @@ from .serializers import (
     StaffSerializer,
     StaffAttendanceSerializer,
     StaffDocumentSerializer,
+    StaffOnboardDocumentSerializer,
 )
 
 
@@ -1475,3 +1476,129 @@ class PayrollRecordViewSet(SchoolScopedModelViewSet):
         payroll.status = PayrollRecord.STATUS_PROCESSED
         payroll.save(update_fields=["status", "updated_at"])
         return Response({"id": payroll.id, "status": payroll.status, "paid_at": payroll.paid_at})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Staff Onboarding Wizard — Temporary Document Endpoints
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ALLOWED_CONTENT_TYPES = {"application/pdf", "image/jpeg", "image/png", "image/jpg"}
+_MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+class StaffOnboardDocumentListView(APIView):
+    """GET /api/v1/hr/onboard/documents/ — list all onboard docs for the current user."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        qs = StaffOnboardDocument.objects.filter(uploaded_by=request.user).order_by("doc_key")
+        serializer = StaffOnboardDocumentSerializer(qs, many=True)
+        return Response({"success": True, "data": serializer.data})
+
+
+class StaffOnboardDocumentUploadView(APIView):
+    """POST /api/v1/hr/onboard/documents/upload/ — upload (or replace) a document."""
+
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        file = request.FILES.get("file")
+        doc_key = str(request.data.get("doc_key") or "").strip()
+        doc_label = str(request.data.get("doc_label") or "").strip()
+
+        if not file:
+            return Response({"success": False, "message": "No file provided."}, status=status.HTTP_400_BAD_REQUEST)
+        if not doc_key:
+            return Response({"success": False, "message": "doc_key is required."}, status=status.HTTP_400_BAD_REQUEST)
+        if not doc_label:
+            doc_label = doc_key.replace("_", " ").title()
+
+        # Validate file size
+        if file.size > _MAX_UPLOAD_BYTES:
+            return Response(
+                {"success": False, "message": "File size must be 5 MB or less."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate content type
+        content_type = file.content_type or ""
+        if content_type not in _ALLOWED_CONTENT_TYPES:
+            return Response(
+                {"success": False, "message": "Only PDF, JPEG, and PNG files are allowed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        school = getattr(request.user, "school", None)
+
+        # Delete previous upload for the same (user, doc_key) if exists
+        StaffOnboardDocument.objects.filter(uploaded_by=request.user, doc_key=doc_key).delete()
+
+        doc = StaffOnboardDocument.objects.create(
+            uploaded_by=request.user,
+            school=school,
+            doc_key=doc_key,
+            doc_label=doc_label,
+            file=file,
+            file_name=file.name or "document",
+            file_size=file.size,
+            content_type=content_type,
+        )
+        serializer = StaffOnboardDocumentSerializer(doc)
+        return Response({"success": True, "data": serializer.data}, status=status.HTTP_201_CREATED)
+
+
+class StaffOnboardDocumentPreviewView(APIView):
+    """GET /api/v1/hr/onboard/documents/{pk}/preview/ — serve the document file."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, pk=None):
+        try:
+            doc = StaffOnboardDocument.objects.get(pk=pk, uploaded_by=request.user)
+        except StaffOnboardDocument.DoesNotExist:
+            return Response({"success": False, "message": "Document not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        from django.http import FileResponse
+        try:
+            return FileResponse(doc.file.open("rb"), content_type=doc.content_type, as_attachment=False)
+        except Exception:
+            return Response({"success": False, "message": "File not available."}, status=status.HTTP_404_NOT_FOUND)
+
+
+class StaffOnboardDocumentDeleteView(APIView):
+    """DELETE /api/v1/hr/onboard/documents/{pk}/ — delete an onboard document."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, pk=None):
+        try:
+            doc = StaffOnboardDocument.objects.get(pk=pk, uploaded_by=request.user)
+        except StaffOnboardDocument.DoesNotExist:
+            return Response({"success": False, "message": "Document not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        doc.file.delete(save=False)  # remove from storage
+        doc.delete()
+        return Response({"success": True, "message": "Document deleted."}, status=status.HTTP_200_OK)
+
+
+class StaffOnboardDocumentStatusView(APIView):
+    """PATCH /api/v1/hr/onboard/documents/{pk}/status/ — update document status."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, pk=None):
+        try:
+            doc = StaffOnboardDocument.objects.get(pk=pk, uploaded_by=request.user)
+        except StaffOnboardDocument.DoesNotExist:
+            return Response({"success": False, "message": "Document not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        new_status = str(request.data.get("status") or "").strip()
+        allowed = {s[0] for s in StaffOnboardDocument._meta.get_field("status").choices}
+        if new_status not in allowed:
+            return Response({"success": False, "message": f"Invalid status. Allowed: {allowed}."}, status=status.HTTP_400_BAD_REQUEST)
+
+        doc.status = new_status
+        doc.save(update_fields=["status", "updated_at"])
+        return Response({"success": True, "data": StaffOnboardDocumentSerializer(doc).data})

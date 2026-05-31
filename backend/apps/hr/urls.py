@@ -13,6 +13,11 @@ from .views import (
     StaffAttendanceViewSet,
     StaffViewSet,
     StaffDocumentViewSet,
+    StaffOnboardDocumentListView,
+    StaffOnboardDocumentUploadView,
+    StaffOnboardDocumentPreviewView,
+    StaffOnboardDocumentDeleteView,
+    StaffOnboardDocumentStatusView,
 )
 
 router = DefaultRouter()
@@ -29,4 +34,10 @@ router.register("payroll", PayrollRecordViewSet, basename="hr-payroll")
 
 urlpatterns = [
     path("designations/reorder/", DesignationReorderView.as_view(), name="hr-designation-reorder"),
+    # Onboarding wizard document endpoints
+    path("onboard/documents/", StaffOnboardDocumentListView.as_view(), name="hr-onboard-doc-list"),
+    path("onboard/documents/upload/", StaffOnboardDocumentUploadView.as_view(), name="hr-onboard-doc-upload"),
+    path("onboard/documents/<int:pk>/preview/", StaffOnboardDocumentPreviewView.as_view(), name="hr-onboard-doc-preview"),
+    path("onboard/documents/<int:pk>/", StaffOnboardDocumentDeleteView.as_view(), name="hr-onboard-doc-delete"),
+    path("onboard/documents/<int:pk>/status/", StaffOnboardDocumentStatusView.as_view(), name="hr-onboard-doc-status"),
 ] + router.urls
