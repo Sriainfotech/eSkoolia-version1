@@ -188,6 +188,58 @@ Brought in 9 demo commits (some authored 2026-05-12 to 2026-05-20 by `shivasurya
 
 ---
 
+## Day 6 Update — Sridevi (2026-05-29)
+Branch: `tenancy-errors/28-05` · Focus: partial-payment ledger for super-admin invoices, school logo display, login hardening, and media-serving fix.
+
+**Backend — partial-payment ledger (super-admin billing):**
+- [backend/apps/tenancy/models.py](backend/apps/tenancy/models.py) — added `partially_paid` status, `paid_amount` / `due_amount` / `last_payment_on` fields and `grand_total()` / `recalculate()` helpers on `SuperAdminInvoice`; new `SuperAdminInvoicePayment` ledger model (UUID PK, method choices: bank_transfer/upi/cheque/cash/razorpay/stripe/adjustment/other, `received_by` FK to user).
+- [backend/apps/tenancy/migrations/0015_invoice_partial_payments.py](backend/apps/tenancy/migrations/0015_invoice_partial_payments.py) — schema + backfill: legacy `paid` invoices get `paid_amount = grand_total` and a synthetic `adjustment` payment row labelled `BACKFILL` so historical receipts survive.
+- [backend/apps/tenancy/migrations/0016_rename_sa_inv_pay_inv_paid_idx_super_admin_invoice_26f535_idx.py](backend/apps/tenancy/migrations/0016_rename_sa_inv_pay_inv_paid_idx_super_admin_invoice_26f535_idx.py) — auto-rename of the `(invoice, paid_on)` index to Django's default naming.
+- [backend/apps/super_admin/serializers.py](backend/apps/super_admin/serializers.py) — `InvoicePaymentSerializer`, `InvoicePaymentCreateSerializer`; `InvoiceSerializer` now exposes `paid_amount`, `due_amount`, `last_payment_on`, nested `payments`; `partially_paid` added to status choices on create/update.
+- [backend/apps/super_admin/views.py](backend/apps/super_admin/views.py) — new `BillingInvoicePaymentsView` (`GET`/`POST`) and `BillingInvoicePaymentDetailView` (`DELETE`); `BillingInvoiceMarkPaidView` rewritten to settle outstanding via a real ledger entry inside `transaction.atomic()` + `select_for_update()`; `BillingMRRView` outstanding/at-risk now aggregate `due_amount` (so `partially_paid` only contributes the unpaid remainder); blocks payments on `cancelled` invoices; rejects overpayments with a clear 400; audit-logs `invoice.payment_recorded` and `invoice.payment_reversed`.
+- [backend/apps/super_admin/urls.py](backend/apps/super_admin/urls.py) — added:
+  - `POST /api/super-admin/billing/invoices/{id}/payments/`
+  - `GET  /api/super-admin/billing/invoices/{id}/payments/`
+  - `DELETE /api/super-admin/billing/invoices/{id}/payments/{payment_id}/`
+
+**Backend — auth / tenancy hardening:**
+- [backend/apps/users/serializers.py](backend/apps/users/serializers.py) — `LoginTokenObtainPairSerializer` now resolves the tenant from the request (subdomain / `X-Tenant`) AND from `user.school_id`, and blocks login with `AuthenticationFailed("Login is disabled for this school…")` when tenant status is not `active`/`trial`. Tenant lookup widened to match by `School.name`, `School.code` (against `subdomain_url` and `short_code`), and `School.subdomain`.
+- [backend/apps/tenancy/middleware.py](backend/apps/tenancy/middleware.py) — `_PUBLIC_PATH_PREFIXES` simplified: every `/api/v1/auth/` endpoint now bypasses the tenant-context check (covers `me`, `change-password`, etc. that were previously slipping through).
+- [backend/apps/super_admin/serializers.py](backend/apps/super_admin/serializers.py) — `SchoolTenantBaseSerializer` exposes `logo_url` and `brand_color`.
+- [backend/config/urls.py](backend/config/urls.py) — also serve `/media/` when `DEBUG=False` (local daphne) so uploaded school logos are reachable; note: real production must serve `/media/` via nginx/CDN.
+- [backend/requirements.txt](backend/requirements.txt) — minor dependency bump.
+
+**Frontend — Record Payment UX:**
+- [frontend/app/(dashboard)/super-admin/billing/RecordPaymentModal.tsx](frontend/app/(dashboard)/super-admin/billing/RecordPaymentModal.tsx) — NEW. Amount pre-filled to outstanding `due_amount`, validates against overpayment, method dropdown (bank_transfer/UPI/cheque/cash/razorpay/stripe/adjustment/other), reference number + notes, "fully settle vs partial" hint.
+- [frontend/app/(dashboard)/super-admin/billing/page.tsx](frontend/app/(dashboard)/super-admin/billing/page.tsx) — replaces one-click `markInvoicePaid` with `RecordPaymentModal` flow via `recordInvoicePayment`; new `partially_paid` status chip (sky); invoice rows now show `Due ₹…` underneath the grand total when a balance remains; table buttons relabelled "Record payment".
+- [frontend/lib/api/super-admin/billing.ts](frontend/lib/api/super-admin/billing.ts) — added `recordInvoicePayment`, `listInvoicePayments`, `deleteInvoicePayment`, plus `RecordInvoicePaymentPayload`.
+- [frontend/types/super-admin/index.ts](frontend/types/super-admin/index.ts) — added `InvoicePayment`, `InvoicePaymentMethod`; `Invoice` extended with `paid_amount`, `due_amount`, `last_payment_on`, `payments`; `InvoiceStatus` now includes `partially_paid`.
+
+**Frontend — Plan / School polish:**
+- [frontend/app/(dashboard)/super-admin/billing/NewPlanDrawer.tsx](frontend/app/(dashboard)/super-admin/billing/NewPlanDrawer.tsx) — plan code slug switched to `snake_case` (matches Stripe/Razorpay identifier style); auto-derive from name continues until the user actually diverges.
+- [frontend/app/(dashboard)/super-admin/schools/page.tsx](frontend/app/(dashboard)/super-admin/schools/page.tsx) — GSTIN field shown/cleared based on `gst_registered`; schools list now renders the uploaded `logo_url` (resolved against `API_BASE_URL` for relative paths) instead of the initials avatar when present.
+
+**Fixed today:**
+- Suspended/inactive schools could still log in — now blocked at the JWT serializer with a clean error message.
+- `/api/v1/auth/me/` and `change-password` were going through tenant middleware unnecessarily — now in the public-prefix list.
+- School logo uploads invisible under daphne (`DEBUG=False`) because Django wasn't serving `/media/` — added a guarded fallback route.
+- `markInvoicePaid` flipped status with no audit trail of how the invoice was settled — now every settlement (full or partial) creates an immutable `SuperAdminInvoicePayment` row.
+- MRR "Outstanding" double-counted invoices that had already received partial payments — now aggregates `due_amount`.
+
+**Still in progress / open:**
+- No UI yet to list / delete individual payments on the invoice detail panel (backend `GET`/`DELETE` ready).
+- GSTR-1 export still groups by `status="paid"` only — needs review for `partially_paid` invoices (should report cash actually received in the period from the payment ledger, not invoice totals).
+- Receipt PDF / email-on-payment is not implemented.
+- Migrations `0015` and `0016` are uncommitted; need to apply on staging Neon and verify backfill creates the right `adjustment` payment rows.
+
+**Start tomorrow with:**
+1. Commit the working tree on `tenancy-errors/28-05` in focused commits (ledger backend, ledger frontend, auth hardening, schools/plan polish).
+2. Apply `tenancy/0015` + `0016` on staging Neon and spot-check `paid_amount` / `due_amount` on existing invoices.
+3. Add a payments table inside the invoice detail drawer (list + delete with confirm).
+4. Audit GSTR-1 export against the new payment ledger.
+
+---
+
 ## Module Reference (current state)
 
 ### Backend ΓÇö Tenancy / Super Admin
@@ -2069,4 +2121,124 @@ No change — already matched reference from previous session.
 3. Verify StepFamily dynamic emergency contacts and nominees rows add/remove correctly.
 4. Connect StepReview "Enroll staff →" to the existing `handleSubmit` function (already wired in the main render but confirm the flow end-to-end with a real backend call).
 5. Consider persisting dynamic list rows (qualifications, emergency contacts, nominees) in the parent `form` state so they survive navigating back and forth between steps.
+
+---
+
+## Day 11 — 2026-05-28 — Invoice Locking, Impersonation 404 Fix, GSTR-1 Excel Export & HR Admin Registration
+
+**Branch:** `tenancy-new`
+
+---
+
+### 1. Invoice Locking — Prevent Editing Paid / Cancelled Invoices
+
+**Problem:** Paid and cancelled invoices could still be edited — the edit button was only disabled for `"cancelled"` status (not `"paid"`), and the backend had no guard to reject PATCH requests on locked invoices.
+
+**Backend — `backend/apps/super_admin/views.py` (`BillingInvoiceDetailView.patch()`):**
+- Added a status guard at the top of `patch()`:
+  ```python
+  if invoice.status in ("paid", "cancelled"):
+      return Response(
+          {"detail": f"Invoice is '{invoice.status}' and cannot be edited. "
+                     "Mark it as draft or void it to make changes."},
+          status=status.HTTP_400_BAD_REQUEST,
+      )
+  ```
+- Returns `400 Bad Request` with a human-readable message for any PATCH attempt on a paid or cancelled invoice.
+
+**Frontend — `frontend/app/(dashboard)/super-admin/billing/page.tsx`:**
+- Edit button `disabled` condition extended: `invoice.status === 'paid' || invoice.status === 'cancelled'` (was only `'cancelled'`).
+
+**Frontend — `frontend/app/(dashboard)/super-admin/billing/NewInvoiceDrawer.tsx`:**
+- Added `isPaidLocked = isEditMode && invoice?.status === 'paid'` derived variable.
+- `canSubmit` now includes `&& !isPaidLocked`.
+- Split the warning banner into two:
+  - **Red "locked" banner** shown when `isPaidLocked`: "This invoice has been paid and is locked. It cannot be edited. Void it first to make changes."
+  - **Amber "editing issued invoice" banner** shown for non-paid invoices in edit mode (unchanged).
+
+---
+
+### 2. Impersonation 404 Fix
+
+**Problem:** Clicking "Impersonate" on schools with no `tenant_id` (e.g. `Sprint1 Demo School`) produced URL `/api/super-admin/schools//impersonate/` — a double-slash URL Django could not route — which returned an HTML 404 page. The frontend parsed the non-JSON response as "Request failed with status 404".
+
+**Root cause:** Some demo/test schools in the DB have an empty `tenant_id` string. The impersonation URL was built as `schools/${school.tenant_id}/impersonate/` without checking for an empty value first.
+
+**Frontend — `frontend/app/(dashboard)/super-admin/schools/page.tsx`:**
+- `handleImpersonate` now guards at the start:
+  ```typescript
+  if (!school.tenant_id) {
+      toast.error("This school has no tenant ID. Impersonation is not available.");
+      return;
+  }
+  ```
+- Impersonate button now `disabled` when `!school.tenant_id || school.status === 'provisioning'` (prevents the request entirely before it can form a malformed URL).
+
+---
+
+### 3. GSTR-1 Export — CSV to Excel (.xlsx)
+
+**Problem:** The GSTR-1 export downloaded a plain CSV file. Accountants and GST filers expect Excel format with styled headers.
+
+**Backend — `backend/apps/super_admin/views.py` (`BillingGSTR1ExportView`):**
+- Completely rewritten from `csv.writer` to `openpyxl` (already in `requirements.txt` as `openpyxl==3.1.5`).
+- Header row styled: brand purple fill (`#5B4FCF`), white bold font, centred alignment.
+- First row frozen (`freeze_panes = "B2"`).
+- 14 columns (5 new vs. old CSV): Invoice #, School, Invoice Date, Due Date, Status, Amount (₹), GST Rate (%), **Buyer GSTIN**, **Place of Supply**, **IGST (₹)**, **CGST (₹)**, **SGST (₹)**, SAC Code, Reverse Charge.
+- Returns `HttpResponse` with `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` and `Content-Disposition: attachment; filename="gstr1-<YYYYMM>.xlsx"`.
+
+**Frontend — `frontend/app/(dashboard)/super-admin/billing/page.tsx`:**
+- Export filename changed from `` `gstr1-${stamp}.csv` `` to `` `gstr1-${stamp}.xlsx` ``.
+
+---
+
+### 4. HR Admin Registration
+
+**Problem:** `backend/apps/hr/admin.py` was empty — no HR models were visible in the Django admin panel.
+
+**Backend — `backend/apps/hr/admin.py`** (written from scratch):
+- Registered all 11 HR models with useful admin configuration:
+
+| Model | list_display | Notable config |
+|---|---|---|
+| `DepartmentType` | name, is_active, created_at | search: name |
+| `Department` | name, dept_type, school, is_active | search: name, filter: dept_type/is_active |
+| `Designation` | name, department, is_active | raw_id_fields: department |
+| `Staff` | staff_no, full_name, school, department, designation, is_active | search: staff_no/name/email, filter: is_active/department |
+| `StaffDocument` | staff, document_type, is_verified | raw_id_fields: staff |
+| `LeaveType` | name, school, days_allowed, is_active | search: name |
+| `LeaveDefine` | leave_type, school, academic_year, days_allowed | raw_id_fields: leave_type |
+| `StaffAttendance` | staff, date, status | date_hierarchy: date, filter: status |
+| `LeaveRequest` | staff, leave_type, start_date, end_date, status | date_hierarchy: start_date, filter: status |
+| `PayrollRecord` | staff, month, year, basic_salary, net_salary | search: staff__staff_no/name, filter: month/year |
+| `PayrollSettings` | school, basic_salary_pct, hra_pct, pf_pct | readonly_fields: school |
+
+---
+
+### Files Changed (Day 11)
+
+| File | Change |
+|---|---|
+| `backend/apps/super_admin/views.py` | `BillingInvoiceDetailView.patch()` — added paid/cancelled guard; `BillingGSTR1ExportView` — rewritten with openpyxl (14 columns, styled header, frozen row) |
+| `frontend/app/(dashboard)/super-admin/billing/page.tsx` | Edit button disabled for `paid` + `cancelled`; export filename changed to `.xlsx` |
+| `frontend/app/(dashboard)/super-admin/billing/NewInvoiceDrawer.tsx` | `isPaidLocked` derived var; `canSubmit` blocked when locked; split warning banner (red locked vs amber edit) |
+| `frontend/app/(dashboard)/super-admin/schools/page.tsx` | `handleImpersonate` guard for missing `tenant_id`; Impersonate button disabled for no `tenant_id` or `provisioning` status |
+| `backend/apps/hr/admin.py` | Written from scratch — all 11 HR models registered with `list_display`, `search_fields`, `list_filter`, `raw_id_fields`/`readonly_fields` |
+
+---
+
+### Still in progress / known follow-ups
+
+- HR onboard wizard (Day 10) smoke-test in browser not yet done — `StepReview` enroll flow not end-to-end verified.
+- Pending Neon migrations (`tenancy/0007`–`0011`) not yet applied on staging.
+- GSTR-1 export IGST/CGST/SGST calculation logic uses simple split — a proper inter-state / intra-state detection pass (using `place_of_supply` vs. company state) should be added before production use.
+- `backend/apps/hr/admin.py` registrations are for local Django admin use only — no API changes involved.
+
+### Start next with
+
+1. Smoke-test all 10 HR onboard wizard steps in the browser.
+2. Apply pending Neon migrations (`0007`–`0011`) on dev + staging.
+3. End-to-end test impersonation: super-admin → Impersonate → new tab → spinner → `/home` as school admin.
+4. Add IGST/CGST/SGST state-of-supply detection to `BillingGSTR1ExportView` for accurate GST filing values.
+5. Commit all Day 11 changes on `tenancy-new` branch.
 

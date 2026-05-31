@@ -190,7 +190,28 @@ export interface DashboardData {
 // Billing Types
 // ============================================================================
 
-export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled';
+export type InvoiceStatus = 'draft' | 'sent' | 'partially_paid' | 'paid' | 'overdue' | 'cancelled';
+
+export type InvoicePaymentMethod =
+  | 'bank_transfer'
+  | 'upi'
+  | 'cheque'
+  | 'cash'
+  | 'razorpay'
+  | 'stripe'
+  | 'adjustment'
+  | 'other';
+
+export interface InvoicePayment {
+  id: string;
+  amount: number;
+  paid_on: string;
+  method: InvoicePaymentMethod;
+  reference_no?: string;
+  notes?: string;
+  received_by_username?: string;
+  created_at?: string;
+}
 
 export interface InvoiceLineItem {
   description: string;
@@ -241,6 +262,12 @@ export interface Invoice {
   reverse_charge?: boolean;
   created_at?: string;
   updated_at?: string;
+
+  // Partial-payment ledger
+  paid_amount?: number;
+  due_amount?: number;
+  last_payment_on?: string | null;
+  payments?: InvoicePayment[];
 }
 
 export interface MrrData {

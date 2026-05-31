@@ -13,6 +13,7 @@ import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSch
 import type { LLMSchoolState } from '@/lib/api/super-admin/schools';
 import { getPlans } from '@/lib/api/super-admin/billing';
 import { apiRequestWithRefreshResponse } from '@/lib/api-auth';
+import { API_BASE_URL } from '@/lib/api';
 import type {
   BoardType, HealthFlagsCounts, PaginatedResponse, PlanType, ProvisionSchoolRequest, ProvisionSchoolResponse,
   SchoolFilters, SchoolTenant, SchoolStatus, SubscriptionPlan,
@@ -586,11 +587,10 @@ export default function SuperAdminSchoolsPage() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const fetchIdRef = useRef(0);
   const [globalStats, setGlobalStats] = useState({ total: 0, active: 0, trial: 0, attention: 0, archived: 0 });
   const [statusFilter, setStatusFilter] = useState<StatusTab>('active');
-  const [pendingPlan,   setPendingPlan]   = useState('');
-  const [pendingBoard,  setPendingBoard]  = useState('');
-  const [pendingState,  setPendingState]  = useState('');
   const [planFilter,    setPlanFilter]    = useState('');
   const [boardFilter,   setBoardFilter]   = useState('');
   const [stateFilter,   setStateFilter]   = useState('');
@@ -708,14 +708,21 @@ export default function SuperAdminSchoolsPage() {
   const totalInactiveStudents = totalStudents - totalActiveStudents;
   const totalStaff    = rows.reduce((a, b) => a + (b.staff ?? 0), 0);
 
+  // Debounce: fire the API call only after the user stops typing for 300 ms
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const loadSchools = useCallback(async () => {
+    const fetchId = ++fetchIdRef.current;
     setLoading(true);
     setError(null);
     // Guard: only send a status param for values the backend recognises
     const safeStatus = VALID_STATUS_TABS.has(statusFilter) ? statusFilter : 'all';
     const filters: SchoolFilters = {
       page, page_size: PAGE_SIZE,
-      search: search.trim() || undefined,
+      search: debouncedSearch.trim() || undefined,
       status: safeStatus === 'all' ? undefined : (safeStatus as SchoolStatus),
       plan: planFilter as PlanType || undefined,
       board: boardFilter as BoardType || undefined,
@@ -724,19 +731,21 @@ export default function SuperAdminSchoolsPage() {
     };
     try {
       const res = await getSchools(filters);
+      if (fetchId !== fetchIdRef.current) return; // stale response — discard
       setResponse(res);
       if (res.health_flags_counts) setHealthFlagCounts(res.health_flags_counts);
     } catch (err) {
+      if (fetchId !== fetchIdRef.current) return;
       setError(err instanceof Error ? err.message : 'Unable to load schools.');
       setResponse(DEFAULT_SCHOOLS);
     } finally {
-      setLoading(false);
+      if (fetchId === fetchIdRef.current) setLoading(false);
     }
-  }, [page, search, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
+  }, [page, debouncedSearch, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
 
   useEffect(() => { void loadSchools(); }, [loadSchools]);
   useEffect(() => { getLLMStates().then(setLlmStates).catch(() => {}); }, []);
-  useEffect(() => { setPage(1); }, [search, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
 
   // Fetch global stats — extracted so it can be re-called after any status change
   const loadGlobalStats = useCallback(() => {
@@ -753,13 +762,6 @@ export default function SuperAdminSchoolsPage() {
   }, []);
 
   useEffect(() => { loadGlobalStats(); }, [loadGlobalStats]);
-
-  const handleApplyFilters = useCallback(() => {
-    setPlanFilter(pendingPlan);
-    setBoardFilter(pendingBoard);
-    setStateFilter(pendingState);
-    setPage(1);
-  }, [pendingPlan, pendingBoard, pendingState]);
 
   const handleProvisionSubmit = useCallback(async () => {
     setProvisionError(null);
@@ -909,6 +911,10 @@ export default function SuperAdminSchoolsPage() {
   }, [llmStates]);
 
   const handleImpersonate = useCallback(async (school: SchoolTenant) => {
+    if (!school.tenant_id) {
+      toast.error(`Cannot impersonate "${school.name}": school has no tenant ID assigned. Check provisioning status.`);
+      return;
+    }
     setImpersonatingId(school.tenant_id);
     try {
       const data = await impersonateSchool(school.tenant_id);
@@ -1505,11 +1511,30 @@ export default function SuperAdminSchoolsPage() {
               <Fld label="GST registration">
                 <select className={selectCls} title="GST registration"
                   value={editFields.gst_registered}
-                  onChange={e => setEditFields(f => ({ ...f, gst_registered: e.target.value }))}>
+                  onChange={e => setEditFields(f => ({
+                    ...f,
+                    gst_registered: e.target.value,
+                    gstin: e.target.value === 'no' ? '' : f.gstin,
+                  }))}>
                   <option value="yes">GST-registered</option>
                   <option value="no">Unregistered (exempt)</option>
                 </select>
               </Fld>
+              {editFields.gst_registered === 'yes' && (
+                <Fld label="GSTIN" error={fieldErrors.gstin}>
+                  <input
+                    className={`${monoInputCls} uppercase${fieldErrors.gstin ? ' !border-[var(--danger)]' : ''}`}
+                    placeholder="27AABCU9603R1ZX"
+                    maxLength={15}
+                    value={editFields.gstin}
+                    data-field-error={fieldErrors.gstin ? 'true' : undefined}
+                    onChange={e => {
+                      setEditFields(f => ({ ...f, gstin: e.target.value.toUpperCase() }));
+                      if (fieldErrors.gstin) setFieldErrors(p => ({ ...p, gstin: '' }));
+                    }}
+                  />
+                </Fld>
+              )}
               <Fld label="PAN" required error={fieldErrors.pan}>
                 <input className={`${monoInputCls} uppercase${fieldErrors.pan ? ' !border-[var(--danger)]' : ''}`} placeholder="AAACE9988K" maxLength={10}
                   value={editFields.pan}
@@ -1778,7 +1803,7 @@ export default function SuperAdminSchoolsPage() {
             {/* Plan */}
             <div>
               <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Plan</label>
-              <select className={selectCls} title="Plan" value={pendingPlan} onChange={e => setPendingPlan(e.target.value)}>
+              <select className={selectCls} title="Plan" value={planFilter} onChange={e => { setPlanFilter(e.target.value); setPage(1); }}>
                 <option value="">All plans</option>
                 <option value="trial">Trial</option>
                 <option value="starter">Starter</option>
@@ -1790,7 +1815,7 @@ export default function SuperAdminSchoolsPage() {
             {/* Board */}
             <div>
               <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Board</label>
-              <select className={selectCls} title="Board" value={pendingBoard} onChange={e => setPendingBoard(e.target.value)}>
+              <select className={selectCls} title="Board" value={boardFilter} onChange={e => { setBoardFilter(e.target.value); setPage(1); }}>
                 <option value="">All boards</option>
                 {BOARDS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
               </select>
@@ -1798,7 +1823,7 @@ export default function SuperAdminSchoolsPage() {
             {/* State */}
             <div>
               <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">State</label>
-              <select className={selectCls} title="State" value={pendingState} onChange={e => setPendingState(e.target.value)}>
+              <select className={selectCls} title="State" value={stateFilter} onChange={e => { setStateFilter(e.target.value); setPage(1); }}>
                 <option value="">All states</option>
                 <option value="36">Telangana (36)</option>
                 <option value="37">Andhra Pradesh (37)</option>
@@ -1835,15 +1860,6 @@ export default function SuperAdminSchoolsPage() {
                 />
               ))}
             </div>
-          </div>
-
-          <div className="mt-4 flex justify-end border-t border-dashed border-[var(--bd-2)] pt-4">
-            <button
-              onClick={handleApplyFilters}
-              className="rounded-lg bg-[#5B4FCF] px-5 py-2 text-[13px] font-semibold text-white shadow-sm transition hover:bg-[#4A3FBF] active:scale-95"
-            >
-              Apply filters
-            </button>
           </div>
 
         </div>
@@ -1971,13 +1987,27 @@ export default function SuperAdminSchoolsPage() {
                   {rows.map(school => {
                     const initials = schoolInitials(school.name);
                     const gradCls = avatarGradient(school.tenant_id);
+                    const logoSrc = school.logo_url
+                      ? (school.logo_url.startsWith('http')
+                          ? school.logo_url
+                          : `${API_BASE_URL}${school.logo_url}`)
+                      : null;
                     return (
                       <tr key={school.tenant_id} className="group transition-colors hover:bg-[var(--bg-2)]">
                         <td className="border-b border-[var(--bd)] py-3.5 pl-[18px] pr-3.5 align-middle">
                           <div className="flex min-w-[240px] items-center gap-2.5">
-                            <span className={`flex h-[38px] w-[38px] flex-shrink-0 items-center justify-center rounded-[10px] text-[13px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,.15)] ${gradCls}`}>
-                              {initials}
-                            </span>
+                            {logoSrc ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={logoSrc}
+                                alt={`${school.name} logo`}
+                                className="h-[38px] w-[38px] flex-shrink-0 rounded-[10px] object-cover bg-[var(--bg-2)]"
+                              />
+                            ) : (
+                              <span className={`flex h-[38px] w-[38px] flex-shrink-0 items-center justify-center rounded-[10px] text-[13px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,.15)] ${gradCls}`}>
+                                {initials}
+                              </span>
+                            )}
                             <span className="min-w-0 flex-1">
                               <Link
                                 href={`/super-admin/schools/${school.tenant_id}`}
@@ -2051,7 +2081,7 @@ export default function SuperAdminSchoolsPage() {
                             ] : [
                               { title: 'Open',        icon: <ExternalLink size={13} />, action: () => window.open(`/super-admin/schools/${school.tenant_id}`, '_blank') },
                               { title: 'Edit',        icon: <Edit2 size={13} />,        action: () => handleEditInForm(school) },
-                              { title: 'Impersonate', icon: <Users size={13} />,        action: () => void handleImpersonate(school), loading: impersonatingId === school.tenant_id },
+                              { title: 'Impersonate', icon: <Users size={13} />,        action: () => void handleImpersonate(school), loading: impersonatingId === school.tenant_id, disabled: !school.tenant_id || school.status === 'provisioning' },
                               { title: 'Suspend',     icon: <Pause size={13} />,        action: () => setConfirmDialog({ type: 'suspend', school }) },
                               { title: 'Archive',     icon: <Archive size={13} />,      action: () => setConfirmDialog({ type: 'archive', school }) },
                             ]).map(btn => (

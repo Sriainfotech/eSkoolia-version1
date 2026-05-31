@@ -23,10 +23,11 @@ import {
   getInvoices,
   getMrr,
   getPlans,
-  markInvoicePaid,
+  recordInvoicePayment,
 } from '@/lib/api/super-admin/billing';
 import type {
   Invoice,
+  InvoicePaymentMethod,
   InvoiceStatus,
   MrrData,
   PaginatedResponse,
@@ -35,6 +36,7 @@ import type {
 } from '@/types/super-admin';
 import NewInvoiceDrawer from './NewInvoiceDrawer';
 import NewPlanDrawer from './NewPlanDrawer';
+import RecordPaymentModal from './RecordPaymentModal';
 
 // -- Formatting ----------------------------------------------------------------
 function fmtINR(n: number, opts?: { compact?: boolean; symbol?: boolean; fraction?: number }) {
@@ -244,6 +246,7 @@ function PlanCard({
 const STATUS_META: Record<InvoiceStatus, { label: string; dot: string; text: string }> = {
   draft: { label: 'Draft', dot: 'bg-[var(--ink-3)]', text: 'text-[var(--ink-2)]' },
   sent: { label: 'Sent', dot: 'bg-amber-500', text: 'text-amber-700' },
+  partially_paid: { label: 'Partially Paid', dot: 'bg-sky-500', text: 'text-sky-700' },
   paid: { label: 'Paid', dot: 'bg-emerald-500', text: 'text-emerald-700' },
   overdue: { label: 'Overdue', dot: 'bg-[var(--danger)]', text: 'text-[var(--danger)]' },
   cancelled: { label: 'Cancelled', dot: 'bg-[var(--ink-3)]', text: 'text-[var(--ink-3)]' },
@@ -582,14 +585,14 @@ function TaxInvoiceCard({
             />
             <ActionRow
               icon={<CheckCircle2 className="h-3.5 w-3.5" />}
-              label={actionBusy ? 'Updating…' : 'Mark as paid'}
+              label={actionBusy ? 'Updating…' : (invoice.status === 'partially_paid' ? 'Record payment' : 'Record payment / Mark paid')}
               disabled={actionBusy || invoice.status === 'paid' || invoice.status === 'cancelled'}
               onClick={onMarkPaid}
             />
             <ActionRow
               icon={<Edit3 className="h-3.5 w-3.5" />}
               label="Edit invoice"
-              disabled={invoice.status === 'cancelled'}
+              disabled={invoice.status === 'paid' || invoice.status === 'cancelled'}
               onClick={onEdit}
             />
             <ActionRow
@@ -724,6 +727,7 @@ export default function SuperAdminBillingPage() {
   const [selected, setSelected] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
+  const [payInvoice, setPayInvoice] = useState<Invoice | null>(null);
   const [newInvoiceOpen, setNewInvoiceOpen] = useState(false);
   const [newPlanOpen, setNewPlanOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState<SubscriptionPlan | null>(null);
@@ -765,24 +769,41 @@ export default function SuperAdminBillingPage() {
     try {
       const blob = await exportGstr1();
       const stamp = new Date().toISOString().slice(0, 10);
-      downloadFile(blob, `gstr1-${stamp}.csv`);
+      downloadFile(blob, `gstr1-${stamp}.xlsx`);
       toast.success('GSTR-1 exported.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'GSTR export failed.');
     }
   };
 
-  const handleMarkPaid = async (target?: Invoice) => {
+  const handleMarkPaid = (target?: Invoice) => {
     const inv = target ?? selected;
     if (!inv) return;
+    setPayInvoice(inv);
+  };
+
+  const handleRecordPayment = async (payload: {
+    amount: number;
+    paid_on: string;
+    method: InvoicePaymentMethod;
+    reference_no?: string;
+    notes?: string;
+  }) => {
+    if (!payInvoice) return;
     setActionBusy(true);
     try {
-      const updated = await markInvoicePaid(String(inv.id));
-      setSelected(updated);
-      toast.success(`Invoice ${updated.invoice_number} marked as paid.`);
+      const res = await recordInvoicePayment(String(payInvoice.id), payload);
+      setSelected(res.invoice);
+      const remaining = Number(res.invoice.due_amount ?? 0);
+      toast.success(
+        remaining > 0
+          ? `Recorded \u20b9${payload.amount.toFixed(2)}. Remaining due \u20b9${remaining.toFixed(2)}.`
+          : `Invoice ${res.invoice.invoice_number} fully paid.`
+      );
+      setPayInvoice(null);
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Mark paid failed.');
+      toast.error(err instanceof Error ? err.message : 'Failed to record payment.');
     } finally {
       setActionBusy(false);
     }
@@ -1111,12 +1132,14 @@ export default function SuperAdminBillingPage() {
                         <StatusChip status={inv.status} daysOverdue={daysOverdue} />
                       </td>
                       <td className="py-3 pr-3 text-right">
-                        <p className="sa-kpi-value text-[14px] text-[var(--ink-1)]">
-                          {fmtINR(Number(inv.tax_breakdown?.grand_total || 0), { compact: true })}
+                        <p className="sa-kpi-value font-mono tabular-nums text-[13.5px] text-[var(--ink-1)]">
+                          {fmtINR(Number(inv.tax_breakdown?.grand_total || 0))}
                         </p>
-                        <p className="font-mono text-[10.5px] text-[var(--ink-3)]">
-                          {fmtINR(Number(inv.tax_breakdown?.grand_total || 0), { symbol: false })}
-                        </p>
+                        {Number(inv.due_amount ?? 0) > 0 && inv.status !== 'cancelled' && (
+                          <p className="font-mono tabular-nums text-[10.5px] text-amber-700">
+                            Due {fmtINR(Number(inv.due_amount ?? 0), { symbol: false })}
+                          </p>
+                        )}
                       </td>
                       <td className="py-3 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">
@@ -1147,8 +1170,8 @@ export default function SuperAdminBillingPage() {
                           </button>
                           <button
                             type="button"
-                            title={inv.status === 'paid' ? 'Already paid' : inv.status === 'cancelled' ? 'Cancelled invoice' : 'Mark as paid'}
-                            aria-label="Mark as paid"
+                            title={inv.status === 'paid' ? 'Already paid' : inv.status === 'cancelled' ? 'Cancelled invoice' : 'Record payment'}
+                            aria-label="Record payment"
                             disabled={actionBusy || inv.status === 'paid' || inv.status === 'cancelled'}
                             onClick={() => handleMarkPaid(inv)}
                             className="grid h-7 w-7 place-items-center rounded-md border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-40 disabled:hover:bg-emerald-50"
@@ -1211,6 +1234,15 @@ export default function SuperAdminBillingPage() {
           variant={confirmDialog.variant}
           onConfirm={confirmDialog.onConfirm}
           onCancel={closeConfirm}
+        />
+      )}
+
+      {payInvoice && (
+        <RecordPaymentModal
+          invoice={payInvoice}
+          busy={actionBusy}
+          onClose={() => setPayInvoice(null)}
+          onSubmit={handleRecordPayment}
         />
       )}
     </div>
