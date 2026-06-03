@@ -3015,3 +3015,147 @@ const ratioChecks: (() => string | null)[] = [
 4. Add IGST/CGST/SGST state-of-supply detection to `BillingGSTR1ExportView` for accurate GST filing values.
 5. Commit all Day 11 changes on `tenancy-new` branch.
 
+---
+
+## Day 13 — 2026-06-03 — HR Onboard: Staff Photo, Save-Draft System & PDF Generation
+
+**Branch:** `hr-03/06`
+**Author:** Gowtham
+**Focus:** Staff photo capture (camera + file upload), save-draft system (backend model + full CRUD), blank form PDF download, filled form PDF generation.
+
+---
+
+### Staff Photo — Camera & File Upload
+
+**Backend (`backend/apps/hr/serializers.py`):**
+- `validate_staff_photo(value)`: size ≤ 2 MB, Pillow `Image.open` integrity check, width/height 100–8 000 px.
+
+**Backend (`backend/apps/hr/views.py`):**
+- `StaffCreateView` uses `MultiPartParser` / `FormParser` — photo uploaded via FormData.
+
+**Frontend (`frontend/hooks/useHrApi.ts`):**
+- `createStaff(body, photoFile?)`: sends FormData when photo present, JSON otherwise.
+
+**Frontend (`frontend/app/(dashboard)/hr/onboard/page.tsx`):**
+- `handlePhotoChange` — validates type (jpg/png) + size (≤ 2 MB), stores `photoFile`.
+- `openCamera` / `closeCamera` / `capturePhoto` — `getUserMedia`, live-video modal, canvas capture.
+- Camera modal: fixed overlay `z-[9999]`, face-guide circle, Capture / Cancel buttons.
+- Photo circle: `relative shrink-0` wrapper with `×` overlay button when `photoPreview` is set (`onPhotoRemove` clears both `photoFile` and `photoPreview`).
+
+---
+
+### Save-Draft System
+
+**Backend (`backend/apps/hr/models.py`):**
+- `StaffOnboardDraft`: `created_by` FK, `school` FK (nullable), `draft_name` (max 120), `form_data` (JSONField), `current_step` (1–10), `MAX_DRAFTS_PER_USER = 10`.
+
+**Backend (`backend/apps/hr/serializers.py`):**
+- `StaffOnboardDraftSerializer`: validates `form_data` is dict, `current_step` 1–10.
+
+**Backend (`backend/apps/hr/views.py`):**
+- `StaffOnboardDraftListView` — `GET /api/v1/hr/onboard/drafts/`
+- `StaffOnboardDraftSaveView` — `POST /api/v1/hr/onboard/drafts/save/` — validates `first_name` non-empty, max 10 drafts, auto-derives `draft_name` from first + last name.
+- `StaffOnboardDraftDeleteView` — `DELETE /api/v1/hr/onboard/drafts/{pk}/`
+
+**Backend (`backend/apps/hr/migrations/0021_staff_onboard_draft.py`):** migration applied ✅
+
+**Backend (`backend/apps/hr/urls.py`):**
+- `onboard/drafts/`, `onboard/drafts/save/`, `onboard/drafts/<int:pk>/`
+
+**Frontend (`frontend/hooks/useHrApi.ts`):**
+- `useOnboardDrafts()`, `saveOnboardDraft()`, `deleteOnboardDraft()`, `OnboardDraft` interface.
+
+**Frontend (`frontend/app/(dashboard)/hr/onboard/page.tsx`):**
+- State: `draftId`, `draftSaving`, `showDraftsModal`, `deletingDraftId`.
+- `handleSaveDraft` / `handleLoadDraft` / `handleDeleteDraft`.
+- "Save draft" / "Update draft" button in sticky footer; drafts badge showing count; load/delete modal.
+
+---
+
+### Blank Form PDF
+
+**Backend (`backend/apps/hr/views.py`) — `StaffOnboardBlankFormView`:**
+- `GET /api/v1/hr/onboard/blank-form/?copies=1`
+- Validates: `copies` must be integer 1–5.
+- ReportLab A4 PDF — all 10 onboarding sections (photo box, field lines with underlines, nominee / qualification / previous-employment tables, document checklist with ☐ checkboxes, signature block).
+- Returns `application/pdf`, `Content-Disposition: attachment; filename="staff-onboarding-form.pdf"`.
+
+**Backend (`backend/apps/hr/urls.py`):** `onboard/blank-form/`
+
+**Frontend (`frontend/hooks/useHrApi.ts`):**
+- `downloadBlankForm(copies?)`: GET, blob download, `<a>` click trigger.
+
+**Frontend (`frontend/app/(dashboard)/hr/onboard/page.tsx`):**
+- `blankFormDownloading` state, `handleBlankForm`, "Blank form" button in sticky footer wired (shows "Generating…" while in-flight).
+
+---
+
+### Filled Form PDF
+
+**Backend (`backend/apps/hr/views.py`) — `StaffOnboardFilledFormView`:**
+- `POST /api/v1/hr/onboard/filled-form/`
+- Validates: `form_data` must be dict, `form_data.first_name` must be non-empty string.
+- ReportLab A4 PDF pre-filled from wizard form data — green underlines on filled fields, grey on empty.
+- Covers: Identity, Role & Employment, Contact (with address), Family & Emergency, Gov IDs, Qualifications (table), Previous Employment (table), Medical, Bank & Payroll, Declaration + signature block.
+- Personalised filename: `onboarding-{FirstName_LastName}.pdf`.
+- Returns `application/pdf`; exposes `Content-Disposition` header via CORS.
+
+**Backend (`backend/apps/hr/urls.py`):** `onboard/filled-form/`
+
+**Frontend (`frontend/hooks/useHrApi.ts`):**
+- `downloadFilledForm(formData)`: POST JSON `{ form_data }`, receives PDF blob, derives filename from `Content-Disposition`, falls back to `staff-onboarding.pdf`.
+
+**Frontend (`frontend/app/(dashboard)/hr/onboard/page.tsx`):**
+- `filledFormDownloading` state, `handleFilledForm` (frontend validates `first_name` non-empty before API call).
+- "PDF" button in wizard header wired (shows "Generating…", disabled during download).
+
+---
+
+### Validation (both PDF endpoints)
+
+| Endpoint | Validation |
+|---|---|
+| `GET /api/v1/hr/onboard/blank-form/?copies=1` | `copies` must be integer 1–5 |
+| `POST /api/v1/hr/onboard/filled-form/` | `form_data` must be dict; `form_data.first_name` must be non-empty string |
+
+---
+
+### Files Changed (Day 13)
+
+| File | Change |
+|---|---|
+| `backend/apps/hr/models.py` | Added `StaffOnboardDraft` model with `MAX_DRAFTS_PER_USER = 10` |
+| `backend/apps/hr/migrations/0021_staff_onboard_draft.py` | New migration — applied ✅ |
+| `backend/apps/hr/serializers.py` | Added `StaffOnboardDraftSerializer`; `validate_staff_photo` (size + Pillow + dimensions) |
+| `backend/apps/hr/views.py` | Added `StaffOnboardDraftListView`, `StaffOnboardDraftSaveView`, `StaffOnboardDraftDeleteView`, `StaffOnboardBlankFormView` (ReportLab), `StaffOnboardFilledFormView` (ReportLab) |
+| `backend/apps/hr/urls.py` | Added `onboard/drafts/`, `onboard/drafts/save/`, `onboard/drafts/<int:pk>/`, `onboard/blank-form/`, `onboard/filled-form/` |
+| `frontend/hooks/useHrApi.ts` | Added `OnboardDraft`, `useOnboardDrafts`, `saveOnboardDraft`, `deleteOnboardDraft`, `downloadBlankForm`, `downloadFilledForm`, `lookupPincode`; `createStaff` updated for FormData photo upload |
+| `frontend/app/(dashboard)/hr/onboard/page.tsx` | Photo capture (camera modal + file upload + remove); draft state + handlers + modal; `blankFormDownloading` + `handleBlankForm`; `filledFormDownloading` + `handleFilledForm`; wired "Blank form" and "PDF" buttons |
+
+---
+
+### Verified
+
+| Check | Result |
+|---|---|
+| `GET /api/v1/hr/onboard/blank-form/?copies=1` | `200 8 043 bytes` ✅ |
+| `POST /api/v1/hr/onboard/filled-form/` | `200 5 973 bytes` ✅ |
+| `npm run build` | Exit code 0 — 0 errors ✅ |
+| `git push origin hr-03/06` | Pushed ✅ |
+
+---
+
+### Start next with
+
+1. Restart servers:
+   ```
+   cd e:\Es_V1\eskoolia-v1\backend
+   $env:DJANGO_SETTINGS_MODULE="config.settings.local"
+   daphne -b 0.0.0.0 -p 8000 config.asgi:application
+   ```
+   ```
+   cd e:\Es_V1\eskoolia-v1\frontend
+   npm run dev
+   ```
+2. Continue building remaining HR onboarding features or move to next module.
+
