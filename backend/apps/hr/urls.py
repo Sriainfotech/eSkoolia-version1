@@ -18,6 +18,11 @@ from .views import (
     StaffOnboardDocumentPreviewView,
     StaffOnboardDocumentDeleteView,
     StaffOnboardDocumentStatusView,
+    StaffOnboardDraftListView,
+    StaffOnboardDraftSaveView,
+    StaffOnboardDraftDeleteView,
+    StaffOnboardBlankFormView,
+    StaffOnboardFilledFormView,
 )
 
 router = DefaultRouter()
@@ -40,4 +45,12 @@ urlpatterns = [
     path("onboard/documents/<int:pk>/preview/", StaffOnboardDocumentPreviewView.as_view(), name="hr-onboard-doc-preview"),
     path("onboard/documents/<int:pk>/", StaffOnboardDocumentDeleteView.as_view(), name="hr-onboard-doc-delete"),
     path("onboard/documents/<int:pk>/status/", StaffOnboardDocumentStatusView.as_view(), name="hr-onboard-doc-status"),
+    # Onboarding wizard draft endpoints
+    path("onboard/drafts/", StaffOnboardDraftListView.as_view(), name="hr-onboard-draft-list"),
+    path("onboard/drafts/save/", StaffOnboardDraftSaveView.as_view(), name="hr-onboard-draft-save"),
+    path("onboard/drafts/<int:pk>/", StaffOnboardDraftDeleteView.as_view(), name="hr-onboard-draft-delete"),
+    # Blank onboarding form PDF
+    path("onboard/blank-form/", StaffOnboardBlankFormView.as_view(), name="hr-onboard-blank-form"),
+    # Filled onboarding form PDF (current wizard data)
+    path("onboard/filled-form/", StaffOnboardFilledFormView.as_view(), name="hr-onboard-filled-form"),
 ] + router.urls

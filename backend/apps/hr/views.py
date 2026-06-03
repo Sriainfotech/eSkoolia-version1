@@ -21,7 +21,7 @@ from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 
-from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument
+from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft
 from .serializers import (
     DepartmentSerializer,
     DepartmentTypeSerializer,
@@ -35,6 +35,7 @@ from .serializers import (
     StaffAttendanceSerializer,
     StaffDocumentSerializer,
     StaffOnboardDocumentSerializer,
+    StaffOnboardDraftSerializer,
 )
 
 
@@ -1602,3 +1603,964 @@ class StaffOnboardDocumentStatusView(APIView):
         doc.status = new_status
         doc.save(update_fields=["status", "updated_at"])
         return Response({"success": True, "data": StaffOnboardDocumentSerializer(doc).data})
+
+
+# ── Onboarding draft endpoints ────────────────────────────────────────────────
+
+class StaffOnboardDraftListView(APIView):
+    """GET /api/v1/hr/onboard/drafts/ — list all drafts for the current user."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        drafts = StaffOnboardDraft.objects.filter(created_by=request.user).order_by("-updated_at")
+        serializer = StaffOnboardDraftSerializer(drafts, many=True)
+        return Response({"count": len(serializer.data), "results": serializer.data})
+
+
+class StaffOnboardDraftSaveView(APIView):
+    """POST /api/v1/hr/onboard/drafts/save/
+
+    Body (JSON):
+      {
+        "id": <int|null>,       # null → create, int → update existing
+        "form_data": {...},     # partial form state (text fields only)
+        "current_step": <1-10>
+      }
+
+    Validations:
+      - form_data must be a JSON object (dict)
+      - current_step must be 1–10
+      - first_name in form_data must be non-empty (so the draft has a meaningful name)
+      - At most MAX_DRAFTS_PER_USER drafts per user (enforced on create)
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+
+        raw_id = request.data.get("id")
+        form_data = request.data.get("form_data")
+        raw_step = request.data.get("current_step", 1)
+
+        # ── Validate form_data ──────────────────────────────────────────────
+        if not isinstance(form_data, dict):
+            return Response(
+                {"error": "form_data must be a JSON object."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        first_name = str(form_data.get("first_name") or "").strip()
+        if not first_name:
+            return Response(
+                {"error": "Please enter at least the staff member's first name before saving a draft."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Validate current_step ───────────────────────────────────────────
+        try:
+            current_step = int(raw_step)
+        except (TypeError, ValueError):
+            current_step = 1
+        if not (1 <= current_step <= 10):
+            return Response(
+                {"error": "current_step must be between 1 and 10."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Derive a human-readable name ────────────────────────────────────
+        last_name = str(form_data.get("last_name") or "").strip()
+        draft_name = " ".join(filter(None, [first_name, last_name]))
+
+        school = getattr(user, "school", None)
+
+        # ── Create or update ────────────────────────────────────────────────
+        if raw_id:
+            try:
+                draft_id = int(raw_id)
+            except (TypeError, ValueError):
+                return Response({"error": "Invalid draft id."}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                draft = StaffOnboardDraft.objects.get(id=draft_id, created_by=user)
+            except StaffOnboardDraft.DoesNotExist:
+                return Response({"error": "Draft not found."}, status=status.HTTP_404_NOT_FOUND)
+
+            draft.draft_name = draft_name
+            draft.form_data = form_data
+            draft.current_step = current_step
+            draft.save(update_fields=["draft_name", "form_data", "current_step", "updated_at"])
+        else:
+            count = StaffOnboardDraft.objects.filter(created_by=user).count()
+            if count >= StaffOnboardDraft.MAX_DRAFTS_PER_USER:
+                return Response(
+                    {
+                        "error": (
+                            f"You have reached the maximum of {StaffOnboardDraft.MAX_DRAFTS_PER_USER} saved drafts. "
+                            "Please delete an old draft before saving a new one."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            draft = StaffOnboardDraft.objects.create(
+                created_by=user,
+                school=school,
+                draft_name=draft_name,
+                form_data=form_data,
+                current_step=current_step,
+            )
+
+        return Response(StaffOnboardDraftSerializer(draft).data, status=status.HTTP_200_OK)
+
+
+class StaffOnboardDraftDeleteView(APIView):
+    """DELETE /api/v1/hr/onboard/drafts/{pk}/ — delete a draft owned by the current user."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, pk=None):
+        try:
+            draft = StaffOnboardDraft.objects.get(pk=pk, created_by=request.user)
+        except StaffOnboardDraft.DoesNotExist:
+            return Response({"error": "Draft not found."}, status=status.HTTP_404_NOT_FOUND)
+        draft.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ── Blank onboarding form PDF ─────────────────────────────────────────────────
+
+class StaffOnboardBlankFormView(APIView):
+    """GET /api/v1/hr/onboard/blank-form/
+
+    Generates and streams a blank staff onboarding form as a PDF.
+
+    Query params (all optional):
+      format=pdf  (default) — returns application/pdf
+      copies=1    — how many copies to embed (1–5)
+
+    Validations:
+      - User must be authenticated.
+      - `copies` must be an integer between 1 and 5.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    # Maximum printable copies allowed in one request
+    _MAX_COPIES = 5
+
+    def get(self, request):
+        # ── Validate `copies` param ────────────────────────────────────────
+        raw_copies = request.query_params.get("copies", "1")
+        try:
+            copies = int(raw_copies)
+        except (TypeError, ValueError):
+            return Response(
+                {"error": "`copies` must be an integer between 1 and 5."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not (1 <= copies <= self._MAX_COPIES):
+            return Response(
+                {"error": f"`copies` must be between 1 and {self._MAX_COPIES}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ── Build PDF ──────────────────────────────────────────────────────
+        try:
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+            from reportlab.lib.units import mm
+            from reportlab.platypus import (
+                HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+            )
+            from reportlab.platypus.flowables import Flowable
+            from io import BytesIO
+        except ImportError:
+            return Response(
+                {"error": "PDF generation library is not available. Contact support."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        BRAND    = colors.HexColor("#4729F4")
+        LIGHT    = colors.HexColor("#F8FAFC")
+        BORDER   = colors.HexColor("#E8E8F0")
+        MUTED    = colors.HexColor("#94A3B8")
+        INK      = colors.HexColor("#15172A")
+        REQUIRED = colors.HexColor("#EF4444")
+
+        PAGE_W, PAGE_H = A4
+        L_MARGIN = R_MARGIN = 18 * mm
+        INNER_W = PAGE_W - L_MARGIN - R_MARGIN
+
+        styles = getSampleStyleSheet()
+
+        title_style  = ParagraphStyle("FormTitle",  fontName="Helvetica-Bold",   fontSize=16, textColor=INK,   spaceAfter=2)
+        sub_style    = ParagraphStyle("FormSub",    fontName="Helvetica",         fontSize=8,  textColor=MUTED,  spaceAfter=6)
+        section_style= ParagraphStyle("Section",    fontName="Helvetica-Bold",   fontSize=9,  textColor=BRAND,  spaceBefore=10, spaceAfter=4)
+        label_style  = ParagraphStyle("Label",      fontName="Helvetica-Bold",   fontSize=7.5,textColor=INK)
+        hint_style   = ParagraphStyle("Hint",       fontName="Helvetica-Oblique",fontSize=6.5,textColor=MUTED)
+        note_style   = ParagraphStyle("Note",       fontName="Helvetica",         fontSize=7,  textColor=MUTED, spaceAfter=2)
+        footer_style = ParagraphStyle("Footer",     fontName="Helvetica",         fontSize=6.5,textColor=MUTED, alignment=1)
+
+        # ── Helpers ────────────────────────────────────────────────────────
+        def _line(label: str, required: bool = False, hint: str = "") -> list:
+            """Returns a 2-row pair: label + underline."""
+            req_mark = '<font color="#EF4444"> *</font>' if required else ""
+            lbl = Paragraph(f"{label}{req_mark}", label_style)
+            rows = [[lbl, ""]]
+            t = Table(rows, colWidths=[INNER_W * 0.3, INNER_W * 0.7])
+            t.setStyle(TableStyle([
+                ("VALIGN",      (0, 0), (-1, -1), "BOTTOM"),
+                ("LINEBELOW",   (1, 0), (1, 0), 0.5, colors.HexColor("#CBD5E1")),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING",  (0, 0), (-1, -1), 5),
+            ]))
+            result = [t]
+            if hint:
+                result.append(Paragraph(hint, hint_style))
+            return result
+
+        def _two_col(*pairs) -> list:
+            """Lays out up to 4 label/required pairs in two side-by-side columns."""
+            col = INNER_W / 2 - 3 * mm
+            rows = []
+            it = iter(pairs)
+            for left in it:
+                right = next(it, None)
+                left_label, left_req = left
+                right_cell = ""
+                if right:
+                    right_label, right_req = right
+                    req_r = '<font color="#EF4444"> *</font>' if right_req else ""
+                    right_cell = Paragraph(f"{right_label}{req_r}", label_style)
+                req_l = '<font color="#EF4444"> *</font>' if left_req else ""
+                left_cell = Paragraph(f"{left_label}{req_l}", label_style)
+                t = Table([[left_cell, "", right_cell, ""]], colWidths=[col * 0.38, col * 0.62, col * 0.38, col * 0.62])
+                t.setStyle(TableStyle([
+                    ("VALIGN",       (0, 0), (-1, -1), "BOTTOM"),
+                    ("LINEBELOW",    (1, 0), (1, 0), 0.5, colors.HexColor("#CBD5E1")),
+                    ("LINEBELOW",    (3, 0), (3, 0), 0.5, colors.HexColor("#CBD5E1")),
+                    ("BOTTOMPADDING",(0, 0), (-1, -1), 3),
+                    ("TOPPADDING",   (0, 0), (-1, -1), 5),
+                ]))
+                rows.append(t)
+            return rows
+
+        def _three_col(*triples) -> list:
+            col = INNER_W / 3 - 2 * mm
+            result = []
+            it = iter(triples)
+            for grp in zip(*[iter(triples)] * 3):
+                cells = []
+                for label, req in grp:
+                    req_mark = '<font color="#EF4444"> *</font>' if req else ""
+                    cells += [Paragraph(f"{label}{req_mark}", label_style), ""]
+                t = Table([cells], colWidths=[col * 0.42, col * 0.58] * 3)
+                t.setStyle(TableStyle([
+                    ("VALIGN",       (0, 0), (-1, -1), "BOTTOM"),
+                    ("LINEBELOW",    (1, 0), (1, 0), 0.5, colors.HexColor("#CBD5E1")),
+                    ("LINEBELOW",    (3, 0), (3, 0), 0.5, colors.HexColor("#CBD5E1")),
+                    ("LINEBELOW",    (5, 0), (5, 0), 0.5, colors.HexColor("#CBD5E1")),
+                    ("BOTTOMPADDING",(0, 0), (-1, -1), 3),
+                    ("TOPPADDING",   (0, 0), (-1, -1), 5),
+                ]))
+                result.append(t)
+            return result
+
+        def _section(title: str) -> list:
+            return [
+                Spacer(1, 6),
+                HRFlowable(width=INNER_W, thickness=0.5, color=BORDER),
+                Spacer(1, 4),
+                Paragraph(title.upper(), section_style),
+            ]
+
+        def _checkbox_list(items: list[str], cols: int = 2) -> Table:
+            """Renders a grid of checkboxes."""
+            symbol = "☐  "
+            rows = []
+            row = []
+            for i, item in enumerate(items):
+                row.append(Paragraph(f"{symbol}{item}", note_style))
+                if len(row) == cols:
+                    rows.append(row)
+                    row = []
+            if row:
+                row += [""] * (cols - len(row))
+                rows.append(row)
+            t = Table(rows, colWidths=[INNER_W / cols] * cols)
+            t.setStyle(TableStyle([
+                ("VALIGN",  (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING",  (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING",(0, 0), (-1, -1), 3),
+            ]))
+            return t
+
+        def _blank_table(headers: list[str], num_rows: int = 3) -> Table:
+            """Renders a table with header row and blank fill-in rows."""
+            col_w = INNER_W / len(headers)
+            header_row = [Paragraph(h, label_style) for h in headers]
+            all_rows = [header_row] + [[""] * len(headers) for _ in range(num_rows)]
+            t = Table(all_rows, colWidths=[col_w] * len(headers), rowHeights=[14] + [16] * num_rows)
+            t.setStyle(TableStyle([
+                ("BACKGROUND",    (0, 0), (-1, 0), LIGHT),
+                ("GRID",          (0, 0), (-1, -1), 0.4, BORDER),
+                ("FONTSIZE",      (0, 0), (-1, -1), 7),
+                ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 3),
+            ]))
+            return t
+
+        # ── Build story ────────────────────────────────────────────────────
+        def _build_story(copy_num: int, total: int) -> list:
+            story = []
+
+            # ─── Header ───────────────────────────────────────────────────
+            copy_label = f"Copy {copy_num} of {total}" if total > 1 else ""
+            header_data = [[
+                Paragraph("<b>STAFF ONBOARDING FORM</b>", title_style),
+                Paragraph(
+                    f'<font color="#94A3B8">Eskoolia School Management · {copy_label}</font>',
+                    ParagraphStyle("HR", fontName="Helvetica", fontSize=7.5, textColor=MUTED, alignment=2)
+                ),
+            ]]
+            header_table = Table(header_data, colWidths=[INNER_W * 0.6, INNER_W * 0.4])
+            header_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+            story.append(header_table)
+            story.append(Paragraph(
+                "Fill in block letters · Fields marked <font color='#EF4444'>*</font> are mandatory · "
+                "Submit this form along with attested copies of supporting documents.",
+                sub_style,
+            ))
+            story.append(HRFlowable(width=INNER_W, thickness=1, color=BRAND))
+            story.append(Spacer(1, 6))
+
+            # ─── Photo box + basic identifiers ────────────────────────────
+            photo_box = Table(
+                [["", "PHOTO\n(Paste here)"]],
+                colWidths=[INNER_W - 28*mm, 28*mm],
+                rowHeights=[32*mm],
+            )
+            photo_box.setStyle(TableStyle([
+                ("BOX",        (1, 0), (1, 0), 0.5, BORDER),
+                ("ALIGN",      (1, 0), (1, 0), "CENTER"),
+                ("VALIGN",     (1, 0), (1, 0), "MIDDLE"),
+                ("FONTSIZE",   (1, 0), (1, 0), 7),
+                ("TEXTCOLOR",  (1, 0), (1, 0), MUTED),
+            ]))
+
+            id_items = _two_col(
+                ("Staff Code", True), ("Biometric / RFID Code", False),
+                ("Status", True),     ("Date of Form", False),
+            )
+            id_col = Table([[item] for item in id_items], colWidths=[INNER_W - 28*mm])
+            id_col.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+
+            top_row = Table([[id_col, ""]], colWidths=[INNER_W - 32*mm, 32*mm], rowHeights=[32*mm])
+            top_row.setStyle(TableStyle([
+                ("BOX",       (1, 0), (1, 0), 0.5, BORDER),
+                ("VALIGN",    (0, 0), (-1, -1), "TOP"),
+                ("ALIGN",     (1, 0), (1, 0), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING",(0, 0), (-1, -1), 0),
+            ]))
+
+            photo_label = Paragraph('<font color="#94A3B8">PHOTO<br/>(Paste here)</font>',
+                                    ParagraphStyle("PC", fontName="Helvetica", fontSize=7, textColor=MUTED, alignment=1))
+
+            combined = Table(
+                [[id_col, photo_label]],
+                colWidths=[INNER_W - 30*mm, 30*mm],
+            )
+            combined.setStyle(TableStyle([
+                ("BOX",         (1, 0), (1, 0), 0.5, BORDER),
+                ("VALIGN",      (0, 0), (0, 0), "TOP"),
+                ("VALIGN",      (1, 0), (1, 0), "MIDDLE"),
+                ("ALIGN",       (1, 0), (1, 0), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING",(0, 0), (-1, -1), 0),
+                ("TOPPADDING",  (1, 0), (1, 0), 0),
+                ("BOTTOMPADDING",(1,0), (1, 0), 0),
+                ("MINROWHEIGHT",(0, 0), (-1,-1), 30*mm),
+            ]))
+            story.append(combined)
+
+            # ─── Section 1: Personal Identity ─────────────────────────────
+            story += _section("1. Personal Identity")
+            story += _two_col(
+                ("First Name", True),  ("Middle Name", False),
+                ("Last Name", True),   ("Date of Birth (DD/MM/YYYY)", True),
+                ("Gender", True),      ("Blood Group", False),
+                ("Mother Tongue", False), ("Religion", False),
+                ("Nationality", True), ("Marital Status", False),
+            )
+
+            # ─── Section 2: Role & Employment ─────────────────────────────
+            story += _section("2. Role & Employment")
+            story += _two_col(
+                ("Department", True),      ("Designation", True),
+                ("Role / Access Level", True), ("Joining Date (DD/MM/YYYY)", True),
+                ("Employment Type", True), ("Contract Type", False),
+                ("Probation Period", False), ("Reporting Manager", False),
+                ("Work Location", False),  ("Biometric Enrolled", False),
+            )
+
+            # ─── Section 3: Contact Details ────────────────────────────────
+            story += _section("3. Contact Details")
+            story += _two_col(
+                ("Mobile Number", True),   ("WhatsApp Number", False),
+                ("Personal Email", False), ("Official Email", False),
+                ("Driving License No.", False), ("", False),
+            )
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("Current Address", label_style))
+            story += _line("Address Line 1", required=True)
+            story += _line("Address Line 2")
+            story += _three_col(
+                ("City", True), ("State / District", True), ("Pin Code", True),
+            )
+            story += _line("Country", required=True)
+            story.append(Paragraph("☐  Permanent address same as current address", note_style))
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("Permanent Address (if different)", label_style))
+            story += _line("Address Line 1")
+            story += _line("Address Line 2")
+            story += _three_col(
+                ("City", False), ("State / District", False), ("Pin Code", False),
+            )
+            story += _line("Country")
+
+            # ─── Section 4: Family & Emergency Contact ────────────────────
+            story += _section("4. Family & Emergency Contact")
+            story += _two_col(
+                ("Father's / Mother's Name", False), ("Spouse / Partner Name", False),
+                ("No. of Children", False), ("", False),
+            )
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("Emergency Contact", label_style))
+            story += _two_col(
+                ("Name", True),         ("Relationship", True),
+                ("Mobile Number", True), ("Alternate Number", False),
+            )
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("Nominee(s) — Insurance / Gratuity", label_style))
+            story.append(_blank_table(["Nominee Name", "Relationship", "Date of Birth", "% Share"], num_rows=3))
+
+            # ─── Section 5: Government IDs ────────────────────────────────
+            story += _section("5. Government & Statutory IDs")
+            story += _two_col(
+                ("Aadhaar Number", True), ("PAN Number", False),
+                ("Passport Number", False), ("Passport Expiry", False),
+                ("Driving License No.", False), ("EPF / PF Number", False),
+                ("ESI Number", False), ("UAN", False),
+            )
+
+            # ─── Section 6: Qualifications ────────────────────────────────
+            story += _section("6. Educational Qualifications")
+            story.append(_blank_table(
+                ["Degree / Certificate", "Institution / University", "Board", "Year", "Grade / %"],
+                num_rows=4,
+            ))
+
+            # ─── Section 7: Previous Employment ──────────────────────────
+            story += _section("7. Previous Employment")
+            story.append(_blank_table(
+                ["Organisation", "Designation", "From", "To", "Reason for Leaving"],
+                num_rows=3,
+            ))
+
+            # ─── Section 8: Medical / Health ──────────────────────────────
+            story += _section("8. Medical & Health")
+            story += _two_col(
+                ("Height (cm)", False),           ("Weight (kg)", False),
+                ("Known Medical Conditions", False), ("Allergies", False),
+                ("Colour Blindness", False),       ("Disability Status", False),
+            )
+            story += _line("Emergency Medical Notes (medications, conditions to be aware of)")
+
+            # ─── Section 9: Bank & Payroll ────────────────────────────────
+            story += _section("9. Bank & Payroll Details")
+            story += _two_col(
+                ("Bank Name", False),          ("Branch Name", False),
+                ("Account Holder Name", False),("Account Number", False),
+                ("IFSC Code", False),          ("Bank-linked Mobile No.", False),
+                ("Basic Salary (₹)", False),   ("", False),
+            )
+
+            # ─── Section 10: Documents Submitted ─────────────────────────
+            story += _section("10. Documents Checklist")
+            story.append(Paragraph(
+                "Tick documents enclosed with this form (attested copies):", note_style
+            ))
+            story.append(_checkbox_list([
+                "Aadhaar Card",
+                "PAN Card",
+                "Passport (if available)",
+                "Passport-size Photographs (3)",
+                "10th Certificate / Marksheet",
+                "12th Certificate / Marksheet",
+                "Degree Certificate",
+                "Experience / Relieving Letters",
+                "Driving License (if applicable)",
+                "Medical Fitness Certificate",
+                "Bank Passbook / Cancel Cheque",
+                "Joining / Offer Letter",
+            ], cols=2))
+
+            # ─── Declaration ──────────────────────────────────────────────
+            story += _section("Declaration")
+            story.append(Paragraph(
+                "I hereby declare that the information furnished above is true and correct to the best of my knowledge and belief. "
+                "I understand that any false or misleading information may result in disqualification / termination of service.",
+                note_style,
+            ))
+            story.append(Spacer(1, 14))
+            sig_data = [
+                [
+                    Paragraph("________________________", label_style),
+                    Paragraph("________________________", label_style),
+                    Paragraph("________________________", label_style),
+                ],
+                [
+                    Paragraph("Applicant Signature & Date", hint_style),
+                    Paragraph("HR Officer Signature & Date", hint_style),
+                    Paragraph("Principal / Director Signature", hint_style),
+                ],
+            ]
+            sig_table = Table(sig_data, colWidths=[INNER_W / 3] * 3)
+            sig_table.setStyle(TableStyle([
+                ("ALIGN",  (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
+            story.append(sig_table)
+
+            # ─── Footer ───────────────────────────────────────────────────
+            story.append(Spacer(1, 8))
+            story.append(HRFlowable(width=INNER_W, thickness=0.4, color=BORDER))
+            story.append(Paragraph(
+                "Eskoolia School Management System · Confidential · For internal HR use only",
+                footer_style,
+            ))
+
+            return story
+
+        # ── Assemble all copies ────────────────────────────────────────────
+        buf = BytesIO()
+        doc = SimpleDocTemplate(
+            buf,
+            pagesize=A4,
+            leftMargin=L_MARGIN,
+            rightMargin=R_MARGIN,
+            topMargin=14 * mm,
+            bottomMargin=12 * mm,
+            title="Staff Onboarding Form – Eskoolia",
+            author="Eskoolia HR",
+        )
+
+        full_story: list = []
+        for i in range(1, copies + 1):
+            full_story += _build_story(i, copies)
+            if i < copies:
+                full_story.append(PageBreak())
+
+        doc.build(full_story)
+
+        pdf_bytes = buf.getvalue()
+
+        from django.http import HttpResponse as DjResponse
+        response = DjResponse(pdf_bytes, content_type="application/pdf")
+        response["Content-Disposition"] = 'attachment; filename="staff-onboarding-form.pdf"'
+        response["Content-Length"] = str(len(pdf_bytes))
+        # Allow frontend to read Content-Disposition header
+        response["Access-Control-Expose-Headers"] = "Content-Disposition"
+        return response
+
+
+# ── Filled onboarding form PDF ────────────────────────────────────────────────
+
+class StaffOnboardFilledFormView(APIView):
+    """POST /api/v1/hr/onboard/filled-form/
+
+    Generates a filled staff onboarding PDF from the current wizard form data.
+
+    Request body (JSON):
+      form_data  {dict}  — all wizard form fields as key/value strings.
+
+    Validations:
+      - User must be authenticated.
+      - `form_data` must be a dict.
+      - `form_data.first_name` must be a non-empty string.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        # ── Input validation ───────────────────────────────────────────────
+        body = request.data
+        form_data = body.get("form_data")
+
+        if not isinstance(form_data, dict):
+            return Response(
+                {"error": "`form_data` must be an object containing the wizard fields."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        first_name = str(form_data.get("first_name", "")).strip()
+        if not first_name:
+            return Response(
+                {"error": "`form_data.first_name` is required to generate a filled form."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Sanitise: all values to strings, strip control characters
+        def _s(key: str, default: str = "") -> str:
+            """Return form_data[key] as a safe stripped string."""
+            v = form_data.get(key, default)
+            if v is None:
+                return default
+            return str(v).strip()
+
+        # ── Build PDF ──────────────────────────────────────────────────────
+        try:
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import ParagraphStyle
+            from reportlab.lib.units import mm
+            from reportlab.platypus import (
+                HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+            )
+            from io import BytesIO
+        except ImportError:
+            return Response(
+                {"error": "PDF generation library is not available. Contact support."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        BRAND  = colors.HexColor("#4729F4")
+        BORDER = colors.HexColor("#E8E8F0")
+        MUTED  = colors.HexColor("#94A3B8")
+        INK    = colors.HexColor("#15172A")
+        LIGHT  = colors.HexColor("#F8FAFC")
+        GREEN  = colors.HexColor("#16A34A")
+
+        PAGE_W, PAGE_H = A4
+        L_MARGIN = R_MARGIN = 18 * mm
+        INNER_W = PAGE_W - L_MARGIN - R_MARGIN
+
+        title_style   = ParagraphStyle("FT",  fontName="Helvetica-Bold",   fontSize=15, textColor=INK,   spaceAfter=2)
+        sub_style     = ParagraphStyle("FS",  fontName="Helvetica",         fontSize=8,  textColor=MUTED,  spaceAfter=6)
+        section_style = ParagraphStyle("SEC", fontName="Helvetica-Bold",   fontSize=8.5,textColor=BRAND,  spaceBefore=8, spaceAfter=3)
+        label_style   = ParagraphStyle("LBL", fontName="Helvetica-Bold",   fontSize=7,  textColor=MUTED)
+        value_style   = ParagraphStyle("VAL", fontName="Helvetica",         fontSize=8,  textColor=INK)
+        hint_style    = ParagraphStyle("HNT", fontName="Helvetica-Oblique",fontSize=6.5,textColor=MUTED)
+        footer_style  = ParagraphStyle("FTR", fontName="Helvetica",         fontSize=6.5,textColor=MUTED, alignment=1)
+        tbl_hdr_style = ParagraphStyle("TH",  fontName="Helvetica-Bold",   fontSize=7,  textColor=INK)
+        tbl_val_style = ParagraphStyle("TV",  fontName="Helvetica",         fontSize=7,  textColor=INK)
+
+        # ── Helpers ────────────────────────────────────────────────────────
+
+        def _field_row(label: str, value: str, col_ratio: float = 0.35) -> Table:
+            """Single label+value row with bottom border."""
+            lbl_w = INNER_W * col_ratio
+            val_w = INNER_W * (1 - col_ratio)
+            disp = value if value else ""
+            t = Table(
+                [[Paragraph(label, label_style), Paragraph(disp, value_style)]],
+                colWidths=[lbl_w, val_w],
+            )
+            t.setStyle(TableStyle([
+                ("VALIGN",        (0, 0), (-1, -1), "BOTTOM"),
+                ("LINEBELOW",     (1, 0), (1, 0), 0.5,
+                 GREEN if value else colors.HexColor("#CBD5E1")),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("TOPPADDING",    (0, 0), (-1, -1), 4),
+            ]))
+            return t
+
+        def _two_fields(pairs: list[tuple[str, str]]) -> list:
+            """Two label+value pairs side by side."""
+            col = (INNER_W / 2) - 2 * mm
+            rows = []
+            it = iter(pairs)
+            for left in it:
+                right = next(it, None)
+                left_lbl, left_val = left
+                right_lbl = right[0] if right else ""
+                right_val = right[1] if right else ""
+                cells = [
+                    Paragraph(left_lbl, label_style), Paragraph(left_val, value_style),
+                    Paragraph(right_lbl, label_style), Paragraph(right_val, value_style),
+                ]
+                t = Table([cells], colWidths=[col * 0.38, col * 0.62, col * 0.38, col * 0.62])
+                t.setStyle(TableStyle([
+                    ("VALIGN",        (0, 0), (-1, -1), "BOTTOM"),
+                    ("LINEBELOW",     (1, 0), (1, 0), 0.5,
+                     GREEN if left_val else colors.HexColor("#CBD5E1")),
+                    ("LINEBELOW",     (3, 0), (3, 0), 0.5,
+                     GREEN if right_val else colors.HexColor("#CBD5E1")),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ("TOPPADDING",    (0, 0), (-1, -1), 4),
+                    ("LEFTPADDING",   (2, 0), (2, 0), 6),
+                ]))
+                rows.append(t)
+            return rows
+
+        def _section(title: str) -> list:
+            return [
+                Spacer(1, 4),
+                HRFlowable(width=INNER_W, thickness=0.5, color=BORDER),
+                Spacer(1, 3),
+                Paragraph(title.upper(), section_style),
+            ]
+
+        def _data_table(headers: list[str], rows: list[list[str]]) -> Table:
+            col_w = INNER_W / len(headers)
+            header_cells = [Paragraph(h, tbl_hdr_style) for h in headers]
+            data_rows = [[Paragraph(c, tbl_val_style) for c in r] for r in rows]
+            if not data_rows:
+                data_rows = [["—"] * len(headers)]
+            t = Table(
+                [header_cells] + data_rows,
+                colWidths=[col_w] * len(headers),
+            )
+            t.setStyle(TableStyle([
+                ("BACKGROUND",    (0, 0), (-1, 0), LIGHT),
+                ("GRID",          (0, 0), (-1, -1), 0.4, BORDER),
+                ("FONTSIZE",      (0, 0), (-1, -1), 7),
+                ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING",    (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+            ]))
+            return t
+
+        # ── Assemble story ─────────────────────────────────────────────────
+        story = []
+
+        # ─── Header ───────────────────────────────────────────────────────
+        staff_name = " ".join(filter(None, [_s("first_name"), _s("middle_name"), _s("last_name")]))
+        staff_code = _s("staff_code") or "—"
+
+        header_data = [[
+            Paragraph(f"<b>STAFF ONBOARDING FORM</b><br/><font size='9' color='#94A3B8'>{staff_name}</font>", title_style),
+            Paragraph(
+                f'<font color="#94A3B8">Code: {staff_code}<br/>Generated: {__import__("datetime").date.today().strftime("%d %b %Y")}</font>',
+                ParagraphStyle("HR2", fontName="Helvetica", fontSize=7.5, textColor=MUTED, alignment=2),
+            ),
+        ]]
+        header_table = Table(header_data, colWidths=[INNER_W * 0.65, INNER_W * 0.35])
+        header_table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+        story.append(header_table)
+
+        status_val = _s("status", "active").capitalize()
+        story.append(Paragraph(
+            f'Status: <b>{status_val}</b> · '
+            f'Fields highlighted in <font color="#16A34A"><b>green</b></font> have been filled.',
+            ParagraphStyle("SUB2", fontName="Helvetica", fontSize=7.5, textColor=MUTED, spaceAfter=5),
+        ))
+        story.append(HRFlowable(width=INNER_W, thickness=1, color=BRAND))
+        story.append(Spacer(1, 5))
+
+        # ─── Photo box + identifiers ───────────────────────────────────────
+        id_pairs = [
+            ("Staff Code", _s("staff_code")),
+            ("Biometric / RFID Code", _s("biometric_code")),
+            ("Status", status_val),
+            ("Date of Form", _s("joining_date")),
+        ]
+        id_rows = _two_fields(id_pairs)
+        id_col = Table([[r] for r in id_rows], colWidths=[INNER_W - 30*mm])
+        id_col.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        photo_label = Paragraph(
+            '<font color="#94A3B8">PHOTO<br/>(Paste here)</font>',
+            ParagraphStyle("PC2", fontName="Helvetica", fontSize=7, textColor=MUTED, alignment=1),
+        )
+        combined = Table([[id_col, photo_label]], colWidths=[INNER_W - 30*mm, 30*mm])
+        combined.setStyle(TableStyle([
+            ("BOX",         (1, 0), (1, 0), 0.5, BORDER),
+            ("VALIGN",      (0, 0), (0, 0), "TOP"),
+            ("VALIGN",      (1, 0), (1, 0), "MIDDLE"),
+            ("ALIGN",       (1, 0), (1, 0), "CENTER"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING",(0, 0), (-1, -1), 0),
+            ("MINROWHEIGHT",(0, 0), (-1, -1), 28*mm),
+        ]))
+        story.append(combined)
+
+        # ─── Section 1: Personal Identity ─────────────────────────────────
+        story += _section("1. Personal Identity")
+        story += _two_fields([
+            ("First Name", _s("first_name")),       ("Middle Name", _s("middle_name")),
+            ("Last Name",  _s("last_name")),         ("Date of Birth", _s("date_of_birth")),
+            ("Gender",     _s("gender")),            ("Blood Group", _s("blood_group") or _s("blood_group_input")),
+            ("Mother Tongue", _s("mother_tongue")),  ("Religion", _s("religion")),
+            ("Nationality", _s("nationality")),      ("Marital Status", _s("marital_status")),
+        ])
+
+        # ─── Section 2: Role & Employment ─────────────────────────────────
+        story += _section("2. Role & Employment")
+        prob = ""
+        if _s("probation_value"):
+            prob = f"{_s('probation_value')} {_s('probation_unit')}".strip()
+        story += _two_fields([
+            ("Department",       _s("department")),        ("Designation", _s("designation")),
+            ("Role / Access",    _s("role")),              ("Joining Date", _s("joining_date")),
+            ("Employment Type",  _s("employment_type")),   ("Contract Type", _s("contract_type")),
+            ("Probation Period", prob),                    ("Reporting Manager", _s("reporting_manager")),
+            ("Work Location",    _s("work_location")),     ("Biometric ID", _s("biometric_code")),
+        ])
+
+        # ─── Section 3: Contact ────────────────────────────────────────────
+        story += _section("3. Contact Details")
+        story += _two_fields([
+            ("Mobile",        _s("mobile")),          ("WhatsApp", _s("whatsapp")),
+            ("Personal Email",_s("personal_email")),  ("Official Email", _s("official_email")),
+        ])
+        story.append(Spacer(1, 3))
+        story.append(Paragraph("Current Address", label_style))
+        story.append(Spacer(1, 2))
+
+        curr_addr = ", ".join(filter(None, [
+            _s("current_address_line1"), _s("current_address_line2"),
+            _s("current_city"),          _s("current_state"),
+            _s("current_pin"),           _s("current_country"),
+        ])) or "—"
+        story.append(_field_row("Address", curr_addr, col_ratio=0.2))
+
+        same = str(form_data.get("same_address", "")).lower() in ("true", "1", "yes")
+        if same:
+            story.append(Paragraph("✓  Permanent address same as current address", value_style))
+        else:
+            perm_addr = ", ".join(filter(None, [
+                _s("permanent_address_line1"), _s("permanent_address_line2"),
+                _s("permanent_city"),          _s("permanent_state"),
+                _s("permanent_pin"),           _s("permanent_country"),
+            ])) or ""
+            if perm_addr:
+                story.append(Spacer(1, 3))
+                story.append(Paragraph("Permanent Address", label_style))
+                story.append(_field_row("Address", perm_addr, col_ratio=0.2))
+
+        # ─── Section 4: Family & Emergency ────────────────────────────────
+        story += _section("4. Family & Emergency Contact")
+        story += _two_fields([
+            ("Father / Mother Name", _s("father_name") or _s("mother_name")),
+            ("Spouse / Partner",     _s("spouse_name")),
+            ("No. of Children",      _s("num_children")), ("Marital Status", _s("marital_status")),
+            ("Emergency Contact",    _s("emergency_name")),
+            ("Emergency Relation",   _s("emergency_relation")),
+            ("Emergency Mobile",     _s("emergency_phone")), ("", ""),
+        ])
+
+        # ─── Section 5: Government IDs ────────────────────────────────────
+        story += _section("5. Government & Statutory IDs")
+        story += _two_fields([
+            ("Aadhaar Number", _s("aadhaar_number")), ("PAN Number", _s("pan_number")),
+            ("Passport Number",_s("passport_number")), ("Passport Expiry", _s("passport_expiry")),
+            ("Driving License", _s("driving_license")), ("EPF / PF Number", _s("epf_number")),
+            ("ESI Number",      _s("esi_number")),     ("UAN", _s("uan")),
+        ])
+
+        # ─── Section 6: Qualifications ────────────────────────────────────
+        story += _section("6. Educational Qualifications")
+        summary = _s("qualifications_summary")
+        if summary:
+            story.append(_field_row("Summary", summary, col_ratio=0.2))
+        story.append(_data_table(
+            ["Degree / Certificate", "Institution / University", "Board", "Year", "Grade / %"],
+            [],  # child-component state; not available at PDF-generation time
+        ))
+
+        # ─── Section 7: Previous Employment ──────────────────────────────
+        story += _section("7. Previous Employment")
+        story.append(_data_table(
+            ["Organisation", "Designation", "From", "To", "Reason for Leaving"],
+            [],
+        ))
+
+        # ─── Section 8: Medical / Health ──────────────────────────────────
+        story += _section("8. Medical & Health")
+        story += _two_fields([
+            ("Height (cm)",          _s("height")),        ("Weight (kg)", _s("weight")),
+            ("Colour Blindness",     _s("colour_blindness")),("Disability Status", _s("disability_status")),
+            ("Medical Conditions",   _s("medical_conditions")), ("Eye Exam Result", _s("eye_exam_result")),
+            ("Medical Cert No.",     _s("med_cert_no")),   ("Cert Valid Till", _s("cert_valid_till")),
+        ])
+
+        # ─── Section 9: Bank & Payroll ────────────────────────────────────
+        story += _section("9. Bank & Payroll Details")
+        story += _two_fields([
+            ("Bank Name",          _s("bank_name")),         ("Branch", _s("bank_branch")),
+            ("Account Holder",     _s("bank_account_name")), ("Account Number", _s("bank_account_number")),
+            ("IFSC Code",          _s("ifsc_code")),         ("Bank Mobile", _s("bank_mobile")),
+            ("Basic Salary (₹)",   _s("basic_salary_input")),("Salary Mode", _s("salary_mode")),
+        ])
+
+        # ─── Declaration / Signatures ─────────────────────────────────────
+        story += _section("Declaration")
+        story.append(Paragraph(
+            "I hereby declare that the information furnished above is true and correct to the best of my knowledge and belief.",
+            ParagraphStyle("NOTE2", fontName="Helvetica", fontSize=7, textColor=MUTED, spaceAfter=2),
+        ))
+        story.append(Spacer(1, 12))
+        sig_data = [[
+            Paragraph("________________________", label_style),
+            Paragraph("________________________", label_style),
+            Paragraph("________________________", label_style),
+        ], [
+            Paragraph("Applicant Signature & Date", hint_style),
+            Paragraph("HR Officer Signature & Date", hint_style),
+            Paragraph("Principal / Director", hint_style),
+        ]]
+        sig_table = Table(sig_data, colWidths=[INNER_W / 3] * 3)
+        sig_table.setStyle(TableStyle([
+            ("ALIGN",  (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        story.append(sig_table)
+
+        # Footer
+        story.append(Spacer(1, 8))
+        story.append(HRFlowable(width=INNER_W, thickness=0.4, color=BORDER))
+        story.append(Paragraph(
+            f"Eskoolia School Management System · Confidential · "
+            f"Generated for {staff_name} · For internal HR use only",
+            footer_style,
+        ))
+
+        # ── Build PDF ──────────────────────────────────────────────────────
+        buf = BytesIO()
+        doc = SimpleDocTemplate(
+            buf,
+            pagesize=A4,
+            leftMargin=L_MARGIN,
+            rightMargin=R_MARGIN,
+            topMargin=14 * mm,
+            bottomMargin=12 * mm,
+            title=f"Staff Onboarding – {staff_name}",
+            author="Eskoolia HR",
+        )
+        doc.build(story)
+
+        pdf_bytes = buf.getvalue()
+
+        from django.http import HttpResponse as DjResponse
+        safe_name = staff_name.replace(" ", "_").replace("/", "-")[:40]
+        filename = f"onboarding-{safe_name}.pdf"
+
+        response = DjResponse(pdf_bytes, content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response["Content-Length"] = str(len(pdf_bytes))
+        response["Access-Control-Expose-Headers"] = "Content-Disposition"
+        return response
