@@ -75,6 +75,8 @@ export interface ModuleRoute {
   permission?: string;
   /** If true, only shown to users with is_superuser=true */
   superuserOnly?: boolean;
+  /** If true, hides the module label and tab icons in ModuleSubNav for a clean tab-only look */
+  cleanTabs?: boolean;
 }
 
 export const MODULES: ModuleRoute[] = [
@@ -262,18 +264,18 @@ export const MODULES: ModuleRoute[] = [
   {
     id: 'fees',
     name: 'Fees',
-    path: '/fees/groups',
+    path: '/fees/payments',
     icon: HandCoins,
     bg: '#ECFEFF',
     ic: '#0E7490',
-    permission: 'fees',
     sub: [
-      { label: 'Fees Group',        path: '/fees/groups',        icon: Users,           permission: 'fees.fees_group.view' },
-      { label: 'Fees Type',         path: '/fees/types',         icon: CreditCard,      permission: 'fees.fees_type.view' },
-      { label: 'Fees Master',       path: '/fees/master',        icon: DollarSign,      permission: 'fees.fees_master.view' },
-      { label: 'Fees Collection',   path: '/fees/payments',      icon: HandCoins,       permission: 'fees.fees_collection.view' },
-      { label: 'Fees Due',          path: '/fees/due',           icon: AlertCircle,     permission: 'fees.fees_due.view' },
-      { label: 'Fees Carry Forward',path: '/fees/carry-forward', icon: ArrowRightLeft,  permission: 'fees.fees_carry_forward.view' },
+      { label: 'Home',              path: '/fees/payments',       icon: LayoutGrid   },
+      { label: 'Fee Configuration', path: '/fees/configuration',  icon: Settings     },
+      { label: 'Fee Assignment',    path: '/fees/fee-assignment', icon: ClipboardList },
+      { label: 'Collection',        path: '/fees/collection',     icon: CreditCard   },
+      { label: 'Dues & Reminders',  path: '/fees/dues-reminders', icon: AlertCircle  },
+      { label: 'Year-End',          path: '/fees/year-end',       icon: Calendar     },
+      { label: 'Enroll Student',    path: '/fees/enroll-student', icon: UserPlus     },
     ],
   },
   // HIDDEN - no backend yet
