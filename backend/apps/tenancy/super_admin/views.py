@@ -250,6 +250,23 @@ class SchoolProvisionView(SuperAdminBaseView):
             tenant.brand_color = data["brand_color"]
         if "logo_url" in data:
             tenant.logo_url = data["logo_url"]
+        # Plan & capacity overrides
+        for capacity_field in (
+            "student_seat_limit",
+            "staff_seat_limit",
+            "storage_cap_gb",
+            "trial_days",
+            "go_live_date",
+            "billing_cycle",
+        ):
+            if capacity_field in data:
+                setattr(tenant, capacity_field, data[capacity_field])
+        # Derived: trial_ends_at
+        if tenant.go_live_date and tenant.trial_days:
+            from datetime import timedelta
+            tenant.trial_ends_at = tenant.go_live_date + timedelta(days=int(tenant.trial_days))
+        elif tenant.trial_days == 0:
+            tenant.trial_ends_at = None
         tenant.save()
 
         audit_super_admin_action(
@@ -272,12 +289,23 @@ class SchoolDetailView(SuperAdminBaseView):
 
     def patch(self, request, tenant_id: str):
         tenant = self.get_object(tenant_id)
-        serializer = SchoolTenantUpdateSerializer(data=request.data, partial=True)
+        serializer = SchoolTenantUpdateSerializer(
+            data=request.data, partial=True, context={"tenant": tenant}
+        )
         serializer.is_valid(raise_exception=True)
 
-        for key, value in serializer.validated_data.items():
+        validated = dict(serializer.validated_data)
+        for key, value in validated.items():
             setattr(tenant, key, value)
-        tenant.save(update_fields=list(serializer.validated_data.keys()))
+        # Derived: trial_ends_at when trial config changes
+        if "trial_days" in validated or "go_live_date" in validated:
+            if tenant.go_live_date and tenant.trial_days:
+                from datetime import timedelta
+                tenant.trial_ends_at = tenant.go_live_date + timedelta(days=int(tenant.trial_days))
+            else:
+                tenant.trial_ends_at = None
+            validated["trial_ends_at"] = tenant.trial_ends_at
+        tenant.save(update_fields=list(validated.keys()))
 
         audit_super_admin_action(
             request=request,
@@ -655,7 +683,14 @@ class BillingMrrView(SuperAdminBaseView):
 
 
 class BillingPlansView(SuperAdminBaseView):
-    """Returns subscription plan catalog (India-priced, GST 18% under SAC 998313)."""
+    """Returns subscription plan catalog (India-priced, GST 18% under SAC 998313).
+
+    Each plan also carries capacity defaults and the billing cadences a tenant
+    on that plan is allowed to pick. These are the source of truth the
+    super-admin UI uses to auto-fill section 07 (Plan & capacity limits).
+    """
+
+    ALLOWED_BILLING_CYCLES = ["annual", "half_yearly", "quarterly", "monthly"]
 
     PLANS = [
         {
@@ -666,6 +701,12 @@ class BillingPlansView(SuperAdminBaseView):
             "popular": False,
             "description": "Up to 500 students \u00b7 50 staff \u00b7 20 GB \u00b7 core modules \u00b7 email support",
             "features": ["Up to 500 students", "50 staff", "20 GB storage", "Core modules", "Email support"],
+            "default_student_seats": 500,
+            "default_staff_seats": 50,
+            "default_storage_gb": 20,
+            "default_trial_days": 30,
+            "allowed_billing_cycles": ["annual", "monthly"],
+            "default_billing_cycle": "annual",
         },
         {
             "code": "standard",
@@ -675,6 +716,12 @@ class BillingPlansView(SuperAdminBaseView):
             "popular": False,
             "description": "Up to 2,000 students \u00b7 200 staff \u00b7 50 GB \u00b7 all core + transport + library",
             "features": ["Up to 2,000 students", "200 staff", "50 GB storage", "Transport + Library", "Priority support"],
+            "default_student_seats": 2000,
+            "default_staff_seats": 200,
+            "default_storage_gb": 50,
+            "default_trial_days": 30,
+            "allowed_billing_cycles": ["annual", "half_yearly", "monthly"],
+            "default_billing_cycle": "annual",
         },
         {
             "code": "premium",
@@ -684,6 +731,12 @@ class BillingPlansView(SuperAdminBaseView):
             "popular": True,
             "description": "Up to 5,000 students \u00b7 500 staff \u00b7 100 GB \u00b7 all 14 modules \u00b7 phone & chat",
             "features": ["Up to 5,000 students", "500 staff", "100 GB storage", "All 14 modules", "Phone & chat support"],
+            "default_student_seats": 5000,
+            "default_staff_seats": 500,
+            "default_storage_gb": 100,
+            "default_trial_days": 14,
+            "allowed_billing_cycles": ["annual", "half_yearly", "quarterly", "monthly"],
+            "default_billing_cycle": "annual",
         },
         {
             "code": "enterprise",
@@ -693,6 +746,12 @@ class BillingPlansView(SuperAdminBaseView):
             "popular": False,
             "description": "Unlimited \u00b7 multi-campus \u00b7 SLA \u00b7 custom SSO \u00b7 dedicated CSM & onboarding",
             "features": ["Unlimited students", "Multi-campus", "SLA guarantee", "Custom SSO", "Dedicated CSM"],
+            "default_student_seats": 0,  # 0 = unlimited
+            "default_staff_seats": 0,
+            "default_storage_gb": 500,
+            "default_trial_days": 0,
+            "allowed_billing_cycles": ["annual", "half_yearly", "quarterly", "monthly"],
+            "default_billing_cycle": "annual",
         },
     ]
 
@@ -703,6 +762,7 @@ class BillingPlansView(SuperAdminBaseView):
             "sac_code": "998313",
             "sac_description": "Education software",
             "currency": "INR",
+            "allowed_billing_cycles": self.ALLOWED_BILLING_CYCLES,
         })
 
 

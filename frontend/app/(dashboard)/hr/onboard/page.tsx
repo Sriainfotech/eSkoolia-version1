@@ -15,6 +15,7 @@ import SearchableSelect from "@/components/hr/SearchableSelect";
 import {
   useAllDepartments, useDesignations, useStaffList, createStaff,
   useMasterLanguages, useMasterReligions, useMasterCountries, useMasterEmploymentTypes,
+  useStaffFormOptions,
   useOnboardDrafts, saveOnboardDraft, deleteOnboardDraft, downloadBlankForm, downloadFilledForm,
 } from "@/hooks/useHrApi";
 import type { OnboardDraft } from "@/hooks/useHrApi";
@@ -662,13 +663,14 @@ function StepIdentity({
 
 // --- Step 2: Role & Placement ---
 function StepRole({
-  f, set, departments, designations, staffList,
+  f, set, departments, designations, roles, staffList,
   empTypes, empLoading, empError, showErrors, todayDate,
 }: {
   f: FormData;
   set: (k: string, v: string) => void;
   departments: { id: number; name: string }[];
   designations: { id: number; name: string; department: number }[];
+  roles: { id: number; name: string }[];
   staffList: { id: number; first_name: string; last_name: string }[];
   empTypes: { id: number; name: string }[];
   empLoading: boolean;
@@ -726,7 +728,9 @@ function StepRole({
           <HrDropdown
             value={String(f.role ?? "")}
             onChange={(v) => set("role", v)}
-            options={ROLES.map((r) => ({ value: r, label: r }))}
+            options={roles.length
+              ? roles.map((r) => ({ value: r.id, label: r.name }))
+              : ROLES.map((r) => ({ value: r, label: r }))}
             placeholder="Select..."
           />
           {showErrors && !f.role && (
@@ -1231,20 +1235,25 @@ function StepFamily({ f, set, showErrors, validatorRef }: {
 }) {
   type EC = { name: string; relation: string; mobileCc: string; mobile: string; alt_mobile: string; email: string };
   type Nominee = { name: string; relation: string; share: string };
-  const [ecs, setEcs] = useState<EC[]>([{ name: "", relation: "", mobileCc: "+91", mobile: "", alt_mobile: "", email: "" }]);
+  const [ecs, setEcs] = useState<EC[]>(() => [{
+    name: f.emergency_name ?? "",
+    relation: f.emergency_relation ?? "",
+    mobileCc: "+91",
+    mobile: f.emergency_phone ?? "",
+    alt_mobile: "",
+    email: "",
+  }]);
   const [nominees, setNominees] = useState<Nominee[]>([{ name: "", relation: "", share: "" }]);
 
   const setEc = (i: number, k: keyof EC, v: string) => {
-    setEcs((prev) => {
-      const next = prev.map((r, idx) => idx === i ? { ...r, [k]: v } : r);
-      // Keep first EC in sync with parent form for goNext validation
-      if (i === 0) {
-        if (k === "name")     set("emergency_name",     next[0].name);
-        if (k === "relation") set("emergency_relation",  next[0].relation);
-        if (k === "mobile")   set("emergency_phone",     next[0].mobile);
-      }
-      return next;
-    });
+    setEcs((prev) => prev.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
+    // Keep first EC in sync with parent form for goNext validation.
+    // Done OUTSIDE the setEcs updater so the parent setForm reliably commits.
+    if (i === 0) {
+      if (k === "name")     set("emergency_name",     v);
+      if (k === "relation") set("emergency_relation", v);
+      if (k === "mobile")   set("emergency_phone",    v);
+    }
   };
   const setNom = (i: number, k: keyof Nominee, v: string) => setNominees((p) => p.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
 
@@ -2946,6 +2955,7 @@ function StepPayroll({
 
 // --- Step 9: Documents ---
 const ALL_DOCS = [
+  { key: "signature",           label: "Signature (scanned image)",                    required: true  },
   { key: "aadhaar",             label: "Aadhaar Card (self-attested copy)",           required: true  },
   { key: "pan",                 label: "PAN Card",                                     required: false },
   { key: "passport_photo",      label: "Passport-size photographs (3 copies)",         required: false },
@@ -3352,11 +3362,13 @@ export default function HrOnboardPage() {
   const { data: relData,     loading: relLoading,     error: relError     } = useMasterReligions();
   const { data: countryData, loading: countryLoading, error: countryError } = useMasterCountries();
   const { data: empTypeData, loading: empTypeLoading, error: empTypeError } = useMasterEmploymentTypes();
+  const { data: formOptsData } = useStaffFormOptions();
   const { data: draftsData, refetch: refetchDrafts } = useOnboardDrafts();
   const { toast }             = useHrToast();
 
   const departments  = allDeptData?.results ?? [];
   const designations = desigData?.results ?? [];
+  const roles        = formOptsData?.data?.roles ?? [];
   const staffList    = (staffData?.results ?? []) as { id: number; first_name: string; last_name: string }[];
   const staffCount   = staffData?.count ?? 0;
   const draftList    = draftsData?.results ?? [];
@@ -3523,7 +3535,7 @@ export default function HrOnboardPage() {
         return;
       }
     }
-    if (!isStepComplete(step, form, todayDate, maxDobDate, minDobDate, highestStep)) {
+    if (step <= 3 && !isStepComplete(step, form, todayDate, maxDobDate, minDobDate, highestStep)) {
       setShowErrors(true);
       // Give a specific message when inactive status is the only blocker
       if (step === 1 && form.status === "inactive" && step1Missing({ ...form, status: "active" }).size === 0) {
@@ -3698,14 +3710,68 @@ export default function HrOnboardPage() {
     }
     setSaving(true);
     try {
-      await createStaff(
-        { ...form, basic_salary: form.basic_salary_input ? Number(form.basic_salary_input) : 0 },
-        photoFile ?? undefined,
-      );
+      // Auto-allocate staff_no if user didn't enter one (onboarding wizard doesn't ask for it).
+      let staffNo = (form as Record<string, unknown>).staff_no as string | undefined;
+      if (!staffNo || !String(staffNo).trim()) {
+        try {
+          const res = await apiRequestWithRefreshResponse("/api/v1/hr/staff/next-staff-no/");
+          if (res.ok) {
+            const j = (await res.json()) as { staff_no?: string };
+            staffNo = j?.staff_no ?? "";
+          }
+        } catch { /* fall through; backend will error if still missing */ }
+      }
+
+      // Backend choice fields are lowercase; frontend captures Title Case labels.
+      const lower = (v: unknown) => (typeof v === "string" ? v.trim().toLowerCase() : v);
+
+      // Map frontend employment_type label → backend contract_type key
+      // (model choices: "permanent" / "contract")
+      const empLabel = String((form as Record<string, unknown>).employment_type ?? "").trim().toLowerCase();
+      const contractType = empLabel.includes("contract") ? "contract" : (empLabel ? "permanent" : "");
+
+      const fAny = form as Record<string, unknown>;
+      const { joining_date, mobile, personal_email, official_email, employment_type, ...rest } = fAny;
+      void employment_type; // mapped to contract_type below
+
+      const payload: Record<string, unknown> = {
+        ...rest,
+        staff_no: staffNo,
+        join_date: joining_date,
+        // Field-name mapping (frontend → backend)
+        email: (official_email as string) || (personal_email as string) || "",
+        phone: mobile,
+        contract_type: contractType,
+        // Carry through originals too so other consumers/saved drafts keep working.
+        mobile,
+        personal_email,
+        official_email,
+        // Fallback: if user didn't fill permanent_address, reuse current_address.
+        permanent_address: (fAny.permanent_address as string) || (fAny.current_address as string) || "",
+        gender: lower(form.gender),
+        marital_status: lower(form.marital_status),
+        basic_salary: form.basic_salary_input ? Number(form.basic_salary_input) : 0,
+      };
+
+      // Pull uploaded onboarding docs and surface signature filename via other_document,
+      // which the backend requires as the "Signature upload".
+      try {
+        const docsRes = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/");
+        if (docsRes.ok) {
+          const docsJson = (await docsRes.json()) as { data?: { doc_key: string; file_name: string }[] };
+          const sig = (docsJson.data ?? []).find((d) => d.doc_key === "signature");
+          if (sig?.file_name) {
+            payload.other_document = [sig.file_name];
+          }
+        }
+      } catch { /* if fetch fails, backend will surface the missing-signature error */ }
+
+      await createStaff(payload as Partial<Staff>, photoFile ?? undefined);
       toast("Staff onboarded successfully!");
       setDone(true);
-    } catch {
-      toast("Failed to save staff. Please check the form.", "error");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to save staff. Please check the form.";
+      toast(msg, "error");
     } finally {
       setSaving(false);
     }
@@ -4042,7 +4108,7 @@ export default function HrOnboardPage() {
                 showErrors={showErrors}
               />
             )}
-            {step === 2 && <StepRole f={form} set={setField} departments={departments} designations={designations} staffList={staffList} empTypes={empTypeData ?? []} empLoading={empTypeLoading} empError={empTypeError} showErrors={showErrors} todayDate={todayDate} />}
+            {step === 2 && <StepRole f={form} set={setField} departments={departments} designations={designations} roles={roles} staffList={staffList} empTypes={empTypeData ?? []} empLoading={empTypeLoading} empError={empTypeError} showErrors={showErrors} todayDate={todayDate} />}
             {step === 3 && <StepContact f={form} set={setField} showErrors={showErrors} />}
             {step === 4 && <StepFamily  f={form} set={setField} showErrors={showErrors} validatorRef={nomValidatorRef} />}
             {step === 5 && <StepGovId   f={form} set={setField} showErrors={showErrors} />}
