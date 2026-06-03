@@ -11,7 +11,7 @@ from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 from rest_framework import serializers
 
-from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, PREDEFINED_DEPARTMENT_TYPES
+from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft, PREDEFINED_DEPARTMENT_TYPES
 
 
 def _is_valid_person_name(value: str) -> bool:
@@ -562,7 +562,28 @@ class StaffSerializer(serializers.ModelSerializer):
             return value
         max_size = 2 * 1024 * 1024
         if value.size > max_size:
-            raise serializers.ValidationError("File size must be 2MB or less.")
+            raise serializers.ValidationError("File size must be 2 MB or less.")
+        # Verify it is a real, readable image and check dimensions
+        try:
+            from PIL import Image
+            value.seek(0)
+            img = Image.open(value)
+            w, h = img.size
+            if w < 100 or h < 100:
+                raise serializers.ValidationError(
+                    "Photo must be at least 100×100 pixels. Please provide a higher-resolution image."
+                )
+            if w > 8000 or h > 8000:
+                raise serializers.ValidationError(
+                    "Photo dimensions cannot exceed 8000×8000 pixels. Please resize and re-upload."
+                )
+            value.seek(0)
+        except serializers.ValidationError:
+            raise
+        except Exception:
+            raise serializers.ValidationError(
+                "Unable to read the image file. Please upload a valid JPG or PNG photo."
+            )
         return value
 
     def validate_status(self, value):
@@ -2158,6 +2179,23 @@ class StaffOnboardDocumentSerializer(serializers.ModelSerializer):
         model = StaffOnboardDocument
         fields = ["id", "doc_key", "doc_label", "file_name", "file_size", "content_type", "status", "created_at"]
         read_only_fields = fields
+
+
+class StaffOnboardDraftSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StaffOnboardDraft
+        fields = ["id", "draft_name", "form_data", "current_step", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate_form_data(self, value):
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("form_data must be a JSON object.")
+        return value
+
+    def validate_current_step(self, value):
+        if not (1 <= value <= 10):
+            raise serializers.ValidationError("current_step must be between 1 and 10.")
+        return value
 
 
 class PayrollSettingsSerializer(serializers.ModelSerializer):

@@ -404,6 +404,42 @@ class PayrollRecord(models.Model):
         super().save(*args, **kwargs)
 
 
+class StaffOnboardDraft(models.Model):
+    """Partial staff onboarding form data saved as a draft.
+
+    Scoped to the HR officer who created it.  Each user may hold up to
+    MAX_DRAFTS_PER_USER drafts at a time.  Draft names are auto-derived from
+    the partial first/last name in form_data.
+    """
+
+    MAX_DRAFTS_PER_USER = 10
+
+    created_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.CASCADE,
+        related_name="onboard_drafts",
+    )
+    school = models.ForeignKey(
+        "tenancy.School",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="onboard_drafts",
+    )
+    draft_name = models.CharField(max_length=120, default="Unnamed draft")
+    form_data = models.JSONField(default=dict)
+    current_step = models.PositiveSmallIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "hr_staff_onboard_drafts"
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"{self.draft_name} (step {self.current_step})"
+
+
 class StaffOnboardDocument(models.Model):
     """Temporary documents uploaded during the staff onboarding wizard.
 

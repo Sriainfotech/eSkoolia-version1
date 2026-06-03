@@ -15,7 +15,9 @@ import SearchableSelect from "@/components/hr/SearchableSelect";
 import {
   useAllDepartments, useDesignations, useStaffList, createStaff,
   useMasterLanguages, useMasterReligions, useMasterCountries, useMasterEmploymentTypes,
+  useOnboardDrafts, saveOnboardDraft, deleteOnboardDraft, downloadBlankForm, downloadFilledForm,
 } from "@/hooks/useHrApi";
+import type { OnboardDraft } from "@/hooks/useHrApi";
 import { apiRequestWithRefreshResponse } from "@/lib/api-auth";
 import type { Staff } from "@/types/hr";
 import { isValidEmail, isValidPhoneDigits, isValidPin, hasAlphanumeric, isGibberishAddress, isGibberishPlaceName, isValidIndianMobile, isValidPersonName, PERSON_NAME_ERR, isValidBankAccountName, BANK_ACCOUNT_NAME_ERR } from "@/lib/hrValidation";
@@ -381,7 +383,7 @@ function isStepComplete(
 
 // --- Step 1: Staff Identity ---
 function StepIdentity({
-  f, set, photoPreview, onPhotoClick,
+  f, set, photoPreview, onPhotoClick, onCameraClick, onPhotoRemove,
   languages, religions, countries,
   langLoading, relLoading, countryLoading,
   langError, relError, countryError,
@@ -391,6 +393,8 @@ function StepIdentity({
   set: (k: string, v: string) => void;
   photoPreview: string | null;
   onPhotoClick: () => void;
+  onCameraClick: () => void;
+  onPhotoRemove: () => void;
   languages: { id: number; name: string }[];
   religions: { id: number; name: string }[];
   countries: { id: number; name: string }[];
@@ -433,19 +437,31 @@ function StepIdentity({
     <div className="flex flex-col gap-8">
       {/* Photo upload */}
       <div className="flex items-start gap-6 p-[20px_24px] bg-[#F8FAFC] border border-[#E8E8F0] rounded-[12px]">
-        <button
-          type="button"
-          onClick={onPhotoClick}
-          className="w-[90px] h-[90px] rounded-full border-2 border-dashed border-[#CBD5E1] bg-white flex flex-col items-center justify-center cursor-pointer overflow-hidden shrink-0 hover:border-[var(--brand)] transition-colors"
-        >
-          {photoPreview ? (
-            <img src={photoPreview} className="w-full h-full object-cover" alt="Staff" />
-          ) : (
-            <span className="text-[8px] font-[900] text-[#94A3B8] tracking-[0.05em] text-center leading-snug">
-              ADD<br />PHOTO
-            </span>
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={onPhotoClick}
+            className="w-[90px] h-[90px] rounded-full border-2 border-dashed border-[#CBD5E1] bg-white flex flex-col items-center justify-center cursor-pointer overflow-hidden hover:border-[var(--brand)] transition-colors"
+          >
+            {photoPreview ? (
+              <img src={photoPreview} className="w-full h-full object-cover" alt="Staff" />
+            ) : (
+              <span className="text-[8px] font-[900] text-[#94A3B8] tracking-[0.05em] text-center leading-snug">
+                ADD<br />PHOTO
+              </span>
+            )}
+          </button>
+          {photoPreview && (
+            <button
+              type="button"
+              onClick={onPhotoRemove}
+              title="Remove photo"
+              className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-[#EF4444] text-white flex items-center justify-center shadow hover:bg-[#DC2626] transition-colors"
+            >
+              <X size={11} />
+            </button>
           )}
-        </button>
+        </div>
         <div>
           <div className="text-[13px] font-[700] text-[#15172A] mb-1">Staff photo</div>
           <div className="text-[12px] text-[#94A3B8] mb-3 leading-relaxed">
@@ -461,6 +477,7 @@ function StepIdentity({
             </button>
             <button
               type="button"
+              onClick={onCameraClick}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
             >
               <Camera size={12} /> Take photo
@@ -3305,9 +3322,23 @@ export default function HrOnboardPage() {
   const [done,                 setDone]                 = useState(false);
   const [showQrBanner,         setShowQrBanner]         = useState(true);
   const [photoPreview,         setPhotoPreview]         = useState<string | null>(null);
+  const [photoFile,            setPhotoFile]            = useState<File | null>(null);
+  const [showCameraModal,      setShowCameraModal]      = useState(false);
+  const [cameraStream,         setCameraStream]         = useState<MediaStream | null>(null);
+  const [cameraErr,            setCameraErr]            = useState<string | null>(null);
   const [showErrors,           setShowErrors]           = useState(false);
   const [highestStep,          setHighestStep]          = useState(1);
+  // Draft state
+  const [draftId,              setDraftId]              = useState<number | null>(null);
+  const [draftSaving,          setDraftSaving]          = useState(false);
+  const [showDraftsModal,      setShowDraftsModal]      = useState(false);
+  const [deletingDraftId,      setDeletingDraftId]      = useState<number | null>(null);
+  // Blank form download state
+  const [blankFormDownloading, setBlankFormDownloading] = useState(false);
+  // Filled form PDF state
+  const [filledFormDownloading, setFilledFormDownloading] = useState(false);
   const photoInputRef    = useRef<HTMLInputElement>(null);
+  const cameraVideoRef   = useRef<HTMLVideoElement>(null);
   const nomValidatorRef  = useRef<() => string | null>(() => null);
   const prevDateValidatorRef = useRef<() => string | null>(() => null);
   const medValidatorRef  = useRef<() => string | null>(() => null);
@@ -3321,14 +3352,23 @@ export default function HrOnboardPage() {
   const { data: relData,     loading: relLoading,     error: relError     } = useMasterReligions();
   const { data: countryData, loading: countryLoading, error: countryError } = useMasterCountries();
   const { data: empTypeData, loading: empTypeLoading, error: empTypeError } = useMasterEmploymentTypes();
+  const { data: draftsData, refetch: refetchDrafts } = useOnboardDrafts();
   const { toast }             = useHrToast();
 
   const departments  = allDeptData?.results ?? [];
   const designations = desigData?.results ?? [];
   const staffList    = (staffData?.results ?? []) as { id: number; first_name: string; last_name: string }[];
   const staffCount   = staffData?.count ?? 0;
+  const draftList    = draftsData?.results ?? [];
 
   const setField = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Wire camera stream to video element when modal opens
+  useEffect(() => {
+    if (showCameraModal && cameraStream && cameraVideoRef.current) {
+      cameraVideoRef.current.srcObject = cameraStream;
+    }
+  }, [showCameraModal, cameraStream]);
 
   // DOB limits: must be ≥ 18 years old, cannot be a future date
   const maxDobDate = (() => {
@@ -3503,7 +3543,152 @@ export default function HrOnboardPage() {
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!["image/jpeg", "image/jpg", "image/png"].includes(file.type)) {
+      toast("Only JPG and PNG files are allowed for the staff photo.", "error");
+      e.target.value = "";
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast("Staff photo must be 2 MB or less.", "error");
+      e.target.value = "";
+      return;
+    }
+    setPhotoFile(file);
     setPhotoPreview(URL.createObjectURL(file));
+    e.target.value = "";
+  };
+
+  const openCamera = async () => {
+    setCameraErr(null);
+    setShowCameraModal(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 640 } },
+      });
+      setCameraStream(stream);
+    } catch {
+      setCameraErr("Camera access denied or not available. Please allow camera permission and try again.");
+    }
+  };
+
+  const closeCamera = () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((t) => t.stop());
+      setCameraStream(null);
+    }
+    setShowCameraModal(false);
+    setCameraErr(null);
+  };
+
+  const capturePhoto = () => {
+    const video = cameraVideoRef.current;
+    if (!video || !video.videoWidth) {
+      setCameraErr("Camera not ready. Please wait a moment and try again.");
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { setCameraErr("Unable to process the image. Try uploading a file instead."); return; }
+    ctx.drawImage(video, 0, 0);
+    canvas.toBlob((blob) => {
+      if (!blob) { setCameraErr("Failed to capture photo. Please try again."); return; }
+      if (blob.size > 2 * 1024 * 1024) {
+        setCameraErr("Captured photo exceeds 2 MB. Move closer or improve lighting, then try again.");
+        return;
+      }
+      const file = new File([blob], `staff-photo-${Date.now()}.jpg`, { type: "image/jpeg" });
+      setPhotoFile(file);
+      setPhotoPreview(URL.createObjectURL(blob));
+      cameraStream?.getTracks().forEach((t) => t.stop());
+      setCameraStream(null);
+      setShowCameraModal(false);
+      setCameraErr(null);
+      toast("Photo captured successfully!", "success");
+    }, "image/jpeg", 0.92);
+  };
+
+  const handleSaveDraft = async () => {
+    const firstName = (form.first_name ?? "").trim();
+    if (!firstName) {
+      toast("Please enter the staff member's first name before saving a draft.", "error");
+      return;
+    }
+    setDraftSaving(true);
+    try {
+      // Strip any keys whose values are undefined so JSON serialises cleanly
+      const cleanForm = Object.fromEntries(
+        Object.entries(form).filter(([, v]) => v !== undefined)
+      ) as Record<string, unknown>;
+      const saved = await saveOnboardDraft({ id: draftId, form_data: cleanForm, current_step: step });
+      setDraftId(saved.id);
+      await refetchDrafts();
+      toast(`Draft "${saved.draft_name}" saved at Step ${step}.`, "success");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Failed to save draft.", "error");
+    } finally {
+      setDraftSaving(false);
+    }
+  };
+
+  const handleLoadDraft = (draft: OnboardDraft) => {
+    const fd = draft.form_data as Record<string, string>;
+    setForm({ status: "active", ...fd });
+    setStep(draft.current_step);
+    setHighestStep(draft.current_step);
+    setDraftId(draft.id);
+    setShowDraftsModal(false);
+    setShowErrors(false);
+    setPhotoPreview(null);
+    setPhotoFile(null);
+    toast(`Draft "${draft.draft_name}" loaded — continuing from Step ${draft.current_step}.`, "success");
+  };
+
+  const handleDeleteDraft = async (id: number) => {
+    setDeletingDraftId(id);
+    try {
+      await deleteOnboardDraft(id);
+      await refetchDrafts();
+      if (draftId === id) setDraftId(null);
+      toast("Draft deleted.", "success");
+    } catch {
+      toast("Failed to delete draft.", "error");
+    } finally {
+      setDeletingDraftId(null);
+    }
+  };
+
+  const handleBlankForm = async () => {
+    setBlankFormDownloading(true);
+    try {
+      await downloadBlankForm();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to download blank form.";
+      toast(msg, "error");
+    } finally {
+      setBlankFormDownloading(false);
+    }
+  };
+
+  const handleFilledForm = async () => {
+    const firstName = (form.first_name ?? "").trim();
+    if (!firstName) {
+      toast("Enter the staff member's first name before generating a PDF.", "error");
+      return;
+    }
+    setFilledFormDownloading(true);
+    try {
+      const cleanForm = Object.fromEntries(
+        Object.entries(form).filter(([, v]) => v !== undefined),
+      ) as Record<string, unknown>;
+      await downloadFilledForm(cleanForm);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to generate PDF.";
+      toast(msg, "error");
+    } finally {
+      setFilledFormDownloading(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -3513,7 +3698,10 @@ export default function HrOnboardPage() {
     }
     setSaving(true);
     try {
-      await createStaff({ ...form, basic_salary: form.basic_salary_input ? Number(form.basic_salary_input) : 0 });
+      await createStaff(
+        { ...form, basic_salary: form.basic_salary_input ? Number(form.basic_salary_input) : 0 },
+        photoFile ?? undefined,
+      );
       toast("Staff onboarded successfully!");
       setDone(true);
     } catch {
@@ -3540,7 +3728,7 @@ export default function HrOnboardPage() {
         </p>
         <div className="flex justify-center gap-3">
           <button
-            onClick={() => { setForm({ status: "active" }); setStep(1); setDone(false); setPhotoPreview(null); setHighestStep(1); setShowErrors(false); }}
+            onClick={() => { setForm({ status: "active" }); setStep(1); setDone(false); setPhotoPreview(null); setPhotoFile(null); setDraftId(null); setHighestStep(1); setShowErrors(false); }}
             className="px-5 py-2 rounded-[10px] text-[13px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
           >
             Onboard another
@@ -3561,7 +3749,140 @@ export default function HrOnboardPage() {
   return (
     <div className="flex flex-col" style={{ paddingBottom: "72px", marginLeft: "-20px", marginRight: "-20px", marginBottom: "-40px" }}>
       {/* Hidden photo file input */}
-      <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
+      <input ref={photoInputRef} type="file" accept="image/jpeg,image/jpg,image/png" className="hidden" onChange={handlePhotoChange} />
+
+      {/* Camera capture modal */}
+      {showCameraModal && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70" onClick={(e) => { if (e.target === e.currentTarget) closeCamera(); }}>
+          <div className="bg-white rounded-[16px] p-6 w-[480px] max-w-[95vw] flex flex-col gap-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-[16px] font-[700] text-[#15172A]">Take Staff Photo</h3>
+              <button
+                type="button"
+                onClick={closeCamera}
+                className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-[#F1F5F9] text-[#94A3B8] hover:text-[#475569]"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {cameraErr ? (
+              <div className="p-4 rounded-[10px] bg-[#FFF5F5] border border-[#FCA5A5] text-[13px] text-[#DC2626]">
+                {cameraErr}
+              </div>
+            ) : (
+              <div className="relative bg-black rounded-[10px] overflow-hidden" style={{ aspectRatio: "4/3" }}>
+                <video
+                  ref={cameraVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                />
+                {/* Face guide overlay */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="w-44 h-44 rounded-full border-2 border-white/50 border-dashed" />
+                </div>
+              </div>
+            )}
+
+            <p className="text-[12px] text-[#94A3B8] text-center -mt-1">
+              Position the staff member&apos;s face within the circle, then tap Capture.
+            </p>
+            <p className="text-[11px] text-[#94A3B8] text-center -mt-3">
+              JPG output · max 2 MB · min 100×100 px
+            </p>
+
+            <div className="flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={closeCamera}
+                className="px-4 py-2 rounded-[8px] text-[13px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={capturePhoto}
+                disabled={!!cameraErr || !cameraStream}
+                className="flex items-center gap-2 px-4 py-2 rounded-[8px] text-[13px] font-[700] text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ background: "var(--brand)" }}
+              >
+                <Camera size={14} /> Capture
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drafts list modal */}
+      {showDraftsModal && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowDraftsModal(false); }}
+        >
+          <div className="bg-white rounded-[16px] p-6 w-[520px] max-w-[95vw] flex flex-col gap-4 shadow-2xl max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-[16px] font-[700] text-[#15172A]">Saved Drafts</h3>
+              <button
+                type="button"
+                onClick={() => setShowDraftsModal(false)}
+                className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-[#F1F5F9] text-[#94A3B8] hover:text-[#475569]"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {draftList.length === 0 ? (
+              <div className="py-10 text-center text-[13px] text-[#94A3B8]">
+                No saved drafts yet. Start filling a form and click <strong>Save draft</strong> to create one.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {draftList.map((d) => (
+                  <div
+                    key={d.id}
+                    className={`flex items-center justify-between p-3 rounded-[10px] border transition-colors ${draftId === d.id ? "border-[var(--brand)] bg-[var(--soft)]" : "border-[#E8E8F0] bg-[#F8FAFC]"}`}
+                  >
+                    <div className="flex-1 min-w-0 pr-3">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className="text-[13.5px] font-[700] text-[#15172A] truncate">{d.draft_name}</span>
+                        {draftId === d.id && (
+                          <span className="text-[9px] font-[800] uppercase tracking-[0.08em] px-1.5 py-0.5 rounded-[4px] bg-[var(--brand)] text-white shrink-0">current</span>
+                        )}
+                      </div>
+                      <div className="text-[11.5px] text-[#94A3B8]">
+                        Step {d.current_step} / {TOTAL} · {new Date(d.updated_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleLoadDraft(d)}
+                        className="px-3 py-1 rounded-[7px] text-[12px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+                      >
+                        Load
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteDraft(d.id)}
+                        disabled={deletingDraftId === d.id}
+                        className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-red-50 text-[#94A3B8] hover:text-[#EF4444] disabled:opacity-50"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p className="text-[11.5px] text-[#94A3B8] text-center">
+              Up to 10 drafts · Photos are not saved in drafts (re-upload after loading)
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Page header */}
       <div className="flex items-start justify-between mb-4">
@@ -3580,13 +3901,15 @@ export default function HrOnboardPage() {
 
         <div className="flex flex-col items-end gap-2 shrink-0">
           <div className="flex items-center gap-3">
-            <div
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-[#E8E8F0] text-[12px] font-[600] text-[#475569]"
-              style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}
-            >
-              <span className="w-[7px] h-[7px] rounded-full bg-green-500 inline-block" />
-              Draft saved
-            </div>
+            {draftId && (
+              <div
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white border border-[#E8E8F0] text-[12px] font-[600] text-[#475569]"
+                style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}
+              >
+                <span className="w-[7px] h-[7px] rounded-full bg-green-500 inline-block" />
+                Draft saved
+              </div>
+            )}
             <div className="text-right">
               <div className="text-[28px] font-[900] text-[#15172A] leading-none">{staffCount}</div>
               <div className="text-[9.5px] font-[700] uppercase tracking-[0.1em] text-[#94A3B8]">Current Staff</div>
@@ -3595,10 +3918,13 @@ export default function HrOnboardPage() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => toast("2 drafts saved", "info")}
+              onClick={() => setShowDraftsModal(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
             >
-              Drafts <span className="text-[10px] font-[800] px-1 py-0.5 rounded-[4px] bg-[#F1F5F9]">2</span>
+              Drafts{" "}
+              <span className="text-[10px] font-[800] px-1 py-0.5 rounded-[4px] bg-[#F1F5F9]">
+                {draftList.length}
+              </span>
             </button>
             <button
               onClick={() => toast("AI Assist coming soon", "info")}
@@ -3607,10 +3933,11 @@ export default function HrOnboardPage() {
               <Sparkles size={12} /> AI Assist
             </button>
             <button
-              onClick={() => toast("PDF generation coming soon", "info")}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              onClick={handleFilledForm}
+              disabled={filledFormDownloading}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc] disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <FileText size={12} /> PDF
+              {filledFormDownloading ? "Generating…" : (<><FileText size={12} /> PDF</>)}
             </button>
             <button
               onClick={() => toast("Documents checklist: NIN, Photos, Certs, Offer letter", "info")}
@@ -3698,6 +4025,8 @@ export default function HrOnboardPage() {
                 set={setField}
                 photoPreview={photoPreview}
                 onPhotoClick={() => photoInputRef.current?.click()}
+                onCameraClick={openCamera}
+                onPhotoRemove={() => { setPhotoPreview(null); setPhotoFile(null); }}
                 languages={langData ?? []}
                 religions={relData ?? []}
                 countries={countryData ?? []}
@@ -3754,16 +4083,17 @@ export default function HrOnboardPage() {
           <span className="text-[12.5px] font-[700] text-[#475569] shrink-0">Step {step} / {TOTAL}</span>
           <div className="flex items-center gap-2 flex-wrap justify-end">
             <button
-              onClick={() => { setForm({ status: "active" }); setStep(1); setPhotoPreview(null); setHighestStep(1); setShowErrors(false); }}
+              onClick={() => { setForm({ status: "active" }); setStep(1); setPhotoPreview(null); setPhotoFile(null); setDraftId(null); setHighestStep(1); setShowErrors(false); }}
               className="px-3 py-1.5 text-[12.5px] font-[600] text-[#EF4444] hover:bg-red-50 rounded-[8px] transition-colors"
             >
               Discard
             </button>
             <button
-              onClick={() => toast("Draft saved", "success")}
-              className="px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              onClick={handleSaveDraft}
+              disabled={draftSaving}
+              className="px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc] disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Save draft
+              {draftSaving ? "Saving…" : draftId ? "Update draft" : "Save draft"}
             </button>
             <button
               onClick={() => toast("Upload signed document — coming soon", "info")}
@@ -3772,10 +4102,11 @@ export default function HrOnboardPage() {
               <Upload size={11} /> Upload signed
             </button>
             <button
-              onClick={() => toast("Blank form download — coming soon", "info")}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              onClick={handleBlankForm}
+              disabled={blankFormDownloading}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc] disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Blank form <ChevronDown size={11} />
+              {blankFormDownloading ? "Generating…" : (<><FileText size={11} /> Blank form</>)}
             </button>
             <button
               onClick={() => toast("QR scan to fill — coming soon", "info")}
