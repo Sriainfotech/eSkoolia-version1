@@ -1,4 +1,43 @@
-﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
+# TEAM_CONTEXT — Eskoolia ERP (Combined)
+
+## Update — Safura Samreen (03/06/2026)
+i am Safura Samreen today 03/06/2024 i have worked on the following UI improvements:
+- Updated `FeesPaymentsPanel.tsx` header to use `justifyContent: "space-between"` for proper right-alignment of the "Simulate Incoming Payment" button.
+- Redesigned the Live Payment Feed items in `FeesPaymentsPanel.tsx` from simple list rows into individual bordered, rounded cards with gaps, matching the provided UI design.
+- Modified `ModuleSubNav.tsx` by removing the `maxWidth` and `margin auto` constraints and adjusting the left padding. This ensures the topbar items start exactly from the left corner, aligning with the main page content.
+- Updated all topbar items in `ModuleSubNav.tsx` to be uniformly bold (`fontWeight: 600`).
+- Handled git operations to bypass a branch collision by creating and pushing a new branch `Fees-ui-updates`.
+
+**Bug fix:**
+- Fixed login network error: `frontend/.env` had `NEXT_PUBLIC_API_URL=http://127.0.0.1:8002` (wrong port). Changed to `http://127.0.0.1:8000` to match Django backend (confirmed via `docker-compose.yml`).
+
+**New file — `frontend/components/fees/FeeConfigurationPanel.tsx`:**
+- Built complete Fee Configuration page with 5 pill-style tabs: Fee Groups, Fee Types, Fee Schedules, Concession Rules, Late Fee Rules.
+- **Fee Schedules tab:**
+  - Academic Calendar card (lavender bg) — shows 2025-26 year, CBSE board, term date ranges. Term count (1-4) drives how many term cards render.
+  - School Term Settings — dropdown for 1-4 terms; term name inputs (editable) + DEFAULT DUE DATE as `<input type="date">` (editable); Save Term Settings button.
+  - Fee Schedule per Group — collapsible accordion (Day Scholar DS / Transport Users TU / Full Boarder FB). Groups start **collapsed**; click header or ▾ chevron to expand. Expanded view: FEE TYPE | STRUCTURE | AMOUNT/PLAN | GRACE | LATE FEE RULE | ACTIONS columns. Term-wise amount chips (T1/T2/T3) update when term count changes. Structure badges: Term-wise (green), Monthly (amber), Custom (red).
+  - "+ Add Fee Schedule" button opens an inline form above the group list (toggles to "– Close Form"). Fields: FEE GROUP dropdown, FEE TYPE dropdown, COLLECTION STRUCTURE dropdown, GRACE PERIOD, LATE FEE RULE + dynamic term/installment rows. Save Schedule + Cancel.
+  - "+ Add Fee Type" on each group header opens the same form with that group pre-selected.
+- **Fee Groups tab** — Create form (GROUP NAME | DESCRIPTION | APPLICABLE CLASSES | STATUS) + table (NAME | DESCRIPTION | STUDENTS | STATUS | ACTIONS). Data: Day Scholar 47 students, Transport Users 31, Full Boarder 12, Scholarship Review 8 (Draft).
+- **Fee Types tab** — Create form (FEE TYPE NAME | GL CODE | TAXABLE | DEFAULT STRUCTURE) + table. Data: Tuition Fee 4001-TUITION Term-wise, Transport Fee 4002-TRANS Monthly, Development Fund 4003-DEVFUND Custom, Lunch Fee 4004-LUNCH Monthly (Yes GST 5%).
+- **Concession Rules tab** — Create form (RULE NAME | APPLIES TO | DISCOUNT % | STATUS) + table (NAME | SCOPE | DISCOUNT | STATUS | ACTIONS). Data: Staff Ward 50%, Merit 25%, Need-Based Full 100%, Sibling 10%.
+- **Late Fee Rules tab** — Create form (RULE NAME | GRACE PERIOD | PENALTY | CAP AMOUNT) + table (NAME | GRACE | PENALTY | CAP | ACTIONS). Data: Tuition late rule, Transport weekly penalty, Development fund grace, Lunch fee reminder only.
+- All "Add" buttons: `minWidth: 160`, centered text (fixed small-width style).
+- Toast notifications on all interactions.
+
+**Updated `frontend/app/(dashboard)/fees/configuration/page.tsx`:**
+- Replaced `<ComingSoon />` with `<FeeConfigurationPanel />`.
+
+**Updated `frontend/lib/routes.ts` — Fees module:**
+- Removed `cleanTabs: true` — Fees top bar now shows HandCoins icon + "Fees" label on the left, matching School Tenancy / Roles & Permissions nav style.
+- Added icons to each sub-route tab: LayoutGrid (Home), Settings (Fee Configuration), ClipboardList (Fee Assignment), CreditCard (Collection), AlertCircle (Dues & Reminders), Calendar (Year-End), UserPlus (Enroll Student).
+
+**Files changed:**
+- `frontend/.env` — port fix 8002 → 8000
+- `frontend/components/fees/FeeConfigurationPanel.tsx` — NEW (~1,050 lines)
+- `frontend/app/(dashboard)/fees/configuration/page.tsx` — replaced ComingSoon
+- `frontend/lib/routes.ts` — removed cleanTabs, added Fees tab icons
 
 > This file is the merged context from both feature branches.
 > - **Tenancy Team** (branch: `tenancy`): Multi-tenancy, Super Admin Console, Billing
