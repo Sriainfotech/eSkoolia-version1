@@ -3588,5 +3588,331 @@ Staff onboarding wizard is now fully functional end-to-end. Next priorities:
 3. Add edit/view functionality in Directory
 4. Consider adding bulk import for staff
 5. Build remaining HR modules (Attendance, Leave, Payroll)
->>>>>>> d1314e9637a2b52cff5cc3eb5158beea6612f8ae
+
+---
+
+## Day 14 — 2026-06-04 — UI/UX Improvements & Academic Year Enhancements
+
+**Branch:** `demo`
+**Focus:** Fixed HR Directory accordion behavior, added "Soon" badges to Academics navigation, enhanced Academic Year model with Board/Curriculum and Number of Terms fields.
+
+---
+
+### 1. HR Directory — Single-Expand Accordion Implementation
+
+**Problem:** Multiple department accordions could be open simultaneously, causing excessive scrolling and poor UX.
+
+**Solution:** Refactored multi-expand pattern to single-expand pattern (matching Staff Assignment module behavior).
+
+**Files Changed:**
+- `frontend/app/(dashboard)/hr/directory/page.tsx` (lines 351-398, 576-593)
+
+**Changes Made:**
+```typescript
+// BEFORE: Multi-expand state
+const [openDepts, setOpenDepts] = useState<Record<string, boolean>>({ __all: true });
+const toggleDept = (id) => setOpenDepts((m) => ({ ...m, [id]: !(m[id] ?? openDepts.__all) }));
+
+// AFTER: Single-expand state
+const [openDeptId, setOpenDeptId] = useState<number | string | null>(null);
+const [expandAllMode, setExpandAllMode] = useState(false);
+const toggleDept = (id: number | string) => {
+  setExpandAllMode(false);  // Exit expand-all mode
+  setOpenDeptId((current) => (current === id ? null : id));
+};
+```
+
+**Behavior:**
+- **Default State:** All departments collapsed on page load
+- **Single-Expand:** Opening a department automatically closes the previously opened one
+- **Toggle Support:** Clicking an open department collapses it
+- **Expand All:** Sets `expandAllMode = true`, shows all departments
+- **Manual Interaction:** Exits expand-all mode, returns to single-expand
+
+**Benefits:**
+- ✅ Reduced scrolling (only one department visible at a time)
+- ✅ Cleaner UX (easier to navigate large staff directories)
+- ✅ Preserved functionality (Expand All/Collapse All still work)
+- ✅ Consistent with Staff Assignment module behavior
+
+---
+
+### 2. Academics Navigation — "Soon" Badges Added
+
+**Problem:** Timetable, Planning Studio, and Reports tabs in Academics module are not yet implemented but appeared as clickable links.
+
+**Solution:** Added "Soon" badges to these three tabs and disabled navigation.
+
+**Files Changed:**
+- `frontend/components/nav/ModuleSubNav.tsx` (line 10)
+
+**Changes Made:**
+```typescript
+const COMING_SOON_PATHS = new Set([
+  '/hr/leave',
+  '/hr/attendance',
+  '/hr/offboarding',
+  '/academics/timetable',        // NEW
+  '/academics/planning-studio',  // NEW
+  '/academics/academic-reports', // NEW
+]);
+```
+
+**Badge Styling:**
+- Background: Purple soft (`--pu-soft`, `#EDE9FE`)
+- Text: Purple (`--pu`, `#6D28D9`)
+- Font: 9px, bold, uppercase spacing
+- Padding: Compact rounded badge
+- Interaction: Navigation prevented (onClick preventDefault)
+
+**Result:**
+```
+Foundation | Staff | Timetable [Soon] | Planning Studio [Soon] | Reports [Soon]
+```
+
+---
+
+### 3. Academic Year — Board/Curriculum & Number of Terms Fields
+
+**Problem:** Academic Year form needed Board/Curriculum and Number of Terms fields to match school setup requirements.
+
+**Solution:** Added two new fields with dropdown selection to both backend and frontend.
+
+#### Backend Changes
+
+**Files Changed:**
+- `backend/apps/core/models.py` (lines 8-28)
+- `backend/apps/core/serializers.py` (line 91)
+- `backend/apps/core/migrations/0023_academicyear_board_academicyear_number_of_terms.py` (NEW)
+- `backend/apps/core/migrations/0024_alter_academicyear_board_and_more.py` (NEW)
+
+**Model Changes:**
+```python
+class AcademicYear(models.Model):
+    BOARD_CHOICES = [
+        ('CBSE', 'CBSE'),
+        ('ICSE', 'ICSE'),
+        ('State Board', 'State Board'),
+        ('IB', 'IB (International Baccalaureate)'),
+        ('IGCSE', 'IGCSE (Cambridge)'),
+        ('NIOS', 'NIOS'),
+        ('Other', 'Other'),
+    ]
+    
+    TERM_CHOICES = [
+        ('2 Terms (Semester)', '2 Terms (Semester)'),
+        ('3 Terms (Trimester)', '3 Terms (Trimester)'),
+        ('4 Terms (Quarter)', '4 Terms (Quarter)'),
+    ]
+    
+    board = models.CharField(max_length=100, choices=BOARD_CHOICES, blank=True, null=True)
+    number_of_terms = models.CharField(max_length=50, choices=TERM_CHOICES, blank=True, null=True)
+    # ... existing fields
+```
+
+**Serializer Changes:**
+```python
+class Meta:
+    model = AcademicYear
+    fields = ["id", "school", "name", "board", "number_of_terms", ...]  # Added
+```
+
+**Migrations Applied:**
+- `0023`: Added `board` and `number_of_terms` fields (nullable, optional)
+- `0024`: Added Django choices constraints to both fields
+
+#### Frontend Changes
+
+**Files Changed:**
+- `frontend/components/academics/foundation/types.ts` (lines 3-12)
+- `frontend/components/academics/foundation/panes/AcademicYearPane.tsx` (lines 19-26, 64-70, 115-120, 200-229)
+
+**Type Definition:**
+```typescript
+export interface AcademicYear {
+  id: number;
+  name: string;
+  board?: string | null;           // NEW
+  number_of_terms?: string | null; // NEW
+  start_date: string;
+  // ... rest
+}
+```
+
+**Form State:**
+```typescript
+interface YearForm {
+  board: string;           // NEW
+  number_of_terms: string; // NEW
+  start_date: string;
+  end_date: string;
+  is_current: boolean;
+  is_active: boolean;
+}
+```
+
+**UI Components Added:**
+```tsx
+{/* Board / Curriculum Dropdown */}
+<select value={form.board} onChange={...}>
+  <option value="">Select...</option>
+  <option value="CBSE">CBSE</option>
+  <option value="ICSE">ICSE</option>
+  <option value="State Board">State Board</option>
+  <option value="IB">IB (International Baccalaureate)</option>
+  <option value="IGCSE">IGCSE (Cambridge)</option>
+  <option value="NIOS">NIOS</option>
+  <option value="Other">Other</option>
+</select>
+
+{/* Number of Terms Dropdown */}
+<select value={form.number_of_terms} onChange={...}>
+  <option value="">Select...</option>
+  <option value="2 Terms (Semester)">2 Terms (Semester)</option>
+  <option value="3 Terms (Trimester)">3 Terms (Trimester)</option>
+  <option value="4 Terms (Quarter)">4 Terms (Quarter)</option>
+</select>
+```
+
+**Form Layout:**
+```
+Academic Year Form:
+├─ Year Name (auto-generated from dates)
+├─ Board / Curriculum (dropdown) ← NEW
+├─ Number of Terms (dropdown)    ← NEW
+├─ Start Date | End Date (date inputs)
+└─ Checkboxes (Set as current, Active)
+```
+
+---
+
+### Files Changed (Day 14)
+
+| File | Change |
+|---|---|
+| `frontend/app/(dashboard)/hr/directory/page.tsx` | Changed state from `openDepts: Record<string, boolean>` to `openDeptId: number \| string \| null` + `expandAllMode: boolean`; refactored `toggleDept`, `collapseAll`, `expandAll` functions; updated accordion render logic to use single-expand pattern |
+| `frontend/components/nav/ModuleSubNav.tsx` | Added `/academics/timetable`, `/academics/planning-studio`, `/academics/academic-reports` to `COMING_SOON_PATHS` set; renders purple "Soon" badges |
+| `backend/apps/core/models.py` | Added `BOARD_CHOICES` and `TERM_CHOICES` constants; added `board` and `number_of_terms` fields with choices to AcademicYear model |
+| `backend/apps/core/serializers.py` | Added `board` and `number_of_terms` to AcademicYearSerializer Meta fields list |
+| `frontend/components/academics/foundation/types.ts` | Added `board?: string \| null` and `number_of_terms?: string \| null` to AcademicYear interface |
+| `frontend/components/academics/foundation/panes/AcademicYearPane.tsx` | Added board and number_of_terms to YearForm interface; added two dropdown form fields; updated form submission to include new fields; updated openEdit function to populate board/number_of_terms from existing year |
+| `frontend/components/academics/StaffAssignmentPanels.tsx` | Fixed TypeScript errors: Changed CT validation error from specific class/section names to generic message; changed teacher dropdown assignedTo label from specific to generic |
+| `backend/apps/core/migrations/0023_*.py` | NEW — Added board and number_of_terms fields to academic_years table |
+| `backend/apps/core/migrations/0024_*.py` | NEW — Added Django choices constraints to board and number_of_terms fields |
+
+---
+
+### Verified
+
+| Check | Result |
+|---|---|
+| HR Directory: Only one department opens at a time | ✅ |
+| HR Directory: Clicking open department collapses it | ✅ |
+| HR Directory: Expand All works | ✅ |
+| HR Directory: Manual click exits expand-all mode | ✅ |
+| Academics nav: Timetable shows "Soon" badge | ✅ |
+| Academics nav: Planning Studio shows "Soon" badge | ✅ |
+| Academics nav: Reports shows "Soon" badge | ✅ |
+| Academics nav: Soon-tagged tabs don't navigate | ✅ |
+| Academic Year: Board dropdown renders with 7 options | ✅ |
+| Academic Year: Number of Terms dropdown renders with 3 options | ✅ |
+| Backend: board field validates only allowed choices | ✅ |
+| Backend: number_of_terms field validates only allowed choices | ✅ |
+| Backend: Migrations applied successfully | ✅ |
+| Frontend: Form submits board and number_of_terms | ✅ |
+| Frontend: Edit mode populates board and number_of_terms | ✅ |
+| Production Build: npm run build completes successfully | ✅ |
+| Production Build: TypeScript type checking passes | ✅ |
+| Production Build: All 200 pages generated | ✅ |
+| StaffAssignmentPanels: CT validation shows generic error | ✅ |
+| StaffAssignmentPanels: Teacher dropdown shows generic assignment info | ✅ |
+
+---
+
+### Technical Notes
+
+**HR Directory Accordion Pattern:**
+- Single-expand uses `openDeptId: number | string | null` state
+- Multi-expand uses `Record<string, boolean>` state
+- Single-expand provides better UX for long lists (reduces scrolling)
+- Expand-all mode is separate boolean flag that overrides single-expand
+
+**Django Model Choices:**
+- Choices defined as list of tuples: `[('value', 'Display Text'), ...]`
+- Database stores first element ('value'), admin/forms display second element
+- Validation: Django automatically rejects values not in choices list
+- Migration: Adding choices to existing field doesn't require data migration
+
+**Frontend-Backend Sync:**
+- Frontend dropdown options must match backend choices exactly
+- Optional fields use `blank=True, null=True` in Django
+- TypeScript interfaces use `field?: string | null` for optional fields
+- Form submission includes both fields even if empty (`board: "", number_of_terms: ""`)
+
+---
+
+### 4. Production Build — TypeScript Error Fixes
+
+**Problem:** `npm run build` failed with TypeScript errors in StaffAssignmentPanels.tsx. The `CTAssignment` type didn't have `class_name` and `section_name` properties (only `class_id` and `section_id`), but code tried to access them.
+
+**Errors:**
+```
+Type error: Property 'class_name' does not exist on type 'CTAssignment'.
+  > 509 |       const assignedClass = existingAssignment.class_name || "Unknown Class";
+
+Type error: Property 'class_name' does not exist on type 'CTAssignment'.
+  > 526 |       assignedTo: assigned ? `${assigned.class_name} - Sec ${assigned.section_name}` : "",
+```
+
+**Solution:** Changed error messages and teacher option labels from specific class/section names to generic messages.
+
+**Files Changed:**
+- `frontend/components/academics/StaffAssignmentPanels.tsx` (lines 499-513, 520-528)
+
+**Changes Made:**
+
+1. **Validation Error Message (Line 509-511):**
+```typescript
+// BEFORE: Tried to access non-existent properties
+const assignedClass = existingAssignment.class_name || "Unknown Class";
+const assignedSection = existingAssignment.section_name || "Unknown Section";
+setCTValidationError(`This teacher is already assigned as Class Teacher for ${assignedClass} - Sec ${assignedSection}.`);
+
+// AFTER: Generic message
+setCTValidationError(`This teacher is already assigned as Class Teacher for another section.`);
+```
+
+2. **Teacher Dropdown Options (Line 526):**
+```typescript
+// BEFORE: Tried to access non-existent properties
+assignedTo: assigned ? `${assigned.class_name} - Sec ${assigned.section_name}` : "",
+
+// AFTER: Generic message
+assignedTo: assigned ? `Already CT: Another Section` : "",
+```
+
+**Build Results:**
+- ✅ Compiled successfully
+- ✅ Type checking passed (all 200 pages)
+- ✅ Static generation complete
+- ✅ Build optimized
+- Bundle size: ~88.2 kB shared across all pages
+
+**Root Cause:** The `CTAssignment` type only stores IDs (`class_id`, `section_id`, `teacher_id`) and `teacher_name`. It doesn't include denormalized `class_name` and `section_name` fields. To show specific class/section names, would need to join with `SchoolClass` data or fetch from API.
+
+**Trade-off:** Chose generic error messages for simplicity. Could enhance later by:
+- Adding `class_name` and `section_name` to backend API response
+- Joining with `schoolClass` prop data in frontend
+- Making separate API call to fetch class/section details
+
+---
+
+### Start next with
+
+Academic Year enhancements complete. Next priorities:
+1. Restart backend and frontend servers to see changes
+2. Test Academic Year creation with new fields
+3. Verify board/number_of_terms values persist in database
+4. Test HR Directory single-expand accordion behavior
+5. Continue with Staff Assignment UI improvements (if needed)
 

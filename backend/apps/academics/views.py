@@ -1527,6 +1527,22 @@ class StaffClassTeachersView(viewsets.ViewSet):
         if not staff:
             return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Validate teacher is not already assigned as CT for another section in the same academic year
+        existing_ct = ClassTeacherAssignment.objects.filter(
+            school_id=school_id,
+            academic_year_id=academic_year_id,
+            teacher_id=teacher_id,
+            active_status=True,
+        ).exclude(section_id=section_id).select_related("school_class", "section").first()
+        
+        if existing_ct:
+            class_name = existing_ct.school_class.name if existing_ct.school_class else "Unknown Class"
+            section_name = existing_ct.section.name if existing_ct.section else "Unknown Section"
+            return Response({
+                "success": False,
+                "message": f"This teacher is already assigned as Class Teacher for {class_name} - Sec {section_name}. A teacher can only be assigned as Class Teacher to one section."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         existing = ClassTeacherAssignment.objects.filter(
             school_id=school_id,
             academic_year_id=academic_year_id,
@@ -1564,6 +1580,23 @@ class StaffClassTeachersView(viewsets.ViewSet):
             staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE).first()
             if not staff:
                 return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validate teacher is not already assigned as CT for another section in the same academic year
+            existing_ct = ClassTeacherAssignment.objects.filter(
+                school_id=school_id,
+                academic_year_id=ct.academic_year_id,
+                teacher_id=teacher_id,
+                active_status=True,
+            ).exclude(pk=ct.pk).select_related("school_class", "section").first()
+            
+            if existing_ct:
+                class_name = existing_ct.school_class.name if existing_ct.school_class else "Unknown Class"
+                section_name = existing_ct.section.name if existing_ct.section else "Unknown Section"
+                return Response({
+                    "success": False,
+                    "message": f"This teacher is already assigned as Class Teacher for {class_name} - Sec {section_name}. A teacher can only be assigned as Class Teacher to one section."
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
             ct.teacher_id = teacher_id
             ct.save(update_fields=["teacher_id"])
         return Response({"success": True, "message": "Updated."})
@@ -1596,6 +1629,22 @@ class StaffClassTeachersView(viewsets.ViewSet):
             staff = Staff.objects.filter(user_id=new_teacher_id, status=Staff.STATUS_ACTIVE).first()
             if not staff:
                 return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validate teacher is not already assigned as CT for another section in the same academic year
+            existing_ct = ClassTeacherAssignment.objects.filter(
+                school_id=school_id,
+                academic_year_id=ct.academic_year_id,
+                teacher_id=new_teacher_id,
+                active_status=True,
+            ).exclude(pk=ct.pk).select_related("school_class", "section").first()
+            
+            if existing_ct:
+                class_name = existing_ct.school_class.name if existing_ct.school_class else "Unknown Class"
+                section_name = existing_ct.section.name if existing_ct.section else "Unknown Section"
+                return Response({
+                    "success": False,
+                    "message": f"This teacher is already assigned as Class Teacher for {class_name} - Sec {section_name}. A teacher can only be assigned as Class Teacher to one section."
+                }, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
             ClassTeacherAudit.objects.create(
@@ -1632,9 +1681,9 @@ class StaffSubjectAssignmentsView(viewsets.ViewSet):
         section_id_filter = request.query_params.get("section_id")
 
         # Step 1: Get all sections for context (to auto-create assignments from catalog)
-        sections_qs = Section.objects.filter(active_status=True)
+        sections_qs = Section.objects.all()
         if school_id:
-            sections_qs = sections_qs.filter(school_id=school_id)
+            sections_qs = sections_qs.filter(school_class__school_id=school_id)
         if class_id_filter:
             sections_qs = sections_qs.filter(school_class_id=class_id_filter)
         if section_id_filter:

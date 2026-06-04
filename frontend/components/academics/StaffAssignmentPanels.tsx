@@ -473,48 +473,82 @@ function SubjectTeacherRow({
 // ─── Section Card ─────────────────────────────────────────────────────────────
 
 function SectionCard({
-  section, teachers, subjectRows, ctAssignment,
+  section, teachers, subjectRows, ctAssignment, ctAssignments,
   onCTConfirmLock, onCTEditRequest, onSubjectSave, savingSubjKeys, savingCT,
+  isOpen, onToggle, schoolClass,
 }: {
   section: Section; teachers: Teacher[];
   subjectRows: SubjectRow[];
   ctAssignment: CTAssignment | undefined;
+  ctAssignments: CTAssignment[];
   onCTConfirmLock: (sectionId: number, teacherId: number) => Promise<void>;
   onCTEditRequest: (ctId: number, currentTeacherName: string) => void;
   onSubjectSave: (rowId: number, teacherId: number) => Promise<void>;
   savingSubjKeys: Set<number>; savingCT: boolean;
+  isOpen: boolean;
+  onToggle: () => void;
+  schoolClass: SchoolClass;
 }) {
-  const [open, setOpen] = useState(true);
   const [selectedCT, setSelectedCT] = useState<number | "">(ctAssignment?.teacher_id ?? "");
+  const [ctValidationError, setCTValidationError] = useState("");
 
   useEffect(() => { setSelectedCT(ctAssignment?.teacher_id ?? ""); }, [ctAssignment?.teacher_id]);
+
+  // Check if selected teacher is already assigned as CT elsewhere
+  useEffect(() => {
+    if (!selectedCT) {
+      setCTValidationError("");
+      return;
+    }
+    
+    const existingAssignment = ctAssignments.find(
+      (ct) => ct.teacher_id === selectedCT && ct.section_id !== section.id
+    );
+    
+    if (existingAssignment) {
+      setCTValidationError(`This teacher is already assigned as Class Teacher for another section.`);
+    } else {
+      setCTValidationError("");
+    }
+  }, [selectedCT, ctAssignments, section.id]);
 
   const isLocked = !!ctAssignment?.is_locked;
   const ctTeacherName = ctAssignment
     ? teachers.find((t) => t.id === ctAssignment.teacher_id)?.full_name ?? ctAssignment.teacher_name
     : "";
 
+  // Build teacher options with assignment info
+  const teacherOptions = teachers.map((t) => {
+    const assigned = ctAssignments.find((ct) => ct.teacher_id === t.id && ct.section_id !== section.id);
+    return {
+      ...t,
+      isAssigned: !!assigned,
+      assignedTo: assigned ? `Already CT: Another Section` : "",
+    };
+  });
+
   return (
     <div className="border border-gray-100 rounded-xl bg-white mb-2 overflow-hidden">
       {/* Section header row */}
       <div
         className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none hover:bg-gray-50/80 transition-colors"
-        onClick={() => setOpen((o) => !o)}
+        onClick={onToggle}
       >
-        <span className="text-gray-400">{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
+        <span className="text-gray-400">{isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
         <span className="font-bold text-gray-800 text-sm">Sec {section.name}</span>
         {section.capacity !== undefined && (
           <span className="text-xs text-gray-400">Strength: {section.capacity}</span>
         )}
+        <span className="text-xs text-gray-400">| {subjectRows.length} Subject{subjectRows.length !== 1 ? "s" : ""} Assigned</span>
         <span className="flex-1" />
         {isLocked && (
           <span className="flex items-center gap-1.5 text-xs font-bold text-green-700 bg-green-50 border border-green-200 px-2.5 py-1 rounded-full">
-            <Lock size={11} /> CT Confirmed
+            <Lock size={11} /> CT Assigned
           </span>
         )}
       </div>
 
-      {open && (
+      {isOpen && (
         <div className="border-t border-gray-100">
           {/* CLASS TEACHER block */}
           <div className="px-4 py-3 border-b border-gray-100">
@@ -537,29 +571,43 @@ function SectionCard({
               </div>
             ) : (
               <div className="space-y-2">
-                <select
-                  value={selectedCT}
-                  onChange={(e) => setSelectedCT(e.target.value ? Number(e.target.value) : "")}
-                  disabled={savingCT}
-                  className="w-full max-w-xs border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-[var(--brand)] bg-gray-50 focus:bg-white disabled:opacity-60"
-                >
-                  <option value="">Select Teacher</option>
-                  {teachers.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.full_name}{t.periods_per_week !== undefined ? ` (${t.periods_per_week}p)` : ""}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => { if (selectedCT) onCTConfirmLock(section.id, selectedCT as number); }}
-                  disabled={!selectedCT || savingCT}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-sm font-semibold disabled:opacity-40 transition-colors"
-                >
-                  {savingCT
-                    ? <span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" />
-                    : <CheckCircle size={15} />}
-                  Confirm &amp; Lock
-                </button>
+                <div className="flex items-center gap-3">
+                  <select
+                    value={selectedCT}
+                    onChange={(e) => setSelectedCT(e.target.value ? Number(e.target.value) : "")}
+                    disabled={savingCT}
+                    className={`flex-1 border rounded-xl px-3 py-2 text-sm focus:outline-none focus:bg-white disabled:opacity-60 ${
+                      ctValidationError 
+                        ? "border-red-400 bg-red-50 focus:border-red-500" 
+                        : "border-gray-200 bg-gray-50 focus:border-[var(--brand)]"
+                    }`}
+                  >
+                    <option value="">Select Teacher</option>
+                    {teacherOptions.map((t) => (
+                      <option key={t.id} value={t.id} disabled={t.isAssigned}>
+                        {t.full_name}
+                        {t.periods_per_week !== undefined ? ` (${t.periods_per_week}p)` : ""}
+                        {t.isAssigned ? ` - Already CT: ${t.assignedTo}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => { if (selectedCT && !ctValidationError) onCTConfirmLock(section.id, selectedCT as number); }}
+                    disabled={!selectedCT || savingCT || !!ctValidationError}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-green-600 hover:bg-green-700 text-white text-sm font-semibold disabled:opacity-40 transition-colors whitespace-nowrap shrink-0"
+                  >
+                    {savingCT
+                      ? <span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" />
+                      : <CheckCircle size={15} />}
+                    Confirm &amp; Lock
+                  </button>
+                </div>
+                {ctValidationError && (
+                  <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    <AlertTriangle size={14} className="text-red-600 shrink-0 mt-0.5" />
+                    <p className="text-xs text-red-700">{ctValidationError}</p>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -629,6 +677,7 @@ function ClassAccordion({
   savingCTSects: Set<number>; savingSubjKeys: Set<number>;
 }) {
   const [open, setOpen] = useState(false);
+  const [openSectionId, setOpenSectionId] = useState<number | null>(null);
   const classSections = sections.filter((s) => s.school_class === cls.id);
   const confirmedCT = ctAssignments.filter((ct) => ct.is_locked).length;
   const classSubjects = new Set(subjectRows.map((r) => r.subject_id)).size;
@@ -677,11 +726,15 @@ function ClassAccordion({
                   teachers={teachers}
                   subjectRows={merged}
                   ctAssignment={ct}
+                  ctAssignments={ctAssignments}
                   onCTConfirmLock={onCTConfirmLock}
                   onCTEditRequest={onCTEditRequest}
                   onSubjectSave={onSubjectSave}
                   savingSubjKeys={savingSubjKeys}
                   savingCT={savingCTSects.has(sec.id)}
+                  isOpen={openSectionId === sec.id}
+                  onToggle={() => setOpenSectionId(openSectionId === sec.id ? null : sec.id)}
+                  schoolClass={cls}
                 />
               );
             })

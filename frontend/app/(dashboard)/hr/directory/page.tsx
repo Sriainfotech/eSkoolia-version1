@@ -348,7 +348,8 @@ export default function HrDirectoryPage() {
   const { data: staffData, loading: staffLoading } = useStaff({ search: submittedSearch || undefined });
 
   const [filterOpen, setFilterOpen] = useState(false);
-  const [openDepts, setOpenDepts] = useState<Record<string, boolean>>({ __all: true });
+  const [openDeptId, setOpenDeptId] = useState<number | string | null>(null);
+  const [expandAllMode, setExpandAllMode] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [profile, setProfile] = useState<Staff | null>(null);
 
@@ -375,18 +376,19 @@ export default function HrDirectoryPage() {
     return result;
   }, [departments, staffList, submittedSearch]);
 
-  const toggleDept = (id: number | string) =>
-    setOpenDepts((m) => ({ ...m, [id]: !(m[id] ?? openDepts.__all) }));
+  const toggleDept = (id: number | string) => {
+    setExpandAllMode(false); // Exit expand-all mode when manually toggling
+    setOpenDeptId((current) => (current === id ? null : id));
+  };
 
   const collapseAll = () => {
-    const m: Record<string, boolean> = { __all: false };
-    grouped.forEach((g) => { m[String(g.dept.id)] = false; });
-    setOpenDepts(m);
+    setExpandAllMode(false);
+    setOpenDeptId(null);
   };
+
   const expandAll = () => {
-    const m: Record<string, boolean> = { __all: true };
-    grouped.forEach((g) => { m[String(g.dept.id)] = true; });
-    setOpenDepts(m);
+    setExpandAllMode(true);
+    setOpenDeptId(null); // Clear single-expand selection
   };
 
   const toggleSelect = (id: number) => {
@@ -576,7 +578,7 @@ export default function HrDirectoryPage() {
           )}
           {grouped.map((g) => {
             const id = String(g.dept.id);
-            const open = openDepts[id] ?? openDepts.__all ?? true;
+            const open = expandAllMode ? true : openDeptId === g.dept.id;
             return (
               <DepartmentAccordion
                 key={id}
