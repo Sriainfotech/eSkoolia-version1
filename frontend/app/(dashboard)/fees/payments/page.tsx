@@ -1,12 +1,5 @@
-// HIDDEN - no backend yet
-// import FeesPaymentsPanel from "@/components/fees/FeesPaymentsPanel";
-//
-// export default function FeesPaymentsPage() {
-//   return <FeesPaymentsPanel />;
-// }
+import FeesPaymentsPanel from "@/components/fees/FeesPaymentsPanel";
 
-import ComingSoon from '@/components/shared/ComingSoon';
-
-export default function Page() {
-  return <ComingSoon />;
+export default function FeesPaymentsPage() {
+  return <FeesPaymentsPanel />;
 }

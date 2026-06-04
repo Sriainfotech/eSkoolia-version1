@@ -6,7 +6,7 @@ import { Clock } from 'lucide-react';
 import type { ModuleRoute } from '@/lib/routes';
 
 // Modules that are visible in nav but show Coming Soon on hover
-const COMING_SOON_IDS = new Set(['attendance', 'fees', 'exam', 'reports']);
+const COMING_SOON_IDS = new Set(['attendance', 'exam', 'reports']);
 
 // Individual sub-pages that show Coming Soon when navigated to
 const COMING_SOON_PATHS = new Set([
