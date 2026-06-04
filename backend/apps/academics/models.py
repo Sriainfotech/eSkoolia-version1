@@ -70,6 +70,15 @@ class ClassTeacherAssignment(models.Model):
         related_name="teacher_assignments",
     )
     teacher = models.ForeignKey("users.User", on_delete=models.CASCADE, related_name="class_teacher_assignments")
+    is_locked = models.BooleanField(default=False)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    locked_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="locked_ct_assignments",
+    )
     active_status = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -82,6 +91,44 @@ class ClassTeacherAssignment(models.Model):
                 name="uq_class_teacher_assignment_scope",
             ),
         ]
+
+
+class ClassTeacherAudit(models.Model):
+    section = models.ForeignKey(
+        "core.Section",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ct_audit_logs",
+    )
+    school_class = models.ForeignKey("core.Class", on_delete=models.SET_NULL, null=True, blank=True, related_name="ct_audit_logs")
+    old_teacher = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ct_audit_old",
+    )
+    new_teacher = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ct_audit_new",
+    )
+    reason = models.TextField()
+    changed_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="ct_audit_changes",
+    )
+    changed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "class_teacher_audit"
+        ordering = ["-changed_at"]
 
 
 class ClassRoutineSlot(models.Model):

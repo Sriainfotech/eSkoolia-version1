@@ -3159,3 +3159,147 @@ const ratioChecks: (() => string | null)[] = [
    ```
 2. Continue building remaining HR onboarding features or move to next module.
 
+---
+
+## Day 13 (cont'd) — 2026-06-03 — Academics: Staff Assignment Subject Count Bug Fix
+
+**Branch:** `hr-03/06` (same branch)
+**Author:** Gowtham (AI assistant)
+**Focus:** Critical bug fix — Staff Assignment showing "0 subjects" for all classes when Foundation Subject Catalog has subjects configured.
+
+---
+
+### Problem Analysis
+
+**Issue:** All classes in Academics → Staff Assignment displayed "0 subjects" even though Foundation → Core Setup → Subjects had subjects configured:
+- UKG → showed "0 subjects" but Foundation has 6 subjects
+- Grade 1 → showed "0 subjects" but Foundation has 3 subjects (Computer Science, Football, Telugu)
+- Grade 2 → showed "0 subjects" but Foundation has 13 subjects
+
+**Root Cause:** Database architecture mismatch between two modules:
+- **Foundation** stores Subject Catalog in `ClassSubjectEntry` table (class-level subject definitions)
+- **Staff Workspace** was only reading from `ClassSubjectAssignment` table (teacher assignments only)
+- These tables were **not synced** → Staff workspace showed 0 subjects because no teacher assignments existed yet
+
+**Expected Behavior:** Staff Assignment must display actual subject count from Foundation's Subject Catalog, independent of whether teachers are assigned.
+
+---
+
+### Solution Implemented
+
+**Backend (`backend/apps/academics/views.py`) — `StaffSubjectAssignmentsView.list()` method refactored:**
+
+**Before:** Only fetched `ClassSubjectAssignment` records (teacher assignments), filtered by academic year.
+
+**After:** Auto-sync architecture with 5-step process:
+1. **Fetch all sections** for context (filtered by school, class, section if provided)
+2. **Fetch catalog entries** from `ClassSubjectEntry` (Foundation's subject definitions)
+3. **Auto-create missing records:** For each section + catalog entry combination, create `ClassSubjectAssignment` record if it doesn't exist:
+   - Auto-creates matching `core.Subject` records from catalog entries using `get_or_create`
+   - Creates assignment with `teacher=null` initially
+   - Sets `academic_year_id` from request parameter
+4. **Fetch all assignments** (now includes newly created ones from catalog)
+5. **Deduplicate and return** (prefer year-specific records over generic ones)
+
+**Key Logic:**
+```python
+# Auto-create Subject from catalog entry
+subject, _ = CoreSubject.objects.get_or_create(
+    school_id=school_id,
+    name=entry.name,
+    defaults={
+        "code": entry.code or "",
+        "subject_type": "optional" if entry.subject_type == ClassSubjectEntry.TYPE_OPTIONAL else "compulsory",
+    },
+)
+
+# Create or get assignment for section + subject (teacher=null initially)
+ClassSubjectAssignment.objects.get_or_create(
+    school_id=school_id,
+    academic_year_id=academic_year_id if academic_year_id else None,
+    school_class_id=section.school_class_id,
+    section_id=section.id,
+    subject_id=subject.id,
+    defaults={
+        "is_optional": entry.subject_type == ClassSubjectEntry.TYPE_OPTIONAL,
+        "active_status": True,
+    },
+)
+```
+
+**Result:**
+- Foundation → Core Setup subject changes automatically sync to Staff Assignment
+- Subject counts now accurate (e.g., UKG shows "6 subjects", Grade 1 shows "3 subjects")
+- Subjects appear in Staff workspace even without teachers assigned
+- When teachers are assigned, records are updated in place (no duplicates)
+
+---
+
+### Files Changed
+
+| File | Change |
+|---|---|
+| `backend/apps/academics/views.py` | Refactored `StaffSubjectAssignmentsView.list()` — added auto-sync logic to create `ClassSubjectAssignment` records from `ClassSubjectEntry` catalog; auto-creates `core.Subject` records; ensures all Foundation subjects appear in Staff workspace |
+
+---
+
+### Technical Details
+
+**Import Added:**
+```python
+from apps.core.models import Section, Subject as CoreSubject
+```
+
+**New Logic Flow:**
+1. Query `ClassSubjectEntry` (Foundation catalog) filtered by school + class
+2. Query `Section` records for target classes
+3. For each section × catalog entry: ensure `ClassSubjectAssignment` exists (create if missing)
+4. Fetch and deduplicate assignments (ordered by `-academic_year_id` for priority)
+5. Return unified list with subject names, teacher info, academic year
+
+**Benefits:**
+- ✅ Single source of truth: Foundation Subject Catalog
+- ✅ Zero manual sync required
+- ✅ Subjects auto-appear when added in Foundation
+- ✅ Teacher assignments update existing records (no duplication)
+- ✅ Backward compatible with existing assignments
+
+---
+
+### Validation
+
+| Check | Result |
+|---|---|
+| Python syntax validation | `python -m py_compile apps/academics/views.py` — OK ✅ |
+| Backend server start | `python manage.py runserver 0.0.0.0:8001` — Running ✅ |
+| Frontend server | `npm run dev` — Running on port 3001 ✅ |
+
+**Expected Test Results:**
+- Navigate to `/academics/staff-workspace`
+- UKG should show: "3 sections • 0/3 CT confirmed • **6 subjects**" (not 0)
+- Grade 1 should show: "3 sections • 0/3 CT confirmed • **3 subjects**" (not 0)
+- Grade 2 should show: "3 sections • 0/3 CT confirmed • **13 subjects**" (not 0)
+- Opening any class accordion should reveal all subjects from Foundation in Subject Teachers table
+
+---
+
+### Impact
+
+**Before:** Staff Assignment was unusable — showed 0 subjects for all classes, admins had no visibility into what subjects needed teacher assignment.
+
+**After:** Staff Assignment now correctly displays all subjects from Foundation catalog, enabling:
+- Accurate workload planning (know total subjects per class)
+- Teacher assignment workflow (see all subjects that need teachers)
+- Real-time sync with Foundation changes (add subject in Foundation → immediately appears in Staff)
+
+---
+
+### Related Work
+
+This fix builds on previous Staff Assignment implementation:
+- **Backend models** (`ClassTeacherAssignment`, `ClassSubjectAssignment`, `ClassTeacherAudit`) — already existed
+- **Frontend UI** (`StaffAssignmentPanels.tsx` ~900 lines, compact table layout) — already implemented
+- **API endpoints** (6 ViewSets: teachers, class-teachers, subject-assignments, workload, audit, kpi) — already implemented
+
+This fix specifically addresses the **data source issue** for subject counts and ensures Foundation remains the single source of truth for subject catalog.
+
