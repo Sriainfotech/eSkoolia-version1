@@ -13,9 +13,10 @@ import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSch
 import type { LLMSchoolState } from '@/lib/api/super-admin/schools';
 import { getPlans } from '@/lib/api/super-admin/billing';
 import { apiRequestWithRefreshResponse } from '@/lib/api-auth';
+import { API_BASE_URL } from '@/lib/api';
 import type {
   BoardType, HealthFlagsCounts, PaginatedResponse, PlanType, ProvisionSchoolRequest, ProvisionSchoolResponse,
-  SchoolFilters, SchoolTenant, SchoolStatus, SubscriptionPlan,
+  SchoolFilters, SchoolTenant, SchoolStatus, SubscriptionPlan, TenantBillingCycle,
 } from '@/types/super-admin';
 
 const PAGE_SIZE = 10;
@@ -29,6 +30,17 @@ const BOARDS = [
 ] as const;
 
 const DEFAULT_SCHOOLS: PaginatedResponse<SchoolTenant> = { count: 0, next: null, previous: null, results: [] };
+
+const EMPTY_EDIT_FIELDS = {
+  short_code: '', gstin: '', pan: '', udise_code: '', seats: '',
+  api_access: 'disabled', brand_color: '', gst_registered: 'yes',
+  principal_name: '', principal_designation: 'Principal',
+  principal_email: '', principal_phone: '',
+  alternate_contact: '', owner_role: 'Principal',
+  campus_address: '', city: '', pin_code: '', affiliation_number: '',
+  student_seat_limit: '', staff_seat_limit: '', storage_cap_gb: '',
+  trial_days: '30', go_live_date: '', billing_cycle: 'annual',
+};
 
 const AVATAR_GRADIENT_CLS = [
   'bg-[linear-gradient(135deg,#7C5BFF,#5836E0)]',
@@ -586,11 +598,10 @@ export default function SuperAdminSchoolsPage() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const fetchIdRef = useRef(0);
   const [globalStats, setGlobalStats] = useState({ total: 0, active: 0, trial: 0, attention: 0, archived: 0 });
   const [statusFilter, setStatusFilter] = useState<StatusTab>('active');
-  const [pendingPlan,   setPendingPlan]   = useState('');
-  const [pendingBoard,  setPendingBoard]  = useState('');
-  const [pendingState,  setPendingState]  = useState('');
   const [planFilter,    setPlanFilter]    = useState('');
   const [boardFilter,   setBoardFilter]   = useState('');
   const [stateFilter,   setStateFilter]   = useState('');
@@ -678,7 +689,7 @@ export default function SuperAdminSchoolsPage() {
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [editSchool, setEditSchool] = useState<SchoolTenant | null>(null);
   const [editBusy, setEditBusy] = useState(false);
-  const [editFields, setEditFields] = useState({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' });
+  const [editFields, setEditFields] = useState({ ...EMPTY_EDIT_FIELDS });
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
   const [logoDragging, setLogoDragging] = useState(false);
@@ -708,14 +719,21 @@ export default function SuperAdminSchoolsPage() {
   const totalInactiveStudents = totalStudents - totalActiveStudents;
   const totalStaff    = rows.reduce((a, b) => a + (b.staff ?? 0), 0);
 
+  // Debounce: fire the API call only after the user stops typing for 300 ms
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const loadSchools = useCallback(async () => {
+    const fetchId = ++fetchIdRef.current;
     setLoading(true);
     setError(null);
     // Guard: only send a status param for values the backend recognises
     const safeStatus = VALID_STATUS_TABS.has(statusFilter) ? statusFilter : 'all';
     const filters: SchoolFilters = {
       page, page_size: PAGE_SIZE,
-      search: search.trim() || undefined,
+      search: debouncedSearch.trim() || undefined,
       status: safeStatus === 'all' ? undefined : (safeStatus as SchoolStatus),
       plan: planFilter as PlanType || undefined,
       board: boardFilter as BoardType || undefined,
@@ -724,19 +742,21 @@ export default function SuperAdminSchoolsPage() {
     };
     try {
       const res = await getSchools(filters);
+      if (fetchId !== fetchIdRef.current) return; // stale response — discard
       setResponse(res);
       if (res.health_flags_counts) setHealthFlagCounts(res.health_flags_counts);
     } catch (err) {
+      if (fetchId !== fetchIdRef.current) return;
       setError(err instanceof Error ? err.message : 'Unable to load schools.');
       setResponse(DEFAULT_SCHOOLS);
     } finally {
-      setLoading(false);
+      if (fetchId === fetchIdRef.current) setLoading(false);
     }
-  }, [page, search, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
+  }, [page, debouncedSearch, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
 
   useEffect(() => { void loadSchools(); }, [loadSchools]);
   useEffect(() => { getLLMStates().then(setLlmStates).catch(() => {}); }, []);
-  useEffect(() => { setPage(1); }, [search, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
 
   // Fetch global stats — extracted so it can be re-called after any status change
   const loadGlobalStats = useCallback(() => {
@@ -754,21 +774,40 @@ export default function SuperAdminSchoolsPage() {
 
   useEffect(() => { loadGlobalStats(); }, [loadGlobalStats]);
 
-  const handleApplyFilters = useCallback(() => {
-    setPlanFilter(pendingPlan);
-    setBoardFilter(pendingBoard);
-    setStateFilter(pendingState);
-    setPage(1);
-  }, [pendingPlan, pendingBoard, pendingState]);
-
   const handleProvisionSubmit = useCallback(async () => {
     setProvisionError(null);
     const errors: Record<string, string> = {};
+    // Validation regexes
+    const RE_NAME = /^[\p{L}][\p{L}\s.''\-]{0,59}$/u;
+    const RE_DESIG = /^[\p{L}][\p{L}\s.&/\-]{0,49}$/u;
+    const RE_EMAIL = /^[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/;
+    const RE_MOBILE_IN = /^[6-9]\d{9}$/;
+
     if (!provisionForm.name.trim()) errors.name = 'School name is required.';
     if (!provisionForm.state.trim()) errors.state = 'State is required.';
-    if (!editFields.principal_name.trim()) errors.principal_name = 'Principal name is required.';
-    if (!editFields.principal_email.trim()) errors.principal_email = 'Principal email is required.';
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editFields.principal_email.trim())) errors.principal_email = 'Enter a valid email address.';
+
+    const pName = editFields.principal_name.trim();
+    if (!pName) errors.principal_name = 'Principal name is required.';
+    else if (!RE_NAME.test(pName)) errors.principal_name = 'Use letters only (max 60). No numbers or special symbols.';
+
+    const pDesig = editFields.principal_designation.trim();
+    if (pDesig && !RE_DESIG.test(pDesig)) errors.principal_designation = 'Designation must contain letters only (max 50).';
+
+    const pEmail = editFields.principal_email.trim();
+    if (!pEmail) errors.principal_email = 'Principal email is required.';
+    else if (pEmail.length > 100) errors.principal_email = 'Email is too long (max 100 characters).';
+    else if (!RE_EMAIL.test(pEmail)) errors.principal_email = 'Enter a valid email address.';
+
+    const pMobile = editFields.principal_phone.trim();
+    if (!pMobile) errors.principal_phone = 'Mobile is required.';
+    else if (!RE_MOBILE_IN.test(pMobile)) errors.principal_phone = 'Enter a valid 10-digit mobile starting with 6-9.';
+
+    const pAlt = editFields.alternate_contact.trim();
+    if (pAlt) {
+      if (!RE_MOBILE_IN.test(pAlt)) errors.alternate_contact = 'Enter a valid 10-digit number starting with 6-9.';
+      else if (pAlt === pMobile) errors.alternate_contact = 'Alternate contact must differ from mobile.';
+    }
+
     if (!editFields.pan.trim()) errors.pan = 'PAN is required.';
     else if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(editFields.pan.trim())) errors.pan = 'PAN must be in format ABCDE1234F.';
     if (Object.keys(errors).length > 0) {
@@ -812,19 +851,25 @@ export default function SuperAdminSchoolsPage() {
           api_access: editFields.api_access === 'enabled',
           brand_color: editFields.brand_color || undefined,
           logo_url: logoUrl,
-          principal_name: editFields.principal_name || undefined,
-          principal_email: editFields.principal_email || undefined,
+          principal_name: editFields.principal_name.trim() || undefined,
+          principal_email: editFields.principal_email.trim() || undefined,
           principal_phone: editFields.principal_phone || undefined,
           campus_address: editFields.campus_address || undefined,
           city: editFields.city || undefined,
           pin_code: editFields.pin_code || undefined,
           affiliation_number: editFields.affiliation_number || undefined,
+          student_seat_limit: editFields.student_seat_limit !== '' ? Number(editFields.student_seat_limit) : null,
+          staff_seat_limit: editFields.staff_seat_limit !== '' ? Number(editFields.staff_seat_limit) : null,
+          storage_cap_gb: editFields.storage_cap_gb !== '' ? Number(editFields.storage_cap_gb) : null,
+          trial_days: editFields.trial_days !== '' ? Number(editFields.trial_days) : null,
+          go_live_date: editFields.go_live_date || null,
+          billing_cycle: (editFields.billing_cycle as TenantBillingCycle) || null,
         });
         toast.success(`${provisionForm.name} updated.`);
         setEditSchool(null);
         setAccAddOpen(false);
         setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
-        setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' });
+        setEditFields({ ...EMPTY_EDIT_FIELDS });
         setLogoFile(null);
         setLogoPreview(null);
         setSelectedColor(PALETTE_COLORS[0]!.hex);
@@ -832,6 +877,18 @@ export default function SuperAdminSchoolsPage() {
         await loadSchools();
         void loadGlobalStats();
       } catch (err) {
+        const apiErr = err as { fields?: Record<string, string | string[]>; message?: string };
+        if (apiErr?.fields && typeof apiErr.fields === 'object') {
+          const next: Record<string, string> = {};
+          for (const [k, v] of Object.entries(apiErr.fields)) {
+            next[k] = Array.isArray(v) ? String(v[0]) : String(v);
+          }
+          setFieldErrors(next);
+          setTimeout(() => {
+            const el = document.querySelector('[data-field-error="true"]');
+            if (el) (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }, 50);
+        }
         setProvisionError(err instanceof Error ? err.message : 'Update failed.');
       } finally {
         setProvisioning(false);
@@ -864,6 +921,12 @@ export default function SuperAdminSchoolsPage() {
         city: editFields.city || undefined,
         pin_code: editFields.pin_code || undefined,
         affiliation_number: editFields.affiliation_number || undefined,
+        student_seat_limit: editFields.student_seat_limit !== '' ? Number(editFields.student_seat_limit) : undefined,
+        staff_seat_limit: editFields.staff_seat_limit !== '' ? Number(editFields.staff_seat_limit) : undefined,
+        storage_cap_gb: editFields.storage_cap_gb !== '' ? Number(editFields.storage_cap_gb) : undefined,
+        trial_days: editFields.trial_days !== '' ? Number(editFields.trial_days) : undefined,
+        go_live_date: editFields.go_live_date || undefined,
+        billing_cycle: (editFields.billing_cycle as TenantBillingCycle) || undefined,
       });
       // Upload logo after provisioning if a file was selected
       if (logoFile && result.tenant_id) {
@@ -875,7 +938,7 @@ export default function SuperAdminSchoolsPage() {
       }
       setAccAddOpen(false);
       setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
-      setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' });
+      setEditFields({ ...EMPTY_EDIT_FIELDS });
       setLogoFile(null);
       setLogoPreview(null);
       setSelectedColor(PALETTE_COLORS[0]!.hex);
@@ -909,6 +972,10 @@ export default function SuperAdminSchoolsPage() {
   }, [llmStates]);
 
   const handleImpersonate = useCallback(async (school: SchoolTenant) => {
+    if (!school.tenant_id) {
+      toast.error(`Cannot impersonate "${school.name}": school has no tenant ID assigned. Check provisioning status.`);
+      return;
+    }
     setImpersonatingId(school.tenant_id);
     try {
       const data = await impersonateSchool(school.tenant_id);
@@ -1006,6 +1073,7 @@ export default function SuperAdminSchoolsPage() {
       admin_password: '',
     });
     setEditFields({
+      ...EMPTY_EDIT_FIELDS,
       short_code: school.short_code ?? '',
       gstin: school.gstin ?? '',
       pan: school.pan ?? '',
@@ -1021,6 +1089,12 @@ export default function SuperAdminSchoolsPage() {
       city: school.city ?? '',
       pin_code: school.pin_code ?? '',
       affiliation_number: school.affiliation_number ?? '',
+      student_seat_limit: school.student_seat_limit != null ? String(school.student_seat_limit) : '',
+      staff_seat_limit: school.staff_seat_limit != null ? String(school.staff_seat_limit) : '',
+      storage_cap_gb: school.storage_cap_gb != null ? String(school.storage_cap_gb) : '',
+      trial_days: school.trial_days != null ? String(school.trial_days) : '30',
+      go_live_date: school.go_live_date ?? '',
+      billing_cycle: school.billing_cycle ?? 'annual',
     });
     setSelectedColor(school.brand_color || PALETTE_COLORS[0]!.hex);
     setLogoPreview(school.logo_url || null);
@@ -1177,7 +1251,7 @@ export default function SuperAdminSchoolsPage() {
           if (accAddOpen && editSchool) {
             setEditSchool(null);
             setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
-            setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: '', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' });
+            setEditFields({ ...EMPTY_EDIT_FIELDS, gst_registered: '' });
             setLogoFile(null);
             setLogoPreview(null);
             setSelectedColor(PALETTE_COLORS[0]!.hex);
@@ -1445,28 +1519,94 @@ export default function SuperAdminSchoolsPage() {
             <SectionHead num="04">Principal &amp; primary contact</SectionHead>
             <div className="grid grid-cols-3 gap-3.5 max-md:grid-cols-2">
               <Fld label="Principal name" required error={fieldErrors.principal_name}>
-                <input className={`${inputCls}${fieldErrors.principal_name ? ' !border-[var(--danger)]' : ''}`} placeholder="Dr. M. Iyer" value={editFields.principal_name}
+                <input
+                  className={`${inputCls}${fieldErrors.principal_name ? ' !border-[var(--danger)]' : ''}`}
+                  placeholder="Dr. M. Iyer"
+                  maxLength={60}
+                  autoComplete="name"
+                  value={editFields.principal_name}
                   data-field-error={fieldErrors.principal_name ? 'true' : undefined}
-                  onChange={e => { setEditFields(f => ({ ...f, principal_name: e.target.value })); if (fieldErrors.principal_name) setFieldErrors(p => ({ ...p, principal_name: '' })); }} />
+                  onChange={e => {
+                    const v = e.target.value.replace(/[^\p{L}\s.''\-]/gu, '').slice(0, 60);
+                    setEditFields(f => ({ ...f, principal_name: v }));
+                    if (fieldErrors.principal_name) setFieldErrors(p => ({ ...p, principal_name: '' }));
+                  }}
+                />
               </Fld>
-              <Fld label="Designation"><input className={inputCls} defaultValue="Principal" title="Designation" /></Fld>
+              <Fld label="Designation" error={fieldErrors.principal_designation}>
+                <input
+                  className={`${inputCls}${fieldErrors.principal_designation ? ' !border-[var(--danger)]' : ''}`}
+                  placeholder="Principal"
+                  maxLength={50}
+                  title="Designation"
+                  value={editFields.principal_designation}
+                  data-field-error={fieldErrors.principal_designation ? 'true' : undefined}
+                  onChange={e => {
+                    const v = e.target.value.replace(/[^\p{L}\s.&/\-]/gu, '').slice(0, 50);
+                    setEditFields(f => ({ ...f, principal_designation: v }));
+                    if (fieldErrors.principal_designation) setFieldErrors(p => ({ ...p, principal_designation: '' }));
+                  }}
+                />
+              </Fld>
               <Fld label="Email" required error={fieldErrors.principal_email}>
-                <input type="email" className={`${inputCls}${fieldErrors.principal_email ? ' !border-[var(--danger)]' : ''}`} placeholder="principal@school.edu.in" value={editFields.principal_email}
+                <input
+                  type="email"
+                  className={`${inputCls}${fieldErrors.principal_email ? ' !border-[var(--danger)]' : ''}`}
+                  placeholder="principal@school.edu.in"
+                  maxLength={100}
+                  autoComplete="email"
+                  value={editFields.principal_email}
                   data-field-error={fieldErrors.principal_email ? 'true' : undefined}
-                  onChange={e => { setEditFields(f => ({ ...f, principal_email: e.target.value })); if (fieldErrors.principal_email) setFieldErrors(p => ({ ...p, principal_email: '' })); }} />
+                  onChange={e => {
+                    const v = e.target.value.replace(/\s/g, '').toLowerCase().slice(0, 100);
+                    setEditFields(f => ({ ...f, principal_email: v }));
+                    if (fieldErrors.principal_email) setFieldErrors(p => ({ ...p, principal_email: '' }));
+                  }}
+                />
               </Fld>
-              <Fld label="Mobile">
-                <div className="flex overflow-hidden rounded-lg border border-[var(--bd-2)] bg-[var(--bg-1)] transition focus-within:border-[var(--pu)] focus-within:shadow-[0_0_0_3px_rgba(109,74,255,.12)]">
+              <Fld label="Mobile" required error={fieldErrors.principal_phone}>
+                <div className={`flex overflow-hidden rounded-lg border bg-[var(--bg-1)] transition focus-within:shadow-[0_0_0_3px_rgba(109,74,255,.12)] ${fieldErrors.principal_phone ? 'border-[var(--danger)]' : 'border-[var(--bd-2)] focus-within:border-[var(--pu)]'}`}>
                   <span className="flex items-center border-r border-[var(--bd-2)] bg-[var(--bg-2)] px-[11px] font-mono text-[12px] text-[var(--ink-3)]">+91</span>
-                  <input type="tel" className="h-9 flex-1 border-none bg-transparent px-3 text-[13px] outline-none" placeholder="98765 43210" maxLength={10} inputMode="numeric"
+                  <input
+                    type="tel"
+                    className="h-9 flex-1 border-none bg-transparent px-3 text-[13px] outline-none"
+                    placeholder="98765 43210"
+                    maxLength={10}
+                    inputMode="numeric"
+                    autoComplete="tel-national"
                     value={editFields.principal_phone}
-                    onChange={e => setEditFields(f => ({ ...f, principal_phone: e.target.value.replace(/\D/g, '') }))} />
+                    data-field-error={fieldErrors.principal_phone ? 'true' : undefined}
+                    onChange={e => {
+                      const v = e.target.value.replace(/\D/g, '').slice(0, 10);
+                      setEditFields(f => ({ ...f, principal_phone: v }));
+                      if (fieldErrors.principal_phone) setFieldErrors(p => ({ ...p, principal_phone: '' }));
+                    }}
+                  />
                 </div>
               </Fld>
-              <Fld label="Alternate contact"><input type="tel" className={inputCls} placeholder="+91 98765 43211" inputMode="numeric" maxLength={13}
-                onInput={e => { (e.target as HTMLInputElement).value = (e.target as HTMLInputElement).value.replace(/[^0-9+]/g, ''); }} /></Fld>
+              <Fld label="Alternate contact" error={fieldErrors.alternate_contact}>
+                <input
+                  type="tel"
+                  className={`${inputCls}${fieldErrors.alternate_contact ? ' !border-[var(--danger)]' : ''}`}
+                  placeholder="98765 43211"
+                  maxLength={10}
+                  inputMode="numeric"
+                  value={editFields.alternate_contact}
+                  data-field-error={fieldErrors.alternate_contact ? 'true' : undefined}
+                  onChange={e => {
+                    const v = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    setEditFields(f => ({ ...f, alternate_contact: v }));
+                    if (fieldErrors.alternate_contact) setFieldErrors(p => ({ ...p, alternate_contact: '' }));
+                  }}
+                />
+              </Fld>
               <Fld label="Owner role at school">
-                <select className={selectCls} title="Owner role at school">
+                <select
+                  className={selectCls}
+                  title="Owner role at school"
+                  value={editFields.owner_role}
+                  onChange={e => setEditFields(f => ({ ...f, owner_role: e.target.value }))}
+                >
                   <option>Principal</option><option>Correspondent</option>
                   <option>Trustee / Secretary</option><option>Owner / Founder</option><option>IT Admin</option>
                 </select>
@@ -1505,11 +1645,30 @@ export default function SuperAdminSchoolsPage() {
               <Fld label="GST registration">
                 <select className={selectCls} title="GST registration"
                   value={editFields.gst_registered}
-                  onChange={e => setEditFields(f => ({ ...f, gst_registered: e.target.value }))}>
+                  onChange={e => setEditFields(f => ({
+                    ...f,
+                    gst_registered: e.target.value,
+                    gstin: e.target.value === 'no' ? '' : f.gstin,
+                  }))}>
                   <option value="yes">GST-registered</option>
                   <option value="no">Unregistered (exempt)</option>
                 </select>
               </Fld>
+              {editFields.gst_registered === 'yes' && (
+                <Fld label="GSTIN" error={fieldErrors.gstin}>
+                  <input
+                    className={`${monoInputCls} uppercase${fieldErrors.gstin ? ' !border-[var(--danger)]' : ''}`}
+                    placeholder="27AABCU9603R1ZX"
+                    maxLength={15}
+                    value={editFields.gstin}
+                    data-field-error={fieldErrors.gstin ? 'true' : undefined}
+                    onChange={e => {
+                      setEditFields(f => ({ ...f, gstin: e.target.value.toUpperCase() }));
+                      if (fieldErrors.gstin) setFieldErrors(p => ({ ...p, gstin: '' }));
+                    }}
+                  />
+                </Fld>
+              )}
               <Fld label="PAN" required error={fieldErrors.pan}>
                 <input className={`${monoInputCls} uppercase${fieldErrors.pan ? ' !border-[var(--danger)]' : ''}`} placeholder="AAACE9988K" maxLength={10}
                   value={editFields.pan}
@@ -1531,9 +1690,28 @@ export default function SuperAdminSchoolsPage() {
           <div className="border-b border-dashed border-[var(--bd-2)] py-5">
             <SectionHead num="07">Plan &amp; capacity limits</SectionHead>
             <div className="grid grid-cols-4 gap-3.5 max-md:grid-cols-2">
-              <Fld label="Subscription plan" required span="2">
-                <select className={selectCls} title="Subscription plan" value={provisionForm.plan}
-                  onChange={e => setProvisionForm(f => ({ ...f, plan: e.target.value as PlanType }))}>
+              <Fld label="Subscription plan" required span="2" error={fieldErrors.plan}>
+                <select className={`${selectCls}${fieldErrors.plan ? ' !border-[var(--danger)]' : ''}`} title="Subscription plan" value={provisionForm.plan}
+                  data-field-error={fieldErrors.plan ? 'true' : undefined}
+                  onChange={e => {
+                    const newPlan = e.target.value as PlanType;
+                    setProvisionForm(f => ({ ...f, plan: newPlan }));
+                    const plan = subscriptionPlans.find(p => p.code === newPlan);
+                    if (plan) {
+                      setEditFields(f => ({
+                        ...f,
+                        // Only fill defaults where the user has not entered an override
+                        student_seat_limit: f.student_seat_limit || (plan.default_student_seats != null ? String(plan.default_student_seats) : f.student_seat_limit),
+                        staff_seat_limit: f.staff_seat_limit || (plan.default_staff_seats != null ? String(plan.default_staff_seats) : f.staff_seat_limit),
+                        storage_cap_gb: f.storage_cap_gb || (plan.default_storage_gb != null ? String(plan.default_storage_gb) : f.storage_cap_gb),
+                        trial_days: f.trial_days || (plan.default_trial_days != null ? String(plan.default_trial_days) : f.trial_days),
+                        billing_cycle: plan.allowed_billing_cycles?.includes(f.billing_cycle as TenantBillingCycle)
+                          ? f.billing_cycle
+                          : (plan.default_billing_cycle ?? f.billing_cycle),
+                      }));
+                    }
+                    if (fieldErrors.plan) setFieldErrors(p => ({ ...p, plan: '' }));
+                  }}>
                   {subscriptionPlans.length > 0
                     ? subscriptionPlans.map(p => (
                         <option key={p.code} value={p.code}>{p.name}</option>
@@ -1546,18 +1724,85 @@ export default function SuperAdminSchoolsPage() {
                   }
                 </select>
               </Fld>
-              <Fld label="Trial period">
-                <select className={selectCls} title="Trial period"><option>30 days</option><option>14 days</option><option>No trial</option></select>
+              <Fld label="Trial period" error={fieldErrors.trial_days}>
+                <select className={`${selectCls}${fieldErrors.trial_days ? ' !border-[var(--danger)]' : ''}`} title="Trial period" value={editFields.trial_days}
+                  data-field-error={fieldErrors.trial_days ? 'true' : undefined}
+                  onChange={e => { setEditFields(f => ({ ...f, trial_days: e.target.value })); if (fieldErrors.trial_days) setFieldErrors(p => ({ ...p, trial_days: '' })); }}>
+                  <option value="0">No trial</option>
+                  <option value="7">7 days</option>
+                  <option value="14">14 days</option>
+                  <option value="30">30 days</option>
+                  <option value="60">60 days</option>
+                  <option value="90">90 days</option>
+                </select>
               </Fld>
-              <Fld label="Go-live date">
-                <input type="date" className={inputCls} defaultValue="2026-06-01" min={new Date().toISOString().slice(0, 10)} title="Go-live date" />
+              <Fld label="Go-live date" error={fieldErrors.go_live_date}>
+                <input type="date" className={`${inputCls}${fieldErrors.go_live_date ? ' !border-[var(--danger)]' : ''}`}
+                  title="Go-live date"
+                  min={editSchool ? undefined : new Date().toISOString().slice(0, 10)}
+                  value={editFields.go_live_date}
+                  data-field-error={fieldErrors.go_live_date ? 'true' : undefined}
+                  onChange={e => { setEditFields(f => ({ ...f, go_live_date: e.target.value })); if (fieldErrors.go_live_date) setFieldErrors(p => ({ ...p, go_live_date: '' })); }} />
               </Fld>
-              <Fld label="Student seat limit"><input type="number" className={inputCls} title="Student seat limit" placeholder="2000"
-                value={editFields.seats} onChange={e => setEditFields(f => ({ ...f, seats: e.target.value }))} /></Fld>
-              <Fld label="Staff seat limit"><input type="number" className={inputCls} defaultValue={200} title="Staff seat limit" /></Fld>
-              <Fld label="Storage cap" hint="GB"><input type="number" className={inputCls} defaultValue={50} title="Storage cap" /></Fld>
-              <Fld label="Billing cycle">
-                <select className={selectCls} title="Billing cycle"><option>Annual \u00b7 pay upfront</option><option>Half-yearly</option><option>Quarterly</option><option>Monthly</option></select>
+              <Fld label="Student seat limit" hint="0 = unlimited" error={fieldErrors.student_seat_limit}>
+                <input type="number" className={`${inputCls}${fieldErrors.student_seat_limit ? ' !border-[var(--danger)]' : ''}`}
+                  title="Student seat limit" min={0} max={1000000}
+                  placeholder={String(subscriptionPlans.find(p => p.code === provisionForm.plan)?.default_student_seats ?? 2000)}
+                  value={editFields.student_seat_limit}
+                  data-field-error={fieldErrors.student_seat_limit ? 'true' : undefined}
+                  onChange={e => {
+                    const v = e.target.value.replace(/\D/g, '').slice(0, 7);
+                    setEditFields(f => ({ ...f, student_seat_limit: v }));
+                    if (fieldErrors.student_seat_limit) setFieldErrors(p => ({ ...p, student_seat_limit: '' }));
+                  }} />
+              </Fld>
+              <Fld label="Staff seat limit" hint="0 = unlimited" error={fieldErrors.staff_seat_limit}>
+                <input type="number" className={`${inputCls}${fieldErrors.staff_seat_limit ? ' !border-[var(--danger)]' : ''}`}
+                  title="Staff seat limit" min={0} max={100000}
+                  placeholder={String(subscriptionPlans.find(p => p.code === provisionForm.plan)?.default_staff_seats ?? 200)}
+                  value={editFields.staff_seat_limit}
+                  data-field-error={fieldErrors.staff_seat_limit ? 'true' : undefined}
+                  onChange={e => {
+                    const v = e.target.value.replace(/\D/g, '').slice(0, 6);
+                    setEditFields(f => ({ ...f, staff_seat_limit: v }));
+                    if (fieldErrors.staff_seat_limit) setFieldErrors(p => ({ ...p, staff_seat_limit: '' }));
+                  }} />
+              </Fld>
+              <Fld label="Storage cap" hint="GB" error={fieldErrors.storage_cap_gb}>
+                <input type="number" className={`${inputCls}${fieldErrors.storage_cap_gb ? ' !border-[var(--danger)]' : ''}`}
+                  title="Storage cap" min={0} max={100000}
+                  placeholder={String(subscriptionPlans.find(p => p.code === provisionForm.plan)?.default_storage_gb ?? 50)}
+                  value={editFields.storage_cap_gb}
+                  data-field-error={fieldErrors.storage_cap_gb ? 'true' : undefined}
+                  onChange={e => {
+                    const v = e.target.value.replace(/\D/g, '').slice(0, 6);
+                    setEditFields(f => ({ ...f, storage_cap_gb: v }));
+                    if (fieldErrors.storage_cap_gb) setFieldErrors(p => ({ ...p, storage_cap_gb: '' }));
+                  }} />
+              </Fld>
+              <Fld label="Billing cycle" error={fieldErrors.billing_cycle}>
+                {(() => {
+                  const plan = subscriptionPlans.find(p => p.code === provisionForm.plan);
+                  const allowed = plan?.allowed_billing_cycles ?? ['annual', 'half_yearly', 'quarterly', 'monthly'];
+                  const labels: Record<TenantBillingCycle, string> = {
+                    annual: 'Annual · pay upfront',
+                    half_yearly: 'Half-yearly',
+                    quarterly: 'Quarterly',
+                    monthly: 'Monthly',
+                  };
+                  const all: TenantBillingCycle[] = ['annual', 'half_yearly', 'quarterly', 'monthly'];
+                  return (
+                    <select className={`${selectCls}${fieldErrors.billing_cycle ? ' !border-[var(--danger)]' : ''}`} title="Billing cycle" value={editFields.billing_cycle}
+                      data-field-error={fieldErrors.billing_cycle ? 'true' : undefined}
+                      onChange={e => { setEditFields(f => ({ ...f, billing_cycle: e.target.value })); if (fieldErrors.billing_cycle) setFieldErrors(p => ({ ...p, billing_cycle: '' })); }}>
+                      {all.map(c => (
+                        <option key={c} value={c} disabled={!allowed.includes(c)}>
+                          {labels[c]}{!allowed.includes(c) ? ' (not in plan)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                })()}
               </Fld>
             </div>
           </div>
@@ -1714,7 +1959,7 @@ export default function SuperAdminSchoolsPage() {
             <div className="flex gap-2">
               {editSchool ? (
                 <button type="button"
-                  onClick={() => { setEditSchool(null); setAccAddOpen(false); setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' }); setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' }); setLogoFile(null); setLogoPreview(null); setSelectedColor(PALETTE_COLORS[0]!.hex); setProvisionError(null); }}
+                  onClick={() => { setEditSchool(null); setAccAddOpen(false); setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' }); setEditFields({ ...EMPTY_EDIT_FIELDS }); setLogoFile(null); setLogoPreview(null); setSelectedColor(PALETTE_COLORS[0]!.hex); setProvisionError(null); }}
                   className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border-0 bg-transparent px-3.5 text-[12.5px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)]">
                   Cancel edit
                 </button>
@@ -1723,7 +1968,7 @@ export default function SuperAdminSchoolsPage() {
                   <button type="button" onClick={() => {
                     setAccAddOpen(false);
                     setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
-                    setEditFields({ short_code: '', gstin: '', pan: '', udise_code: '', seats: '', api_access: 'disabled', brand_color: '', gst_registered: 'yes', principal_name: '', principal_email: '', principal_phone: '', campus_address: '', city: '', pin_code: '', affiliation_number: '' });
+                    setEditFields({ ...EMPTY_EDIT_FIELDS });
                     setLogoFile(null);
                     setLogoPreview(null);
                     setSelectedColor(PALETTE_COLORS[0]!.hex);
@@ -1778,7 +2023,7 @@ export default function SuperAdminSchoolsPage() {
             {/* Plan */}
             <div>
               <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Plan</label>
-              <select className={selectCls} title="Plan" value={pendingPlan} onChange={e => setPendingPlan(e.target.value)}>
+              <select className={selectCls} title="Plan" value={planFilter} onChange={e => { setPlanFilter(e.target.value); setPage(1); }}>
                 <option value="">All plans</option>
                 <option value="trial">Trial</option>
                 <option value="starter">Starter</option>
@@ -1790,7 +2035,7 @@ export default function SuperAdminSchoolsPage() {
             {/* Board */}
             <div>
               <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">Board</label>
-              <select className={selectCls} title="Board" value={pendingBoard} onChange={e => setPendingBoard(e.target.value)}>
+              <select className={selectCls} title="Board" value={boardFilter} onChange={e => { setBoardFilter(e.target.value); setPage(1); }}>
                 <option value="">All boards</option>
                 {BOARDS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
               </select>
@@ -1798,7 +2043,7 @@ export default function SuperAdminSchoolsPage() {
             {/* State */}
             <div>
               <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">State</label>
-              <select className={selectCls} title="State" value={pendingState} onChange={e => setPendingState(e.target.value)}>
+              <select className={selectCls} title="State" value={stateFilter} onChange={e => { setStateFilter(e.target.value); setPage(1); }}>
                 <option value="">All states</option>
                 <option value="36">Telangana (36)</option>
                 <option value="37">Andhra Pradesh (37)</option>
@@ -1835,15 +2080,6 @@ export default function SuperAdminSchoolsPage() {
                 />
               ))}
             </div>
-          </div>
-
-          <div className="mt-4 flex justify-end border-t border-dashed border-[var(--bd-2)] pt-4">
-            <button
-              onClick={handleApplyFilters}
-              className="rounded-lg bg-[#5B4FCF] px-5 py-2 text-[13px] font-semibold text-white shadow-sm transition hover:bg-[#4A3FBF] active:scale-95"
-            >
-              Apply filters
-            </button>
           </div>
 
         </div>
@@ -1971,13 +2207,27 @@ export default function SuperAdminSchoolsPage() {
                   {rows.map(school => {
                     const initials = schoolInitials(school.name);
                     const gradCls = avatarGradient(school.tenant_id);
+                    const logoSrc = school.logo_url
+                      ? (school.logo_url.startsWith('http')
+                          ? school.logo_url
+                          : `${API_BASE_URL}${school.logo_url}`)
+                      : null;
                     return (
                       <tr key={school.tenant_id} className="group transition-colors hover:bg-[var(--bg-2)]">
                         <td className="border-b border-[var(--bd)] py-3.5 pl-[18px] pr-3.5 align-middle">
                           <div className="flex min-w-[240px] items-center gap-2.5">
-                            <span className={`flex h-[38px] w-[38px] flex-shrink-0 items-center justify-center rounded-[10px] text-[13px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,.15)] ${gradCls}`}>
-                              {initials}
-                            </span>
+                            {logoSrc ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={logoSrc}
+                                alt={`${school.name} logo`}
+                                className="h-[38px] w-[38px] flex-shrink-0 rounded-[10px] object-cover bg-[var(--bg-2)]"
+                              />
+                            ) : (
+                              <span className={`flex h-[38px] w-[38px] flex-shrink-0 items-center justify-center rounded-[10px] text-[13px] font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,.15)] ${gradCls}`}>
+                                {initials}
+                              </span>
+                            )}
                             <span className="min-w-0 flex-1">
                               <Link
                                 href={`/super-admin/schools/${school.tenant_id}`}
@@ -2051,7 +2301,7 @@ export default function SuperAdminSchoolsPage() {
                             ] : [
                               { title: 'Open',        icon: <ExternalLink size={13} />, action: () => window.open(`/super-admin/schools/${school.tenant_id}`, '_blank') },
                               { title: 'Edit',        icon: <Edit2 size={13} />,        action: () => handleEditInForm(school) },
-                              { title: 'Impersonate', icon: <Users size={13} />,        action: () => void handleImpersonate(school), loading: impersonatingId === school.tenant_id },
+                              { title: 'Impersonate', icon: <Users size={13} />,        action: () => void handleImpersonate(school), loading: impersonatingId === school.tenant_id, disabled: !school.tenant_id || school.status === 'provisioning' },
                               { title: 'Suspend',     icon: <Pause size={13} />,        action: () => setConfirmDialog({ type: 'suspend', school }) },
                               { title: 'Archive',     icon: <Archive size={13} />,      action: () => setConfirmDialog({ type: 'archive', school }) },
                             ]).map(btn => (

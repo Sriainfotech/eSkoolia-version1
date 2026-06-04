@@ -122,6 +122,23 @@ export async function impersonateSchool(tenantId: string): Promise<ImpersonateRe
   );
 }
 
+export interface ResetAdminPasswordResponse {
+  admin_username: string;
+  admin_password: string;
+  message: string;
+}
+
+/**
+ * Generate a new secure password for the school's admin account and apply it
+ * immediately. The password is returned ONCE and is never stored server-side.
+ */
+export async function resetSchoolAdminPassword(tenantId: string): Promise<ResetAdminPasswordResponse> {
+  return apiRequestWithRefresh<ResetAdminPasswordResponse>(
+    `/api/super-admin/schools/${tenantId}/reset-admin-password/`,
+    { method: 'POST' }
+  );
+}
+
 /**
  * Upload a logo image for a school tenant.
  * Returns the stored logo URL.

@@ -4,7 +4,7 @@
  * Handles billing, invoicing, and financial metrics.
  */
 
-import { Invoice, MrrData, InvoiceFilters, PaginatedResponse, PlansCatalog, SubscriptionPlan } from '@/types/super-admin';
+import { Invoice, InvoicePayment, InvoicePaymentMethod, MrrData, InvoiceFilters, PaginatedResponse, PlansCatalog, SubscriptionPlan } from '@/types/super-admin';
 import { apiRequestWithRefresh, apiRequestWithRefreshResponse } from '@/lib/api-auth';
 
 /**
@@ -94,6 +94,45 @@ export async function markInvoicePaid(invoiceId: string): Promise<Invoice> {
   return apiRequestWithRefresh<Invoice>(
     `/api/super-admin/billing/invoices/${invoiceId}/mark-paid/`,
     { method: 'POST' }
+  );
+}
+
+/**
+ * Record a payment (full or partial) against an invoice.
+ * Backend updates paid_amount / due_amount and derives status
+ * (partially_paid vs paid).
+ */
+export interface RecordInvoicePaymentPayload {
+  amount: number;
+  paid_on?: string;
+  method?: InvoicePaymentMethod;
+  reference_no?: string;
+  notes?: string;
+}
+
+export async function recordInvoicePayment(
+  invoiceId: string,
+  payload: RecordInvoicePaymentPayload
+): Promise<{ payment: InvoicePayment; invoice: Invoice }> {
+  return apiRequestWithRefresh<{ payment: InvoicePayment; invoice: Invoice }>(
+    `/api/super-admin/billing/invoices/${invoiceId}/payments/`,
+    { method: 'POST', body: JSON.stringify(payload) }
+  );
+}
+
+export async function listInvoicePayments(invoiceId: string): Promise<InvoicePayment[]> {
+  return apiRequestWithRefresh<InvoicePayment[]>(
+    `/api/super-admin/billing/invoices/${invoiceId}/payments/`
+  );
+}
+
+export async function deleteInvoicePayment(
+  invoiceId: string,
+  paymentId: string
+): Promise<Invoice> {
+  return apiRequestWithRefresh<Invoice>(
+    `/api/super-admin/billing/invoices/${invoiceId}/payments/${paymentId}/`,
+    { method: 'DELETE' }
   );
 }
 

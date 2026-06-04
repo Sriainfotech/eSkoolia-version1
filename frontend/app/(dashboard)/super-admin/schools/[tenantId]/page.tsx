@@ -4,8 +4,9 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { toast } from 'react-toastify';
-import { ArrowLeft, Edit2, Pause, RotateCcw, ExternalLink } from 'lucide-react';
-import { getSchool, updateSchool } from '@/lib/api/super-admin/schools';
+import { ArrowLeft, Copy, Edit2, Eye, EyeOff, KeyRound, Pause, RotateCcw, ExternalLink } from 'lucide-react';
+import { getSchool, resetSchoolAdminPassword, updateSchool } from '@/lib/api/super-admin/schools';
+import type { ResetAdminPasswordResponse } from '@/lib/api/super-admin/schools';
 import type { SchoolTenant } from '@/types/super-admin';
 
 const AVATAR_GRADIENT_CLS = [
@@ -94,9 +95,13 @@ export default function SchoolViewPage({ params }: { params: { tenantId: string 
   const { tenantId } = params;
   const router = useRouter();
 
-  const [school,    setSchool]    = useState<SchoolTenant | null>(null);
-  const [loading,   setLoading]   = useState(true);
-  const [actioning, setActioning] = useState(false);
+  const [school,       setSchool]       = useState<SchoolTenant | null>(null);
+  const [loading,      setLoading]      = useState(true);
+  const [actioning,    setActioning]    = useState(false);
+  const [resetting,    setResetting]    = useState(false);
+  const [resetResult,  setResetResult]  = useState<ResetAdminPasswordResponse | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [copied,       setCopied]       = useState<'user' | 'pass' | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -111,6 +116,30 @@ export default function SchoolViewPage({ params }: { params: { tenantId: string 
   }, [tenantId, router]);
 
   useEffect(() => { void load(); }, [load]);
+
+  const handleResetPassword = async () => {
+    if (!school) return;
+    setResetting(true);
+    try {
+      const result = await resetSchoolAdminPassword(tenantId);
+      setResetResult(result);
+      setShowPassword(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Password reset failed.');
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const copyToClipboard = async (text: string, field: 'user' | 'pass') => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(field);
+      setTimeout(() => setCopied(null), 2000);
+    } catch {
+      toast.error('Could not copy to clipboard.');
+    }
+  };
 
   const handleStatusChange = async (newStatus: 'active' | 'suspended') => {
     if (!school) return;
@@ -145,6 +174,7 @@ export default function SchoolViewPage({ params }: { params: { tenantId: string 
   const isArchived  = school.status === 'archived';
 
   return (
+    <>
     <div className="mx-auto max-w-3xl space-y-5 p-6">
 
       <button
@@ -202,6 +232,16 @@ export default function SchoolViewPage({ params }: { params: { tenantId: string 
                 className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--bd)] px-3.5 py-2 text-[13px] font-[550] text-[var(--ink-2)] hover:bg-[var(--bg-3)] disabled:opacity-50 transition-colors"
               >
                 <Pause size={13} /> Suspend
+              </button>
+            )}
+            {!isArchived && (
+              <button
+                onClick={() => void handleResetPassword()}
+                disabled={resetting || actioning}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--bd)] px-3.5 py-2 text-[13px] font-[550] text-[var(--ink-2)] hover:bg-[var(--bg-3)] disabled:opacity-50 transition-colors"
+              >
+                <KeyRound size={13} />
+                {resetting ? 'Resetting…' : 'Reset Admin Password'}
               </button>
             )}
             {!isArchived && (
@@ -302,5 +342,84 @@ export default function SchoolViewPage({ params }: { params: { tenantId: string 
       </div>
 
     </div>
+
+    {/* ── One-time credential reveal modal ─────────────────────────────── */}
+    {resetResult && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+        onClick={() => setResetResult(null)}
+      >
+        <div
+          className="w-full max-w-md rounded-2xl bg-[var(--bg-1)] shadow-2xl border border-[var(--bd)] p-6 space-y-4"
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex items-start gap-3">
+            <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-amber-100">
+              <KeyRound size={17} className="text-amber-600" />
+            </span>
+            <div>
+              <h2 className="text-[15px] font-[700] text-[var(--ink-1)]">New Admin Credentials</h2>
+              <p className="text-[12px] text-[var(--ink-3)]">{school?.name}</p>
+            </div>
+          </div>
+
+          {/* Warning banner */}
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[12px] text-amber-800">
+            <span className="font-[650]">Shown once only.</span> Copy these credentials now — they will not be shown again after you close this dialog.
+          </div>
+
+          {/* Username */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-[650] uppercase tracking-wider text-[var(--ink-3)]">Username</label>
+            <div className="flex items-center gap-2 rounded-xl border border-[var(--bd)] bg-[var(--bg-2)] px-3 py-2.5">
+              <span className="flex-1 font-mono text-[13px] text-[var(--ink-1)] select-all">{resetResult.admin_username}</span>
+              <button
+                onClick={() => void copyToClipboard(resetResult.admin_username, 'user')}
+                className="flex-shrink-0 rounded-lg p-1 text-[var(--ink-3)] hover:bg-[var(--bg-3)] hover:text-[var(--ink-1)] transition-colors"
+                title="Copy username"
+              >
+                <Copy size={13} />
+              </button>
+            </div>
+            {copied === 'user' && <p className="text-[11px] text-[#0d7a55]">Copied!</p>}
+          </div>
+
+          {/* Password */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-[650] uppercase tracking-wider text-[var(--ink-3)]">Password</label>
+            <div className="flex items-center gap-2 rounded-xl border border-[var(--bd)] bg-[var(--bg-2)] px-3 py-2.5">
+              <span className="flex-1 font-mono text-[13px] text-[var(--ink-1)] select-all">
+                {showPassword ? resetResult.admin_password : '•'.repeat(resetResult.admin_password.length)}
+              </span>
+              <button
+                onClick={() => setShowPassword(v => !v)}
+                className="flex-shrink-0 rounded-lg p-1 text-[var(--ink-3)] hover:bg-[var(--bg-3)] hover:text-[var(--ink-1)] transition-colors"
+                title={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+              <button
+                onClick={() => void copyToClipboard(resetResult.admin_password, 'pass')}
+                className="flex-shrink-0 rounded-lg p-1 text-[var(--ink-3)] hover:bg-[var(--bg-3)] hover:text-[var(--ink-1)] transition-colors"
+                title="Copy password"
+              >
+                <Copy size={13} />
+              </button>
+            </div>
+            {copied === 'pass' && <p className="text-[11px] text-[#0d7a55]">Copied!</p>}
+          </div>
+
+          {/* Close */}
+          <button
+            onClick={() => setResetResult(null)}
+            className="w-full rounded-xl bg-[var(--pu)] py-2.5 text-[13px] font-[600] text-white hover:opacity-90 transition-opacity"
+          >
+            I&apos;ve saved these credentials — Close
+          </button>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

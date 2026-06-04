@@ -87,6 +87,8 @@ ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "127
 ALLOWED_HOSTS += [".devtunnels.ms", ".githubpreview.dev"]
 # Production + local staging subdomain routing: springdale.eskoolia.com / springdale.eskoolia.local
 ALLOWED_HOSTS += [".eskoolia.com", ".eskoolia.local"]
+# Local LAN access for testing from other devices on the network.
+ALLOWED_HOSTS += ["192.168.0.230", "192.168.0.195"]
 
 # Silence django-tenants warning about auto_create_schema=False; schema
 # provisioning is handled explicitly by management commands in this project.
@@ -119,6 +121,7 @@ INSTALLED_APPS = [
     "apps.exams",
     "apps.finance",
     "apps.hr",
+    "apps.master",
     "apps.library",
     "apps.behaviour",
     "apps.chat",

@@ -1,4 +1,6 @@
 import math
+import re
+import requests as http_requests
 from datetime import date
 
 from asgiref.sync import async_to_sync
@@ -1905,3 +1907,73 @@ class HolidayViewSet(TenantQueryMixin, viewsets.ModelViewSet):
         return Response({"success": True, "message": f'Holiday "{name}" deleted.'},
                         status=status.HTTP_200_OK)
 
+
+class PincodeLookupView(APIView):
+    """
+    GET /api/v1/core/pincode-lookup/?pincode=500081
+
+    Proxies to the Indian Postal PIN code API and returns:
+        {"city": "...", "state": "...", "country": "India"}
+
+    Returns 404 if the pincode is not found; 400 for invalid input.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        pincode = request.query_params.get("pincode", "").strip()
+        if not pincode:
+            return Response(
+                {"detail": "pincode query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not re.fullmatch(r"\d{5,6}", pincode):
+            return Response(
+                {"detail": "Invalid pincode. Must be 5 or 6 digits."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            resp = http_requests.get(
+                f"https://api.postalpincode.in/pincode/{pincode}",
+                timeout=8,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if (
+                data
+                and isinstance(data, list)
+                and len(data) > 0
+                and data[0].get("Status") == "Success"
+                and data[0].get("PostOffice")
+                and len(data[0]["PostOffice"]) > 0
+            ):
+                po = data[0]["PostOffice"][0]
+                return Response({
+                    "city":    po.get("District", ""),
+                    "state":   po.get("State", ""),
+                    "country": po.get("Country", "India"),
+                })
+            # API returned but said Not Found or invalid structure
+            return Response(
+                {"detail": "Location not found for this PIN code."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except http_requests.Timeout:
+            return Response(
+                {"detail": "PIN code lookup service is taking too long. Please try again."},
+                status=status.HTTP_504_GATEWAY_TIMEOUT,
+            )
+        except http_requests.HTTPError as exc:
+            import logging
+            logging.getLogger(__name__).warning("PIN code API HTTP error: %s", exc)
+            return Response(
+                {"detail": "PIN code lookup service is temporarily unavailable."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception("PIN code lookup unexpected error: %s", exc)
+            return Response(
+                {"detail": "Unable to lookup PIN code at this time. Please enter city/state manually."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )

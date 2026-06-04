@@ -187,7 +187,25 @@ export function useStaff(filters: StaffFilters = {}) {
   );
 }
 
-export async function createStaff(body: Partial<Staff>) {
+export async function createStaff(body: Partial<Staff>, photoFile?: File | null) {
+  if (photoFile) {
+    const fd = new FormData();
+    Object.entries(body).forEach(([key, val]) => {
+      if (val === undefined || val === null) return;
+      if (typeof val === "object") {
+        fd.append(key, JSON.stringify(val));
+      } else {
+        fd.append(key, String(val));
+      }
+    });
+    fd.append("staff_photo", photoFile, photoFile.name);
+    const res = await apiRequestWithRefreshResponse("/api/v1/hr/staff/", {
+      method: "POST",
+      body: fd,
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<Staff>;
+  }
   const res = await apiRequestWithRefreshResponse("/api/v1/hr/staff/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -227,6 +245,124 @@ export function useStaffDocuments(staffId: number) {
     `/api/v1/hr/staff-documents/?staff=${staffId}&page_size=50`,
     [staffId],
   );
+}
+
+// ─── Onboard Drafts ──────────────────────────────────────────────────────────
+export interface OnboardDraft {
+  id: number;
+  draft_name: string;
+  form_data: Record<string, unknown>;
+  current_step: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export function useOnboardDrafts() {
+  return useFetch<{ count: number; results: OnboardDraft[] }>("/api/v1/hr/onboard/drafts/");
+}
+
+export async function saveOnboardDraft(payload: {
+  id?: number | null;
+  form_data: Record<string, unknown>;
+  current_step: number;
+}): Promise<OnboardDraft> {
+  const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/drafts/save/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json() as OnboardDraft & { error?: string };
+  if (!res.ok) throw new Error((body as { error?: string }).error ?? "Failed to save draft.");
+  return body;
+}
+
+export async function deleteOnboardDraft(id: number): Promise<void> {
+  const res = await apiRequestWithRefreshResponse(`/api/v1/hr/onboard/drafts/${id}/`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error("Failed to delete draft.");
+  }
+}
+
+/** Downloads the blank staff onboarding form PDF.
+ *  Pass `copies` (1–5) to embed multiple copies in the same PDF.
+ */
+export async function downloadBlankForm(copies: number = 1): Promise<void> {  const res = await apiRequestWithRefreshResponse(
+    `/api/v1/hr/onboard/blank-form/?copies=${copies}`,
+    { method: "GET" },
+  );
+  if (!res.ok) {
+    let msg = "Failed to generate blank form.";
+    try {
+      const data = await res.json();
+      if (data?.error) msg = data.error;
+    } catch {
+      // ignore parse error, keep generic message
+    }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "staff-onboarding-form.pdf";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/** Downloads a filled staff onboarding PDF using the current wizard form data.
+ *  Sends form_data as JSON to the backend, receives a PDF blob.
+ *  Validates: form_data.first_name must be non-empty (backend also validates).
+ */
+export async function downloadFilledForm(formData: Record<string, unknown>): Promise<void> {
+  const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/filled-form/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ form_data: formData }),
+  });
+  if (!res.ok) {
+    let msg = "Failed to generate PDF.";
+    try {
+      const data = await res.json();
+      if (data?.error) msg = data.error;
+    } catch {
+      // ignore parse error, keep generic message
+    }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  // Derive filename from Content-Disposition if available, else default
+  const cd = res.headers.get("Content-Disposition") ?? "";
+  const match = cd.match(/filename="?([^";\n]+)"?/i);
+  a.download = match?.[1] ?? "staff-onboarding.pdf";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ─── PIN Code Lookup ──────────────────────────────────────────────────────────
+/** Looks up city/state/country for a given PIN code via the backend proxy.
+ *  Returns null if the pincode is not found or the request fails.
+ */
+export async function lookupPincode(
+  pincode: string,
+): Promise<{ city: string; state: string; country: string } | null> {
+  try {
+    const data = await apiRequestWithRefresh<{ city: string; state: string; country: string }>(
+      `/api/v1/core/pincode-lookup/?pincode=${encodeURIComponent(pincode)}`,
+      { method: "GET" },
+    );
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Leave Types ─────────────────────────────────────────────────────────────
@@ -378,6 +514,35 @@ export async function completeOffboarding(id: number) {
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<OffboardingRecord>;
+}
+
+// ─── Master Data ──────────────────────────────────────────────────────────────
+export interface MasterItem { id: number; name: string; }
+
+export function useMasterLanguages() {
+  return useFetch<MasterItem[]>("/api/master/languages/");
+}
+
+export function useMasterReligions() {
+  return useFetch<MasterItem[]>("/api/master/religions/");
+}
+
+export function useMasterCountries() {
+  return useFetch<MasterItem[]>("/api/master/countries/");
+}
+
+export function useMasterEmploymentTypes() {
+  return useFetch<MasterItem[]>("/api/master/employment-types/");
+}
+
+// Staff form options (roles, departments, designations) — backed by hr/staff/form-options/
+export interface StaffFormOptions {
+  roles: { id: number; name: string }[];
+  departments: { id: number; name: string }[];
+  designations: { id: number; name: string; department: number }[];
+}
+export function useStaffFormOptions() {
+  return useFetch<{ success: boolean; data: StaffFormOptions }>("/api/v1/hr/staff/form-options/");
 }
 
 

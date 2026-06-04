@@ -6,7 +6,7 @@ import { MODULES, FLAT_INDEX } from '@/lib/routes';
 import type { PinItem } from '@/lib/userPrefs';
 
 // Modules that show Coming Soon tooltip on hover
-const COMING_SOON_IDS = new Set(['attendance', 'fees', 'exam', 'reports', 'hr']);
+const COMING_SOON_IDS = new Set(['attendance', 'exam', 'reports', 'hr']);
 
 function getIconAndColors(path: string) {
   const entry = FLAT_INDEX.find(f => f.path === path);

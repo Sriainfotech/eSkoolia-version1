@@ -51,13 +51,14 @@ function SectionHead({ num, title }: { num: string; title: string }) {
   );
 }
 
-// Slugify name → code suggestion
+// Slugify name → code suggestion (lowercase snake_case, matches
+// Stripe/Razorpay-style plan identifiers used as immutable billing keys).
 function slugify(input: string): string {
   return input
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
     .slice(0, 64);
 }
 
@@ -256,9 +257,13 @@ export default function NewPlanDrawer({ open, onClose, onCreated, existing }: Ne
                     className={monoInputCls}
                     value={code}
                     disabled={isEdit}
+                    autoComplete="off"
                     onChange={(e) => {
-                      setCodeEdited(true);
-                      setCode(slugify(e.target.value));
+                      const next = slugify(e.target.value);
+                      setCode(next);
+                      // Only stop auto-deriving from `name` once the user
+                      // actually diverges from the name-derived slug.
+                      setCodeEdited(next !== slugify(name));
                     }}
                     placeholder="growth"
                   />

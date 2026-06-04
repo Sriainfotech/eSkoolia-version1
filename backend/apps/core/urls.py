@@ -27,6 +27,7 @@ from .views import (
     ItemReceiveViewSet,
     ItemIssueViewSet,
     ItemSellViewSet,
+    PincodeLookupView,
 )
 from .views import HolidayViewSet
 
@@ -69,4 +70,5 @@ urlpatterns = [
     # Section standalone API views (registered before router to take priority)
     path("sections/replace/", SectionReplaceView.as_view(), name="section-replace"),
     path("sections/bulk-delete/", SectionBulkDeleteView.as_view(), name="section-bulk-delete"),
+    path("pincode-lookup/", PincodeLookupView.as_view(), name="pincode-lookup"),
 ] + router.urls

@@ -129,6 +129,8 @@ class SchoolTenantBaseSerializer(serializers.ModelSerializer):
             "city",
             "pin_code",
             "affiliation_number",
+            "logo_url",
+            "brand_color",
         ]
         read_only_fields = ["tenant_id"]
 
@@ -286,6 +288,10 @@ class InvoiceSerializer(serializers.ModelSerializer):
     tenant_id = serializers.SerializerMethodField()
     line_items = serializers.JSONField()
     tax_breakdown = serializers.JSONField()
+    paid_amount = serializers.FloatField(read_only=True)
+    due_amount = serializers.FloatField(read_only=True)
+    last_payment_on = serializers.DateField(read_only=True)
+    payments = serializers.SerializerMethodField()
 
     class Meta:
         model = SuperAdminInvoice
@@ -308,12 +314,57 @@ class InvoiceSerializer(serializers.ModelSerializer):
             "notes",
             "terms_conditions",
             "reverse_charge",
+            "paid_amount",
+            "due_amount",
+            "last_payment_on",
+            "payments",
             "created_at",
             "updated_at",
         ]
 
     def get_tenant_id(self, obj):
         return obj.tenant.tenant_id if obj.tenant_id and obj.tenant else ""
+
+    def get_payments(self, obj):
+        return InvoicePaymentSerializer(obj.payments.all(), many=True).data
+
+
+class InvoicePaymentSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    amount = serializers.FloatField()
+    received_by_username = serializers.SerializerMethodField()
+
+    class Meta:
+        from apps.tenancy.models import SuperAdminInvoicePayment
+        model = SuperAdminInvoicePayment
+        fields = [
+            "id",
+            "amount",
+            "paid_on",
+            "method",
+            "reference_no",
+            "notes",
+            "received_by_username",
+            "created_at",
+        ]
+
+    def get_received_by_username(self, obj):
+        return obj.received_by.username if obj.received_by_id else ""
+
+
+class InvoicePaymentCreateSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0.01)
+    paid_on = serializers.DateField(required=False)
+    method = serializers.ChoiceField(
+        choices=[
+            "bank_transfer", "upi", "cheque", "cash",
+            "razorpay", "stripe", "adjustment", "other",
+        ],
+        required=False,
+        default="bank_transfer",
+    )
+    reference_no = serializers.CharField(max_length=128, required=False, allow_blank=True)
+    notes = serializers.CharField(required=False, allow_blank=True)
 
 
 class InvoiceCreateSerializer(serializers.Serializer):
@@ -322,7 +373,7 @@ class InvoiceCreateSerializer(serializers.Serializer):
     school_name = serializers.CharField(max_length=255)
     invoice_date = serializers.DateField()
     due_date = serializers.DateField()
-    status = serializers.ChoiceField(choices=["draft", "sent", "paid", "overdue", "cancelled"], required=False)
+    status = serializers.ChoiceField(choices=["draft", "sent", "partially_paid", "paid", "overdue", "cancelled"], required=False)
     seller_name = serializers.CharField(max_length=255)
     seller_gstin = serializers.CharField(max_length=32, required=False, allow_blank=True)
     seller_state = serializers.CharField(max_length=64)
@@ -353,7 +404,7 @@ class InvoiceUpdateSerializer(serializers.Serializer):
     """
 
     status = serializers.ChoiceField(
-        choices=["draft", "sent", "paid", "overdue", "cancelled"], required=False
+        choices=["draft", "sent", "partially_paid", "paid", "overdue", "cancelled"], required=False
     )
     due_date = serializers.DateField(required=False)
     notes = serializers.CharField(required=False, allow_blank=True)

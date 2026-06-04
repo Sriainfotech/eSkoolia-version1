@@ -90,10 +90,20 @@ export interface SchoolTenant {
   pin_code?: string;
   // Board affiliation
   affiliation_number?: string;
+  // Plan & capacity overrides (null/undefined = inherit plan defaults)
+  student_seat_limit?: number | null;
+  staff_seat_limit?: number | null;
+  storage_cap_gb?: number | null;
+  trial_days?: number | null;
+  go_live_date?: string | null; // ISO date (YYYY-MM-DD)
+  trial_ends_at?: string | null;
+  billing_cycle?: TenantBillingCycle | null;
   // LLM access
   id?: number;
   llm_enabled?: boolean;
 }
+
+export type TenantBillingCycle = 'annual' | 'half_yearly' | 'quarterly' | 'monthly';
 
 export interface ProvisionSchoolRequest {
   name: string;
@@ -119,6 +129,13 @@ export interface ProvisionSchoolRequest {
   city?: string;
   pin_code?: string;
   affiliation_number?: string;
+  // Plan & capacity overrides
+  student_seat_limit?: number | null;
+  staff_seat_limit?: number | null;
+  storage_cap_gb?: number | null;
+  trial_days?: number | null;
+  go_live_date?: string | null;
+  billing_cycle?: TenantBillingCycle | null;
   admin_username?: string;
   admin_password?: string;
 }
@@ -190,7 +207,28 @@ export interface DashboardData {
 // Billing Types
 // ============================================================================
 
-export type InvoiceStatus = 'draft' | 'sent' | 'paid' | 'overdue' | 'cancelled';
+export type InvoiceStatus = 'draft' | 'sent' | 'partially_paid' | 'paid' | 'overdue' | 'cancelled';
+
+export type InvoicePaymentMethod =
+  | 'bank_transfer'
+  | 'upi'
+  | 'cheque'
+  | 'cash'
+  | 'razorpay'
+  | 'stripe'
+  | 'adjustment'
+  | 'other';
+
+export interface InvoicePayment {
+  id: string;
+  amount: number;
+  paid_on: string;
+  method: InvoicePaymentMethod;
+  reference_no?: string;
+  notes?: string;
+  received_by_username?: string;
+  created_at?: string;
+}
 
 export interface InvoiceLineItem {
   description: string;
@@ -241,6 +279,12 @@ export interface Invoice {
   reverse_charge?: boolean;
   created_at?: string;
   updated_at?: string;
+
+  // Partial-payment ledger
+  paid_amount?: number;
+  due_amount?: number;
+  last_payment_on?: string | null;
+  payments?: InvoicePayment[];
 }
 
 export interface MrrData {
@@ -278,6 +322,13 @@ export interface SubscriptionPlan {
   features: string[];
   sort_order?: number;
   sac_code?: string;
+  // Capacity defaults (used by the Schools UI to auto-fill section 07)
+  default_student_seats?: number;
+  default_staff_seats?: number;
+  default_storage_gb?: number;
+  default_trial_days?: number;
+  allowed_billing_cycles?: TenantBillingCycle[];
+  default_billing_cycle?: TenantBillingCycle;
 }
 
 export interface PlansCatalog {
@@ -286,6 +337,7 @@ export interface PlansCatalog {
   sac_code: string;
   sac_description: string;
   currency: string;
+  allowed_billing_cycles?: TenantBillingCycle[];
 }
 
 export interface BillingMetrics {

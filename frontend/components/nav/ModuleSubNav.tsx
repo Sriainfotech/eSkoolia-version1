@@ -6,6 +6,8 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { MODULES } from '@/lib/routes';
 import { usePermissions } from '@/hooks/usePermissions';
 
+const COMING_SOON_PATHS = new Set(['/hr/leave', '/hr/attendance', '/hr/offboarding']);
+
 /** Finds the module that "owns" the given pathname */
 function findOwnerModule(pathname: string) {
   let match = MODULES.find(m => m.path === pathname);
@@ -94,31 +96,32 @@ export function ModuleSubNav() {
   return (
     <div style={{ background: '#fff', borderBottom: '1px solid var(--bd)', position: 'relative' }}>
       <div style={{
-        maxWidth: 1280, margin: '0 auto',
         display: 'flex', alignItems: 'center', minHeight: 46,
-        padding: '0 22px 0 8px', gap: 0,
+        padding: mod.cleanTabs ? '0 18px' : '0 18px 0 8px', gap: 0,
         overflow: 'visible',
       }}>
-        {/* Module label — left side breadcrumb */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          paddingRight: 12, marginRight: 7,
-          borderRight: '1px solid var(--bd)',
-          flexShrink: 0,
-        }}>
+        {/* Module label — hidden when cleanTabs is set (e.g. Fees module) */}
+        {!mod.cleanTabs && (
           <div style={{
-            width: 20, height: 20, borderRadius: 6,
-            background: mod.bg, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            display: 'flex', alignItems: 'center', gap: 6,
+            paddingRight: 12, marginRight: 7,
+            borderRight: '1px solid var(--bd)',
+            flexShrink: 0,
           }}>
-            <mod.icon size={11} color={mod.ic} strokeWidth={1.8} />
+            <div style={{
+              width: 20, height: 20, borderRadius: 6,
+              background: mod.bg, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <mod.icon size={11} color={mod.ic} strokeWidth={1.8} />
+            </div>
+            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>
+              {mod.name}
+            </span>
           </div>
-          <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>
-            {mod.name}
-          </span>
-        </div>
+        )}
 
-        {/* Left arrow */}
-        {arrowBtn('left', canScrollLeft)}
+        {/* Left arrow — hidden for cleanTabs modules */}
+        {!mod.cleanTabs && arrowBtn('left', canScrollLeft)}
 
         {/* Scrollable tabs — left-aligned */}
         <div
@@ -139,32 +142,43 @@ export function ModuleSubNav() {
             // Hidden — user has no permission
             if (!allowed) return null;
 
+            const subComingSoon = COMING_SOON_PATHS.has(s.path);
+
             return (
               <Link
                 key={s.path}
                 href={s.path}
                 data-active={isActive ? 'true' : 'false'}
+                onClick={subComingSoon ? (e) => e.preventDefault() : undefined}
                 style={{
                   position: 'relative',
                   display: 'flex', alignItems: 'center', gap: 4,
-                  height: 46, padding: '1px 11px 0',
-                  fontSize: 12.5, fontWeight: isActive ? 600 : 400,
+                  height: 46, padding: '1px 14px 0',
+                  fontSize: 13, fontWeight: 600,
                   lineHeight: 1.25,
                   color: isActive ? 'var(--pu)' : 'var(--ink-2)',
                   textDecoration: 'none', whiteSpace: 'nowrap',
                   transition: 'color 0.12s',
                   borderBottom: isActive ? '2px solid var(--pu)' : '2px solid transparent',
                   flexShrink: 0,
+                  cursor: subComingSoon ? 'default' : 'pointer',
                 }}
                 onMouseEnter={e => {
-                  if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--ink-1)';
+                  if (!isActive && !subComingSoon) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--ink-1)';
                 }}
                 onMouseLeave={e => {
                   if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--ink-2)';
                 }}
               >
-                <SubIcon size={12} strokeWidth={1.8} />
+                {!mod.cleanTabs && <SubIcon size={12} strokeWidth={1.8} />}
                 {s.label}
+                {subComingSoon && (
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, letterSpacing: '0.03em',
+                    color: 'var(--pu, #6D28D9)', background: 'var(--pu-soft, #EDE9FE)',
+                    borderRadius: 4, padding: '1px 5px', marginLeft: 2, flexShrink: 0,
+                  }}>Soon</span>
+                )}
               </Link>
             );
           })}

@@ -365,8 +365,9 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
     setLines((prev) => (prev.length === 1 ? prev : prev.filter((_, i) => i !== idx)));
 
   // Validation
+  const isPaidLocked = isEditMode && invoice?.status === 'paid';
   const canSubmit = isEditMode
-    ? !!invoice && !!dueDate && (!invoice.invoice_date || dueDate >= invoice.invoice_date) && !submitting
+    ? !!invoice && !!dueDate && (!invoice.invoice_date || dueDate >= invoice.invoice_date) && !submitting && !isPaidLocked
     : !!selectedSchool &&
       !!invoiceDate &&
       !!dueDate &&
@@ -529,7 +530,22 @@ export default function NewInvoiceDrawer({ open, onClose, onCreated, invoice }: 
               </div>
             )}
 
-            {isEditMode && (
+            {isEditMode && invoice?.status === 'paid' && (
+              <div className="mb-5 rounded-xl border border-red-300 bg-red-50 px-4 py-3 dark:border-red-700 dark:bg-red-950/40">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+                  <div className="flex-1 text-[12.5px] text-red-800 dark:text-red-300">
+                    <p className="font-semibold">This invoice is paid and cannot be edited</p>
+                    <p className="mt-1 text-[12px]">
+                      Paid invoices are locked to preserve the audit trail and GST
+                      compliance. To make corrections, cancel this invoice and
+                      re-issue a new one.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+            {isEditMode && invoice?.status !== 'paid' && (
               <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-950/40">
                 <div className="flex items-start gap-3">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
