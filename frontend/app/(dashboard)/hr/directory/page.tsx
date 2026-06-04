@@ -1,373 +1,663 @@
 "use client";
-/**
- * HR Directory — Staff by department accordion groups, profile drawer, filter bar.
- */
-import { useCallback, useRef, useState } from "react";
+
+import { useMemo, useState } from "react";
 import {
-  Search, Filter, Plus, Edit2, Trash2, Eye, UserCheck, UserX,
-  Phone, Mail, Calendar, ChevronDown, ChevronRight, User,
+  ChevronDown,
+  Eye,
+  Pencil,
+  FileText,
+  MoreHorizontal,
+  Search as SearchIcon,
+  Plus,
+  X,
 } from "lucide-react";
-import {
-  HrButton, HrBadge, HrKpiCard, HrModal, HrDrawer, HrHero,
-  HrField, HrInput, HrSelect, HrSkeleton, HrConfirmDialog,
-  statusToBadge, useHrToast,
-} from "@/components/hr/HrUi";
-import { useStaff, useDepartments, updateStaffStatus } from "@/hooks/useHrApi";
-import type { Staff } from "@/types/hr";
+import { useAllDepartments, useStaff } from "@/hooks/useHrApi";
+import type { Department, Staff } from "@/types/hr";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-const avatarColor = (name: string) => {
-  const colors = ["#6D4AFF", "#2563EB", "#22C55E", "#F59E0B", "#E0463A", "#06B6D4"];
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h + name.charCodeAt(i)) % colors.length;
-  return colors[h];
-};
-const initials = (name: string) =>
-  name.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
-
-const getDisplayName = (staff: Staff | null | undefined): string => {
-  if (!staff) return "Staff";
-  return staff.full_name ?? ([staff.first_name, staff.last_name].filter(Boolean).join(" ") || "Staff");
-};
-
-const getPhone = (staff: Staff | null | undefined): string => {
-  if (!staff) return "—";
-  return staff.phone_number ?? staff.mobile ?? "—";
-};
-
-// ─── Staff Avatar ─────────────────────────────────────────────────────────────
-function StaffAvatar({ staff }: { staff: Staff }) {
-  const name = getDisplayName(staff);
-  const bg = avatarColor(name);
-  return (
-    <div
-      className="w-[36px] h-[36px] rounded-full flex items-center justify-center text-white font-[900] text-[13px] shrink-0"
-      style={{ background: bg }}
-    >
-      {initials(name)}
-    </div>
-  );
+// ─── helpers ─────────────────────────────────────────────────────────────────
+function initials(s: Staff): string {
+  const full = (s.full_name ?? `${s.first_name ?? ""} ${s.last_name ?? ""}`).trim();
+  const parts = full.split(/\s+/).filter(Boolean);
+  return (parts[0]?.[0] ?? "?").toUpperCase() + (parts[1]?.[0] ?? "").toUpperCase();
 }
 
-// ─── Context Menu ─────────────────────────────────────────────────────────────
-function ContextMenu({
+function fullName(s: Staff): string {
+  return (s.full_name ?? `${s.first_name ?? ""} ${s.last_name ?? ""}`).trim() || s.staff_no;
+}
+
+function formatJoining(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function formatSalary(n?: number): string {
+  if (!n && n !== 0) return "—";
+  return `₹${Math.round(n).toLocaleString("en-IN")}`;
+}
+
+function rupeeTotalFromStaff(s: Staff): number {
+  return (s.basic_salary ?? 0) + (s.hra ?? 0) + (s.da ?? 0)
+    + (s.travel_allowance ?? 0) + (s.medical_allowance ?? 0) + (s.special_allowance ?? 0);
+}
+
+const STATUS_STYLES: Record<string, string> = {
+  active:       "text-emerald-600 bg-emerald-50",
+  probation:    "text-amber-600 bg-amber-50",
+  inactive:     "text-slate-500 bg-slate-100",
+  terminated:   "text-rose-600 bg-rose-50",
+  offboarded:   "text-rose-600 bg-rose-50",
+};
+
+// ─── department accordion ────────────────────────────────────────────────────
+function DepartmentAccordion({
+  dept,
   staff,
+  open,
+  onToggle,
+  selected,
+  toggleSelect,
   onView,
-  onEdit,
-  onToggleStatus,
 }: {
-  staff: Staff;
-  onView: () => void;
-  onEdit: () => void;
-  onToggleStatus: () => void;
+  dept: { id: number | string; name: string };
+  staff: Staff[];
+  open: boolean;
+  onToggle: () => void;
+  selected: Set<number>;
+  toggleSelect: (id: number) => void;
+  onView: (s: Staff) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const total = staff.length;
+  const active = staff.filter((s) => s.status === "active").length;
+  const roles = new Set(staff.map((s) => s.designation_name).filter(Boolean)).size;
+  const present = staff.filter((s) => s.is_present).length;
+  const presentPct = total ? Math.round((present / total) * 100) : 0;
+  const donutBg = `conic-gradient(var(--brand) ${presentPct * 3.6}deg, #E8E8EE 0deg)`;
 
   return (
-    <div className="relative" ref={ref}>
-      <HrButton variant="icon" size="icon" onClick={() => setOpen((p) => !p)}>
-        <span className="text-[18px] leading-none">⋮</span>
-      </HrButton>
-      {open && (
-        <div
-          className="absolute right-0 top-full mt-1 bg-white border border-[var(--line)] rounded-[10px] py-1 z-10 w-[170px]"
-          style={{ boxShadow: "0 8px 24px -4px rgba(15,18,34,0.14)" }}
-          onBlur={() => setOpen(false)}
+    <div className="bg-white border border-[#E8E8EE] rounded-[14px] overflow-hidden mb-3 shadow-[0_12px_28px_-24px_rgba(15,23,42,.38)]">
+      {/* header */}
+      <div
+        onClick={onToggle}
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer border-l-4 border-[var(--strong,#4F35CC)]"
+        style={{ background: "linear-gradient(135deg,#fff 60%,#EEEAFF 100%)" }}
+      >
+        <button
+          type="button"
+          className="w-6 h-6 grid place-items-center rounded-md text-slate-500 hover:bg-[#EEEAFF] hover:text-[var(--brand,#6D4AFF)]"
+          aria-label={open ? "Collapse" : "Expand"}
         >
-          {[
-            { label: "View Profile", icon: <Eye size={13} />, action: onView },
-            { label: "Edit", icon: <Edit2 size={13} />, action: onEdit },
-            {
-              label: staff.status === "active" ? "Deactivate" : "Reactivate",
-              icon: staff.status === "active" ? <UserX size={13} /> : <UserCheck size={13} />,
-              action: onToggleStatus,
-            },
-          ].map(({ label, icon, action }) => (
-            <button
-              key={label}
-              onClick={() => { action(); setOpen(false); }}
-              className="w-full flex items-center gap-2 px-3 py-[8px] text-[13px] text-left hover:bg-[var(--soft)] transition-colors"
-            >
-              <span className="text-[var(--muted)]">{icon}</span>
-              {label}
-            </button>
-          ))}
+          <ChevronDown size={16} className={`transition-transform ${open ? "rotate-180" : ""}`} />
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="text-[15px] font-[850] text-[#15172A]">{dept.name}</div>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            <Chip>{total} staff</Chip>
+            <Chip tone="green">{active} active</Chip>
+            <Chip tone="violet">{roles} roles</Chip>
+            <Chip tone="blue">{present} present today</Chip>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          className="hidden sm:inline-flex items-center gap-1.5 h-8 px-3 rounded-[10px] border border-[#E8E8EE] bg-white text-[12px] font-[700] text-[#15172A] hover:border-[var(--brand,#6D4AFF)] hover:text-[var(--brand,#6D4AFF)]"
+        >
+          <Plus size={13} /> Add staff
+        </button>
+        <div
+          className="w-9 h-9 rounded-full grid place-items-center text-[10px] font-[800] text-white"
+          style={{ background: donutBg }}
+          title={`${presentPct}% present today`}
+        >
+          <div className="w-6 h-6 rounded-full bg-white grid place-items-center text-[10px] font-[800] text-[var(--brand,#6D4AFF)]">
+            {presentPct}%
+          </div>
+        </div>
+      </div>
+
+      {/* body */}
+      {open && (
+        <div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1100px] text-[13px]">
+              <thead>
+                <tr className="bg-[#FBFCFE] text-[11px] font-[800] tracking-[0.06em] text-[#53627A] uppercase">
+                  <th className="w-[42px] py-3 pl-4">
+                    <input type="checkbox" className="accent-[var(--brand,#6D4AFF)]" />
+                  </th>
+                  <th className="text-left py-3">Staff</th>
+                  <th className="text-left py-3">Staff ID</th>
+                  <th className="text-left py-3">Designation</th>
+                  <th className="text-left py-3">Classes / Route</th>
+                  <th className="text-left py-3">Joining</th>
+                  <th className="text-left py-3">Status</th>
+                  <th className="text-left py-3">Salary</th>
+                  <th className="text-left py-3 pr-4">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {staff.map((s) => {
+                  const sel = selected.has(s.id);
+                  const statusKey = (s.status ?? "").toLowerCase();
+                  return (
+                    <tr
+                      key={s.id}
+                      className={`border-t border-[#EEF0F4] hover:bg-[#FAFAFD] ${sel ? "bg-[#F4F1FF]" : ""}`}
+                    >
+                      <td className="pl-4 py-3 align-middle">
+                        <input
+                          type="checkbox"
+                          checked={sel}
+                          onChange={() => toggleSelect(s.id)}
+                          className="accent-[var(--brand,#6D4AFF)]"
+                        />
+                      </td>
+                      <td className="py-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="relative shrink-0">
+                            <div className="w-9 h-9 rounded-full bg-[var(--brand,#6D4AFF)] text-white grid place-items-center text-[12px] font-[800]">
+                              {initials(s)}
+                            </div>
+                            {s.is_present && (
+                              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-[700] text-[#15172A] truncate">{fullName(s)}</div>
+                            <div className="text-[11.5px] text-[#64748B] truncate">
+                              {s.designation_name || "—"}
+                              {s.mobile ? ` · ${s.mobile}` : ""}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-3">
+                        <span className="inline-flex items-center px-2 py-1 rounded-md bg-[#F4F4F8] text-[#15172A] text-[11.5px] font-[700] tracking-wide">
+                          {s.staff_id || s.staff_no || "—"}
+                        </span>
+                      </td>
+                      <td className="py-3 text-[#15172A]">{s.designation_name || "—"}</td>
+                      <td className="py-3 text-[#15172A]">{s.classes_subjects || "—"}</td>
+                      <td className="py-3 text-[#15172A]">{formatJoining(s.joining_date)}</td>
+                      <td className="py-3">
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-[700] capitalize ${STATUS_STYLES[statusKey] ?? "text-slate-600 bg-slate-100"}`}
+                        >
+                          {s.status || "—"}
+                        </span>
+                      </td>
+                      <td className="py-3 font-[700] text-[#15172A]">
+                        {formatSalary(rupeeTotalFromStaff(s))}
+                      </td>
+                      <td className="pr-4 py-3">
+                        <div className="flex items-center gap-1.5 text-[#64748B]">
+                          <IconBtn title="View" onClick={() => onView(s)}>
+                            <Eye size={15} />
+                          </IconBtn>
+                          <IconBtn title="Edit"><Pencil size={14} /></IconBtn>
+                          <IconBtn title="Documents"><FileText size={14} /></IconBtn>
+                          <IconBtn title="More"><MoreHorizontal size={15} /></IconBtn>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {staff.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="py-8 text-center text-[#64748B] text-[13px]">
+                      No staff in this department yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-// ─── Staff Profile Drawer ─────────────────────────────────────────────────────
+function Chip({
+  children,
+  tone = "slate",
+}: {
+  children: React.ReactNode;
+  tone?: "slate" | "green" | "violet" | "blue";
+}) {
+  const map: Record<string, string> = {
+    slate:  "bg-[#F4F4F8] text-[#5B5E72]",
+    green:  "bg-emerald-50 text-emerald-600",
+    violet: "bg-[#EEEAFF] text-[var(--brand,#6D4AFF)]",
+    blue:   "bg-blue-50 text-blue-600",
+  };
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-[700] ${map[tone]}`}>
+      {children}
+    </span>
+  );
+}
+
+function IconBtn({
+  title,
+  children,
+  onClick,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className="w-7 h-7 grid place-items-center rounded-md hover:bg-[#EEEAFF] hover:text-[var(--brand,#6D4AFF)] transition-colors"
+    >
+      {children}
+    </button>
+  );
+}
+
+// ─── profile drawer ──────────────────────────────────────────────────────────
 function ProfileDrawer({ staff, onClose }: { staff: Staff | null; onClose: () => void }) {
   if (!staff) return null;
   return (
-    <HrDrawer isOpen={!!staff} onClose={onClose} title="Staff Profile">
-      <div className="flex flex-col gap-6">
-        {/* Avatar + Name */}
-        <div className="flex items-center gap-4">
-          <div
-            className="w-[64px] h-[64px] rounded-full flex items-center justify-center text-white text-[22px] font-[900]"
-            style={{ background: avatarColor(getDisplayName(staff)) }}
-          >
-            {initials(getDisplayName(staff))}
-          </div>
-          <div>
-            <div className="text-[18px] font-[800]">{getDisplayName(staff)}</div>
-            <div className="text-[var(--muted)] text-[13px] mt-[2px]">{staff.designation_name}</div>
-            <HrBadge variant={staff.status === "active" ? "green" : "grey"} className="mt-1">
-              {staff.status}
-            </HrBadge>
-          </div>
-        </div>
-
-        {/* Contact */}
-        <div className="grid gap-2">
-          <div className="text-[11px] font-[700] text-[var(--muted)] uppercase tracking-[0.08em]">Contact</div>
-          {[
-            { icon: <Phone size={14} />, text: getPhone(staff) },
-            { icon: <Mail size={14} />, text: staff.email ?? staff.official_email ?? staff.personal_email ?? "—" },
-            { icon: <Calendar size={14} />, text: staff.joining_date ? `Joined ${staff.joining_date}` : "—" },
-          ].map(({ icon, text }) => (
-            <div key={text} className="flex items-center gap-2 text-[13px]">
-              <span className="text-[var(--brand)]">{icon}</span>
-              <span>{text}</span>
-            </div>
-          ))}
-        </div>
-
-        {/* Role */}
-        <div className="grid gap-2">
-          <div className="text-[11px] font-[700] text-[var(--muted)] uppercase tracking-[0.08em]">Role & Dept</div>
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              ["Department", staff.department_name],
-              ["Designation", staff.designation_name],
-              ["Employment", staff.employment_type ?? "—"],
-              ["Staff ID", staff.staff_id ?? "—"],
-            ].map(([k, v]) => (
-              <div key={k} className="bg-[#fafafa] rounded-[8px] p-2">
-                <div className="text-[10px] text-[var(--muted)] uppercase">{k}</div>
-                <div className="text-[13px] font-[700] mt-[1px]">{v}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </HrDrawer>
-  );
-}
-
-// ─── Department Accordion Row ─────────────────────────────────────────────────
-function DeptAccordion({
-  deptName,
-  members,
-  onView,
-  onEdit,
-  onToggleStatus,
-}: {
-  deptName: string;
-  members: Staff[];
-  onView: (s: Staff) => void;
-  onEdit: (s: Staff) => void;
-  onToggleStatus: (s: Staff) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  const active = members.filter((s) => s.status === "active").length;
-
-  return (
-    <div className="border border-[var(--line)] rounded-[12px] overflow-hidden mb-3">
-      <button
-        onClick={() => setOpen((p) => !p)}
-        className="w-full flex items-center gap-3 p-[12px_16px] text-left"
-        style={{ background: open ? "#f8f6ff" : "#fafafa", borderLeft: "4px solid var(--strong)" }}
+    <div
+      className="fixed inset-0 z-[900] flex justify-end bg-black/35"
+      onClick={onClose}
+    >
+      <aside
+        className="w-[390px] max-w-[94vw] h-full bg-white overflow-auto shadow-[-20px_0_45px_-26px_rgba(15,23,42,.55)]"
+        onClick={(e) => e.stopPropagation()}
       >
-        <span className="flex-1 font-[850] text-[14px]">{deptName}</span>
-        <HrBadge variant="purple">{members.length} staff</HrBadge>
-        <HrBadge variant="green">{active} active</HrBadge>
-        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-      </button>
+        <div className="relative px-5 pt-5 pb-4 border-b border-[#EEF0F4]">
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute top-3 right-3 w-8 h-8 grid place-items-center rounded-full text-slate-500 hover:bg-slate-100"
+            aria-label="Close"
+          >
+            <X size={16} />
+          </button>
+          <div className="flex items-center gap-3">
+            <div className="w-14 h-14 rounded-full bg-[var(--brand,#6D4AFF)] text-white grid place-items-center text-[16px] font-[800]">
+              {initials(staff)}
+            </div>
+            <div className="min-w-0">
+              <div className="text-[16px] font-[800] text-[#15172A] truncate">{fullName(staff)}</div>
+              <div className="text-[12px] text-[#64748B] truncate">
+                {staff.designation_name || "—"} · {staff.department_name || "—"}
+              </div>
+              <div className="text-[11px] text-[#94A3B8] mt-0.5">{staff.staff_id || staff.staff_no}</div>
+            </div>
+          </div>
+        </div>
 
-      {open && (
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-[#fafafa] text-[#64748b] text-[11px] uppercase tracking-[0.08em]">
-              <th className="px-3 py-[10px] text-left">Staff</th>
-              <th className="px-3 py-[10px] text-left">Designation</th>
-              <th className="px-3 py-[10px] text-left">Phone</th>
-              <th className="px-3 py-[10px] text-left">Joining Date</th>
-              <th className="px-3 py-[10px] text-left">Status</th>
-              <th className="px-3 py-[10px] text-left">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {members.map((s) => (
-              <tr key={s.id} className="border-t border-[#f4f4f8] hover:bg-[#fafafd] transition-colors">
-                <td className="px-3 py-3">
-                  <div className="flex items-center gap-2">
-                    <StaffAvatar staff={s} />
-                    <div>
-                      <div className="font-[750] text-[13px]">{getDisplayName(s)}</div>
-                      <div className="text-[11px] text-[var(--muted)]">{s.staff_id}</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-3 py-3 text-[13px]">{s.designation_name}</td>
-                <td className="px-3 py-3 text-[13px]">{getPhone(s)}</td>
-                <td className="px-3 py-3 text-[12px] text-[var(--muted)]">{s.joining_date || "—"}</td>
-                <td className="px-3 py-3">
-                  <HrBadge variant={statusToBadge(s.status)}>{s.status}</HrBadge>
-                </td>
-                <td className="px-3 py-3">
-                  <ContextMenu
-                    staff={s}
-                    onView={() => onView(s)}
-                    onEdit={() => onEdit(s)}
-                    onToggleStatus={() => onToggleStatus(s)}
-                  />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+        <Section title="Contact">
+          <Info label="Mobile" value={staff.mobile || "—"} />
+          <Info label="Email" value={staff.official_email || staff.personal_email || staff.email || "—"} />
+          <Info label="WhatsApp" value={staff.whatsapp || "—"} />
+        </Section>
+
+        <Section title="Employment">
+          <Info label="Joining" value={formatJoining(staff.joining_date)} />
+          <Info label="Type" value={staff.employment_type || "—"} />
+          <Info label="Status" value={staff.status || "—"} />
+          <Info label="Reports to" value={staff.reporting_manager_name || "—"} />
+        </Section>
+
+        <Section title="Compensation">
+          <div className="bg-[#F8F6FF] border border-[#DDD6FE] rounded-[12px] p-3 mt-1">
+            <div className="text-[11px] uppercase tracking-[0.08em] text-[#64748B] font-[800]">Gross monthly</div>
+            <div className="text-[22px] font-[900] text-[var(--brand,#6D4AFF)] mt-0.5">
+              {formatSalary(rupeeTotalFromStaff(staff))}
+            </div>
+          </div>
+        </Section>
+      </aside>
     </div>
   );
 }
 
-// ─── Main Directory Page ──────────────────────────────────────────────────────
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="px-5 py-4 border-b border-[#EEF0F4]">
+      <h4 className="text-[10px] font-[800] tracking-[0.08em] text-[#64748B] uppercase mb-2">{title}</h4>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between gap-3 text-[12px] py-1 border-b border-dashed border-[#EEF2F7] last:border-0">
+      <span className="text-[#64748B]">{label}</span>
+      <strong className="text-[#15172A] text-right truncate">{value}</strong>
+    </div>
+  );
+}
+
+// ─── page ────────────────────────────────────────────────────────────────────
 export default function HrDirectoryPage() {
+  const { data: deptData, loading: deptLoading } = useAllDepartments();
   const [search, setSearch] = useState("");
-  const [deptFilter, setDeptFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [submittedSearch, setSubmittedSearch] = useState("");
+  const { data: staffData, loading: staffLoading } = useStaff({ search: submittedSearch || undefined });
 
-  const { data, loading, refetch } = useStaff({ search, department: deptFilter, status: statusFilter });
-  const { data: deptData } = useDepartments();
-  const { toast } = useHrToast();
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [openDepts, setOpenDepts] = useState<Record<string, boolean>>({ __all: true });
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [profile, setProfile] = useState<Staff | null>(null);
 
-  const [viewingStaff, setViewingStaff] = useState<Staff | null>(null);
-  const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
-  const [toggleTarget, setToggleTarget] = useState<Staff | null>(null);
-  const [toggling, setToggling] = useState(false);
+  const departments: Department[] = deptData?.results ?? [];
+  const staffList: Staff[] = staffData?.results ?? [];
 
-  const staff = data?.results ?? [];
-  const departments = deptData?.results ?? [];
+  const grouped = useMemo(() => {
+    const byDept = new Map<number | string, Staff[]>();
+    for (const s of staffList) {
+      const key = s.department ?? "__none";
+      const bucket = byDept.get(key) ?? [];
+      bucket.push(s);
+      byDept.set(key, bucket);
+    }
+    const result: { dept: { id: number | string; name: string }; staff: Staff[] }[] = [];
+    for (const d of departments) {
+      const items = byDept.get(d.id) ?? [];
+      if (items.length || !submittedSearch) {
+        result.push({ dept: { id: d.id, name: d.name }, staff: items });
+      }
+    }
+    const orphans = byDept.get("__none") ?? [];
+    if (orphans.length) result.push({ dept: { id: "__none", name: "Unassigned" }, staff: orphans });
+    return result;
+  }, [departments, staffList, submittedSearch]);
 
-  // Group staff by department
-  const byDept = staff.reduce<Record<string, Staff[]>>((acc, s) => {
-    const d = s.department_name || "Unassigned";
-    (acc[d] = acc[d] || []).push(s);
-    return acc;
-  }, {});
+  const toggleDept = (id: number | string) =>
+    setOpenDepts((m) => ({ ...m, [id]: !(m[id] ?? openDepts.__all) }));
 
-  const handleToggleStatus = async () => {
-    if (!toggleTarget) return;
-    setToggling(true);
-    try {
-      const newStatus = toggleTarget.status === "active" ? "inactive" : "active";
-      await updateStaffStatus(toggleTarget.id, newStatus);
-      toast(`Staff ${newStatus === "active" ? "reactivated" : "deactivated"}`);
-      void refetch();
-    } catch { toast("Failed to update status", "error"); }
-    finally { setToggling(false); setToggleTarget(null); }
+  const collapseAll = () => {
+    const m: Record<string, boolean> = { __all: false };
+    grouped.forEach((g) => { m[String(g.dept.id)] = false; });
+    setOpenDepts(m);
+  };
+  const expandAll = () => {
+    const m: Record<string, boolean> = { __all: true };
+    grouped.forEach((g) => { m[String(g.dept.id)] = true; });
+    setOpenDepts(m);
   };
 
-  const activeCount = staff.filter((s) => s.status === "active").length;
-  const inactiveCount = staff.filter((s) => s.status === "inactive").length;
+  const toggleSelect = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selected.size === staffList.length) setSelected(new Set());
+    else setSelected(new Set(staffList.map((s) => s.id)));
+  };
+
+  const runSearch = () => setSubmittedSearch(search.trim());
+
+  const totalStaff = staffList.length;
+  const totalActive = staffList.filter((s) => s.status === "active").length;
+  const totalPresent = staffList.filter((s) => s.is_present).length;
 
   return (
-    <div>
-      <HrHero
-        eyebrow="HR Module"
-        title="Staff"
-        accent="Directory"
-        sub={`${data?.count ?? "—"} staff members across ${departments.length} departments.`}
-        actions={
-          <HrButton variant="primary" onClick={() => { window.location.href = "/hr/onboard"; }}>
-            <Plus size={14} /> Onboard Staff
-          </HrButton>
-        }
-      />
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
-        <HrKpiCard label="Total Staff" value={data?.count ?? "—"} />
-        <HrKpiCard label="Active" value={activeCount} color="var(--green)" />
-        <HrKpiCard label="Inactive" value={inactiveCount} color="var(--amber)" />
-        <HrKpiCard label="Departments" value={departments.length} />
+    <div className="max-w-[1400px] mx-auto">
+      {/* Hero */}
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.12em] text-[#64748B] font-[700] mb-1">Staff records</p>
+          <h1
+            className="text-[40px] leading-[1.1] font-[700] text-[#15172A] m-0"
+            style={{ fontFamily: "var(--serif, Georgia, serif)", letterSpacing: "-0.02em" }}
+          >
+            Staff{" "}
+            <span
+              className="italic font-[400] text-[var(--brand,#6D4AFF)]"
+              style={{ fontFamily: "var(--serif, Georgia, serif)" }}
+            >
+              directory
+            </span>
+          </h1>
+          <p className="text-[14px] text-[#64748B] mt-1 max-w-[640px]">
+            Department parent accordions with staff child rows, fast filters, and profile details in a side hover panel.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="h-10 px-4 rounded-[11px] border border-[#E8E8EE] bg-white text-[13.5px] font-[600] text-[#15172A] hover:border-[var(--brand,#6D4AFF)] hover:text-[var(--brand,#6D4AFF)]"
+          >
+            Export CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => { window.location.href = "/hr/onboard"; }}
+            className="h-10 px-4 rounded-[11px] bg-[var(--brand,#6D4AFF)] text-white text-[13.5px] font-[700] hover:bg-[var(--strong,#4F35CC)] shadow-[0_8px_18px_-10px_rgba(108,60,225,.7)]"
+          >
+            Onboard Staff
+          </button>
+        </div>
       </div>
 
-      {/* Filter bar */}
-      <div className="flex gap-3 mb-4 flex-wrap items-center">
-        <div className="flex-1 min-w-[200px] relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted)]" />
+      {/* Smart Filter */}
+      <div className="bg-white border border-[#E8E8EE] rounded-[14px] overflow-hidden mb-3 shadow-[0_4px_12px_-4px_rgba(15,18,34,.08)]">
+        <button
+          type="button"
+          onClick={() => setFilterOpen((o) => !o)}
+          className="w-full flex items-center gap-3 px-4 py-3 text-left border-l-4 border-[var(--strong,#4F35CC)]"
+          style={{ background: "#FBFAFF" }}
+        >
+          <ChevronDown
+            size={16}
+            className={`text-[var(--brand,#6D4AFF)] transition-transform ${filterOpen ? "rotate-180" : "-rotate-90"}`}
+          />
+          <div className="flex-1 min-w-0">
+            <div className="font-[800] text-[14px] text-[#15172A]">Smart Filter &amp; Bulk Actions</div>
+            <div className="mt-1 flex gap-2">
+              <Chip>No filters active</Chip>
+              <Chip tone="violet">Grouped by department</Chip>
+            </div>
+          </div>
+          <span className="text-[12px] text-[#64748B]">{filterOpen ? "Collapse" : "Expand to filter"}</span>
+        </button>
+        {filterOpen && (
+          <div className="px-4 py-4 border-t border-[#EEF0F4] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <Field label="Department">
+              <select className="h-9 px-2 border border-[#E8E8EE] rounded-[9px] bg-white text-[13px] w-full">
+                <option>All departments</option>
+                {departments.map((d) => <option key={d.id}>{d.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Status">
+              <select className="h-9 px-2 border border-[#E8E8EE] rounded-[9px] bg-white text-[13px] w-full">
+                <option>All</option>
+                <option>Active</option>
+                <option>Probation</option>
+                <option>Inactive</option>
+              </select>
+            </Field>
+            <Field label="Employment">
+              <select className="h-9 px-2 border border-[#E8E8EE] rounded-[9px] bg-white text-[13px] w-full">
+                <option>All types</option>
+                <option>Full-time</option>
+                <option>Part-time</option>
+                <option>Contract</option>
+              </select>
+            </Field>
+            <Field label="Present today">
+              <select className="h-9 px-2 border border-[#E8E8EE] rounded-[9px] bg-white text-[13px] w-full">
+                <option>Any</option>
+                <option>Present</option>
+                <option>Absent</option>
+              </select>
+            </Field>
+          </div>
+        )}
+      </div>
+
+      {/* Search row */}
+      <div className="flex flex-wrap items-center gap-3 bg-white border border-[#E8E8EE] rounded-[14px] px-4 py-3 mb-3 shadow-[0_4px_12px_-4px_rgba(15,18,34,.08)]">
+        <SearchIcon size={16} className="text-[var(--brand,#6D4AFF)] shrink-0" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
+          placeholder="Search by name, ID, designation, phone…"
+          className="flex-1 min-w-[200px] h-9 outline-none text-[14px] bg-transparent"
+        />
+        <button
+          type="button"
+          onClick={runSearch}
+          className="h-9 px-4 rounded-[10px] bg-[var(--brand,#6D4AFF)] text-white text-[13px] font-[700] hover:bg-[var(--strong,#4F35CC)]"
+        >
+          Search
+        </button>
+        <div className="w-px h-5 bg-[#E8E8EE]" />
+        <label className="inline-flex items-center gap-2 text-[12px] font-[700] text-[#5B5E72] cursor-pointer">
           <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search staff name or ID…"
-            className="w-full pl-9 pr-3 py-[9px] border border-[var(--line)] rounded-[8px] text-[13px] outline-none focus:border-[var(--brand)]"
+            type="checkbox"
+            checked={staffList.length > 0 && selected.size === staffList.length}
+            onChange={toggleSelectAll}
+            className="accent-[var(--brand,#6D4AFF)]"
           />
-        </div>
-        <select
-          value={deptFilter}
-          onChange={(e) => setDeptFilter(e.target.value)}
-          className="border border-[var(--line)] rounded-[8px] px-3 py-[9px] text-[13px] outline-none focus:border-[var(--brand)]"
+          Select all
+        </label>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 h-8 px-3 rounded-[8px] bg-[#EEEAFF] text-[var(--brand,#6D4AFF)] text-[12px] font-[700]"
         >
-          <option value="">All Departments</option>
-          {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="border border-[var(--line)] rounded-[8px] px-3 py-[9px] text-[13px] outline-none focus:border-[var(--brand)]"
-        >
-          <option value="">All Status</option>
-          <option value="active">Active</option>
-          <option value="inactive">Inactive</option>
-        </select>
+          ↓ Export
+        </button>
       </div>
 
-      {/* Department accordion groups */}
-      {loading ? (
-        <HrSkeleton rows={6} />
-      ) : staff.length === 0 ? (
-        <div
-          className="bg-white border border-[var(--line)] rounded-[14px] py-16 text-center text-[var(--muted)]"
-        >
-          No staff found. <button className="text-[var(--brand)] font-[700]" onClick={() => { window.location.href = "/hr/onboard"; }}>Onboard your first staff member.</button>
+      {/* All Staff card */}
+      <div className="bg-white border border-[#E8E8EE] rounded-[14px] overflow-hidden shadow-[0_4px_12px_-4px_rgba(15,18,34,.08)]">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-[#EEF0F4]">
+          <div>
+            <strong className="block text-[14px] text-[#15172A]">All Staff</strong>
+            <span className="text-[12px] text-[#64748B]">
+              View opens a side hover panel. The table remains full width for large schools.
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={collapseAll}
+              className="h-8 px-3 rounded-[9px] border border-[#E8E8EE] bg-white text-[12.5px] font-[600] text-[#15172A] hover:border-[var(--brand,#6D4AFF)] hover:text-[var(--brand,#6D4AFF)]"
+            >
+              Collapse all
+            </button>
+            <button
+              type="button"
+              onClick={expandAll}
+              className="h-8 px-3 rounded-[9px] border border-[#E8E8EE] bg-white text-[12.5px] font-[600] text-[#15172A] hover:border-[var(--brand,#6D4AFF)] hover:text-[var(--brand,#6D4AFF)]"
+            >
+              Expand all
+            </button>
+          </div>
         </div>
-      ) : (
-        Object.entries(byDept).map(([deptName, members]) => (
-          <DeptAccordion
-            key={deptName}
-            deptName={deptName}
-            members={members}
-            onView={setViewingStaff}
-            onEdit={setEditingStaff}
-            onToggleStatus={setToggleTarget}
-          />
-        ))
+
+        <div className="p-3 bg-[#FAFAFB]">
+          {(deptLoading || staffLoading) && (
+            <div className="py-8 text-center text-[#64748B] text-[13px]">Loading staff…</div>
+          )}
+          {!deptLoading && !staffLoading && grouped.length === 0 && (
+            <div className="py-8 text-center text-[#64748B] text-[13px]">
+              No staff found{submittedSearch ? ` for "${submittedSearch}"` : ""}.
+            </div>
+          )}
+          {grouped.map((g) => {
+            const id = String(g.dept.id);
+            const open = openDepts[id] ?? openDepts.__all ?? true;
+            return (
+              <DepartmentAccordion
+                key={id}
+                dept={g.dept}
+                staff={g.staff}
+                open={open}
+                onToggle={() => toggleDept(g.dept.id)}
+                selected={selected}
+                toggleSelect={toggleSelect}
+                onView={setProfile}
+              />
+            );
+          })}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-[#EEF0F4]">
+          <span className="text-[12px] text-[#64748B]">
+            Department accordions show staff as child table rows.
+            {" "}
+            <span className="text-[#94A3B8]">
+              {totalStaff} staff · {totalActive} active · {totalPresent} present today
+            </span>
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={collapseAll}
+              className="h-8 px-3 rounded-[9px] border border-[#E8E8EE] bg-white text-[12.5px] font-[600] text-[#15172A] hover:border-[var(--brand,#6D4AFF)] hover:text-[var(--brand,#6D4AFF)]"
+            >
+              Collapse all
+            </button>
+            <button
+              type="button"
+              className="h-8 px-3 rounded-[9px] border border-[#E8E8EE] bg-white text-[12.5px] font-[600] text-[#15172A] hover:border-[var(--brand,#6D4AFF)] hover:text-[var(--brand,#6D4AFF)]"
+            >
+              Export view
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Bulk action bar */}
+      {selected.size > 0 && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[80] flex items-center gap-2 bg-[#15172A] text-white rounded-full px-4 py-2 shadow-[0_18px_40px_-12px_rgba(15,23,42,.5)]">
+          <span className="text-[12.5px] font-[700]">{selected.size} selected</span>
+          <span className="w-px h-4 bg-white/20" />
+          <BulkBtn>Deactivate</BulkBtn>
+          <BulkBtn>Message</BulkBtn>
+          <BulkBtn>Export</BulkBtn>
+          <BulkBtn>Archive</BulkBtn>
+          <button
+            type="button"
+            onClick={() => setSelected(new Set())}
+            className="text-[12px] font-[700] text-white/70 hover:text-white px-2"
+          >
+            Clear
+          </button>
+        </div>
       )}
 
-      {/* Profile Drawer */}
-      <ProfileDrawer staff={viewingStaff} onClose={() => setViewingStaff(null)} />
-
-      {/* Deactivation Confirm */}
-      <HrConfirmDialog
-        isOpen={!!toggleTarget}
-        onClose={() => setToggleTarget(null)}
-        onConfirm={() => void handleToggleStatus()}
-        title={toggleTarget?.status === "active" ? "Deactivate Staff" : "Reactivate Staff"}
-        message={
-          toggleTarget?.status === "active"
-            ? `This will deactivate ${getDisplayName(toggleTarget)}. They will lose system access.`
-            : `Reactivate ${getDisplayName(toggleTarget)} and restore their system access?`
-        }
-        confirmLabel={toggleTarget?.status === "active" ? "Deactivate" : "Reactivate"}
-        danger={toggleTarget?.status === "active"}
-        loading={toggling}
-      />
+      <ProfileDrawer staff={profile} onClose={() => setProfile(null)} />
     </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10.5px] font-[800] tracking-[0.1em] text-[#94A3B8] uppercase">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function BulkBtn({ children }: { children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      className="h-7 px-3 rounded-full bg-white/10 text-white text-[12px] font-[700] hover:bg-white/20"
+    >
+      {children}
+    </button>
   );
 }

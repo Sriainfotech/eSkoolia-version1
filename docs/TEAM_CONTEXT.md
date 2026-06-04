@@ -401,7 +401,43 @@ GET  /api/login-permission/users/export/      ΓåÆ CSV download
 - **`globals.css`** ΓÇö Added `@keyframes shimmer` and `@keyframes slideInRight` for new components
 
 ---
+## Day 13 (PM) — 2026-06-03 — HR Directory + Onboard Bug Fixes
 
+**Branch:** `demo`
+**Work:** Built HR Staff Directory screen from HTML artifact; fixed 6 critical onboarding wizard bugs preventing staff creation.
+
+### New Features
+- **HR Directory screen** (`frontend/app/(dashboard)/hr/directory/page.tsx`, 890 lines)
+  - Department accordions with staff tables, profile drawer, smart filters, bulk actions
+  - Mirrored HTML artifact classes: `directory-dept`, `directory-table-head`, `profile-drawer`
+
+### Critical Fixes (Onboard Wizard)
+1. **Step 4 validation false positives** — Fixed React state side effects in emergency contact updater; restricted generic validator to steps 1-3
+2. **Role field rejection** — Changed hardcoded string roles to numeric IDs from API (`useStaffFormOptions` hook)
+3. **Field name mismatches** — Added mappings: `joining_date`→`join_date`, `mobile`→`phone`, lowercase gender/marital_status
+4. **Email/contract type** — Map `official_email`→`email`, `employment_type`→`contract_type` ("permanent"/"contract")
+5. **Missing signature field** — Added signature upload to Documents step; fetch from `/api/v1/hr/onboard/documents/`
+6. **Backend validation errors:**
+   - Fixed marital_status to accept lowercase
+   - Moved `add_years_safe` function before first usage (UnboundLocalError)
+   - Added IntegrityError handling for email conflicts in user creation
+   - Improved PIN code lookup with User-Agent, 8s timeout, specific error codes (504/503)
+   - Fixed document validation to parse JSON-stringified arrays from FormData (`'["img.jpeg"]'` → `['img.jpeg']`)
+
+### Files Changed
+- `frontend/app/(dashboard)/hr/directory/page.tsx` — NEW (890 lines)
+- `frontend/app/(dashboard)/hr/onboard/page.tsx` — 6 bug fixes
+- `frontend/hooks/useHrApi.ts` — Added `useStaffFormOptions`
+- `backend/apps/hr/serializers.py` — 3 validation fixes
+- `backend/apps/hr/views.py` — User creation + FormData parsing fixes
+- `backend/apps/core/views.py` — PIN lookup improvements
+
+### Result
+Staff onboarding wizard now fully functional end-to-end. ✅ POST 201 successful.
+
+**Session:** ~2 hours, 6 debugging iterations
+
+---
 ## How to Run (Dev)
 
 ```bash

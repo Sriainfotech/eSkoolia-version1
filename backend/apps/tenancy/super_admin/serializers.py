@@ -11,6 +11,12 @@ from apps.tenancy.models import (
 )
 
 
+# Allowed values for tenant-level billing cadence. Kept in sync with
+# BillingPlansView.ALLOWED_BILLING_CYCLES on the view side.
+TENANT_BILLING_CYCLES = ("annual", "half_yearly", "quarterly", "monthly")
+TRIAL_DAY_CHOICES = (0, 7, 14, 30, 60, 90)
+
+
 class SchoolTenantSerializer(serializers.ModelSerializer):
     students = serializers.IntegerField(source="student_count", read_only=True)
     staff = serializers.IntegerField(source="staff_count", read_only=True)
@@ -43,6 +49,14 @@ class SchoolTenantSerializer(serializers.ModelSerializer):
             "lastActivity",
             "brand_color",
             "logo_url",
+            # Plan & capacity overrides
+            "student_seat_limit",
+            "staff_seat_limit",
+            "storage_cap_gb",
+            "trial_days",
+            "go_live_date",
+            "trial_ends_at",
+            "billing_cycle",
         ]
 
 
@@ -74,6 +88,24 @@ class ProvisionSchoolSerializer(serializers.Serializer):
     seats = serializers.IntegerField(required=False, min_value=0)
     brand_color = serializers.CharField(max_length=32, required=False, allow_blank=True)
     logo_url = serializers.CharField(max_length=512, required=False, allow_blank=True)
+    # Plan & capacity overrides (null/omitted = inherit plan defaults)
+    student_seat_limit = serializers.IntegerField(required=False, min_value=0, allow_null=True)
+    staff_seat_limit = serializers.IntegerField(required=False, min_value=0, allow_null=True)
+    storage_cap_gb = serializers.IntegerField(required=False, min_value=0, allow_null=True)
+    trial_days = serializers.IntegerField(required=False, min_value=0, max_value=365, allow_null=True)
+    go_live_date = serializers.DateField(required=False, allow_null=True)
+    billing_cycle = serializers.ChoiceField(
+        choices=TENANT_BILLING_CYCLES, required=False, allow_blank=True, allow_null=True
+    )
+
+    def validate_trial_days(self, value):
+        if value is None:
+            return value
+        if value not in TRIAL_DAY_CHOICES:
+            raise serializers.ValidationError(
+                f"Trial period must be one of {sorted(TRIAL_DAY_CHOICES)} days."
+            )
+        return value
 
 
 class SchoolTenantUpdateSerializer(serializers.Serializer):
@@ -103,6 +135,43 @@ class SchoolTenantUpdateSerializer(serializers.Serializer):
     staff_count = serializers.IntegerField(required=False, min_value=0)
     brand_color = serializers.CharField(max_length=32, required=False, allow_blank=True)
     logo_url = serializers.CharField(max_length=512, required=False, allow_blank=True)
+    # Plan & capacity overrides
+    student_seat_limit = serializers.IntegerField(required=False, min_value=0, allow_null=True)
+    staff_seat_limit = serializers.IntegerField(required=False, min_value=0, allow_null=True)
+    storage_cap_gb = serializers.IntegerField(required=False, min_value=0, allow_null=True)
+    trial_days = serializers.IntegerField(required=False, min_value=0, max_value=365, allow_null=True)
+    go_live_date = serializers.DateField(required=False, allow_null=True)
+    billing_cycle = serializers.ChoiceField(
+        choices=TENANT_BILLING_CYCLES, required=False, allow_blank=True, allow_null=True
+    )
+
+    def validate_trial_days(self, value):
+        if value is None:
+            return value
+        if value not in TRIAL_DAY_CHOICES:
+            raise serializers.ValidationError(
+                f"Trial period must be one of {sorted(TRIAL_DAY_CHOICES)} days."
+            )
+        return value
+
+    def validate(self, attrs):
+        # Cannot shrink seat / storage limits below current usage.
+        tenant: SchoolTenant | None = self.context.get("tenant") if hasattr(self, "context") else None
+        errors: dict[str, str] = {}
+        if tenant is not None:
+            new_student_cap = attrs.get("student_seat_limit")
+            if new_student_cap not in (None, 0) and new_student_cap < (tenant.student_count or 0):
+                errors["student_seat_limit"] = (
+                    f"Cannot reduce student seat limit below current usage ({tenant.student_count})."
+                )
+            new_staff_cap = attrs.get("staff_seat_limit")
+            if new_staff_cap not in (None, 0) and new_staff_cap < (tenant.staff_count or 0):
+                errors["staff_seat_limit"] = (
+                    f"Cannot reduce staff seat limit below current usage ({tenant.staff_count})."
+                )
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
 
 
 class InvoiceSerializer(serializers.ModelSerializer):

@@ -92,6 +92,15 @@ class SchoolTenant(TenantMixin, models.Model):
     # Board affiliation
     affiliation_number = models.CharField(max_length=64, null=True, blank=True)
 
+    # Plan & capacity overrides (null = inherit subscription plan default)
+    student_seat_limit = models.PositiveIntegerField(null=True, blank=True)
+    staff_seat_limit = models.PositiveIntegerField(null=True, blank=True)
+    storage_cap_gb = models.PositiveIntegerField(null=True, blank=True)
+    trial_days = models.PositiveSmallIntegerField(null=True, blank=True)
+    go_live_date = models.DateField(null=True, blank=True)
+    trial_ends_at = models.DateField(null=True, blank=True)
+    billing_cycle = models.CharField(max_length=16, null=True, blank=True)
+
     # django-tenants uses `schema_name` on TenantMixin. Keep it explicit
     schema_name = models.CharField(max_length=63, unique=True)
 

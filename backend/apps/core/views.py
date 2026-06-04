@@ -1934,14 +1934,18 @@ class PincodeLookupView(APIView):
         try:
             resp = http_requests.get(
                 f"https://api.postalpincode.in/pincode/{pincode}",
-                timeout=5,
+                timeout=8,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
             )
+            resp.raise_for_status()
             data = resp.json()
             if (
                 data
                 and isinstance(data, list)
+                and len(data) > 0
                 and data[0].get("Status") == "Success"
                 and data[0].get("PostOffice")
+                and len(data[0]["PostOffice"]) > 0
             ):
                 po = data[0]["PostOffice"][0]
                 return Response({
@@ -1949,9 +1953,27 @@ class PincodeLookupView(APIView):
                     "state":   po.get("State", ""),
                     "country": po.get("Country", "India"),
                 })
-        except Exception:  # noqa: BLE001
-            pass
-        return Response(
-            {"detail": "Location not found for this PIN code."},
-            status=status.HTTP_404_NOT_FOUND,
-        )
+            # API returned but said Not Found or invalid structure
+            return Response(
+                {"detail": "Location not found for this PIN code."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except http_requests.Timeout:
+            return Response(
+                {"detail": "PIN code lookup service is taking too long. Please try again."},
+                status=status.HTTP_504_GATEWAY_TIMEOUT,
+            )
+        except http_requests.HTTPError as exc:
+            import logging
+            logging.getLogger(__name__).warning("PIN code API HTTP error: %s", exc)
+            return Response(
+                {"detail": "PIN code lookup service is temporarily unavailable."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).exception("PIN code lookup unexpected error: %s", exc)
+            return Response(
+                {"detail": "Unable to lookup PIN code at this time. Please enter city/state manually."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
