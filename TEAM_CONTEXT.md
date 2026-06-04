@@ -1,5 +1,83 @@
 # TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Safura Samreen (04/06/2026)
+
+**Branch:** `Fees-ui-updates`
+
+### Dashboard Fix
+- Removed `'fees'` from `COMING_SOON_IDS` in `ModuleGrid.tsx` and `QuickAccessGrid.tsx` — Fees Collection button no longer shows "Coming Soon" tooltip on hover in the dashboard.
+
+### New file — `frontend/components/fees/FeesAssignmentPanel.tsx`
+Full static Fee Assignment page built matching reference designs:
+- **Stats bar** — 118 assigned · 20 unassigned · 138 total students, orange gradient divider, "Assign all unassigned →" button.
+- **Filters** — search by name/admission number, Year / Class / Fee Group dropdowns; all live-filter via `useMemo`.
+- **Tabs** — All / Unassigned / Assigned with live student counts (update when assignments are made in-session).
+- **Class sections** — 5 classes (6A, 7B, 8A, 9A, 10B); expandable/collapsible, each with Bulk Assign button and a "X shown" count. Default: 6A expanded.
+- **Student table** — checkbox select-all, avatar initials, category badge, Group schedule pill, annual fee (Rs. 36k/44.5k/78k), Plan Agreed / No plan yet pill, action buttons.
+- **Session assignment tracking** — in-session state (`overrides`) updates student rows from "Assign →" to "Edit Assignment + Change Plan"; stats recompute dynamically.
+- **5 modals implemented:**
+  - **Assign Fees** — fee group + concession dropdowns, full fee schedule table (term-wise/custom/monthly rows with colour badges), annual total, italic note. Confirms and updates student state.
+  - **Edit Assignment** — same layout as Assign Fees, pre-fills current group, "Save Changes" button.
+  - **Change Payment Plan** — 5 radio plan options (2-Term / 3-Term (Current badge) / 4-Term / Monthly / Custom), reason textarea, "Confirm Plan Switch".
+  - **Bulk Assign Fees** — class-level "Bulk Assign" button pre-fills class dropdown; header "+ Bulk Assign" defaults to All Classes. "Assign to Unassigned" applies bulk override to all unassigned students.
+  - **How Fee Assignment works (Info)** — 5 numbered steps with purple circles, yellow tip box, "Got it" button. Triggered by "i" header button.
+
+**Updated `frontend/app/(dashboard)/fees/fee-assignment/page.tsx`:** replaced `<ComingSoon />` with `<FeesAssignmentPanel />`.
+
+---
+
+### New file — `frontend/components/fees/FeesCollectionPanel.tsx`
+Full static Collection page (Payment Desk) built matching reference designs:
+- **Two-column layout** — left (Student Search + Payment Form), right (Receipt Preview + Ledger + Reconciliation + Recent Payments). Pre-loaded with Kabir Sharma so all sections are visible on first render.
+- **Student Search** — type-ahead dropdown filters by name or admission number; clicking selects the student and auto-checks all dues, auto-fills Amount Paid.
+- **Payment Form** — checkboxes per due item (unchecking updates Amount Paid), Payment Method dropdown, Date/Time field, Note textarea, "Save & Print Receipt" button.
+- **Confirm Payment Modal** — opens on "Save & Print Receipt"; shows amount spotlight (large purple), Receipt No preview, Payment Method, COLLECTED BY text input, COUNTER/DRAWER dropdown, "Print receipt now" + "Send receipt via SMS" checkboxes, "Post {Method} Payment" button. Actually posts to Recent Payments.
+- **Receipt Preview** — live-updates as due items are checked/unchecked; shows Eskoolia branding, receipt number, all checked items, method, total in purple.
+- **Student Ledger View (inline)** — shows abbreviated ledger for selected student with timeline entries (red charges, green credits, gray notes) and ledger balance in purple.
+- **Student Ledger Modal** — triggered by "Student Ledger" header button or "Open Full Ledger" inline button; full chronological history, ledger balance, Late Fee Calculator Preview section (5-cell grid: Outstanding / Days Overdue / Chargeable Days / Raw Penalty / Final Due), Close + "Generate Ledger PDF" buttons.
+- **Simulate Incoming Payment** — cycles through 5 fake payment notifications (dark pill with green dot, appears above header buttons, auto-dismisses after 4 s).
+- **Payment Reconciliation** — 4 entries with coloured confidence score circles (green/amber/red) and status badges (Matched / Review / Needs mapping).
+- **Recent Payments** — 10-row table; new payments prepend on save. Receipt / Reverse / Delete action buttons per row.
+- Added 3 extra "Kabir" students (Kabir Sharma, Kabir Nair ADM-0165, Kabir Iyer ADM-0225) so the search dropdown matches the reference screenshot.
+
+**Updated `frontend/app/(dashboard)/fees/collection/page.tsx`:** replaced `<ComingSoon />` with `<FeesCollectionPanel />`.
+
+---
+
+### New file — `frontend/components/fees/FeesDuesRemindersPanel.tsx`
+Full static Dues & Reminders page built matching reference designs:
+- **Page header** — "COLLECTIONS FOLLOW-UP" label, "Dues & Reminders" h1, Export CSV button.
+- **4 stat cards** — each with a coloured left accent border (orange / amber / purple / green): Total Overdue Amount (Rs. 21,72,460), Students with Dues (55), Average Days Overdue (17), % Collected (68%). 4-colour gradient line below.
+- **Tier tabs** — Tier 1 (1-15 days), Tier 2 (16-30 days), Tier 3 (31+ days, active by default). Clicking a tier filters the student list across all class sections. "Send Reminder to All Selected" + "Generate Report" buttons.
+- **Late Fee Calculator Preview** — static card (Aarav Sharma · Tuition Fee Term 2) with 5-cell breakdown grid, "Copy Breakdown" button.
+- **Class sections (5 classes)** — expandable/collapsible with purple left bar, class name + stats, "Remind All" button, red "X due" count badge, chevron. Expanded view shows student table.
+- **Student table** — checkbox, student avatar + name + admNo, Amount Due, Days Overdue (colour-coded red/amber by severity), Last Reminder, Fee Status badge (Overdue / Payment Watch / Escalated / Defaulter), Resolve + Log Call actions.
+- **Resolve** — removes student from the dues list (in-session state), toast confirmation.
+- **Log Call → Follow-up side panel** — slides in from the right (400 px drawer, semi-transparent backdrop):
+  - Header: "{Student} Follow-up" + admNo · Class · Due amount + × close.
+  - Student card with avatar, name, status note (e.g. "Principal escalation due"), status badge.
+  - Interaction timeline with blue dots connected by vertical line; each entry shows note text + date · actor (System / Finance Admin). Per-student log entries defined in data.
+  - "ADD NOTE / LOG CALL" textarea.
+  - AGREED AMOUNT + AGREED DATE inputs side by side.
+  - "Save Follow-up" full-width purple button — shows toast and closes panel.
+- Student data updated to match reference screenshots: Zara Sharma (ADM-0133, 7B) and Mihika Sharma (ADM-0153, 7B) in Tier 3; 23 total students across all tiers and 5 classes.
+
+**Updated `frontend/app/(dashboard)/fees/dues-reminders/page.tsx`:** replaced `<ComingSoon />` with `<FeesDuesRemindersPanel />`.
+
+---
+
+**Files changed today:**
+- `frontend/components/home/ModuleGrid.tsx` — removed `'fees'` from COMING_SOON_IDS
+- `frontend/components/home/QuickAccessGrid.tsx` — removed `'fees'` from COMING_SOON_IDS
+- `frontend/components/fees/FeesAssignmentPanel.tsx` — NEW (~650 lines)
+- `frontend/app/(dashboard)/fees/fee-assignment/page.tsx` — replaced ComingSoon
+- `frontend/components/fees/FeesCollectionPanel.tsx` — NEW (~650 lines)
+- `frontend/app/(dashboard)/fees/collection/page.tsx` — replaced ComingSoon
+- `frontend/components/fees/FeesDuesRemindersPanel.tsx` — NEW (~550 lines)
+- `frontend/app/(dashboard)/fees/dues-reminders/page.tsx` — replaced ComingSoon
+
+---
+
 ## Update — Safura Samreen (03/06/2026)
 i am Safura Samreen today 03/06/2024 i have worked on the following UI improvements:
 - Updated `FeesPaymentsPanel.tsx` header to use `justifyContent: "space-between"` for proper right-alignment of the "Simulate Incoming Payment" button.
