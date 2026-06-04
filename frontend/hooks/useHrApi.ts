@@ -535,4 +535,14 @@ export function useMasterEmploymentTypes() {
   return useFetch<MasterItem[]>("/api/master/employment-types/");
 }
 
+// Staff form options (roles, departments, designations) — backed by hr/staff/form-options/
+export interface StaffFormOptions {
+  roles: { id: number; name: string }[];
+  departments: { id: number; name: string }[];
+  designations: { id: number; name: string; department: number }[];
+}
+export function useStaffFormOptions() {
+  return useFetch<{ success: boolean; data: StaffFormOptions }>("/api/v1/hr/staff/form-options/");
+}
+
 

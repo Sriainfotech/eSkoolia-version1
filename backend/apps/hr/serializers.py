@@ -866,8 +866,8 @@ class StaffSerializer(serializers.ModelSerializer):
             attrs["custom_field"] = custom_field_in_attrs
 
         # ========== FAMILY STEP VALIDATION ==========
-        valid_marital = {"Single", "Married", "Divorced", "Widowed"}
-        marital_status_val = self._normalize_text_input(get_value("marital_status"))
+        valid_marital = {"single", "married", "divorced", "widowed"}
+        marital_status_val = self._normalize_text_input(get_value("marital_status")).lower()
         if marital_status_val and marital_status_val not in valid_marital:
             raise serializers.ValidationError({"marital_status": "Select a valid marital status."})
 
@@ -881,7 +881,7 @@ class StaffSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"num_children": "Please enter a valid number of children."})
 
         spouse_name_raw = self._normalize_text_input(str(self.initial_data.get("spouse_parent_name", "")))
-        if marital_status_val == "Married" and not spouse_name_raw:
+        if marital_status_val == "married" and not spouse_name_raw:
             raise serializers.ValidationError({"spouse_parent_name": "Spouse name is required."})
         if spouse_name_raw and not _is_valid_person_name(spouse_name_raw):
             raise serializers.ValidationError({"spouse_parent_name": "Please enter a valid name using alphabets only."})
@@ -1419,6 +1419,15 @@ class StaffSerializer(serializers.ModelSerializer):
 
         # Date range validation for previous employment
         from datetime import date as _date
+        
+        # Helper function for adding years to dates (handles leap year edge cases)
+        def add_years_safe(value, years):
+            # Handles leap-day birthdays (Feb 29 -> Feb 28 on non-leap years)
+            try:
+                return value.replace(year=value.year + years)
+            except ValueError:
+                return value.replace(month=2, day=28, year=value.year + years)
+        
         _today = today  # already defined above
         _joining = join_date  # already parsed above
         _dob = date_of_birth  # already parsed above
@@ -1495,13 +1504,6 @@ class StaffSerializer(serializers.ModelSerializer):
         if not is_valid_optional_url(instagram_url):
             raise serializers.ValidationError({"instagram_url": "Enter a valid URL"})
 
-        def add_years_safe(value, years):
-            # Handles leap-day birthdays (Feb 29 -> Feb 28 on non-leap years)
-            try:
-                return value.replace(year=value.year + years)
-            except ValueError:
-                return value.replace(month=2, day=28, year=value.year + years)
-
         if date_of_birth and date_of_birth > today:
             raise serializers.ValidationError({"date_of_birth": "Date of birth cannot be in the future."})
         if date_of_birth:
@@ -1529,9 +1531,21 @@ class StaffSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"staff_photo": "Only JPG and PNG files are allowed."})
 
         for document_name in other_document_values:
-            lowered_doc = document_name.lower()
+            # Strip whitespace and lower case
+            doc_stripped = str(document_name or "").strip()
+            lowered_doc = doc_stripped.lower()
+            
+            # Log the actual filename being checked for debugging
+            import logging
+            logging.getLogger(__name__).info("Validating document filename: %r (lowered: %r)", doc_stripped, lowered_doc)
+            
+            if not doc_stripped:
+                raise serializers.ValidationError({"other_document": "Document filename cannot be empty."})
+            
             if not lowered_doc.endswith((".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png")):
-                raise serializers.ValidationError({"other_document": "Signature upload must be PDF, DOC, DOCX, JPG, JPEG, or PNG."})
+                raise serializers.ValidationError({
+                    "other_document": f"Invalid file type for '{doc_stripped}'. Only PDF, DOC, DOCX, JPG, JPEG, or PNG files are allowed."
+                })
 
         if school_id and staff_no:
             duplicate_staff_qs = Staff.objects.filter(school_id=school_id, staff_no__iexact=staff_no)

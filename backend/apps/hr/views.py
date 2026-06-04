@@ -557,7 +557,20 @@ class StaffViewSet(SchoolScopedModelViewSet):
 
         other_docs = []
         if hasattr(request.data, "getlist"):
-            other_docs.extend([str(item).strip() for item in request.data.getlist("other_document") if str(item).strip()])
+            for item in request.data.getlist("other_document"):
+                item_str = str(item).strip()
+                if not item_str:
+                    continue
+                # Try to parse JSON-stringified arrays (from FormData)
+                if item_str.startswith('[') and item_str.endswith(']'):
+                    try:
+                        parsed = json.loads(item_str)
+                        if isinstance(parsed, list):
+                            other_docs.extend([str(x).strip() for x in parsed if str(x).strip()])
+                            continue
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        pass
+                other_docs.append(item_str)
         if hasattr(request.FILES, "getlist"):
             other_docs.extend([file_obj.name for file_obj in request.FILES.getlist("other_document") if getattr(file_obj, "name", "")])
         if other_docs:
@@ -601,6 +614,14 @@ class StaffViewSet(SchoolScopedModelViewSet):
             )
         except IntegrityError:
             raise ValidationError({"staff_no": "Staff number already exists."})
+        except (ValidationError, NotFound, PermissionDenied, NotAuthenticated, AuthenticationFailed):
+            raise
+        except Exception as exc:
+            import logging, traceback
+            logging.getLogger(__name__).error(
+                "StaffViewSet.create unhandled error: %s\n%s", exc, traceback.format_exc()
+            )
+            raise
 
     def update(self, request, *args, **kwargs):
         try:
@@ -701,23 +722,44 @@ class StaffViewSet(SchoolScopedModelViewSet):
 
         matched_user = None
         if staff.email:
+            # Find user by email; if they already have a different staff profile, don't reuse
             matched_user = User.objects.filter(email__iexact=staff.email).order_by("id").first()
-            if matched_user and hasattr(matched_user, "staff_profile") and matched_user.staff_profile.id != staff.id:
-                matched_user = None
+            if matched_user:
+                if hasattr(matched_user, "staff_profile") and matched_user.staff_profile.id != staff.id:
+                    # Email collision: existing user has a different staff profile
+                    raise ValidationError({
+                        "email": f"A user account with email {staff.email} is already linked to another staff member."
+                    })
+                # Reuse this user (either no staff_profile, or it's this staff)
 
         if not matched_user:
-            username = self._generate_username(staff)
-            matched_user = User.objects.create(
-                username=username,
-                first_name=(staff.first_name or "").strip(),
-                last_name=(staff.last_name or "").strip(),
-                email=(staff.email or "").strip(),
-                school_id=staff.school_id,
-                is_active=True,
-                access_status=True,
-            )
-            matched_user.set_unusable_password()
-            matched_user.save(update_fields=["password"])
+            try:
+                username = self._generate_username(staff)
+                matched_user = User.objects.create(
+                    username=username,
+                    first_name=(staff.first_name or "").strip(),
+                    last_name=(staff.last_name or "").strip(),
+                    email=(staff.email or "").strip(),
+                    school_id=staff.school_id,
+                    is_active=True,
+                    access_status=True,
+                )
+                matched_user.set_unusable_password()
+                matched_user.save(update_fields=["password"])
+            except IntegrityError as exc:
+                # Likely a race condition or unique constraint violation
+                import logging
+                logging.getLogger(__name__).warning(
+                    "User creation failed for staff %s (email=%s): %s", staff.staff_no, staff.email, exc
+                )
+                # Try to recover by finding the conflicting user
+                if staff.email:
+                    matched_user = User.objects.filter(email__iexact=staff.email).order_by("id").first()
+                if not matched_user:
+                    # Username conflict? Try by username
+                    matched_user = User.objects.filter(username=username).order_by("id").first()
+                if not matched_user:
+                    raise ValidationError({"email": "Unable to create user account. Email or username may already exist."})
 
         staff.user_id = matched_user.id
         staff.save(update_fields=["user", "updated_at"])
