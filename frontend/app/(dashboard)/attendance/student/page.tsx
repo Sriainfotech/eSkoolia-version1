@@ -1,8 +1,5 @@
-// Old StudentAttendancePage implementation has been commented out.
-// (Original file contained encoding issues - implementation preserved in git history)
+import StudentAttendancePremiumPanel from '@/components/attendance/StudentAttendancePremiumPanel';
 
-import ComingSoon from '@/components/shared/ComingSoon';
-
-export default function Page() {
-  return <ComingSoon />;
+export default function StudentAttendancePage() {
+  return <StudentAttendancePremiumPanel />;
 }

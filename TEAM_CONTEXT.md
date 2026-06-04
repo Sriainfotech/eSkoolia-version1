@@ -3015,6 +3015,7 @@ const ratioChecks: (() => string | null)[] = [
 4. Add IGST/CGST/SGST state-of-supply detection to `BillingGSTR1ExportView` for accurate GST filing values.
 5. Commit all Day 11 changes on `tenancy-new` branch.
 
+<<<<<<< HEAD
 ---
 
 ## Day 13 — 2026-06-03 — HR Onboard: Staff Photo, Save-Draft System & PDF Generation
@@ -3445,3 +3446,14 @@ Staff onboarding wizard is now fully functional end-to-end. Next priorities:
 4. Consider adding bulk import for staff
 5. Build remaining HR modules (Attendance, Leave, Payroll)
 
+---
+
+## Day 14 ΓÇö 2026-06-04 ΓÇö Student Attendance Module
+
+### Student Attendance - 04/06/2026
+
+- Attendance Module changes - 04/06/2026
+1. Successfully integrated the Students Attendance module into the frontend.
+2. Fixed the issue in the Student List page.
+3. Identified and resolved the problem where student data was displaying incorrectly.
+4. Verified that the correct student data is now being fetched and displayed.
