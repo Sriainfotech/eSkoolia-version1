@@ -76,6 +76,10 @@ type SchoolClass = { id: number; name?: string; class_name?: string; total_stude
 type Section = { id: number; school_class: number; name?: string; section_name?: string; student_count?: number };
 type StatusFilter = "all" | "active" | "inactive" | "archived" | "new" | "docs";
 
+// Synthetic section id for students who have a class but no section assigned.
+// Real section ids are always positive, so -1 never collides with a real one.
+const UNASSIGNED_SECTION_ID = -1;
+
 async function apiGet<T>(path: string): Promise<T> {
   return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
 }
@@ -135,6 +139,7 @@ function normalizeLabel(label: string, fallback: number) {
 /** Prefixes plain section identifiers like "A", "B", "1" with "Section " for display. */
 function formatSectionLabel(label: string, fallback: number): string {
   const text = String(label || "").trim() || String(fallback);
+  if (/^unassigned$/i.test(text)) return "Unassigned";
   if (/^section\b/i.test(text)) return text;
   return `Section ${text}`;
 }
@@ -220,6 +225,9 @@ export function StudentListPanel() {
   const [activeSectionMap, setActiveSectionMap] = useState<Map<number, number>>(new Map());
   const [classSectionStudents, setClassSectionStudents] = useState<Map<string, StudentRow[]>>(new Map());
   const [classSectionLoading, setClassSectionLoading] = useState<Set<string>>(new Set());
+  // Classes that have at least one student with no section assigned — these get a
+  // synthetic "Unassigned" section so those students still appear in the accordion.
+  const [classesWithUnassigned, setClassesWithUnassigned] = useState<Set<number>>(new Set());
   // Per-section page state for the in-accordion student list pagination.
   const [sectionPage, setSectionPage] = useState<Map<string, number>>(new Map());
   const SECTION_PAGE_SIZE = 10;
@@ -285,6 +293,7 @@ export function StudentListPanel() {
     setAcademicYear("2026-27");
     setFilterApplied(false);
     setClassSectionStudents(new Map());
+    setClassesWithUnassigned(new Set());
     setOpenClasses(new Set());
     setActiveSectionMap(new Map());
   };
@@ -425,8 +434,14 @@ export function StudentListPanel() {
       if (!map.has(sec.school_class)) map.set(sec.school_class, []);
       map.get(sec.school_class)!.push(sec);
     }
+    // Append a synthetic "Unassigned" section to any class that has students
+    // without a section, so those students remain visible in the accordion.
+    classesWithUnassigned.forEach((classId) => {
+      if (!map.has(classId)) map.set(classId, []);
+      map.get(classId)!.push({ id: UNASSIGNED_SECTION_ID, school_class: classId, name: "Unassigned" });
+    });
     return map;
-  }, [sections]);
+  }, [sections, classesWithUnassigned]);
 
   const loadClassSection = async (classId: number, sectionId: number) => {
     const key = `${classId}-${sectionId}`;
@@ -437,14 +452,23 @@ export function StudentListPanel() {
       // accordion badges (students / active / docs / special) reflect the true
       // class composition. Status / special filters are applied client-side via
       // `matchesFilter` for visibility — they do NOT scope this fetch.
+      const unassigned = sectionId === UNASSIGNED_SECTION_ID;
       const query = buildPaginationQuery(1, 200, {
         current_class: String(classId),
-        current_section: String(sectionId),
+        // The synthetic "Unassigned" bucket has no real section id — fetch the
+        // whole class and keep only the students with no section client-side.
+        current_section: unassigned ? undefined : String(sectionId),
         search: debouncedSearch || undefined,
         include_deleted: "true",
       });
       const payload = await apiGet<ListApiResponse<StudentRow>>(`/api/v1/students/students/?${query}`);
-      const items = extractListData(payload);
+      let items = extractListData(payload);
+      if (unassigned) {
+        items = items.filter((row) => !row.current_section);
+        // Reveal the synthetic "Unassigned" tab for this class once we know it
+        // actually has section-less students.
+        if (items.length > 0) setClassesWithUnassigned((prev) => new Set(prev).add(classId));
+      }
       setClassSectionStudents((prev) => new Map(prev).set(key, items));
     } catch {
       setClassSectionStudents((prev) => new Map(prev).set(key, []));
@@ -460,12 +484,19 @@ export function StudentListPanel() {
         next.delete(classId);
       } else {
         next.add(classId);
+        // Probe for section-less students so the synthetic "Unassigned" tab
+        // appears even on the lazy (non-Apply) browse path.
+        void loadClassSection(classId, UNASSIGNED_SECTION_ID);
         const secs = classSectionsMap.get(classId) || [];
         if (secs.length > 0) {
+          // Prefer the first section that already has loaded students so the
+          // class doesn't open on an empty tab when the pupils sit elsewhere
+          // (e.g. the synthetic "Unassigned" section).
+          const preferred = secs.find((s) => (classSectionStudents.get(`${classId}-${s.id}`) || []).length > 0) ?? secs[0];
           setActiveSectionMap((sm) => {
             if (sm.has(classId)) return sm;
-            void loadClassSection(classId, secs[0].id);
-            return new Map(sm).set(classId, secs[0].id);
+            void loadClassSection(classId, preferred.id);
+            return new Map(sm).set(classId, preferred.id);
           });
         }
       }
@@ -526,27 +557,49 @@ export function StudentListPanel() {
         for (const k of allKeys) grouped.set(k, []);
         const validClassIds = new Set(eligibleClasses.map((c) => c.id));
         const validSecIds = new Set(eligibleSecs.map((s) => s.id));
+        const unassignedClassIds = new Set<number>();
         for (const row of items) {
           const cId = row.current_class;
           const sId = row.current_section;
-          if (!cId || !sId) continue;
+          if (!cId) continue;
           if (!validClassIds.has(cId)) continue;
+          if (!sId) {
+            // Student has a class but no section. When a specific section filter
+            // is active they can't belong to it, so skip; otherwise bucket them
+            // under a synthetic "Unassigned" section so they stay visible.
+            if (sectionFilter) continue;
+            const k = `${cId}-${UNASSIGNED_SECTION_ID}`;
+            if (!grouped.has(k)) grouped.set(k, []);
+            grouped.get(k)!.push(row);
+            unassignedClassIds.add(cId);
+            continue;
+          }
           if (!validSecIds.has(sId)) continue;
           const k = `${cId}-${sId}`;
           if (!grouped.has(k)) grouped.set(k, []);
           grouped.get(k)!.push(row);
         }
         setClassSectionStudents(grouped);
+        setClassesWithUnassigned(unassignedClassIds);
         setClassSectionLoading(new Set());
 
-        // Auto-open + auto-select first section of first eligible class (only first time)
-        if (openClasses.size === 0 && eligibleClasses[0]) {
-          const firstClass = eligibleClasses[0];
-          const allSecs = classSectionsMap.get(firstClass.id) || [];
-          const firstSecs = sectionFilter ? allSecs.filter((s) => String(s.id) === sectionFilter) : allSecs;
-          if (firstSecs.length > 0) {
+        // Auto-open the first eligible class that actually has students, and
+        // auto-select the first of its sections that contains students (which
+        // may be the synthetic "Unassigned" bucket). (only first time)
+        if (openClasses.size === 0) {
+          const sectionIdsFor = (classId: number): number[] => {
+            const real = classSectionsMap.get(classId) || [];
+            const realIds = (sectionFilter ? real.filter((s) => String(s.id) === sectionFilter) : real).map((s) => s.id);
+            if (!sectionFilter && unassignedClassIds.has(classId)) realIds.push(UNASSIGNED_SECTION_ID);
+            return realIds;
+          };
+          const firstClass = eligibleClasses.find((c) => sectionIdsFor(c.id).some((sid) => (grouped.get(`${c.id}-${sid}`) || []).length > 0))
+            ?? eligibleClasses.find((c) => sectionIdsFor(c.id).length > 0);
+          if (firstClass) {
+            const secIds = sectionIdsFor(firstClass.id);
+            const firstWithStudents = secIds.find((sid) => (grouped.get(`${firstClass.id}-${sid}`) || []).length > 0) ?? secIds[0];
             setOpenClasses(new Set([firstClass.id]));
-            setActiveSectionMap(new Map([[firstClass.id, firstSecs[0].id]]));
+            setActiveSectionMap(new Map([[firstClass.id, firstWithStudents]]));
           }
         }
       } catch {

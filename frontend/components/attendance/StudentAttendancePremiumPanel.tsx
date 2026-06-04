@@ -24,8 +24,8 @@ import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TopToast } from "@/components/common/TopToast";
 
 type AcademicYear = { id: number; name: string; is_current: boolean };
-type SchoolClass = { id: number; name: string };
 type Section = { id: number; school_class: number; name: string };
+type SchoolClass = { id: number; name: string; sections?: Section[] };
 type ApiList<T> = T[] | { results?: T[] };
 
 type StudentRow = {
@@ -36,6 +36,12 @@ type StudentRow = {
   roll_no: string;
   attendance_type: string | null;
   attendance_note: string;
+  arrival_time?: string;
+  sign_in_time?: string;
+  sign_out_time?: string;
+  pickup_time?: string;
+  pickup_by?: string;
+  lunch?: boolean;
 };
 
 type AttendanceEntry = {
@@ -69,6 +75,58 @@ async function apiPost<T>(path: string, payload: unknown): Promise<T> {
 
 function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results ?? [];
+}
+
+/**
+ * The student-search endpoint normally returns `{ students: [...] }`, but be
+ * tolerant of the shapes the same backend can emit so the table renders no
+ * matter how the API was deployed:
+ *   - `{ students: [...] }`           (current default)
+ *   - `{ results: [...] }`            (paginated / DRF list)
+ *   - `[...]`                         (bare array)
+ *   - `{ already_assigned_students, new_students }` (legacy parity payload)
+ */
+function extractStudentRows(data: unknown): StudentRow[] {
+  if (Array.isArray(data)) return data as StudentRow[];
+  if (!data || typeof data !== "object") return [];
+  const payload = data as Record<string, unknown>;
+
+  if (Array.isArray(payload.students)) return payload.students as StudentRow[];
+  if (Array.isArray(payload.results)) return payload.results as StudentRow[];
+
+  // Legacy payload: merge marked + unmarked pupils into one list.
+  const assigned = Array.isArray(payload.already_assigned_students)
+    ? (payload.already_assigned_students as Array<Record<string, unknown>>)
+    : [];
+  const fresh = Array.isArray(payload.new_students)
+    ? (payload.new_students as Array<Record<string, unknown>>)
+    : [];
+  if (assigned.length || fresh.length) {
+    const mapped: StudentRow[] = assigned.map((item) => ({
+      id: Number(item.student_id ?? item.id),
+      admission_no: String(item.admission_no ?? ""),
+      first_name: String(item.first_name ?? ""),
+      last_name: String(item.last_name ?? ""),
+      roll_no: String(item.roll_no ?? ""),
+      attendance_type: (item.attendance_type as string | null) ?? null,
+      attendance_note: String(item.notes ?? item.attendance_note ?? ""),
+      lunch: Boolean(item.lunch),
+    }));
+    fresh.forEach((item) => {
+      mapped.push({
+        id: Number(item.id ?? item.student_id),
+        admission_no: String(item.admission_no ?? ""),
+        first_name: String(item.first_name ?? ""),
+        last_name: String(item.last_name ?? ""),
+        roll_no: String(item.roll_no ?? ""),
+        attendance_type: null,
+        attendance_note: "",
+      });
+    });
+    return mapped.filter((row) => Number.isFinite(row.id));
+  }
+
+  return [];
 }
 
 function fullName(student: StudentRow): string {
@@ -165,7 +223,8 @@ export default function StudentAttendancePremiumPanel() {
         setError("");
         const [yearData, classData] = await Promise.allSettled([
           apiGet<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
-          apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/"),
+          // page_size=200 so every class (and its embedded sections) loads, not just the first page.
+          apiGet<ApiList<SchoolClass>>("/api/v1/core/classes/?page_size=200"),
         ]);
         const loadedYears = yearData.status === "fulfilled" ? listData(yearData.value) : [];
         const loadedClasses = classData.status === "fulfilled" ? listData(classData.value) : [];
@@ -190,10 +249,23 @@ export default function StudentAttendancePremiumPanel() {
       setSectionId("");
       return;
     }
+    setSectionId("");
+
+    // The classes endpoint always embeds each class's sections, so for any class
+    // we've already loaded just use those — no second round-trip, and no calls to
+    // the sections endpoint (which runs a legacy-normalization write on every GET
+    // and was the source of the "Unable to load sections" error).
+    const selected = classes.find((item) => String(item.id) === targetClassId);
+    if (selected) {
+      setSections(selected.sections ?? []);
+      return;
+    }
+
+    // Class isn't in the loaded list (shouldn't normally happen) — fall back to
+    // the sections endpoint.
     try {
       setLoadingSections(true);
       setSections([]);
-      setSectionId("");
       try {
         const payload = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
         setSections(listData(payload));
@@ -206,7 +278,7 @@ export default function StudentAttendancePremiumPanel() {
     } finally {
       setLoadingSections(false);
     }
-  }, []);
+  }, [classes]);
 
   const searchStudents = useCallback(async () => {
     if (!classId || !sectionId || !attendanceDate) {
@@ -217,7 +289,7 @@ export default function StudentAttendancePremiumPanel() {
       setSearching(true);
       setError("");
       setSuccess("");
-      const data = await apiPost<{ students: StudentRow[] }>(
+      const data = await apiPost<unknown>(
         "/api/v1/attendance/student-attendance/student-search/",
         {
           class: Number(classId),
@@ -228,18 +300,28 @@ export default function StudentAttendancePremiumPanel() {
         },
       );
 
-      const rows = data.students || [];
+      const rows = extractStudentRows(data);
+
       const nextAttendance: Record<number, AttendanceEntry> = {};
       const nextUi: Record<number, UiRow> = {};
 
-      rows.forEach((row, idx) => {
+      rows.forEach((row) => {
         const type = row.attendance_type ?? null;
         nextAttendance[row.id] = {
           student_id: row.id,
           attendance_type: type,
           notes: row.attendance_note || "",
         };
-        nextUi[row.id] = defaultUiRow(idx, type);
+        
+        // Use actual backend data if available, fallback to empty string
+        nextUi[row.id] = {
+          arrivalTime: row.arrival_time || "",
+          signInTime: row.sign_in_time || "",
+          signOutTime: row.sign_out_time || "",
+          pickupTime: row.pickup_time || "",
+          lunchTaken: row.lunch || false,
+          lateMinutes: type === "L" ? 5 : 0, // Fallback for UI visualization if needed
+        };
       });
 
       setStudents(rows);
@@ -248,13 +330,25 @@ export default function StudentAttendancePremiumPanel() {
       setSelectedIds([]);
       setPage(1);
       setDirty(false);
-      setSuccess(`Loaded ${rows.length} pupil records.`);
-    } catch {
-      setError("Unable to load students for attendance.");
+      if (rows.length === 0) {
+        setSuccess("");
+        setError("No pupils found for the selected class, section and date.");
+      } else {
+        setSuccess(`Loaded ${rows.length} pupil records.`);
+      }
+    } catch (err) {
+      const message = err instanceof Error && err.message ? err.message : "Unable to load students for attendance.";
+      setError(message);
     } finally {
       setSearching(false);
     }
   }, [attendanceDate, classId, sectionId]);
+
+  useEffect(() => {
+    if (classId && sectionId && attendanceDate) {
+      void searchStudents();
+    }
+  }, [classId, sectionId, attendanceDate, searchStudents]);
 
   const saveAttendance = useCallback(async () => {
     if (!classId || !sectionId || !attendanceDate || !students.length) return;
@@ -383,31 +477,26 @@ export default function StudentAttendancePremiumPanel() {
 
   const exportRows = () => {
     const source = selectedIds.length ? students.filter((row) => selectedIds.includes(row.id)) : filteredStudents;
-    const csvRows = [
-      ["Admission No", "Name", "Roll No", "Status", "Attendance %", "Notes"],
-      ...source.map((row) => {
-        const entry = attendance[row.id];
-        return [
-          row.admission_no || "",
-          fullName(row),
-          row.roll_no || "",
-          entry?.attendance_type || "P",
-          String(riskMap[row.id] || 100),
-          entry?.notes || "",
-        ];
-      }),
-    ];
+    const data = source.map((row) => {
+      const entry = attendance[row.id];
+      return {
+        "Admission No": row.admission_no || "",
+        "Name": fullName(row),
+        "Roll No": row.roll_no || "",
+        "Status": entry?.attendance_type || "P",
+        "Attendance %": String(riskMap[row.id] || 100),
+        "Notes": entry?.notes || "",
+      };
+    });
 
-    const csv = csvRows
-      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
-      .join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `attendance_${attendanceDate}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    import("xlsx").then((XLSX) => {
+      const worksheet = XLSX.utils.json_to_sheet(data);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Attendance");
+      XLSX.writeFile(workbook, `attendance_${attendanceDate}.xlsx`);
+    }).catch(() => {
+      setToast({ message: "Failed to export Excel file.", tone: "error" });
+    });
   };
 
   return (
@@ -419,7 +508,7 @@ export default function StudentAttendancePremiumPanel() {
           <div className="rounded-2xl border border-[#E5E7EB] bg-white px-6 py-5 shadow-[0_1px_2px_rgba(15,23,42,0.05)]">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <div className="text-xs font-medium tracking-wide text-[#64748B]">Dashboard / Academics / Attendance</div>
+                <div className="text-xs font-medium tracking-wide text-[#64748B]">Dashboard / Attendance</div>
                 <h1 className="mt-2 text-5xl leading-[0.95] text-[#111827] heading-playfair">
                   Mark <span className="italic text-[#5B3DF5]">attendance</span>
                 </h1>
@@ -474,13 +563,12 @@ export default function StudentAttendancePremiumPanel() {
                 <div className="relative">
                   <input
                     type="date"
-                    className="h-11 w-full rounded-xl border border-[#E5E7EB] bg-white px-3 pr-9 text-sm text-[#111827]"
+                    className="h-11 w-full rounded-xl border border-[#E5E7EB] bg-white px-3 text-sm text-[#111827]"
                     value={attendanceDate}
                     max={todayIso}
                     onChange={(event) => setAttendanceDate(event.target.value)}
                     aria-label="Attendance date"
                   />
-                  <CalendarDays className="pointer-events-none absolute right-3 top-3.5 h-4 w-4 text-[#64748B]" />
                 </div>
 
                 <button
