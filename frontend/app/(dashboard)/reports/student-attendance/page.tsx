@@ -1,4 +1,4 @@
-HIDDEN - no backend yet
+// HIDDEN - no backend yet
 "use client";
 
 import Link from "next/link";
