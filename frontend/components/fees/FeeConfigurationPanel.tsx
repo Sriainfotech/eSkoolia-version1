@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { feesApi, listData, type AcademicYear, type FeesGroup, type SchoolClass } from "@/lib/fees-api";
+import { sortAcademicsClasses } from "@/lib/classOrdering";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -254,6 +256,38 @@ export default function FeeConfigurationPanel() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState("");
   const [showInfo, setShowInfo] = useState(false);
+  const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
+  const [academicYearId, setAcademicYearId] = useState<number | null>(null);
+  const [feeGroups, setFeeGroups] = useState<FeesGroup[]>([]);
+  const [isLoadingGroups, setIsLoadingGroups] = useState(false);
+  const [feeGroupName, setFeeGroupName] = useState("");
+  const [feeGroupDescription, setFeeGroupDescription] = useState("");
+  const [availableClasses, setAvailableClasses] = useState<SchoolClass[]>([]);
+  const [feeGroupClassIds, setFeeGroupClassIds] = useState<number[]>([]);
+  const [classSearch, setClassSearch] = useState("");
+  const [isClassDropdownOpen, setIsClassDropdownOpen] = useState(false);
+  const [classError, setClassError] = useState("");
+  const [isSavingGroup, setIsSavingGroup] = useState(false);
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(true);
+  const [feeGroupPage, setFeeGroupPage] = useState(1);
+  const feeGroupPageSize = 5;
+  const [editingGroup, setEditingGroup] = useState<FeesGroup | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editClassIds, setEditClassIds] = useState<number[]>([]);
+  const [editClassSearch, setEditClassSearch] = useState("");
+  const [isEditClassDropdownOpen, setIsEditClassDropdownOpen] = useState(false);
+  const [editClassError, setEditClassError] = useState("");
+  const [editStatus, setEditStatus] = useState(true);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [deleteGroup, setDeleteGroup] = useState<FeesGroup | null>(null);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const [togglingGroupId, setTogglingGroupId] = useState<number | null>(null);
+  const classDropdownRef = useRef<HTMLDivElement | null>(null);
+  const editClassDropdownRef = useRef<HTMLDivElement | null>(null);
 
   // ── Add Fee Schedule inline form ──
   const [showAddForm, setShowAddForm] = useState(false);
@@ -279,6 +313,134 @@ export default function FeeConfigurationPanel() {
     setTimeout(() => setToast(""), 3200);
   };
 
+  useEffect(() => {
+    let active = true;
+    feesApi
+      .listAcademicYears()
+      .then(payload => {
+        if (!active) return;
+        const years = listData(payload);
+        setAcademicYears(years);
+        const current = years.find(year => year.is_current) || years[0];
+        setAcademicYearId(current?.id ?? null);
+      })
+      .catch(() => {
+        if (!active) return;
+        showToast("Unable to load academic years.");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    feesApi
+      .listClasses()
+      .then(payload => {
+        if (!active) return;
+        const sorted = sortAcademicsClasses(listData(payload));
+        setAvailableClasses(sorted);
+      })
+      .catch(() => {
+        if (!active) return;
+        showToast("Unable to load classes.");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      if (
+        classDropdownRef.current &&
+        !classDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsClassDropdownOpen(false);
+      }
+      if (
+        editClassDropdownRef.current &&
+        !editClassDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsEditClassDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const fetchFeeGroups = async () => {
+    setIsLoadingGroups(true);
+    try {
+      const payload = await feesApi.listGroups();
+      setFeeGroups(listData(payload));
+    } catch (error) {
+      showToast("Unable to load fee groups.");
+    } finally {
+      setIsLoadingGroups(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchFeeGroups();
+  }, []);
+
+  function ghostBtn(small = false): React.CSSProperties {
+    return {
+      height: small ? 30 : 36,
+      padding: small ? "0 12px" : "0 16px",
+      background: "#f7f7fb",
+      color: "#4b5563",
+      border: "1px solid #e4e7f1",
+      borderRadius: small ? 7 : 9,
+      fontSize: small ? 12 : 13,
+      fontWeight: 600,
+      cursor: "pointer",
+      whiteSpace: "nowrap",
+    } as const;
+  }
+
+  const handleCreateGroup = async () => {
+    if (!academicYearId) {
+      showToast("Select an academic year first.");
+      return;
+    }
+    if (!feeGroupName.trim()) {
+      showToast("Group name is required.");
+      return;
+    }
+    if (feeGroupClassIds.length === 0) {
+      setClassError("Please select at least one applicable class.");
+      showToast("Please select at least one applicable class.");
+      return;
+    }
+
+    setIsSavingGroup(true);
+    try {
+      await feesApi.createGroup({
+        academic_year: academicYearId,
+        name: feeGroupName.trim(),
+        description: feeGroupDescription.trim() || undefined,
+        applicable_classes: feeGroupClassIds,
+      });
+      showToast("Fee group saved.");
+      await fetchFeeGroups();
+      setFeeGroupName("");
+      setFeeGroupDescription("");
+      setFeeGroupClassIds([]);
+      setClassSearch("");
+      setClassError("");
+    } catch (error) {
+      showToast("Failed to save fee group.");
+    } finally {
+      setIsSavingGroup(false);
+    }
+  };
+
   const toggleGroup = (id: string) => {
     setExpandedGroups(prev => {
       const next = new Set(prev);
@@ -286,6 +448,105 @@ export default function FeeConfigurationPanel() {
       return next;
     });
   };
+
+  const openEditPanel = (group: FeesGroup) => {
+    setEditingGroup(group);
+    setEditName(group.name);
+    setEditDescription(group.description || "");
+    setEditClassIds(group.applicable_classes || []);
+    setEditClassSearch("");
+    setEditClassError("");
+    setEditStatus(group.is_active);
+    setIsEditOpen(true);
+  };
+
+  const closeEditPanel = () => {
+    setIsEditOpen(false);
+    setEditingGroup(null);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingGroup) return;
+    if (!editName.trim()) {
+      showToast("Group name is required.");
+      return;
+    }
+    if (editClassIds.length === 0) {
+      setEditClassError("Please select at least one applicable class.");
+      showToast("Please select at least one applicable class.");
+      return;
+    }
+    setIsSavingEdit(true);
+    try {
+      await feesApi.updateGroup(editingGroup.id, {
+        name: editName.trim(),
+        description: editDescription.trim() || undefined,
+        applicable_classes: editClassIds,
+        is_active: editStatus,
+      });
+      showToast("Fee group updated.");
+      await fetchFeeGroups();
+      closeEditPanel();
+    } catch (error) {
+      showToast("Failed to update fee group.");
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const openDeleteDialog = (group: FeesGroup) => {
+    setDeleteError("");
+    setDeleteGroup(group);
+    setIsDeleteOpen(true);
+  };
+
+  const closeDeleteDialog = () => {
+    setIsDeleteOpen(false);
+    setDeleteGroup(null);
+    setDeleteError("");
+  };
+
+  const getStudentCount = (group: FeesGroup) => {
+    const anyGroup = group as FeesGroup & { student_count?: number; studentCount?: number };
+    return anyGroup.student_count ?? anyGroup.studentCount ?? 0;
+  };
+
+  const totalFeeGroupPages = Math.max(1, Math.ceil(feeGroups.length / feeGroupPageSize));
+  const feeGroupPageSafe = Math.min(feeGroupPage, totalFeeGroupPages);
+  const feeGroupStart = (feeGroupPageSafe - 1) * feeGroupPageSize;
+  const feeGroupEnd = feeGroupStart + feeGroupPageSize;
+  const visibleFeeGroups = feeGroups.slice(feeGroupStart, feeGroupEnd);
+
+  const handleDeleteGroup = async () => {
+    if (!deleteGroup) return;
+    setIsDeleting(true);
+    setDeleteError("");
+    try {
+      await feesApi.deleteGroup(deleteGroup.id);
+      await fetchFeeGroups();
+      closeDeleteDialog();
+      showToast("Fee group deleted.");
+    } catch (error) {
+      setDeleteError("This fee group could not be deleted. Please try again.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleToggleGroup = async (group: FeesGroup) => {
+    setTogglingGroupId(group.id);
+    try {
+      await feesApi.updateGroup(group.id, { is_active: !group.is_active });
+      await fetchFeeGroups();
+    } catch (error) {
+      showToast("Failed to update status.");
+    } finally {
+      setTogglingGroupId(null);
+    }
+  };
+
+  const currentAcademicYearName =
+    academicYears.find(year => year.id === academicYearId)?.name || "Unknown";
 
   const getDisplayAmounts = (row: FeeTypeRow): AmountChip[] =>
     row.structure === "Term-wise" ? row.amounts.slice(0, numTerms) : row.amounts;
@@ -305,8 +566,12 @@ export default function FeeConfigurationPanel() {
   });
 
   const thStyle: React.CSSProperties = {
-    padding: "12px 16px", fontSize: 11, fontWeight: 700,
-    letterSpacing: "0.07em", color: "#A0A3B8", textAlign: "left",
+    padding: "12px 16px",
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: "0.07em",
+    color: "#A0A3B8",
+    textAlign: "left",
     borderBottom: "1px solid #E8E8EE",
   };
 
@@ -315,20 +580,50 @@ export default function FeeConfigurationPanel() {
 
   const statusPill = (status: string) => (
     <span style={{
-      fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 20,
+      fontSize: 11,
+      fontWeight: 600,
+      padding: "2px 8px",
+      borderRadius: 12,
       background: status === "Active" ? "#dcfce7" : "#f3f4f6",
       color: status === "Active" ? "#15803d" : "#6B7280",
+      lineHeight: "16px",
     }}>
       {status}
     </span>
   );
 
-  const rowActions = (name: string) => (
+  const rowActions = (group: FeesGroup) => (
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      <button style={outlineBtn(true)} onClick={() => showToast(`Editing ${name}…`)}>Edit</button>
-      <button style={dangerBtn(true)} onClick={() => showToast(`Delete ${name}…`)}>Delete</button>
+      <button style={outlineBtn(true)} onClick={() => openEditPanel(group)}>Edit</button>
+      <button style={dangerBtn(true)} onClick={() => openDeleteDialog(group)}>Delete</button>
     </div>
   );
+
+  const rowActionsLite = (label: string) => (
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <button style={outlineBtn(true)} onClick={() => showToast(`Edit ${label} — would open editor in production.`)}>Edit</button>
+      <button style={dangerBtn(true)} onClick={() => showToast(`Delete ${label} — confirm in production.`)}>Delete</button>
+    </div>
+  );
+
+  const groupCardStyle: React.CSSProperties = {
+    background: "#fff",
+    border: "1px solid #E8E8EE",
+    borderRadius: 12,
+    padding: "18px 20px",
+    boxShadow: "0 1px 2px rgba(20,24,40,.04)",
+    position: "relative",
+  };
+
+  const groupAccentStyle: React.CSSProperties = {
+    position: "absolute",
+    left: 0,
+    top: 14,
+    bottom: 14,
+    width: 5,
+    background: "#5B4FCF",
+    borderRadius: "0 4px 4px 0",
+  };
 
   // ── Fee Groups tab ──────────────────────────────────────────────────────────
 
@@ -336,54 +631,368 @@ export default function FeeConfigurationPanel() {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Create form */}
       <div style={card}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>Create Fee Group</div>
-        <div style={{ fontSize: 12.5, color: "#A0A3B8", marginBottom: 18 }}>
-          Rows update immediately — each action maps to a feesApi call in production.
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
-          {[
-            { label: "GROUP NAME",         ph: "Day Scholar" },
-            { label: "DESCRIPTION",        ph: "Regular day school students" },
-            { label: "APPLICABLE CLASSES", ph: "6A, 7B, 8A" },
-            { label: "STATUS",             ph: "Active" },
-          ].map(f => (
-            <div key={f.label}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>{f.label}</div>
-              <input placeholder={f.ph} style={inputField(f.ph)} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>Create Fee Group</div>
+            <div style={{ fontSize: 12.5, color: "#A0A3B8" }}>
+              Rows update immediately — each action maps to a feesApi call in production.
             </div>
-          ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsCreateGroupOpen(prev => !prev)}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 8,
+              border: "1px solid #E8E8EE",
+              background: "#fff",
+              color: "#5B5E72",
+              cursor: "pointer",
+              fontSize: 16,
+              lineHeight: "32px",
+              transform: isCreateGroupOpen ? "rotate(0deg)" : "rotate(-90deg)",
+              transition: "transform 0.2s ease",
+            }}
+            aria-label={isCreateGroupOpen ? "Collapse create fee group" : "Expand create fee group"}
+          >
+            ▼
+          </button>
         </div>
-        <button
-          style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
-          onClick={() => showToast("Fee group added — would save to feesApi in production.")}
-        >
-          Add
-        </button>
+        {isCreateGroupOpen && (
+          <>
+            <div style={{ fontSize: 11.5, color: "#6B7280", margin: "12px 0" }}>
+              Academic year: {currentAcademicYearName}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>GROUP NAME</div>
+                <input
+                  placeholder="Day Scholar"
+                  style={inputField("Day Scholar")}
+                  value={feeGroupName}
+                  onChange={event => setFeeGroupName(event.target.value)}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>DESCRIPTION</div>
+                <input
+                  placeholder="Regular day school students"
+                  style={inputField("Regular day school students")}
+                  value={feeGroupDescription}
+                  onChange={event => setFeeGroupDescription(event.target.value)}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>APPLICABLE CLASSES</div>
+                <div ref={classDropdownRef} style={{ position: "relative" }}>
+                  <button
+                    type="button"
+                    onClick={() => setIsClassDropdownOpen(prev => !prev)}
+                    style={{
+                      ...inputField(""),
+                      width: "100%",
+                      textAlign: "left",
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 6,
+                      padding: "8px 10px",
+                      minHeight: 40,
+                      alignItems: "center",
+                    }}
+                  >
+                    {feeGroupClassIds.length === 0 ? (
+                      <span style={{ color: "#9aa0b2", fontSize: 13 }}>Select classes</span>
+                    ) : (
+                      feeGroupClassIds.map(id => (
+                        <span
+                          key={id}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 6,
+                            padding: "4px 8px",
+                            borderRadius: 999,
+                            background: "#f4f5fb",
+                            color: "#1f2937",
+                            fontSize: 12,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {availableClasses.find(item => item.id === id)?.name || "Class"}
+                          <button
+                            type="button"
+                            onClick={event => {
+                              event.stopPropagation();
+                              setFeeGroupClassIds(prev => prev.filter(value => value !== id));
+                            }}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              cursor: "pointer",
+                              fontSize: 12,
+                              color: "#6b7280",
+                            }}
+                            aria-label="Remove class"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))
+                    )}
+                  </button>
+                  {isClassDropdownOpen && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        zIndex: 20,
+                        top: "100%",
+                        left: 0,
+                        right: 0,
+                        marginTop: 6,
+                        background: "#fff",
+                        borderRadius: 12,
+                        border: "1px solid #E8E8EE",
+                        boxShadow: "0 16px 40px rgba(15, 23, 42, 0.12)",
+                        padding: 12,
+                      }}
+                    >
+                      <input
+                        placeholder="Search classes"
+                        value={classSearch}
+                        onChange={event => setClassSearch(event.target.value)}
+                        style={{
+                          ...inputField(""),
+                          width: "100%",
+                          marginBottom: 10,
+                        }}
+                      />
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                        <button
+                          type="button"
+                          onClick={() => setFeeGroupClassIds(availableClasses.map(item => item.id))}
+                          style={ghostBtn(true)}
+                        >
+                          Select all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFeeGroupClassIds([])}
+                          style={ghostBtn(true)}
+                        >
+                          Clear all
+                        </button>
+                      </div>
+                      <div style={{ maxHeight: 200, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                        {availableClasses
+                          .filter(item => item.name?.toLowerCase().includes(classSearch.trim().toLowerCase()))
+                          .map(item => {
+                            const checked = feeGroupClassIds.includes(item.id);
+                            return (
+                              <button
+                                type="button"
+                                key={item.id}
+                                onClick={() => {
+                                  setClassError("");
+                                  setFeeGroupClassIds(prev =>
+                                    prev.includes(item.id)
+                                      ? prev.filter(value => value !== item.id)
+                                      : [...prev, item.id]
+                                  );
+                                }}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 10,
+                                  padding: "8px 10px",
+                                  borderRadius: 10,
+                                  border: "1px solid #EEF0F4",
+                                  background: checked ? "#f2f3ff" : "#fff",
+                                  color: "#1f2937",
+                                  cursor: "pointer",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    width: 16,
+                                    height: 16,
+                                    borderRadius: 4,
+                                    border: checked ? "1px solid #5B4FCF" : "1px solid #cbd5f0",
+                                    background: checked ? "#5B4FCF" : "#fff",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    color: "#fff",
+                                    fontSize: 11,
+                                  }}
+                                >
+                                  {checked ? "✓" : ""}
+                                </span>
+                                <span style={{ fontSize: 13, fontWeight: 600 }}>{item.name}</span>
+                              </button>
+                            );
+                          })}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsClassDropdownOpen(false)}
+                        style={{
+                          marginTop: 12,
+                          width: "100%",
+                          height: 36,
+                          borderRadius: 10,
+                          border: "none",
+                          background: "#111827",
+                          color: "#fff",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                        }}
+                      >
+                        Apply selection
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {classError ? (
+                  <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{classError}</div>
+                ) : null}
+                <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                  {feeGroupClassIds.length} Classes Selected
+                </div>
+              </div>
+            </div>
+            <button
+              style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
+              onClick={handleCreateGroup}
+              disabled={isSavingGroup}
+            >
+              {isSavingGroup ? "Saving..." : "Add"}
+            </button>
+          </>
+        )}
       </div>
 
-      {/* Table */}
-      <div style={{ ...card, padding: 0, overflow: "hidden" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ background: "#F8F8FB" }}>
-              {["NAME", "DESCRIPTION", "STUDENTS", "STATUS", "ACTIONS"].map(h => (
-                <th key={h} style={thStyle}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {FEE_GROUPS_DATA.map((g, i) => (
-              <tr key={g.id} style={{ borderBottom: i < FEE_GROUPS_DATA.length - 1 ? "1px solid #E8E8EE" : "none" }}>
-                <td style={{ ...tdStyle, fontWeight: 600 }}>{g.name}</td>
-                <td style={tdMuted}>{g.description}</td>
-                <td style={tdMuted}>{g.students}</td>
-                <td style={tdStyle}>{statusPill(g.status)}</td>
-                <td style={tdStyle}>{rowActions(g.name)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Fee group cards */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {isLoadingGroups ? (
+          <div style={{ ...card, color: "#5B5E72" }}>Loading fee groups...</div>
+        ) : feeGroups.length === 0 ? (
+          <div style={{ ...card, color: "#5B5E72" }}>No fee groups yet.</div>
+        ) : (
+          visibleFeeGroups.map(group => {
+            const studentCount = getStudentCount(group);
+            const studentLabel = studentCount > 0 ? `${studentCount} students` : "—";
+            return (
+              <div key={group.id} style={groupCardStyle}>
+                <div style={groupAccentStyle} />
+                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.6fr .7fr .8fr auto", gap: 16, alignItems: "center" }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#1d2230" }}>{group.name}</div>
+                  <div style={{ fontSize: 12.5, color: "#3b4150" }}>{group.description || "—"}</div>
+                  <div style={{ fontSize: 12.5, color: "#3b4150" }}>{studentLabel}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {statusPill(group.is_active ? "Active" : "Inactive")}
+                    <button
+                      type="button"
+                      onClick={() => handleToggleGroup(group)}
+                      disabled={togglingGroupId === group.id}
+                      style={{
+                        position: "relative",
+                        width: 32,
+                        height: 18,
+                        borderRadius: 999,
+                        border: "1px solid #E8E8EE",
+                        background: group.is_active ? "#e6f6ee" : "#f3f4f6",
+                        cursor: togglingGroupId === group.id ? "not-allowed" : "pointer",
+                        opacity: togglingGroupId === group.id ? 0.6 : 1,
+                      }}
+                      aria-label={group.is_active ? "Deactivate group" : "Activate group"}
+                    >
+                      <span
+                        style={{
+                          position: "absolute",
+                          top: 2,
+                          left: group.is_active ? 16 : 2,
+                          width: 12,
+                          height: 12,
+                          borderRadius: "50%",
+                          background: group.is_active ? "#1d9e63" : "#8a90a2",
+                          transition: "left 0.2s ease",
+                        }}
+                      />
+                    </button>
+                  </div>
+                  <div>{rowActions(group)}</div>
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
+      {!isLoadingGroups && feeGroups.length > 0 && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={() => setFeeGroupPage(prev => Math.max(1, prev - 1))}
+            disabled={feeGroupPageSafe <= 1}
+            style={{
+              height: 28,
+              minWidth: 28,
+              borderRadius: 8,
+              border: "1px solid #E8E8EE",
+              background: "#fff",
+              color: "#5B5E72",
+              fontSize: 12,
+              cursor: feeGroupPageSafe <= 1 ? "not-allowed" : "pointer",
+              opacity: feeGroupPageSafe <= 1 ? 0.5 : 1,
+            }}
+            aria-label="Previous page"
+          >
+            &lt;
+          </button>
+          {Array.from({ length: totalFeeGroupPages }, (_, index) => {
+            const page = index + 1;
+            return (
+              <button
+                key={page}
+                type="button"
+                onClick={() => setFeeGroupPage(page)}
+                style={{
+                  height: 28,
+                  minWidth: 28,
+                  borderRadius: 8,
+                  border: "1px solid #E8E8EE",
+                  background: page === feeGroupPageSafe ? "#5B4FCF" : "#fff",
+                  color: page === feeGroupPageSafe ? "#fff" : "#5B5E72",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+                aria-current={page === feeGroupPageSafe ? "page" : undefined}
+              >
+                {page}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => setFeeGroupPage(prev => Math.min(totalFeeGroupPages, prev + 1))}
+            disabled={feeGroupPageSafe >= totalFeeGroupPages}
+            style={{
+              height: 28,
+              minWidth: 28,
+              borderRadius: 8,
+              border: "1px solid #E8E8EE",
+              background: "#fff",
+              color: "#5B5E72",
+              fontSize: 12,
+              cursor: feeGroupPageSafe >= totalFeeGroupPages ? "not-allowed" : "pointer",
+              opacity: feeGroupPageSafe >= totalFeeGroupPages ? 0.5 : 1,
+            }}
+            aria-label="Next page"
+          >
+            &gt;
+          </button>
+        </div>
+      )}
     </div>
   );
 
@@ -435,7 +1044,7 @@ export default function FeeConfigurationPanel() {
                 <td style={tdMuted}>{ft.glCode}</td>
                 <td style={tdMuted}>{ft.taxable}</td>
                 <td style={tdMuted}>{ft.structure}</td>
-                <td style={tdStyle}>{rowActions(ft.name)}</td>
+                <td style={tdStyle}>{rowActionsLite(ft.name)}</td>
               </tr>
             ))}
           </tbody>
@@ -989,7 +1598,7 @@ export default function FeeConfigurationPanel() {
                 <td style={tdMuted}>{r.scope}</td>
                 <td style={{ ...tdStyle, fontWeight: 600 }}>{r.discount}</td>
                 <td style={tdStyle}>{statusPill(r.status)}</td>
-                <td style={tdStyle}>{rowActions(r.name)}</td>
+                <td style={tdStyle}>{rowActionsLite(r.name)}</td>
               </tr>
             ))}
           </tbody>
@@ -1046,7 +1655,7 @@ export default function FeeConfigurationPanel() {
                 <td style={tdMuted}>{r.grace}</td>
                 <td style={tdMuted}>{r.penalty}</td>
                 <td style={tdMuted}>{r.cap}</td>
-                <td style={tdStyle}>{rowActions(r.name)}</td>
+                <td style={tdStyle}>{rowActionsLite(r.name)}</td>
               </tr>
             ))}
           </tbody>
@@ -1099,6 +1708,311 @@ export default function FeeConfigurationPanel() {
             Save Configuration
           </button>
         </div>
+
+        {isEditOpen && (
+          <>
+            <div
+              onClick={closeEditPanel}
+              style={{ position: "fixed", inset: 0, background: "rgba(20,24,40,.3)", zIndex: 40 }}
+            />
+            <div
+              style={{
+                position: "fixed",
+                top: 0,
+                right: 0,
+                height: "100%",
+                width: 380,
+                maxWidth: "92vw",
+                background: "#fff",
+                boxShadow: "-8px 0 28px rgba(20,24,40,.16)",
+                zIndex: 50,
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 20px", borderBottom: "1px solid #E8E8EE" }}>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>Edit Fee Group</div>
+                <button onClick={closeEditPanel} style={{ width: 30, height: 30, border: "none", background: "transparent", fontSize: 22, color: "#8a90a2", cursor: "pointer", borderRadius: 7 }}>
+                  &times;
+                </button>
+              </div>
+              <div style={{ padding: 20, overflowY: "auto", flex: 1 }}>
+                <div style={{ marginBottom: 15 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>GROUP NAME</div>
+                  <input value={editName} onChange={event => setEditName(event.target.value)} style={inputField("Group Name")} />
+                </div>
+                <div style={{ marginBottom: 15 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>DESCRIPTION</div>
+                  <input value={editDescription} onChange={event => setEditDescription(event.target.value)} style={inputField("Description")} />
+                </div>
+                <div style={{ marginBottom: 15 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>APPLICABLE CLASSES</div>
+                  <div ref={editClassDropdownRef} style={{ position: "relative" }}>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditClassDropdownOpen(prev => !prev)}
+                      style={{
+                        ...inputField(""),
+                        width: "100%",
+                        textAlign: "left",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 6,
+                        padding: "8px 10px",
+                        minHeight: 40,
+                        alignItems: "center",
+                      }}
+                    >
+                      {editClassIds.length === 0 ? (
+                        <span style={{ color: "#9aa0b2", fontSize: 13 }}>Select classes</span>
+                      ) : (
+                        editClassIds.map(id => (
+                          <span
+                            key={id}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 6,
+                              padding: "4px 8px",
+                              borderRadius: 999,
+                              background: "#f4f5fb",
+                              color: "#1f2937",
+                              fontSize: 12,
+                              fontWeight: 600,
+                            }}
+                          >
+                            {availableClasses.find(item => item.id === id)?.name || "Class"}
+                            <button
+                              type="button"
+                              onClick={event => {
+                                event.stopPropagation();
+                                setEditClassIds(prev => prev.filter(value => value !== id));
+                              }}
+                              style={{
+                                border: "none",
+                                background: "transparent",
+                                cursor: "pointer",
+                                fontSize: 12,
+                                color: "#6b7280",
+                              }}
+                              aria-label="Remove class"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))
+                      )}
+                    </button>
+                    {isEditClassDropdownOpen && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          zIndex: 20,
+                          top: "100%",
+                          left: 0,
+                          right: 0,
+                          marginTop: 6,
+                          background: "#fff",
+                          borderRadius: 12,
+                          border: "1px solid #E8E8EE",
+                          boxShadow: "0 16px 40px rgba(15, 23, 42, 0.12)",
+                          padding: 12,
+                        }}
+                      >
+                        <input
+                          placeholder="Search classes"
+                          value={editClassSearch}
+                          onChange={event => setEditClassSearch(event.target.value)}
+                          style={{
+                            ...inputField(""),
+                            width: "100%",
+                            marginBottom: 10,
+                          }}
+                        />
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+                          <button
+                            type="button"
+                            onClick={() => setEditClassIds(availableClasses.map(item => item.id))}
+                            style={ghostBtn(true)}
+                          >
+                            Select all
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditClassIds([])}
+                            style={ghostBtn(true)}
+                          >
+                            Clear all
+                          </button>
+                        </div>
+                        <div style={{ maxHeight: 200, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                          {availableClasses
+                            .filter(item => item.name?.toLowerCase().includes(editClassSearch.trim().toLowerCase()))
+                            .map(item => {
+                              const checked = editClassIds.includes(item.id);
+                              return (
+                                <button
+                                  type="button"
+                                  key={item.id}
+                                  onClick={() => {
+                                    setEditClassError("");
+                                    setEditClassIds(prev =>
+                                      prev.includes(item.id)
+                                        ? prev.filter(value => value !== item.id)
+                                        : [...prev, item.id]
+                                    );
+                                  }}
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 10,
+                                    padding: "8px 10px",
+                                    borderRadius: 10,
+                                    border: "1px solid #EEF0F4",
+                                    background: checked ? "#f2f3ff" : "#fff",
+                                    color: "#1f2937",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      width: 16,
+                                      height: 16,
+                                      borderRadius: 4,
+                                      border: checked ? "1px solid #5B4FCF" : "1px solid #cbd5f0",
+                                      background: checked ? "#5B4FCF" : "#fff",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      justifyContent: "center",
+                                      color: "#fff",
+                                      fontSize: 11,
+                                    }}
+                                  >
+                                    {checked ? "✓" : ""}
+                                  </span>
+                                  <span style={{ fontSize: 13, fontWeight: 600 }}>{item.name}</span>
+                                </button>
+                              );
+                            })}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsEditClassDropdownOpen(false)}
+                          style={{
+                            marginTop: 12,
+                            width: "100%",
+                            height: 36,
+                            borderRadius: 10,
+                            border: "none",
+                            background: "#111827",
+                            color: "#fff",
+                            fontWeight: 700,
+                            cursor: "pointer",
+                          }}
+                        >
+                          Apply selection
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {editClassError ? (
+                    <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{editClassError}</div>
+                  ) : null}
+                  <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
+                    {editClassIds.length} Classes Selected
+                  </div>
+                </div>
+                <div style={{ marginBottom: 15 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>STATUS</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {statusPill(editStatus ? "Active" : "Inactive")}
+                    <button
+                      type="button"
+                      onClick={() => setEditStatus(prev => !prev)}
+                      style={{
+                        position: "relative",
+                        width: 32,
+                        height: 18,
+                        borderRadius: 999,
+                        border: "1px solid #E8E8EE",
+                        background: editStatus ? "#e6f6ee" : "#f3f4f6",
+                        cursor: "pointer",
+                      }}
+                      aria-label={editStatus ? "Deactivate group" : "Activate group"}
+                    >
+                      <span
+                        style={{
+                          position: "absolute",
+                          top: 2,
+                          left: editStatus ? 16 : 2,
+                          width: 12,
+                          height: 12,
+                          borderRadius: "50%",
+                          background: editStatus ? "#1d9e63" : "#8a90a2",
+                          transition: "left 0.2s ease",
+                        }}
+                      />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div style={{ padding: "16px 20px", borderTop: "1px solid #E8E8EE", display: "flex", gap: 10 }}>
+                <button onClick={closeEditPanel} style={{ height: 42, padding: "0 18px", fontSize: 13, fontWeight: 700, background: "#fff", border: "1px solid #d3d7e2", borderRadius: 8, color: "#3b4150", cursor: "pointer" }}>
+                  Cancel
+                </button>
+                <button onClick={handleSaveEdit} disabled={isSavingEdit} style={{ height: 42, flex: 1, background: "#5B4FCF", color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, cursor: "pointer" }}>
+                  {isSavingEdit ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {isDeleteOpen && deleteGroup && (() => {
+          const studentCount = getStudentCount(deleteGroup);
+          const hasDependents = studentCount > 0;
+          return (
+            <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,40,.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60, padding: 20 }}>
+              <div style={{ background: "#fff", borderRadius: 14, width: 420, maxWidth: "100%", boxShadow: "0 20px 50px rgba(20,24,40,.3)", overflow: "hidden" }}>
+                <div style={{ padding: "22px 22px 6px", display: "flex", gap: 14, alignItems: "flex-start" }}>
+                  <div style={{ width: 42, height: 42, borderRadius: "50%", background: "#fdecec", color: "#d8453f", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <span style={{ fontSize: 18, fontWeight: 700 }}>!</span>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 5 }}>Delete "{deleteGroup.name}"?</div>
+                    <div style={{ fontSize: 13, color: "#3b4150", lineHeight: 1.5 }}>
+                      {hasDependents
+                        ? "This fee group is in use and cannot be deleted."
+                        : "This will permanently remove the fee group. This action cannot be undone."}
+                    </div>
+                  </div>
+                </div>
+                {hasDependents && (
+                  <div style={{ margin: "14px 22px 0", padding: "11px 13px", background: "#fdecec", borderRadius: 8, fontSize: 12.5, color: "#a23631" }}>
+                    {studentCount} student(s) are assigned to this group. Reassign or offboard them first.
+                  </div>
+                )}
+                {deleteError && (
+                  <div style={{ margin: "14px 22px 0", padding: "11px 13px", background: "#fdecec", borderRadius: 8, fontSize: 12.5, color: "#a23631" }}>
+                    {deleteError}
+                  </div>
+                )}
+                <div style={{ padding: "18px 22px", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                  <button onClick={closeDeleteDialog} style={{ height: 40, padding: "0 18px", fontSize: 13, fontWeight: 700, background: "#fff", border: "1px solid #d3d7e2", borderRadius: 8, color: "#3b4150", cursor: "pointer" }}>
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDeleteGroup}
+                    disabled={hasDependents || isDeleting}
+                    style={{ height: 40, padding: "0 18px", fontSize: 13, fontWeight: 700, background: "#d8453f", border: "none", borderRadius: 8, color: "#fff", cursor: hasDependents ? "not-allowed" : "pointer", opacity: hasDependents ? 0.4 : 1 }}
+                  >
+                    {isDeleting ? "Deleting..." : "Delete"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── Tab bar ────────────────────────────────────────────────── */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 24 }}>
@@ -1162,7 +2076,7 @@ export default function FeeConfigurationPanel() {
         {/* ── Toast ──────────────────────────────────────────────────── */}
         {toast && (
           <div style={{
-            position: "fixed", bottom: 24, right: 24,
+            position: "fixed", top: 24, right: 24,
             background: "#1e293b", color: "#fff",
             padding: "12px 20px", borderRadius: 10,
             fontSize: 13.5, fontWeight: 500, lineHeight: 1.4,

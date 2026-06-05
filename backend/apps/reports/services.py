@@ -8,7 +8,7 @@ from apps.attendance.models import StudentAttendance
 from apps.behaviour.models import AssignedIncident
 from apps.core.models import Item
 from apps.exams.models import ExamMarkRegister
-from apps.fees.models import FeesPayment
+from apps.fees.models import Payment
 from apps.finance.models import LedgerEntry
 from apps.hr.models import StaffAttendance
 from apps.library.models import BookIssue
@@ -26,7 +26,7 @@ class ReportQueryService:
 
     @staticmethod
     def accounts_fee_collection(school_id: int, filters: dict):
-        queryset = FeesPayment.objects.select_related(
+        queryset = Payment.objects.select_related(
             "student",
             "student__current_class",
             "student__current_section",

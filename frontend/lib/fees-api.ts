@@ -8,6 +8,7 @@ export type FeesGroup = {
   name: string;
   description?: string;
   is_active: boolean;
+  applicable_classes?: number[];
 };
 
 export type FeesType = {
@@ -60,6 +61,7 @@ export type StudentRow = {
 };
 
 export type AcademicYear = { id: number; name: string; is_current?: boolean };
+export type SchoolClass = { id: number; name: string };
 
 export function listData<T>(payload: ApiList<T>): T[] {
   return Array.isArray(payload) ? payload : payload.results || [];
@@ -149,5 +151,6 @@ export const feesApi = {
     }),
 
   listAcademicYears: () => apiRequestWithRefresh<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
+  listClasses: () => apiRequestWithRefresh<ApiList<SchoolClass>>("/api/v1/core/classes/?page_size=100"),
   listStudents: () => apiRequestWithRefresh<ApiList<StudentRow>>("/api/v1/students/students/"),
 };

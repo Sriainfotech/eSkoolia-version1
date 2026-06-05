@@ -214,6 +214,31 @@ Brought in 9 demo commits (some authored 2026-05-12 to 2026-05-20 by `shivasurya
 
 ---
 
+## Day 6 Update - 2026-06-05 - Fees Module (Fee Groups)
+**What we did today:**
+- Added Fees Group applicable classes M2M and serializer validation.
+- Built Fee Groups UI redesign with class multi-select (search, chips, select all/clear all, apply) and class ID storage.
+- Wired Fee Groups API and class list fetching with pagination override.
+- Fixed compile/runtime issues triggered by new changes.
+
+**Backend changes:**
+- [backend/apps/fees/models.py](backend/apps/fees/models.py) - added FeesGroup.applicable_classes M2M.
+- [backend/apps/fees/serializers.py](backend/apps/fees/serializers.py) - expose applicable_classes and validate non-empty selection.
+- [backend/apps/fees/migrations/0004_feesgroup_applicable_classes.py](backend/apps/fees/migrations/0004_feesgroup_applicable_classes.py) - migration added.
+- [backend/apps/fees/services.py](backend/apps/fees/services.py) - fixed missing imports and typing errors (models.Sum, FeesGroup, AbstractBaseUser type hints).
+- [backend/apps/reports/services.py](backend/apps/reports/services.py) - corrected FeesPayment reference to Payment.
+
+**Frontend changes:**
+- [frontend/lib/fees-api.ts](frontend/lib/fees-api.ts) - added applicable_classes in FeesGroup, added listClasses, and set page_size=100.
+- [frontend/components/fees/FeeConfigurationPanel.tsx](frontend/components/fees/FeeConfigurationPanel.tsx) - replaced text input with class multi-select; validation message; dropdown styles; ghost button helper.
+- [frontend/tsconfig.json](frontend/tsconfig.json) - removed ignoreDeprecations (unsupported in current build).
+
+**Notes:**
+- Class list endpoint is paginated (default size 10). Fee Groups now request page_size=100 to show all grades.
+- Migration applied locally via manage.py migrate.
+
+---
+
 # Roles Team Context (branch: `roles`)
 
 # Eskoolia ERP ΓÇö Frontend Cleanup & Login Permission Module
