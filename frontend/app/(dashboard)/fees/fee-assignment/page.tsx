@@ -1,5 +1,5 @@
-import ComingSoon from '@/components/shared/ComingSoon';
+import FeesAssignmentPanel from '@/components/fees/FeesAssignmentPanel';
 
 export default function FeeAssignmentPage() {
-  return <ComingSoon />;
+  return <FeesAssignmentPanel />;
 }

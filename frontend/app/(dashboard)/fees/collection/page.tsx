@@ -1,5 +1,5 @@
-import ComingSoon from '@/components/shared/ComingSoon';
+import FeesCollectionPanel from '@/components/fees/FeesCollectionPanel';
 
 export default function FeeCollectionPage() {
-  return <ComingSoon />;
+  return <FeesCollectionPanel />;
 }
