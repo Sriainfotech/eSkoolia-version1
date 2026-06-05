@@ -1,5 +1,5 @@
-import ComingSoon from '@/components/shared/ComingSoon';
+import FeesYearEndPanel from '@/components/fees/FeesYearEndPanel';
 
 export default function YearEndPage() {
-  return <ComingSoon />;
+  return <FeesYearEndPanel />;
 }

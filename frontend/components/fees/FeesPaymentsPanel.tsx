@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type FeedStatus = "Verified" | "Posted";
@@ -17,7 +18,7 @@ type FeedItem = {
   isNew?: boolean;
 };
 
-type TaskBtn = { label: string; variant: "primary" | "outline"; toast: string };
+type TaskBtn = { label: string; variant: "primary" | "outline"; toast: string; href?: string };
 type Task = { id: string; color: string; title: string; desc: string; buttons: TaskBtn[] };
 type AuditItem = { id: string; initials: string; event: string; desc: string; date: string; bg: string };
 
@@ -35,8 +36,8 @@ const TASKS: Task[] = [
     title: "23 students in Class 8A haven't paid Term 2 fees",
     desc: "Due in 3 days. Reminder template: polite final notice.",
     buttons: [
-      { label: "Remind All", variant: "outline", toast: "Reminders sent to 23 students in Class 8A." },
-      { label: "View", variant: "outline", toast: "Opening student dues list for Class 8A..." },
+      { label: "Remind All", variant: "outline", toast: "Reminders sent to 23 students in Class 8A.", href: undefined },
+      { label: "View",       variant: "outline", toast: "",                                        href: "/fees/dues-reminders" },
     ],
   },
   {
@@ -121,6 +122,7 @@ function btnStyle(v: "primary" | "outline"): React.CSSProperties {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function FeesPaymentsPanel() {
+  const router = useRouter();
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [toast, setToast] = useState("");
@@ -243,7 +245,7 @@ export default function FeesPaymentsPanel() {
                     {task.buttons.map(btn => (
                       <button
                         key={btn.label}
-                        onClick={() => showToast(btn.toast)}
+                        onClick={() => btn.href ? router.push(btn.href) : showToast(btn.toast)}
                         style={btnStyle(btn.variant)}
                       >
                         {btn.label}
