@@ -173,6 +173,10 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
 
   const [globalSubjectNames, setGlobalSubjectNames] = useState<string[]>([]); // Fix #4E
   const [catalogPage, setCatalogPage] = useState(0);
+  
+  /* Subject name dropdown state */
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   /* init: pick first class */
   useEffect(() => {
@@ -529,23 +533,124 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
             </p>
           )}
 
-          {/* Subject Name */}
-          <div className="flex flex-col gap-1">
+          {/* Subject Name - Custom Searchable Dropdown */}
+          <div className="flex flex-col gap-1 relative">
             <label className="text-[11px] font-semibold text-[#6F767E]">Subject Name *</label>
-            <input
-              value={fname}
-              onChange={(e) => setFname(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && void handleAdd()}
-              placeholder="e.g. Mathematics"
-              list="global-subjects-list" // Fix #4E — autocomplete from global subjects catalog
-              className={`h-9 px-3 rounded-lg border text-[13px] text-[#1A1D1F] focus:outline-none transition-colors ${
-                fname.trim().length > 0 && validateSubjectName(fname) !== null
-                  ? "border-red-400 focus:border-red-500"
-                  : "border-[#E8ECEF] focus:border-[#5B4FCF]"
-              }`}
-            />
+            <div className="relative">
+              <input
+                value={fname}
+                onChange={(e) => {
+                  setFname(e.target.value);
+                  setDropdownOpen(true);
+                  setHighlightedIndex(-1);
+                }}
+                onFocus={() => setDropdownOpen(true)}
+                onBlur={() => {
+                  // Delay to allow clicking on dropdown items
+                  setTimeout(() => setDropdownOpen(false), 200);
+                }}
+                onKeyDown={(e) => {
+                  const filtered = fname.trim().length > 0
+                    ? globalSubjectNames.filter((n) =>
+                        n.toLowerCase().includes(fname.toLowerCase())
+                      )
+                    : globalSubjectNames;
+                  
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setHighlightedIndex((prev) =>
+                      prev < filtered.length - 1 ? prev + 1 : prev
+                    );
+                  } else if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : -1));
+                  } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (highlightedIndex >= 0 && filtered[highlightedIndex]) {
+                      setFname(filtered[highlightedIndex]);
+                      setDropdownOpen(false);
+                      setHighlightedIndex(-1);
+                    } else {
+                      void handleAdd();
+                    }
+                  } else if (e.key === "Escape") {
+                    setDropdownOpen(false);
+                    setHighlightedIndex(-1);
+                  }
+                }}
+                placeholder="e.g. Mathematics"
+                autoComplete="off"
+                className={`h-9 pl-3 pr-9 rounded-lg border text-[13px] text-[#1A1D1F] focus:outline-none transition-colors w-full ${
+                  fname.trim().length > 0 && validateSubjectName(fname) !== null
+                    ? "border-red-400 focus:border-red-500"
+                    : "border-[#E8ECEF] focus:border-[#5B4FCF]"
+                }`}
+              />
+              {/* Dropdown Indicator Icon - Always Visible */}
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                <svg
+                  className="w-4 h-4 text-[#9FA6AD]"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </div>
             {fname.trim().length > 0 && validateSubjectName(fname) !== null && (
               <p className="text-[11px] text-red-500 mt-0.5">{validateSubjectName(fname)}</p>
+            )}
+            
+            {/* Custom Dropdown */}
+            {dropdownOpen && (
+              (() => {
+                const filtered = fname.trim().length > 0
+                  ? globalSubjectNames.filter((n) =>
+                      n.toLowerCase().includes(fname.toLowerCase())
+                    )
+                  : globalSubjectNames;
+                
+                return filtered.length > 0 ? (
+                  <div 
+                    className="absolute left-0 right-0 bg-white border border-[#E5E7EB] rounded-lg shadow-lg z-50 overflow-hidden"
+                    style={{ 
+                      top: 'calc(100% + 4px)',
+                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)' 
+                    }}
+                  >
+                    <div 
+                      className="max-h-[300px] overflow-y-auto"
+                      style={{
+                        scrollbarWidth: 'thin',
+                        scrollbarColor: '#E5E7EB transparent'
+                      }}
+                    >
+                      {filtered.map((name, idx) => (
+                        <button
+                          key={name}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setFname(name);
+                            setDropdownOpen(false);
+                            setHighlightedIndex(-1);
+                          }}
+                          onMouseEnter={() => setHighlightedIndex(idx)}
+                          className={`w-full text-left px-3 py-2 text-[13px] text-[#1A1D1F] transition-colors ${
+                            idx === highlightedIndex
+                              ? "bg-[#F3F0FF] text-[#5B4FCF] font-medium"
+                              : "hover:bg-[#F9FAFB]"
+                          }`}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null;
+              })()
             )}
           </div>
 
@@ -898,11 +1003,6 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
           })()}
         </div>
       </div>
-
-      {/* Fix #4E — datalist for global subject name autocomplete */}
-      <datalist id="global-subjects-list">
-        {globalSubjectNames.map((n) => <option key={n} value={n} />)}
-      </datalist>
 
       <ConfirmDeleteDialog
         open={!!pendingDelete}

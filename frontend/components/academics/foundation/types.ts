@@ -3,6 +3,8 @@
 export interface AcademicYear {
   id: number;
   name: string;
+  board?: string | null;
+  number_of_terms?: string | null;
   start_date: string;   // "YYYY-MM-DD"
   end_date: string;     // "YYYY-MM-DD"
   is_current: boolean;

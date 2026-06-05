@@ -2,7 +2,8 @@ from datetime import datetime, timedelta
 import re
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Count
+from django.utils import timezone
 from django.core.files.storage import default_storage
 from rest_framework import permissions, status, viewsets
 from config.pagination import ApiPageNumberPagination
@@ -20,6 +21,7 @@ from .models import (
     ClassSubjectAssignment,
     ClassSubjectEntry,
     ClassTeacherAssignment,
+    ClassTeacherAudit,
     Homework,
     HomeworkSubmission,
     Lesson,
@@ -1421,3 +1423,601 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
                 "days": day_map,
             }
         )
+
+
+# ============================================================
+# Staff Assignment Module Views
+# ============================================================
+
+class StaffTeachersView(viewsets.ViewSet):
+    """GET /api/v1/academics/staff/teachers/ — list active teaching staff."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def list(self, request):
+        user = request.user
+        school_id = getattr(user, "school_id", None)
+        if not school_id and not user.is_superuser:
+            return Response([], status=status.HTTP_200_OK)
+
+        qs = Staff.objects.select_related("user", "department", "designation").filter(
+            status=Staff.STATUS_ACTIVE
+        )
+        if school_id:
+            qs = qs.filter(school_id=school_id)
+
+        # filter to teaching staff only — designation contains "teacher" or dept is Academic
+        qs = qs.filter(
+            Q(designation__name__icontains="teacher")
+            | Q(department__name__icontains="academic")
+            | Q(department__dept_type__icontains="academic")
+        )
+
+        data = []
+        for s in qs:
+            full_name = f"{s.first_name} {s.last_name}".strip()
+            data.append({
+                "id": s.user_id,
+                "staff_id": s.id,
+                "staff_no": s.staff_no,
+                "full_name": full_name,
+                "designation": s.designation.name if s.designation else "",
+                "department": s.department.name if s.department else "",
+                "photo": request.build_absolute_uri(s.staff_photo.url) if s.staff_photo else None,
+            })
+        return Response(data)
+
+
+class StaffClassTeachersView(viewsets.ViewSet):
+    """Manage ClassTeacherAssignment with lock/unlock workflow."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _school_id(self, request):
+        return getattr(request.user, "school_id", None)
+
+    def list(self, request):
+        school_id = self._school_id(request)
+        qs = ClassTeacherAssignment.objects.select_related(
+            "section", "school_class", "teacher", "academic_year", "locked_by"
+        ).filter(active_status=True)
+        if school_id:
+            qs = qs.filter(school_id=school_id)
+
+        ay_id = request.query_params.get("academic_year_id")
+        class_id = request.query_params.get("class_id")
+        section_id = request.query_params.get("section_id")
+        if ay_id:
+            qs = qs.filter(academic_year_id=ay_id)
+        if class_id:
+            qs = qs.filter(school_class_id=class_id)
+        if section_id:
+            qs = qs.filter(section_id=section_id)
+
+        data = []
+        for ct in qs:
+            teacher = ct.teacher
+            data.append({
+                "id": ct.id,
+                "section_id": ct.section_id,
+                "section_name": ct.section.name if ct.section else "",
+                "class_id": ct.school_class_id,
+                "class_name": ct.school_class.name if ct.school_class else "",
+                "teacher_id": ct.teacher_id,
+                "teacher_name": f"{teacher.first_name} {teacher.last_name}".strip() if teacher else "",
+                "academic_year_id": ct.academic_year_id,
+                "is_locked": ct.is_locked,
+                "locked_at": ct.locked_at.isoformat() if ct.locked_at else None,
+                "locked_by_id": ct.locked_by_id,
+                "locked_by_name": f"{ct.locked_by.first_name} {ct.locked_by.last_name}".strip() if ct.locked_by else "",
+                "created_at": ct.created_at.isoformat(),
+            })
+        return Response(data)
+
+    def create(self, request):
+        school_id = self._school_id(request)
+        section_id = request.data.get("section_id")
+        teacher_id = request.data.get("teacher_id")
+        class_id = request.data.get("class_id")
+        academic_year_id = request.data.get("academic_year_id")
+
+        if not all([section_id, teacher_id, class_id, academic_year_id]):
+            return Response({"success": False, "message": "section_id, teacher_id, class_id, and academic_year_id are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate teacher is active staff
+        staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE).first()
+        if not staff:
+            return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate teacher is not already assigned as CT for another section in the same academic year
+        existing_ct = ClassTeacherAssignment.objects.filter(
+            school_id=school_id,
+            academic_year_id=academic_year_id,
+            teacher_id=teacher_id,
+            active_status=True,
+        ).exclude(section_id=section_id).select_related("school_class", "section").first()
+        
+        if existing_ct:
+            class_name = existing_ct.school_class.name if existing_ct.school_class else "Unknown Class"
+            section_name = existing_ct.section.name if existing_ct.section else "Unknown Section"
+            return Response({
+                "success": False,
+                "message": f"This teacher is already assigned as Class Teacher for {class_name} - Sec {section_name}. A teacher can only be assigned as Class Teacher to one section."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        existing = ClassTeacherAssignment.objects.filter(
+            school_id=school_id,
+            academic_year_id=academic_year_id,
+            school_class_id=class_id,
+            section_id=section_id,
+            active_status=True,
+        ).first()
+
+        if existing:
+            if existing.is_locked:
+                return Response({"success": False, "message": "Class teacher is locked. Use unlock workflow to change."}, status=status.HTTP_400_BAD_REQUEST)
+            existing.teacher_id = teacher_id
+            existing.save(update_fields=["teacher_id"])
+            return Response({"success": True, "message": "Class teacher updated.", "data": {"id": existing.id}})
+
+        ct = ClassTeacherAssignment.objects.create(
+            school_id=school_id,
+            school_class_id=class_id,
+            section_id=section_id,
+            teacher_id=teacher_id,
+            academic_year_id=academic_year_id,
+        )
+        return Response({"success": True, "message": "Class teacher assigned.", "data": {"id": ct.id}}, status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request, pk=None):
+        school_id = self._school_id(request)
+        ct = ClassTeacherAssignment.objects.filter(pk=pk, school_id=school_id).first()
+        if not ct:
+            return Response({"success": False, "message": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        if ct.is_locked:
+            return Response({"success": False, "message": "Assignment is locked."}, status=status.HTTP_400_BAD_REQUEST)
+
+        teacher_id = request.data.get("teacher_id")
+        if teacher_id:
+            staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE).first()
+            if not staff:
+                return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validate teacher is not already assigned as CT for another section in the same academic year
+            existing_ct = ClassTeacherAssignment.objects.filter(
+                school_id=school_id,
+                academic_year_id=ct.academic_year_id,
+                teacher_id=teacher_id,
+                active_status=True,
+            ).exclude(pk=ct.pk).select_related("school_class", "section").first()
+            
+            if existing_ct:
+                class_name = existing_ct.school_class.name if existing_ct.school_class else "Unknown Class"
+                section_name = existing_ct.section.name if existing_ct.section else "Unknown Section"
+                return Response({
+                    "success": False,
+                    "message": f"This teacher is already assigned as Class Teacher for {class_name} - Sec {section_name}. A teacher can only be assigned as Class Teacher to one section."
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            ct.teacher_id = teacher_id
+            ct.save(update_fields=["teacher_id"])
+        return Response({"success": True, "message": "Updated."})
+
+    @action(detail=True, methods=["post"])
+    def lock(self, request, pk=None):
+        school_id = self._school_id(request)
+        ct = ClassTeacherAssignment.objects.filter(pk=pk, school_id=school_id).first()
+        if not ct:
+            return Response({"success": False, "message": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        ct.is_locked = True
+        ct.locked_at = timezone.now()
+        ct.locked_by = request.user
+        ct.save(update_fields=["is_locked", "locked_at", "locked_by"])
+        return Response({"success": True, "message": "Class teacher locked."})
+
+    @action(detail=True, methods=["post"])
+    def unlock(self, request, pk=None):
+        school_id = self._school_id(request)
+        ct = ClassTeacherAssignment.objects.filter(pk=pk, school_id=school_id).first()
+        if not ct:
+            return Response({"success": False, "message": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        new_teacher_id = request.data.get("new_teacher_id")
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            return Response({"success": False, "message": "Please enter a reason to continue."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_teacher_id:
+            staff = Staff.objects.filter(user_id=new_teacher_id, status=Staff.STATUS_ACTIVE).first()
+            if not staff:
+                return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validate teacher is not already assigned as CT for another section in the same academic year
+            existing_ct = ClassTeacherAssignment.objects.filter(
+                school_id=school_id,
+                academic_year_id=ct.academic_year_id,
+                teacher_id=new_teacher_id,
+                active_status=True,
+            ).exclude(pk=ct.pk).select_related("school_class", "section").first()
+            
+            if existing_ct:
+                class_name = existing_ct.school_class.name if existing_ct.school_class else "Unknown Class"
+                section_name = existing_ct.section.name if existing_ct.section else "Unknown Section"
+                return Response({
+                    "success": False,
+                    "message": f"This teacher is already assigned as Class Teacher for {class_name} - Sec {section_name}. A teacher can only be assigned as Class Teacher to one section."
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            ClassTeacherAudit.objects.create(
+                section_id=ct.section_id,
+                school_class_id=ct.school_class_id,
+                old_teacher_id=ct.teacher_id,
+                new_teacher_id=new_teacher_id or ct.teacher_id,
+                reason=reason,
+                changed_by=request.user,
+            )
+            ct.is_locked = False
+            ct.locked_at = None
+            ct.locked_by = None
+            if new_teacher_id:
+                ct.teacher_id = new_teacher_id
+            ct.save()
+
+        return Response({"success": True, "message": "Class teacher unlocked and updated."})
+
+
+class StaffSubjectAssignmentsView(viewsets.ViewSet):
+    """Manage ClassSubjectAssignment teacher assignments."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _school_id(self, request):
+        return getattr(request.user, "school_id", None)
+
+    def list(self, request):
+        from apps.core.models import Section, Subject as CoreSubject
+        
+        school_id = self._school_id(request)
+        academic_year_id = request.query_params.get("academic_year_id")
+        class_id_filter = request.query_params.get("class_id")
+        section_id_filter = request.query_params.get("section_id")
+
+        # Step 1: Get all sections for context (to auto-create assignments from catalog)
+        sections_qs = Section.objects.all()
+        if school_id:
+            sections_qs = sections_qs.filter(school_class__school_id=school_id)
+        if class_id_filter:
+            sections_qs = sections_qs.filter(school_class_id=class_id_filter)
+        if section_id_filter:
+            sections_qs = sections_qs.filter(id=section_id_filter)
+
+        # Step 2: Get catalog entries from Foundation (class-level subject catalog)
+        catalog_qs = ClassSubjectEntry.objects.select_related("school_class").filter(active_status=True)
+        if school_id:
+            catalog_qs = catalog_qs.filter(school_id=school_id)
+        if class_id_filter:
+            catalog_qs = catalog_qs.filter(school_class_id=class_id_filter)
+
+        # Step 3: Auto-create ClassSubjectAssignment records from catalog entries if they don't exist
+        # This ensures every section has assignment records for all catalog subjects
+        for section in sections_qs:
+            catalog_for_class = catalog_qs.filter(school_class_id=section.school_class_id)
+            for entry in catalog_for_class:
+                # Find or create Subject in core.Subject based on catalog entry
+                subject, _ = CoreSubject.objects.get_or_create(
+                    school_id=school_id,
+                    name=entry.name,
+                    defaults={
+                        "code": entry.code or "",
+                        "subject_type": "optional" if entry.subject_type == ClassSubjectEntry.TYPE_OPTIONAL else "compulsory",
+                    },
+                )
+                
+                # Create or get assignment for this section + subject (with teacher=null initially)
+                ClassSubjectAssignment.objects.get_or_create(
+                    school_id=school_id,
+                    academic_year_id=academic_year_id if academic_year_id else None,
+                    school_class_id=section.school_class_id,
+                    section_id=section.id,
+                    subject_id=subject.id,
+                    defaults={
+                        "is_optional": entry.subject_type == ClassSubjectEntry.TYPE_OPTIONAL,
+                        "active_status": True,
+                    },
+                )
+
+        # Step 4: Fetch all assignments (now includes auto-created ones from catalog)
+        assignments_qs = ClassSubjectAssignment.objects.select_related(
+            "section", "school_class", "subject", "teacher", "academic_year"
+        ).filter(active_status=True)
+        if school_id:
+            assignments_qs = assignments_qs.filter(school_id=school_id)
+        if academic_year_id:
+            assignments_qs = assignments_qs.filter(
+                Q(section__isnull=True) |
+                Q(academic_year_id=academic_year_id) |
+                Q(academic_year__isnull=True)
+            )
+        if class_id_filter:
+            assignments_qs = assignments_qs.filter(school_class_id=class_id_filter)
+        if section_id_filter:
+            assignments_qs = assignments_qs.filter(section_id=section_id_filter)
+
+        # Step 5: Build result list (deduplicate if needed)
+        seen: dict[tuple, dict] = {}
+        for sa in assignments_qs.order_by("school_class_id", "section_id", "subject_id", "-academic_year_id"):
+            key = (sa.school_class_id, sa.section_id, sa.subject_id)
+            if key not in seen:
+                teacher = sa.teacher
+                seen[key] = {
+                    "id": sa.id,
+                    "section_id": sa.section_id,
+                    "section_name": sa.section.name if sa.section else "",
+                    "class_id": sa.school_class_id,
+                    "class_name": sa.school_class.name if sa.school_class else "",
+                    "subject_id": sa.subject_id,
+                    "subject_name": sa.subject.name if sa.subject else "",
+                    "teacher_id": sa.teacher_id,
+                    "teacher_name": f"{teacher.first_name} {teacher.last_name}".strip() if teacher else "",
+                    "academic_year_id": sa.academic_year_id,
+                    "is_optional": sa.is_optional,
+                }
+
+        return Response(list(seen.values()))
+
+    def create(self, request):
+        school_id = self._school_id(request)
+        section_id = request.data.get("section_id")
+        subject_id = request.data.get("subject_id")
+        teacher_id = request.data.get("teacher_id")
+        class_id = request.data.get("class_id")
+        academic_year_id = request.data.get("academic_year_id")
+        # Bulk: assign to all sections of a class
+        bulk_class = request.data.get("bulk_class", False)
+
+        if not all([subject_id, teacher_id, class_id, academic_year_id]):
+            return Response({"success": False, "message": "subject_id, teacher_id, class_id, and academic_year_id are required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE).first()
+        if not staff:
+            return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.core.models import Section
+        if bulk_class:
+            sections = Section.objects.filter(school_class_id=class_id)
+        elif section_id:
+            sections = Section.objects.filter(pk=section_id)
+        else:
+            return Response({"success": False, "message": "section_id required (or set bulk_class=true)."}, status=status.HTTP_400_BAD_REQUEST)
+
+        updated = 0
+        for sec in sections:
+            existing = ClassSubjectAssignment.objects.filter(
+                school_id=school_id,
+                academic_year_id=academic_year_id,
+                school_class_id=class_id,
+                section_id=sec.id,
+                subject_id=subject_id,
+                active_status=True,
+            ).first()
+            if existing:
+                existing.teacher_id = teacher_id
+                existing.save(update_fields=["teacher_id"])
+                updated += 1
+            # If no existing subject assignment exists we skip (subject must be set up first)
+
+        return Response({"success": True, "message": f"Subject teacher assigned to {updated} section(s)."})
+
+    def partial_update(self, request, pk=None):
+        """PATCH /staff/subject-assignments/{pk}/ — assign a teacher to a subject row (bypasses section validation)."""
+        school_id = self._school_id(request)
+        teacher_id = request.data.get("teacher_id")
+
+        if not teacher_id:
+            return Response(
+                {"success": False, "message": "teacher_id is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            teacher_id = int(teacher_id)
+        except (TypeError, ValueError):
+            return Response(
+                {"success": False, "message": "teacher_id must be a valid integer."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            sa = ClassSubjectAssignment.objects.get(pk=pk, active_status=True)
+        except ClassSubjectAssignment.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Subject assignment not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Ensure assignment belongs to this school (tenant isolation)
+        if school_id and sa.school_id != school_id:
+            return Response(
+                {"success": False, "message": "Subject assignment not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Validate teacher is active staff
+        staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE).first()
+        if not staff:
+            return Response(
+                {"success": False, "message": "Selected user is not active teaching staff."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        sa.teacher_id = teacher_id
+        sa.save(update_fields=["teacher_id"])
+
+        teacher = sa.teacher
+        return Response({
+            "success": True,
+            "message": "Subject teacher assigned.",
+            "data": {
+                "id": sa.id,
+                "teacher_id": sa.teacher_id,
+                "teacher_name": f"{teacher.first_name} {teacher.last_name}".strip() if teacher else "",
+            },
+        })
+
+
+class StaffWorkloadView(viewsets.ViewSet):
+    """GET /api/v1/academics/staff/workload/ — workload per teacher."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    MAX_PERIODS = 28  # default, can be overridden by query param
+
+    def list(self, request):
+        school_id = getattr(request.user, "school_id", None)
+        academic_year_id = request.query_params.get("academic_year_id")
+        max_periods = int(request.query_params.get("max_periods", self.MAX_PERIODS))
+
+        # Count routine slot periods per teacher
+        qs = ClassRoutineSlot.objects.filter(
+            is_break=False, active_status=True, teacher__isnull=False
+        )
+        if school_id:
+            qs = qs.filter(school_id=school_id)
+        if academic_year_id:
+            qs = qs.filter(academic_year_id=academic_year_id)
+
+        from django.db.models import Count as DjCount
+        teacher_periods = {}
+        for slot in qs.select_related("teacher"):
+            tid = slot.teacher_id
+            teacher_periods.setdefault(tid, {"teacher": slot.teacher, "periods": 0, "sections": set(), "subjects": set()})
+            teacher_periods[tid]["periods"] += 1
+            if slot.section_id:
+                teacher_periods[tid]["sections"].add(slot.section_id)
+            if slot.subject_id:
+                teacher_periods[tid]["subjects"].add(slot.subject_id)
+
+        # Also include subject assignments for teachers with no timetable yet
+        sa_qs = ClassSubjectAssignment.objects.filter(active_status=True, teacher__isnull=False)
+        if school_id:
+            sa_qs = sa_qs.filter(school_id=school_id)
+        if academic_year_id:
+            sa_qs = sa_qs.filter(academic_year_id=academic_year_id)
+
+        for sa in sa_qs.select_related("teacher"):
+            tid = sa.teacher_id
+            if tid not in teacher_periods:
+                teacher_periods[tid] = {"teacher": sa.teacher, "periods": 0, "sections": set(), "subjects": set()}
+            if sa.section_id:
+                teacher_periods[tid]["sections"].add(sa.section_id)
+            if sa.subject_id:
+                teacher_periods[tid]["subjects"].add(sa.subject_id)
+
+        data = []
+        for tid, info in teacher_periods.items():
+            t = info["teacher"]
+            periods = info["periods"]
+            pct = (periods / max_periods * 100) if max_periods else 0
+            is_overloaded = periods > max_periods
+            if pct >= 100:
+                load_status = "overloaded"
+            elif pct >= 85:
+                load_status = "near-limit"
+            else:
+                load_status = "normal"
+
+            data.append({
+                "teacher_id": tid,
+                "teacher_name": f"{t.first_name} {t.last_name}".strip() if t else "",
+                "periods_per_week": periods,
+                "max_periods": max_periods,
+                "sections_count": len(info["sections"]),
+                "subjects_count": len(info["subjects"]),
+                "load_pct": round(pct, 1),
+                "is_overloaded": is_overloaded,
+                "status": load_status,
+            })
+
+        data.sort(key=lambda x: -x["periods_per_week"])
+        return Response(data)
+
+
+class StaffAuditLogView(viewsets.ViewSet):
+    """GET /api/v1/academics/staff/audit-log/"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def list(self, request):
+        school_id = getattr(request.user, "school_id", None)
+        qs = ClassTeacherAudit.objects.select_related(
+            "section", "school_class", "old_teacher", "new_teacher", "changed_by"
+        ).order_by("-changed_at")
+
+        section_id = request.query_params.get("section_id")
+        if section_id:
+            qs = qs.filter(section_id=section_id)
+
+        data = []
+        for log in qs[:100]:
+            data.append({
+                "id": log.id,
+                "section_id": log.section_id,
+                "section_name": log.section.name if log.section else "",
+                "class_name": log.school_class.name if log.school_class else "",
+                "old_teacher_id": log.old_teacher_id,
+                "old_teacher_name": f"{log.old_teacher.first_name} {log.old_teacher.last_name}".strip() if log.old_teacher else "",
+                "new_teacher_id": log.new_teacher_id,
+                "new_teacher_name": f"{log.new_teacher.first_name} {log.new_teacher.last_name}".strip() if log.new_teacher else "",
+                "reason": log.reason,
+                "changed_by_id": log.changed_by_id,
+                "changed_by_name": f"{log.changed_by.first_name} {log.changed_by.last_name}".strip() if log.changed_by else "",
+                "changed_at": log.changed_at.isoformat(),
+            })
+        return Response(data)
+
+
+class StaffDashboardKPIView(viewsets.ViewSet):
+    """GET /api/v1/academics/staff/kpi/ — dashboard KPI stats."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    MAX_PERIODS = 28
+
+    def list(self, request):
+        school_id = getattr(request.user, "school_id", None)
+        academic_year_id = request.query_params.get("academic_year_id")
+        max_periods = int(request.query_params.get("max_periods", self.MAX_PERIODS))
+
+        staff_qs = Staff.objects.filter(status=Staff.STATUS_ACTIVE)
+        if school_id:
+            staff_qs = staff_qs.filter(school_id=school_id)
+        teaching_staff = staff_qs.filter(
+            Q(designation__name__icontains="teacher")
+            | Q(department__name__icontains="academic")
+        )
+        total_teachers = teaching_staff.count()
+
+        ct_qs = ClassTeacherAssignment.objects.filter(active_status=True)
+        if school_id:
+            ct_qs = ct_qs.filter(school_id=school_id)
+        if academic_year_id:
+            ct_qs = ct_qs.filter(academic_year_id=academic_year_id)
+        ct_assigned = ct_qs.count()
+
+        slot_qs = ClassRoutineSlot.objects.filter(is_break=False, active_status=True, teacher__isnull=False)
+        if school_id:
+            slot_qs = slot_qs.filter(school_id=school_id)
+        if academic_year_id:
+            slot_qs = slot_qs.filter(academic_year_id=academic_year_id)
+
+        teacher_periods: dict[int, int] = {}
+        for slot in slot_qs.values_list("teacher_id", flat=True):
+            teacher_periods[slot] = teacher_periods.get(slot, 0) + 1
+
+        avg_load = 0.0
+        overloaded = 0
+        if teacher_periods:
+            avg_load = round(sum(teacher_periods.values()) / len(teacher_periods), 1)
+            overloaded = sum(1 for p in teacher_periods.values() if p > max_periods)
+
+        return Response({
+            "total_teachers": total_teachers,
+            "ct_assigned": ct_assigned,
+            "avg_load": avg_load,
+            "overloaded": overloaded,
+        })

@@ -14,13 +14,15 @@ interface Props {
 }
 
 interface YearForm {
+  board: string;
+  number_of_terms: string;
   start_date: string;
   end_date: string;
   is_current: boolean;
   is_active: boolean; // Fix #1E
 }
 
-const EMPTY: YearForm = { start_date: "", end_date: "", is_current: false, is_active: true }; // Fix #1E
+const EMPTY: YearForm = { board: "", number_of_terms: "", start_date: "", end_date: "", is_current: false, is_active: true }; // Fix #1E
 
 function derivedName(s: string, e: string) {
   if (!s || !e) return "";
@@ -62,7 +64,7 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
   const name = derivedName(form.start_date, form.end_date);
 
   function openEdit(y: AcademicYear) {
-    setForm({ start_date: y.start_date, end_date: y.end_date, is_current: y.is_current, is_active: y.is_active ?? true }); // Fix #1E; ?? true Fix #W4
+    setForm({ board: y.board || "", number_of_terms: y.number_of_terms || "", start_date: y.start_date, end_date: y.end_date, is_current: y.is_current, is_active: y.is_active ?? true }); // Fix #1E; ?? true Fix #W4
     setEditId(y.id);
     setError("");
     setDateWarning(""); // Fix #1D
@@ -102,7 +104,7 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
       await apiRequestWithRefresh(url, {
         method: editingId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ start_date: form.start_date, end_date: form.end_date, is_current: form.is_current, is_active: form.is_active }), // Fix #1E
+        body: JSON.stringify({ board: form.board, number_of_terms: form.number_of_terms, start_date: form.start_date, end_date: form.end_date, is_current: form.is_current, is_active: form.is_active }), // Fix #1E
       });
       showToast(editingId ? "Academic year updated." : `Year ${name} created.`);
       cancelEdit();
@@ -192,6 +194,42 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
               {editingId ? "Update the year dates or current status" : "Define the start and end dates for the school year"}
             </div>
           </div>
+        </div>
+
+        <div className="mb-3">
+          <label className="text-[11px] font-semibold text-[#6F767E] block mb-1">
+            Board / Curriculum
+          </label>
+          <select
+            value={form.board}
+            onChange={(e) => setForm((f) => ({ ...f, board: e.target.value }))}
+            className="w-full bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[10px] px-2.5 py-1.5 text-[13px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
+          >
+            <option value="">Select...</option>
+            <option value="CBSE">CBSE</option>
+            <option value="ICSE">ICSE</option>
+            <option value="State Board">State Board</option>
+            <option value="IB">IB (International Baccalaureate)</option>
+            <option value="IGCSE">IGCSE (Cambridge)</option>
+            <option value="NIOS">NIOS</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+
+        <div className="mb-3">
+          <label className="text-[11px] font-semibold text-[#6F767E] block mb-1">
+            Number of Terms
+          </label>
+          <select
+            value={form.number_of_terms}
+            onChange={(e) => setForm((f) => ({ ...f, number_of_terms: e.target.value }))}
+            className="w-full bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[10px] px-2.5 py-1.5 text-[13px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
+          >
+            <option value="">Select...</option>
+            <option value="2 Terms (Semester)">2 Terms (Semester)</option>
+            <option value="3 Terms (Trimester)">3 Terms (Trimester)</option>
+            <option value="4 Terms (Quarter)">4 Terms (Quarter)</option>
+          </select>
         </div>
 
         <div className="grid grid-cols-2 gap-3 mb-3">
