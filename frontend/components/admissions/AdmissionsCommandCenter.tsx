@@ -207,6 +207,12 @@ export function AdmissionsCommandCenter() {
   const [quickAddMode, setQuickAddMode] = useState(true);
   const [dupRecord, setDupRecord] = useState<ApiInquiry | null>(null);
   const [dupMerging, setDupMerging] = useState(false);
+  const [duplicateCreateConfirm, setDuplicateCreateConfirm] = useState<{
+    record: ApiInquiry;
+    payload: Record<string, unknown>;
+    showAITip: boolean;
+    message: string;
+  } | null>(null);
 
   const [showLogModal, setShowLogModal] = useState(false);
   const [logInquiry, setLogInquiry] = useState<ApiInquiry | null>(null);
@@ -326,7 +332,49 @@ export function AdmissionsCommandCenter() {
     setEditingId(null); setDrawerForm(initialDrawerForm(today)); setDrawerErrors({}); setDupRecord(null); setAdmissionSection(0); setQuickAddMode(true); setShowAdmissionModal(true);
   };
 
+  const parseLegacyInquiryDescription = (description: string) => {
+    const result: Partial<Record<keyof DrawerForm, string>> = {};
+    const find = (label: string) => {
+      const regex = new RegExp(`${label}:\\s*([^\\|\\n]+)`, "i");
+      const match = description.match(regex);
+      return match ? match[1].trim() : "";
+    };
+    if (!description) return result;
+
+    result.child_name = find("Child");
+    result.child_dob = find("DOB");
+    result.child_gender = find("Gender");
+    result.parent_occupation = find("Occupation");
+    result.previous_school = find("Prev School");
+    result.reason_for_change = find("Reason");
+    result.budget_range = find("Budget");
+    result.preferred_contact_time = find("Contact Time");
+    result.sibling_count = find("Siblings");
+    result.specific_requirements = find("Requirements");
+    result.relationship = find("Relationship");
+    result.alternate_phone = find("Alt Phone");
+    result.home_area = find("Area");
+    const siblingEnrolledRaw = find("Sibling Enrolled");
+    if (siblingEnrolledRaw) {
+      const raw = siblingEnrolledRaw.trim();
+      if (/^yes\b/i.test(raw)) {
+        result.has_sibling_enrolled = "yes";
+        result.sibling_name = raw.replace(/^yes\b\s*-?\s*/i, "").trim();
+      } else if (/^no\b/i.test(raw)) {
+        result.has_sibling_enrolled = "no";
+      } else {
+        result.has_sibling_enrolled = raw.toLowerCase();
+      }
+    }
+    result.referred_by = find("Referred By");
+    result.preferred_visit_date = find("Visit Date");
+    result.preferred_visit_time = find("Visit Time");
+    return result;
+  };
+
   const openEditAdmission = (inq: ApiInquiry) => {
+    const tomorrow = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+    const legacy = parseLegacyInquiryDescription(inq.description || "");
     setEditingId(inq.id);
     setDrawerForm({
       full_name: inq.full_name || "", phone: inq.phone || "", email: inq.email || "",
@@ -335,11 +383,26 @@ export function AdmissionsCommandCenter() {
       reference: inq.reference ? String(inq.reference) : "", query_date: inq.query_date || today,
       next_follow_up_date: inq.next_follow_up_date || today, assigned: inq.assigned || "",
       description: inq.description || "", active_status: String(inq.active_status) === "2" ? "2" : "1",
-      note: inq.note || "", child_name: "", child_dob: "", child_gender: "", parent_occupation: "",
-      previous_school: "", reason_for_change: "", budget_range: "", preferred_contact_time: "",
-      sibling_count: "0", specific_requirements: "", relationship: "", alternate_phone: "",
-      home_area: "", has_sibling_enrolled: "", sibling_name: "", sibling_class_name: "",
-      referred_by: "", preferred_visit_date: new Date(Date.now() + 864e5).toISOString().slice(0, 10), preferred_visit_time: "",
+      note: inq.note || "",
+      child_name: inq.child_name || legacy.child_name || "",
+      child_dob: legacy.child_dob || "",
+      child_gender: legacy.child_gender || "",
+      parent_occupation: legacy.parent_occupation || "",
+      previous_school: legacy.previous_school || "",
+      reason_for_change: legacy.reason_for_change || "",
+      budget_range: legacy.budget_range || "",
+      preferred_contact_time: legacy.preferred_contact_time || "",
+      sibling_count: legacy.sibling_count ? String(legacy.sibling_count) : "0",
+      specific_requirements: legacy.specific_requirements || "",
+      relationship: legacy.relationship || "",
+      alternate_phone: legacy.alternate_phone || "",
+      home_area: legacy.home_area || "",
+      has_sibling_enrolled: inq.has_sibling_enrolled || legacy.has_sibling_enrolled || "",
+      sibling_name: inq.sibling_name || legacy.sibling_name || "",
+      sibling_class_name: "",
+      referred_by: legacy.referred_by || "",
+      preferred_visit_date: legacy.preferred_visit_date || tomorrow,
+      preferred_visit_time: legacy.preferred_visit_time || "",
     });
     setDrawerErrors({}); setAdmissionSection(0); setShowAdmissionModal(true);
   };
@@ -353,11 +416,16 @@ export function AdmissionsCommandCenter() {
     if (!drawerForm.phone.trim()) errs.phone = "Phone is required.";
     else if (!/^[6-9]\d{9}$/.test(drawerForm.phone)) errs.phone = "Enter a valid 10-digit Indian mobile number.";
     if (!drawerForm.assigned.trim()) errs.assigned = "Assigned To is required.";
-    if (!drawerForm.source) errs.source = "Source is required.";
     if (!drawerForm.reference) errs.reference = "Reference is required.";
     if (!drawerForm.query_date) errs.query_date = "Query date is required.";
     if (!drawerForm.next_follow_up_date) errs.next_follow_up_date = "Next follow-up date is required.";
     return errs;
+  };
+
+  const findDuplicateInquiryByPhone = (phone?: string) => {
+    const normalized = String(phone || "").trim();
+    if (!normalized) return null;
+    return inquiries.find((i) => i.phone === normalized) || null;
   };
 
   const submitDrawer = async (e: FormEvent) => {
@@ -384,15 +452,32 @@ export function AdmissionsCommandCenter() {
       drawerForm.preferred_visit_time && `Visit Time: ${drawerForm.preferred_visit_time}`,
     ].filter(Boolean).join(" | ");
     const combinedDescription = [drawerForm.description.trim(), extFields].filter(Boolean).join("\n");
-    const payload = {
+    let payload: Record<string, unknown> = {
       full_name: drawerForm.full_name.trim(), phone: drawerForm.phone.trim(), email: drawerForm.email.trim(),
       description: combinedDescription, query_date: drawerForm.query_date,
       next_follow_up_date: drawerForm.next_follow_up_date, assigned: drawerForm.assigned.trim(),
-      reference: Number(drawerForm.reference), source: Number(drawerForm.source),
+      reference: drawerForm.reference ? Number(drawerForm.reference) : null, source: drawerForm.source ? Number(drawerForm.source) : null,
       school_class: drawerForm.school_class ? Number(drawerForm.school_class) : null,
       no_of_child: Number(drawerForm.no_of_child), active_status: Number(drawerForm.active_status),
       note: drawerForm.note.trim(),
+      child_name: drawerForm.child_name.trim(),
+      has_sibling_enrolled: drawerForm.has_sibling_enrolled,
+      sibling_name: drawerForm.sibling_name.trim(),
     };
+    if (!editingId) {
+      const duplicate = findDuplicateInquiryByPhone(payload.phone as string);
+      if (duplicate) {
+        const existingClass = duplicate.school_class;
+        const existingClassName = classes.find((c) => c.id === existingClass)?.name || "";
+        setDuplicateCreateConfirm({
+          record: duplicate,
+          payload,
+          showAITip: false,
+          message: `Phone already exists for ${duplicate.full_name}${existingClassName ? ` · Grade ${existingClassName}` : ""} · ${STAGE_LABELS[duplicate.status] ?? duplicate.status}`,
+        });
+        return;
+      }
+    }
     try {
       setDrawerSaving(true);
       if (editingId) {
@@ -404,8 +489,30 @@ export function AdmissionsCommandCenter() {
         setAITipForm({ ...drawerForm }); setShowAITip(true);
       }
       setShowAdmissionModal(false); void loadAll();
-    } catch { toast.error(editingId ? "Unable to update inquiry." : "Unable to create inquiry.", { autoClose: 5000 }); }
-    finally { setDrawerSaving(false); }
+    } catch (error) {
+      toast.error(editingId ? "Unable to update inquiry." : "Unable to create inquiry.", { autoClose: 5000 });
+    } finally {
+      setDrawerSaving(false);
+    }
+  };
+
+  const createInquiryWithPayload = async (payload: Record<string, unknown>, showAITipAfterCreate: boolean) => {
+    try {
+      setDrawerSaving(true);
+      await apiRequestWithRefresh("/api/v1/admissions/inquiries/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      toast.success("Inquiry added.", { autoClose: 3000 });
+      if (showAITipAfterCreate) {
+        setAITipForm({ ...drawerForm });
+        setShowAITip(true);
+      }
+      setShowAdmissionModal(false);
+      setDuplicateCreateConfirm(null);
+      void loadAll();
+    } catch (error) {
+      toast.error("Unable to create inquiry.", { autoClose: 5000 });
+    } finally {
+      setDrawerSaving(false);
+    }
   };
 
   const openLogModal = (inq: ApiInquiry) => {
@@ -425,7 +532,7 @@ export function AdmissionsCommandCenter() {
       setLogSaving(true);
       await apiRequestWithRefresh(`/api/v1/admissions/inquiries/${logInquiry.id}/`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note: updatedNote, follow_up_date: today, next_follow_up_date: logForm.next_follow_up_date, status: newStatus, active_status: newStatus === "enrolled" || newStatus === "declined" ? 2 : 1 }) });
       toast.success("Contact logged!", { autoClose: 2500 }); setShowLogModal(false); void loadAll();
-    } catch { toast.error("Failed to log contact. Please try again."); }
+    } catch (error) { toast.error("Failed to log contact. Please try again."); }
     finally { setLogSaving(false); }
   };
 
@@ -457,7 +564,7 @@ export function AdmissionsCommandCenter() {
   };
   const copyWAMessage = async () => {
     try { await navigator.clipboard.writeText(waEdited); setWACopied(true); setTimeout(() => setWACopied(false), 2000); toast.success("Message copied!", { autoClose: 1500 }); }
-    catch { toast.error("Copy failed. Select and copy manually."); }
+    catch (error) { toast.error("Copy failed. Select and copy manually."); }
   };
   const sendWADirect = () => {
     if (!waInquiry?.phone) return;
@@ -539,6 +646,29 @@ export function AdmissionsCommandCenter() {
       </div>
 
       {/* LOG MODAL */}
+      {duplicateCreateConfirm && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 350, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.5)" }} onClick={() => { setDuplicateCreateConfirm(null); setDf("phone", ""); }} />
+          <div style={{ position: "relative", width: "min(520px, 100%)", background: "#fff", borderRadius: 16, boxShadow: "0 20px 60px rgba(0,0,0,.25)", overflow: "hidden" }}>
+            <div style={{ padding: "18px 22px", background: "var(--primary, #4f46e5)", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700 }}>Duplicate phone detected</h3>
+                <p style={{ margin: "4px 0 0", fontSize: 12, opacity: 0.9 }}>The phone number is already used by an existing inquiry.</p>
+              </div>
+              <button onClick={() => { setDuplicateCreateConfirm(null); setDf("phone", ""); }} style={{ background: "rgba(255,255,255,.2)", border: "none", cursor: "pointer", borderRadius: 8, padding: 6, color: "#fff", display: "flex" }}><X size={18} /></button>
+            </div>
+            <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+              <div style={{ fontSize: 13, color: "#1f2937" }}>{duplicateCreateConfirm.message}</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button type="button" onClick={() => { setDuplicateCreateConfirm(null); setDf("phone", ""); }} style={{ flex: 1, minWidth: 120, height: 38, background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: 8, color: "#111", cursor: "pointer", fontWeight: 600 }}>Cancel</button>
+                <button type="button" disabled={drawerSaving} onClick={() => createInquiryWithPayload(duplicateCreateConfirm.payload, duplicateCreateConfirm.showAITip)} style={{ flex: 1, minWidth: 120, height: 38, background: drawerSaving ? "#94a3b8" : "var(--primary, #4f46e5)", border: "none", borderRadius: 8, color: "#fff", cursor: drawerSaving ? "not-allowed" : "pointer", fontWeight: 600 }}>
+                  {drawerSaving ? "Saving…" : "Continue"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {showLogModal && logInquiry && (
         <div style={{ position: "fixed", inset: 0, zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
           <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.5)" }} onClick={() => setShowLogModal(false)} />
@@ -738,34 +868,41 @@ export function AdmissionsCommandCenter() {
                 if (!drawerForm.next_follow_up_date) errs.next_follow_up_date = "Next follow-up date is required.";
                 if (Object.keys(errs).length > 0) { setDrawerErrors(errs); return; }
                 // T7: Duplicate phone check against in-memory inquiries (zero API cost)
-                const dupPhone = drawerForm.phone.trim();
-                const duplicate = inquiries.find((i) => i.phone === dupPhone);
-                let siblingNote = "";
-                if (duplicate) {
-                  const newClass = drawerForm.school_class ? Number(drawerForm.school_class) : null;
-                  const existingClass = duplicate.school_class;
-                  const sameClass = newClass && existingClass && newClass === existingClass;
-                  if (sameClass || !newClass) {
-                    // Same class or no class selected — block and offer to open existing
-                    setDupRecord(duplicate);
-                    const existingClassName = classes.find((c) => c.id === existingClass)?.name || "";
-                    setDrawerErrors({ phone: `Already in system: ${duplicate.full_name}${existingClassName ? ` · Grade ${existingClassName}` : ""} · ${STAGE_LABELS[duplicate.status] ?? duplicate.status}` });
-                    return;
-                  }
-                  // Different class — treat as sibling enquiry, allow saving
-                  setDupRecord(null);
-                  setDrawerErrors({});
-                  const siblingClassName = classes.find((c) => c.id === existingClass)?.name || String(existingClass || "");
-                  siblingNote = `Sibling already in enquiry (${duplicate.full_name}, Grade ${siblingClassName})`;
-                }
-                // Auto-fill non-required fields with safe defaults
                 const quickForm: DrawerForm = {
                   ...drawerForm,
                   assigned: drawerForm.assigned.trim() || "Unassigned",
                   source: drawerForm.source || (sources[0] ? String(sources[0].id) : ""),
                   reference: drawerForm.reference || (references[0] ? String(references[0].id) : ""),
-                  note: siblingNote ? (drawerForm.note.trim() ? `${drawerForm.note.trim()} | ${siblingNote}` : siblingNote) : drawerForm.note,
+                  note: drawerForm.note,
                 };
+                const dupPhone = quickForm.phone.trim();
+                const duplicate = inquiries.find((i) => i.phone === dupPhone);
+                if (duplicate) {
+                  const existingClass = duplicate.school_class;
+                  const existingClassName = classes.find((c) => c.id === existingClass)?.name || "";
+                  const duplicatePayload = {
+                    full_name: quickForm.full_name.trim(),
+                    phone: quickForm.phone.trim(),
+                    email: quickForm.email.trim(),
+                    description: quickForm.description.trim(),
+                    query_date: quickForm.query_date,
+                    next_follow_up_date: quickForm.next_follow_up_date,
+                    assigned: quickForm.assigned,
+                    reference: quickForm.reference ? Number(quickForm.reference) : null,
+                    source: quickForm.source ? Number(quickForm.source) : null,
+                    school_class: quickForm.school_class ? Number(quickForm.school_class) : null,
+                    no_of_child: Number(quickForm.no_of_child) || 1,
+                    active_status: 1,
+                    note: quickForm.note.trim(),
+                  };
+                  setDuplicateCreateConfirm({
+                    record: duplicate,
+                    payload: duplicatePayload,
+                    showAITip: true,
+                    message: `Phone already exists for ${duplicate.full_name}${existingClassName ? ` · Grade ${existingClassName}` : ""} · ${STAGE_LABELS[duplicate.status] ?? duplicate.status}`,
+                  });
+                  return;
+                }
                 const payload = {
                   full_name: quickForm.full_name.trim(),
                   phone: quickForm.phone.trim(),
@@ -812,7 +949,19 @@ export function AdmissionsCommandCenter() {
                   <PopField label="Mobile Number *" error={drawerErrors.phone}>
                     <div style={{ display: "flex", gap: 6 }}>
                       <span style={{ width: 48, height: 36, border: "1px solid var(--line)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, flexShrink: 0, background: "#f8fafc" }}>+91</span>
-                      <input value={drawerForm.phone} onChange={(e) => { setDupRecord(null); setDrawerErrors((prev) => ({ ...prev, phone: "" })); setDf("phone", e.target.value.replace(/\D/g, "").slice(0, 10)); }} style={{ ...inp(Boolean(drawerErrors.phone)), flex: 1 }} placeholder="9876543210" inputMode="numeric" />
+                      <input
+                        value={drawerForm.phone}
+                        onChange={(e) => { setDupRecord(null); setDuplicateCreateConfirm(null); setDrawerErrors((prev) => ({ ...prev, phone: "" })); setDf("phone", e.target.value.replace(/\D/g, "").slice(0, 10)); }}
+                        onBlur={() => {
+                          if (!editingId && /^[6-9]\d{9}$/.test(drawerForm.phone)) {
+                            const duplicate = findDuplicateInquiryByPhone(drawerForm.phone);
+                            setDupRecord(duplicate);
+                          }
+                        }}
+                        style={{ ...inp(Boolean(drawerErrors.phone)), flex: 1 }}
+                        placeholder="9876543210"
+                        inputMode="numeric"
+                      />
                     </div>
                     {dupRecord && (
                       <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -849,7 +998,7 @@ export function AdmissionsCommandCenter() {
                               setDupRecord(null);
                               void loadAll();
                               openEditAdmission({ ...dupRecord, ...patch } as ApiInquiry);
-                            } catch {
+                            } catch (error) {
                               toast.error("Merge failed.");
                             } finally {
                               setDupMerging(false);
@@ -899,7 +1048,50 @@ export function AdmissionsCommandCenter() {
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   <PopField label="Parent / Guardian Full Name *" error={drawerErrors.full_name}><input value={drawerForm.full_name} onChange={(e) => setDf("full_name", e.target.value)} style={inp(Boolean(drawerErrors.full_name))} placeholder="e.g. Rahul Sharma" /></PopField>
                   <PopField label="Relationship"><select value={drawerForm.relationship} onChange={(e) => setDf("relationship", e.target.value)} style={inp()}><option value="">Select</option><option>Father</option><option>Mother</option><option>Guardian</option><option>Other</option></select></PopField>
-                  <PopField label="Mobile Number *" error={drawerErrors.phone}><div style={{ display: "flex", gap: 6 }}><span style={{ width: 48, height: 36, border: "1px solid var(--line)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, flexShrink: 0, background: "#f8fafc" }}>+91</span><input value={drawerForm.phone} onChange={(e) => setDf("phone", e.target.value.replace(/\D/g, "").slice(0, 10))} style={{ ...inp(Boolean(drawerErrors.phone)), flex: 1 }} placeholder="9876543210" inputMode="numeric" /></div></PopField>
+                  <PopField label="Mobile Number *" error={drawerErrors.phone}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <span style={{ width: 48, height: 36, border: "1px solid var(--line)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, flexShrink: 0, background: "#f8fafc" }}>+91</span>
+                      <input
+                        value={drawerForm.phone}
+                        onChange={(e) => { setDuplicateCreateConfirm(null); setDf("phone", e.target.value.replace(/\D/g, "").slice(0, 10)); setDrawerErrors((prev) => ({ ...prev, phone: "" })); }}
+                        onBlur={() => {
+                          if (!editingId && /^[6-9]\d{9}$/.test(drawerForm.phone)) {
+                            const duplicate = findDuplicateInquiryByPhone(drawerForm.phone);
+                            if (duplicate) {
+                              const existingClass = duplicate.school_class;
+                              const existingClassName = classes.find((c) => c.id === existingClass)?.name || "";
+                              setDuplicateCreateConfirm({
+                                record: duplicate,
+                                payload: {
+                                  full_name: drawerForm.full_name.trim(),
+                                  phone: drawerForm.phone.trim(),
+                                  email: drawerForm.email.trim(),
+                                  description: drawerForm.description.trim(),
+                                  query_date: drawerForm.query_date,
+                                  next_follow_up_date: drawerForm.next_follow_up_date,
+                                  assigned: drawerForm.assigned.trim(),
+                                  reference: drawerForm.reference ? Number(drawerForm.reference) : null,
+                                  source: drawerForm.source ? Number(drawerForm.source) : null,
+                                  school_class: drawerForm.school_class ? Number(drawerForm.school_class) : null,
+                                  no_of_child: Number(drawerForm.no_of_child),
+                                  active_status: Number(drawerForm.active_status),
+                                  note: drawerForm.note.trim(),
+                                  child_name: drawerForm.child_name.trim(),
+                                  has_sibling_enrolled: drawerForm.has_sibling_enrolled,
+                                  sibling_name: drawerForm.sibling_name.trim(),
+                                },
+                                showAITip: false,
+                                message: `Phone already exists for ${duplicate.full_name}${existingClassName ? ` · Grade ${existingClassName}` : ""} · ${STAGE_LABELS[duplicate.status] ?? duplicate.status}`,
+                              });
+                            }
+                          }
+                        }}
+                        style={{ ...inp(Boolean(drawerErrors.phone)), flex: 1 }}
+                        placeholder="9876543210"
+                        inputMode="numeric"
+                      />
+                    </div>
+                  </PopField>
                   <PopField label="Email"><input value={drawerForm.email} onChange={(e) => setDf("email", e.target.value)} style={inp()} placeholder="parent@example.com" type="email" /></PopField>
                   <PopField label="Home Area / Locality"><input value={drawerForm.home_area} onChange={(e) => setDf("home_area", e.target.value)} style={inp()} placeholder="e.g. Koramangala" /></PopField>
                 </div>
@@ -982,7 +1174,7 @@ export function AdmissionsCommandCenter() {
               <textarea value={broadcastMsg} onChange={e => setBroadcastMsg(e.target.value)} placeholder="Your message... use {{name}} for parent's name" style={{ width: "100%", minHeight: 120, border: "1px solid var(--line, #e5e7eb)", borderRadius: 8, padding: "10px 12px", fontSize: 13, fontFamily: "inherit", resize: "vertical" as const, boxSizing: "border-box" as const }} />
               {broadcastDone > 0 && <div style={{ padding: "8px 12px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, fontSize: 12, color: "#047857", margin: "8px 0" }}>Broadcast queued for {broadcastDone} contacts!</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <button disabled={!broadcastMsg.trim() || broadcastSending} onClick={async () => { const targets = inquiries.filter((i) => i.active_status === 1 && i.phone); setBroadcastSending(true); try { await apiRequestWithRefresh<unknown>("/api/v1/admissions/bulk-jobs/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_whatsapp", lead_ids: targets.map(i => i.id), payload: { text: broadcastMsg } }) }); setBroadcastDone(targets.length); toast.success("Broadcast queued!"); } catch { toast.error("Broadcast failed."); } finally { setBroadcastSending(false); } }} style={{ ...btnPrimary, flex: 1, justifyContent: "center" }}>{broadcastSending ? "Sending..." : `Send to All ${inquiries.filter(i => i.active_status === 1 && i.phone).length}`}</button>
+                <button disabled={!broadcastMsg.trim() || broadcastSending} onClick={async () => { const targets = inquiries.filter((i) => i.active_status === 1 && i.phone); setBroadcastSending(true); try { await apiRequestWithRefresh<unknown>("/api/v1/admissions/bulk-jobs/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "send_whatsapp", lead_ids: targets.map(i => i.id), payload: { text: broadcastMsg } }) }); setBroadcastDone(targets.length); toast.success("Broadcast queued!"); } catch (error) { toast.error("Broadcast failed."); } finally { setBroadcastSending(false); } }} style={{ ...btnPrimary, flex: 1, justifyContent: "center" }}>{broadcastSending ? "Sending..." : `Send to All ${inquiries.filter(i => i.active_status === 1 && i.phone).length}`}</button>
                 <button onClick={() => setShowBroadcastModal(false)} style={btnGhost}>Cancel</button>
               </div>
             </div>

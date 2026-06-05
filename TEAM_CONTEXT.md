@@ -1,5 +1,57 @@
 # TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — GitHub Copilot (06/05/2026)
+
+**Branch:** `demo`
+
+### Admissions Inquiries Enhancement
+
+#### 1. Fixed Inquiry Row Display
+- Updated [frontend/components/admissions/command-center/ApplicationRow.tsx](frontend/components/admissions/command-center/ApplicationRow.tsx) to display `full_name` prominently without child information override
+- Resolved display issue where parent inquiry records were showing child data instead of parent name
+
+#### 2. Duplicate Phone Detection System (NEW)
+Implemented comprehensive duplicate detection workflow in [frontend/components/admissions/AdmissionsCommandCenter.tsx](frontend/components/admissions/AdmissionsCommandCenter.tsx):
+
+**New Helper Function:**
+- `findDuplicateInquiryByPhone(phone?: string)` — Finds existing inquiries by normalized phone number
+
+**Detection Points:**
+- Quick-Add Form: `onBlur` phone field validation with phone regex `/^[6-9]\d{9}$/`
+- Full-Form (Multi-step): `onBlur` validation on phone input
+- Form Submission: Pre-submission duplicate check before POST to API (`/api/v1/admissions/inquiries/`)
+
+**Modal UI:**
+- Duplicate Confirmation Popup (z-index 350) displays when duplicate phone is detected
+- Shows duplicate record information with "Continue" (proceed with creation) and "Cancel" (dismiss) buttons
+- Fixed overlay with semi-transparent backdrop
+
+#### 3. User Experience Improvement
+Enhanced Cancel button behavior:
+- **Cancel button**: Closes modal AND clears phone field → allows user to enter different number
+- **X (close) button**: Same behavior — clears phone for re-entry
+- **Backdrop click**: Closing modal also clears phone field
+- Implementation: `setDuplicateCreateConfirm(null)` + `setDf("phone", "")` on all close actions
+
+#### 4. TypeScript/Build Error Fixes
+Resolved Next.js compiler errors across 6 locations in AdmissionsCommandCenter.tsx:
+- Converted bare `catch { }` blocks to `catch (error) { }` pattern
+- Fixed in: `submitDrawer()`, `createInquiryWithPayload()`, `submitLog()`, `copyWAMessage()`, merge operation, broadcast operation
+- All TypeScript compilation errors resolved; dev server running on localhost:3000
+
+**Files changed today:**
+- `frontend/components/admissions/AdmissionsCommandCenter.tsx` — duplicate detection system + syntax fixes
+- `frontend/components/admissions/command-center/ApplicationRow.tsx` — row display fix
+
+**Workflow tested:**
+- ✅ Row display shows parent full_name correctly
+- ✅ Duplicate modal appears on onBlur phone validation
+- ✅ Continue button creates inquiry after duplicate confirmation
+- ✅ Cancel button clears phone field for re-entry
+- ✅ Dev server compiles without errors
+
+---
+
 ## Update — Safura Samreen (04/06/2026)
 
 **Branch:** `Fees-ui-updates`

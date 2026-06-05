@@ -115,6 +115,7 @@ export function ApplicationRow({
     age <= 2 ? "text-gray-500" : age <= 7 ? "text-amber-600 font-semibold" : "text-red-600 font-semibold";
   const sentiment = detectSentiment(inq.note);
   const nba = nextBestAction(inq, today);
+  const displayName = inq.full_name?.trim() || inq.child_name || "–";
 
   // Overdue left border — draws attention on rows that haven't been actioned
   const isOverdue = inq.next_follow_up_date != null && inq.next_follow_up_date < today && inq.status !== "enrolled" && inq.status !== "declined";
@@ -128,7 +129,7 @@ export function ApplicationRow({
     : "";
 
   const stage = STAGE_MAP[inq.status] ?? { label: inq.status, cls: "bg-gray-100 text-gray-600" };
-  const initials = (inq.full_name || "?")
+  const initials = displayName
     .split(" ")
     .slice(0, 2)
     .map((w) => w[0])
@@ -173,11 +174,7 @@ export function ApplicationRow({
           </div>
           <div>
             <div className="flex items-center gap-1.5 flex-wrap">
-              {inq.child_name ? (
-                <span className="text-sm font-semibold text-gray-900 leading-tight">{inq.child_name}</span>
-              ) : (
-                <span className="text-sm font-semibold text-gray-900 leading-tight">{inq.full_name}</span>
-              )}
+              <span className="text-sm font-semibold text-gray-900 leading-tight">{displayName}</span>
               {sentiment && (
                 <span title={sentiment.label} className="text-xs leading-none" aria-label={sentiment.label}>{sentiment.emoji}</span>
               )}
@@ -185,9 +182,6 @@ export function ApplicationRow({
                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 leading-none">👨‍👩‍👦 Sibling</span>
               )}
             </div>
-            {inq.child_name && (
-              <div className="text-xs text-gray-500 leading-tight">Parent: {inq.full_name}</div>
-            )}
             <div className="text-xs text-gray-400">{inq.phone}</div>
           </div>
         </div>
