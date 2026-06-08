@@ -103,9 +103,21 @@ class StudentSearchRequestSerializer(serializers.Serializer):
     section_id = serializers.IntegerField(required=False)
     attendance_date = serializers.DateField()
 
+    def _raw_int(self, key):
+        """Read an int directly from the request body (the `class_field` field
+        is bound to the input key `class_field`, so a raw `class` key sent by
+        legacy clients would otherwise be ignored)."""
+        value = (self.initial_data or {}).get(key)
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
     def validate(self, attrs):
-        class_id = attrs.get("class") or attrs.get("class_id")
-        section_id = attrs.get("section") or attrs.get("section_id")
+        class_id = attrs.get("class") or attrs.get("class_id") or self._raw_int("class")
+        section_id = attrs.get("section") or attrs.get("section_id") or self._raw_int("section")
 
         if not class_id:
             raise serializers.ValidationError({"class": "Class is required."})

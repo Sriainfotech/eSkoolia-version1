@@ -6,7 +6,7 @@ import { Clock } from 'lucide-react';
 import type { ModuleRoute } from '@/lib/routes';
 
 // Modules that are visible in nav but show Coming Soon on hover
-const COMING_SOON_IDS = new Set(['attendance', 'exam', 'reports']);
+const COMING_SOON_IDS = new Set(['exam', 'reports']);
 
 // Individual sub-pages that show Coming Soon when navigated to
 const COMING_SOON_PATHS = new Set([
@@ -15,7 +15,7 @@ const COMING_SOON_PATHS = new Set([
   '/academics/homework-list', '/academics/other-downloads-list', '/academics/study-material-list',
   '/academics/syllabus-list', '/academics/upload-content', '/academics/assignment-list',
   '/academics/lesson-planner',
-  '/hr/leave', '/hr/attendance', '/hr/offboarding',
+  '/hr/leave', '/hr/offboarding',
 ]);
 
 export function ModulePill({ mod }: { mod: ModuleRoute }) {

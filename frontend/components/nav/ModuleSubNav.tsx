@@ -6,7 +6,14 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { MODULES } from '@/lib/routes';
 import { usePermissions } from '@/hooks/usePermissions';
 
-const COMING_SOON_PATHS = new Set(['/hr/leave', '/hr/attendance', '/hr/offboarding']);
+const COMING_SOON_PATHS = new Set([
+  '/hr/leave',
+  '/hr/attendance',
+  '/hr/offboarding',
+  '/academics/timetable',
+  '/academics/planning-studio',
+  '/academics/academic-reports',
+]);
 
 /** Finds the module that "owns" the given pathname */
 function findOwnerModule(pathname: string) {

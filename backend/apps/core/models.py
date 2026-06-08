@@ -6,8 +6,26 @@ from decimal import Decimal
 
 
 class AcademicYear(models.Model):
+    BOARD_CHOICES = [
+        ('CBSE', 'CBSE'),
+        ('ICSE', 'ICSE'),
+        ('State Board', 'State Board'),
+        ('IB', 'IB (International Baccalaureate)'),
+        ('IGCSE', 'IGCSE (Cambridge)'),
+        ('NIOS', 'NIOS'),
+        ('Other', 'Other'),
+    ]
+    
+    TERM_CHOICES = [
+        ('2 Terms (Semester)', '2 Terms (Semester)'),
+        ('3 Terms (Trimester)', '3 Terms (Trimester)'),
+        ('4 Terms (Quarter)', '4 Terms (Quarter)'),
+    ]
+    
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="academic_years")
     name = models.CharField(max_length=64, help_text="e.g. 2025-2026")
+    board = models.CharField(max_length=100, choices=BOARD_CHOICES, blank=True, null=True, help_text="Board/Curriculum")
+    number_of_terms = models.CharField(max_length=50, choices=TERM_CHOICES, blank=True, null=True, help_text="Number of terms per year")
     start_date = models.DateField()
     end_date = models.DateField()
     is_current = models.BooleanField(default=False)
