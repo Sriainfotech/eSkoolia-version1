@@ -10,7 +10,7 @@ from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated, No
 from rest_framework.response import Response
 
 from apps.core.models import Class, Section
-from apps.fees.models import FeesAssignment
+from apps.fees.models import FeeAssignment
 from apps.hr.models import Staff
 from apps.students.models import Student, StudentMultiClassRecord
 

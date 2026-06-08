@@ -1,143 +1,74 @@
-from decimal import Decimal
-
 from rest_framework import serializers
-
-from .models import FeesAssignment, FeesGroup, FeesPayment, FeesType
-
+from django.db import models
+from decimal import Decimal
+from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry
+from apps.core.models import Class
 
 class FeesGroupSerializer(serializers.ModelSerializer):
+    applicable_classes = serializers.PrimaryKeyRelatedField(
+        queryset=Class.objects.all(),
+        many=True,
+        required=False,
+    )
     class Meta:
         model = FeesGroup
-        fields = [
-            "id",
-            "school",
-            "academic_year",
-            "name",
-            "description",
-            "is_active",
-            "created_at",
-            "updated_at",
-        ]
-        read_only_fields = ["id", "school", "created_at", "updated_at"]
+        fields = ['id', 'academic_year', 'name', 'description', 'applicable_classes', 'is_active', 'created_at', 'created_by']
+        read_only_fields = ['created_at', 'created_by']
 
+    def validate_applicable_classes(self, value):
+        if value is None:
+            return value
+        if len(value) == 0:
+            raise serializers.ValidationError("Please select at least one applicable class.")
+        return value
 
 class FeesTypeSerializer(serializers.ModelSerializer):
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
+
     class Meta:
         model = FeesType
-        fields = [
-            "id",
-            "school",
-            "academic_year",
-            "fees_group",
-            "name",
-            "amount",
-            "description",
-            "is_active",
-            "created_at",
-            "updated_at",
-        ]
-        read_only_fields = ["id", "school", "created_at", "updated_at"]
+        fields = ['id', 'academic_year', 'fees_group', 'name', 'amount', 'description', 'is_active', 'created_at', 'created_by']
+        read_only_fields = ['created_at', 'created_by']
 
-    def validate(self, attrs):
-        request = self.context.get("request")
-        school_id = request.user.school_id if request else None
-        group = attrs.get("fees_group") or getattr(self.instance, "fees_group", None)
-
-        if school_id and group and group.school_id != school_id:
-            raise serializers.ValidationError({"fees_group": "Selected fees group does not belong to your school."})
-
-        return attrs
-
-
-class FeesAssignmentSerializer(serializers.ModelSerializer):
-    net_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    paid_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
-    due_amount = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+class FeeAssignmentSerializer(serializers.ModelSerializer):
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
+    discount_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
+    concession_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
+    status = serializers.CharField(source='status', read_only=True)
+    total_paid = serializers.SerializerMethodField()
+    net_due = serializers.SerializerMethodField()
 
     class Meta:
-        model = FeesAssignment
+        model = FeeAssignment
         fields = [
-            "id",
-            "school",
-            "academic_year",
-            "student",
-            "fees_type",
-            "due_date",
-            "amount",
-            "discount_amount",
-            "status",
-            "net_amount",
-            "paid_amount",
-            "due_amount",
-            "created_at",
-            "updated_at",
+            'id', 'academic_year', 'student', 'fees_type', 'due_date', 
+            'amount', 'discount_amount', 'concession_amount',
+            'status', 'total_paid', 'net_due',
+            'created_at', 'created_by'
         ]
-        read_only_fields = [
-            "id",
-            "school",
-            "status",
-            "net_amount",
-            "paid_amount",
-            "due_amount",
-            "created_at",
-            "updated_at",
-        ]
+        read_only_fields = ['created_at', 'created_by', 'status', 'total_paid', 'net_due']
 
-    def validate(self, attrs):
-        request = self.context.get("request")
-        school_id = request.user.school_id if request else None
-        student = attrs.get("student") or getattr(self.instance, "student", None)
-        fees_type = attrs.get("fees_type") or getattr(self.instance, "fees_type", None)
-        amount = attrs.get("amount") or getattr(self.instance, "amount", Decimal("0.00"))
-        discount = attrs.get("discount_amount") or getattr(self.instance, "discount_amount", Decimal("0.00"))
+    def get_total_paid(self, obj):
+        # This should use the ledger for accuracy
+        paid = obj.payments.filter(status='posted').aggregate(total=models.Sum('amount_paid'))['total'] or Decimal('0.00')
+        return str(paid)
 
-        if discount > amount:
-            raise serializers.ValidationError({"discount_amount": "Discount amount cannot exceed total amount."})
-
-        if school_id and student and student.school_id != school_id:
-            raise serializers.ValidationError({"student": "Selected student does not belong to your school."})
-
-        if school_id and fees_type and fees_type.school_id != school_id:
-            raise serializers.ValidationError({"fees_type": "Selected fee type does not belong to your school."})
-
-        return attrs
+    def get_net_due(self, obj):
+        # This should use the ledger for accuracy
+        net_amount = obj.amount - obj.discount_amount - obj.concession_amount
+        paid = obj.payments.filter(status='posted').aggregate(total=models.Sum('amount_paid'))['total'] or Decimal('0.00')
+        due = net_amount - paid
+        return str(due)
 
 
-class FeesPaymentSerializer(serializers.ModelSerializer):
+class PaymentSerializer(serializers.ModelSerializer):
+    amount_paid = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
+
     class Meta:
-        model = FeesPayment
+        model = Payment
         fields = [
-            "id",
-            "school",
-            "assignment",
-            "student",
-            "amount_paid",
-            "method",
-            "transaction_reference",
-            "note",
-            "paid_at",
-            "recorded_by",
-            "created_at",
+            'id', 'assignment', 'student', 'amount_paid', 'method', 'status', 
+            'paid_at', 'transaction_reference', 'note', 
+            'collected_by', 'created_at'
         ]
-        read_only_fields = ["id", "school", "recorded_by", "created_at"]
-
-    def validate(self, attrs):
-        request = self.context.get("request")
-        school_id = request.user.school_id if request else None
-        assignment = attrs.get("assignment")
-        student = attrs.get("student")
-        amount_paid = attrs.get("amount_paid", Decimal("0.00"))
-
-        if assignment and student and assignment.student_id != student.id:
-            raise serializers.ValidationError({"student": "Student does not match the selected assignment."})
-
-        if school_id and assignment and assignment.school_id != school_id:
-            raise serializers.ValidationError({"assignment": "Selected assignment does not belong to your school."})
-
-        if school_id and student and student.school_id != school_id:
-            raise serializers.ValidationError({"student": "Selected student does not belong to your school."})
-
-        if assignment and amount_paid > assignment.due_amount:
-            raise serializers.ValidationError({"amount_paid": "Payment amount cannot exceed due amount."})
-
-        return attrs
+        read_only_fields = ['collected_by', 'created_at']
