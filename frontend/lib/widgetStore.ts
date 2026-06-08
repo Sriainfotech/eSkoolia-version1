@@ -1,6 +1,8 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 
+export type PortalRole = 'admin' | 'teacher' | 'parent' | 'student' | 'custom';
+
 export interface WidgetDef {
   id: string;
   name: string;
@@ -9,26 +11,47 @@ export interface WidgetDef {
   icon: string;
   defaultEnabled: boolean;
   disabled?: boolean;
+  /** Which portal roles can see this widget. Omit to show to all roles. */
+  roles?: PortalRole[];
 }
 
 export const ALL_WIDGETS: WidgetDef[] = [
-  // Left rail — Today's Pulse
-  { id: 'attendance',    name: 'Student Attendance',  description: 'Live attendance snapshot with class-wise breakdown', rail: 'left',  icon: '📊', defaultEnabled: true },
-  { id: 'sickbay',       name: 'Sick Bay',             description: 'Active sick-bay cases & parent contact status',      rail: 'left',  icon: '🏥', defaultEnabled: true },
-  { id: 'busfleet',      name: 'Bus Fleet',            description: 'Live bus positions & ETA for all routes',            rail: 'left',  icon: '🚌', defaultEnabled: true },
-  { id: 'feestoday',     name: "Today's Fees",         description: 'Fee collections received today vs target',           rail: 'left',  icon: '💰', defaultEnabled: true },
-  { id: 'staffleave',    name: 'Staff Leave',          description: 'Staff on leave today & substitute assignments',      rail: 'left',  icon: '👤', defaultEnabled: true },
-  // Right rail — Admin Cockpit
-  { id: 'morning-brief', name: 'Morning Brief',        description: 'AI-generated start-of-day briefing',                rail: 'right', icon: '☀️', defaultEnabled: true },
-  { id: 'smart-todo',    name: 'Smart To-Do',          description: 'AI-ranked tasks with category tabs',                 rail: 'right', icon: '✅', defaultEnabled: true },
-  { id: 'week-ahead',    name: 'Week Ahead',           description: 'Intelligent 7-day planner — drag to schedule',      rail: 'right', icon: '🗓', defaultEnabled: true },
-  { id: 'notifications', name: 'Notifications',        description: 'Recent system & activity notifications',             rail: 'right', icon: '🔔', defaultEnabled: true },
-  { id: 'calls-queue',   name: 'Calls Queue',          description: 'Pending parent & vendor call-backs, AI-ranked',     rail: 'right', icon: '📞', defaultEnabled: true },
-  { id: 'drafts',        name: 'Drafts Pending',       description: 'Communications awaiting your approval',             rail: 'right', icon: '📝', defaultEnabled: false, disabled: true },
-  { id: 'academic-strip',name: 'Academic Calendar',    description: 'Merged into Week Ahead widget',                     rail: 'right', icon: '📅', defaultEnabled: false, disabled: true },
-  { id: 'broadcast',     name: 'Quick Broadcast',      description: 'Send announcements to parents & students',          rail: 'right', icon: '📢', defaultEnabled: false },
-  { id: 'pinned-notes',  name: 'Pinned Notes',         description: 'Important pinned sticky notes at a glance',        rail: 'right', icon: '📌', defaultEnabled: false },
+  // ── Teacher-only ──────────────────────────────────────────────────────────
+  { id: 'teacher-day-plan', name: "Today's Schedule",  description: "Period-by-period schedule for today",               rail: 'left',  icon: '🗒', defaultEnabled: true,  roles: ['teacher'] },
+
+  // ── Admin-only — Left rail (Today's Pulse) ────────────────────────────────
+  { id: 'attendance',    name: 'Student Attendance',   description: 'Live attendance snapshot with class-wise breakdown', rail: 'left',  icon: '📊', defaultEnabled: true,  roles: ['admin'] },
+  { id: 'sickbay',       name: 'Sick Bay',              description: 'Active sick-bay cases & parent contact status',      rail: 'left',  icon: '🏥', defaultEnabled: true,  roles: ['admin'] },
+  { id: 'busfleet',      name: 'Bus Fleet',             description: 'Live bus positions & ETA for all routes',            rail: 'left',  icon: '🚌', defaultEnabled: true,  roles: ['admin'] },
+  { id: 'feestoday',     name: "Today's Fees",          description: 'Fee collections received today vs target',           rail: 'left',  icon: '💰', defaultEnabled: true,  roles: ['admin'] },
+  { id: 'staffleave',    name: 'Staff Leave',           description: 'Staff on leave today & substitute assignments',      rail: 'left',  icon: '👤', defaultEnabled: true,  roles: ['admin'] },
+
+  // ── Admin-only — Right rail (Admin Cockpit) ───────────────────────────────
+  { id: 'morning-brief', name: 'Morning Brief',         description: 'AI-generated start-of-day briefing',                rail: 'right', icon: '☀️', defaultEnabled: true,  roles: ['admin'] },
+  { id: 'notifications', name: 'Notifications',         description: 'Recent system & activity notifications',             rail: 'right', icon: '🔔', defaultEnabled: true,  roles: ['admin'] },
+  { id: 'calls-queue',   name: 'Calls Queue',           description: 'Pending parent & vendor call-backs, AI-ranked',     rail: 'right', icon: '📞', defaultEnabled: true,  roles: ['admin'] },
+  { id: 'drafts',        name: 'Drafts Pending',        description: 'Communications awaiting your approval',             rail: 'right', icon: '📝', defaultEnabled: false, roles: ['admin'], disabled: true },
+  { id: 'academic-strip',name: 'Academic Calendar',     description: 'Merged into Week Ahead widget',                     rail: 'right', icon: '📅', defaultEnabled: false, roles: ['admin'], disabled: true },
+  { id: 'broadcast',     name: 'Quick Broadcast',       description: 'Send announcements to parents & students',          rail: 'right', icon: '📢', defaultEnabled: false, roles: ['admin'] },
+
+  // ── Parent-only — Left rail ────────────────────────────────────────────────
+  { id: 'parent-attendance', name: "Child's Attendance",  description: 'Attendance ring & stats for the selected child',     rail: 'left',  icon: '📅', defaultEnabled: true,  roles: ['parent'] },
+  { id: 'parent-results',    name: 'Recent Results',       description: 'Latest exam scores for the selected child',           rail: 'left',  icon: '📊', defaultEnabled: true,  roles: ['parent'] },
+
+  // ── Parent-only — Right rail ───────────────────────────────────────────────
+  { id: 'parent-notices',    name: 'Notice Board',         description: 'Latest school circulars & announcements',             rail: 'right', icon: '🔔', defaultEnabled: true,  roles: ['parent'] },
+  { id: 'parent-fees',       name: 'Fee Status',           description: 'Outstanding fees & payment reminders',                rail: 'right', icon: '💳', defaultEnabled: true,  roles: ['parent'] },
+
+  // ── Shared — Right rail (available to admin + teacher) ───────────────────
+  { id: 'smart-todo',    name: 'Smart To-Do',           description: 'AI-ranked tasks with category tabs',                rail: 'right', icon: '✅', defaultEnabled: true  },
+  { id: 'week-ahead',    name: 'Week Ahead',            description: 'Intelligent 7-day planner — drag to schedule',      rail: 'right', icon: '🗓', defaultEnabled: true  },
+  { id: 'pinned-notes',  name: 'Pinned Notes',          description: 'Important pinned sticky notes at a glance',         rail: 'right', icon: '📌', defaultEnabled: false },
 ];
+
+/** Returns only the widgets visible to a given portal role. */
+export function widgetsForRole(role: PortalRole): WidgetDef[] {
+  return ALL_WIDGETS.filter(w => !w.roles || w.roles.includes(role));
+}
 
 const LS_KEY = 'eskoolia_widget_prefs_v2';
 
