@@ -1,5 +1,10 @@
 from django.urls import path
 from rest_framework.routers import DefaultRouter
+from .attendance_endpoints import (
+    StaffAttendanceDownloadSampleAPIView,
+    StaffAttendanceExportAPIView,
+    StaffAttendanceImportBulkAPIView,
+)
 
 from .views import (
     DepartmentViewSet,
@@ -39,6 +44,9 @@ router.register("payroll", PayrollRecordViewSet, basename="hr-payroll")
 
 urlpatterns = [
     path("designations/reorder/", DesignationReorderView.as_view(), name="hr-designation-reorder"),
+    path("staff-attendance/download-sample/", StaffAttendanceDownloadSampleAPIView.as_view(), name="hr-staff-attendance-download-sample"),
+    path("staff-attendance/export/", StaffAttendanceExportAPIView.as_view(), name="hr-staff-attendance-export"),
+    path("staff-attendance/import/", StaffAttendanceImportBulkAPIView.as_view(), name="hr-staff-attendance-import"),
     # Onboarding wizard document endpoints
     path("onboard/documents/", StaffOnboardDocumentListView.as_view(), name="hr-onboard-doc-list"),
     path("onboard/documents/upload/", StaffOnboardDocumentUploadView.as_view(), name="hr-onboard-doc-upload"),

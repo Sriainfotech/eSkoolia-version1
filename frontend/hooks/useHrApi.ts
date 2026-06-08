@@ -12,7 +12,6 @@ import type {
   StaffDocument,
   LeaveType,
   LeaveApplication,
-  AttendanceRecord,
   OffboardingRecord,
   PaginatedHR,
 } from "@/types/hr";
@@ -288,7 +287,8 @@ export async function deleteOnboardDraft(id: number): Promise<void> {
 /** Downloads the blank staff onboarding form PDF.
  *  Pass `copies` (1–5) to embed multiple copies in the same PDF.
  */
-export async function downloadBlankForm(copies: number = 1): Promise<void> {  const res = await apiRequestWithRefreshResponse(
+export async function downloadBlankForm(copies: number = 1): Promise<void> {
+  const res = await apiRequestWithRefreshResponse(
     `/api/v1/hr/onboard/blank-form/?copies=${copies}`,
     { method: "GET" },
   );
@@ -436,32 +436,117 @@ export async function updateLeaveStatus(
   return res.json() as Promise<LeaveApplication>;
 }
 
-// ─── Attendance ───────────────────────────────────────────────────────────────
-export function useAttendance(date: string) {
-  return useFetch<PaginatedHR<AttendanceRecord>>(
-    `/api/v1/hr/staff-attendance/?date=${date}&page_size=200`,
+// ─── Staff Attendance ───────────────────────────────────────────────────────
+// Backend model stores `attendance_type` (P/A/L/F/H) + `note` per (staff, date).
+// We mark attendance against the full active-staff roster, grouped by department.
+
+export type StaffAttCode = "P" | "A" | "L" | "F" | "H";
+
+/** One saved attendance record for a staff member on a given date. */
+export interface StaffAttendanceRow {
+  id: number;
+  staff: number;
+  staff_name: string;
+  staff_no: string;
+  department_name: string;
+  designation_name: string;
+  attendance_date: string;          // YYYY-MM-DD
+  attendance_type: StaffAttCode;
+  note: string;
+  arrival_time: string | null;
+  sign_in_time: string | null;
+  sign_out_time: string | null;
+  lunch: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Payload for a single bulk-store row. */
+export interface StaffAttendanceMark {
+  staff: number;
+  attendance_date: string;
+  attendance_type: string;
+  note?: string;
+  arrival_time?: string | null;
+  sign_in_time?: string | null;
+  sign_out_time?: string | null;
+  lunch?: boolean;
+}
+
+/** Fetch all staff-attendance records already saved for a date. */
+export function useStaffAttendanceForDate(date: string) {
+  return useFetch<PaginatedHR<StaffAttendanceRow>>(
+    `/api/v1/hr/staff-attendance/?attendance_date=${date}&page_size=500`,
     [date],
   );
 }
 
-export async function saveAttendanceBatch(records: Partial<AttendanceRecord>[]) {
-  const res = await apiRequestWithRefreshResponse("/api/v1/hr/staff-attendance/batch/", {
+/** Bulk upsert attendance rows (update_or_create by staff + date) via the backend's bulk-store. */
+export async function saveStaffAttendanceBulk(rows: StaffAttendanceMark[]) {
+  const res = await apiRequestWithRefreshResponse("/api/v1/hr/staff-attendance/bulk-store/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ records }),
+    body: JSON.stringify({ rows }),
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  return res.json() as Promise<{ detail: string; count: number }>;
 }
 
-export async function updateAttendance(id: number, body: Partial<AttendanceRecord>) {
-  const res = await apiRequestWithRefreshResponse(`/api/v1/hr/staff-attendance/${id}/`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<AttendanceRecord>;
+// ─── Staff Attendance: summaries & reports ──────────────────────────────────
+export interface StaffDailySummary {
+  total_staff: number;
+  present: number;
+  absent: number;
+  leave: number;
+  half_day: number;
+  holiday: number;
+  marked: number;
+  present_pct: number;
+}
+
+/** KPI counts for a single date (optionally scoped to a department). */
+export function useStaffDailySummary(date: string, department?: number | string) {
+  const dep = department ? `&department=${department}` : "";
+  return useFetch<StaffDailySummary>(
+    `/api/v1/hr/staff-attendance/daily-summary/?date=${date}${dep}`,
+    [date, department],
+  );
+}
+
+export interface StaffMonthlyRecord {
+  staff: number;
+  attendance_date: string;
+  attendance_type: StaffAttCode;
+}
+export interface StaffMonthlyRow {
+  staff_id: number;
+  name: string;
+  staff_no: string;
+  department_name: string;
+  present: number;
+  absent: number;
+  leave: number;
+  half_day: number;
+  holiday: number;
+}
+export interface StaffReasonInsight { reason: string; count: number; }
+export interface StaffMonthlyReport {
+  records: StaffMonthlyRecord[];
+  rows: StaffMonthlyRow[];
+  insights: { top_absent_reasons: StaffReasonInsight[]; top_leave_reasons: StaffReasonInsight[] };
+}
+
+/** Fetch the monthly report payload (records + per-staff rows + reason insights). */
+export async function fetchStaffMonthlyReport(params: {
+  month: number; year: number; department?: number | string; staff?: number | string;
+}): Promise<StaffMonthlyReport> {
+  const q = new URLSearchParams({ month: String(params.month), year: String(params.year) });
+  if (params.department) q.set("department", String(params.department));
+  if (params.staff) q.set("staff", String(params.staff));
+  return apiRequestWithRefresh<StaffMonthlyReport>(
+    `/api/v1/hr/staff-attendance/monthly-report/?${q.toString()}`,
+    { method: "GET" },
+  );
 }
 
 // ─── Offboarding ──────────────────────────────────────────────────────────────

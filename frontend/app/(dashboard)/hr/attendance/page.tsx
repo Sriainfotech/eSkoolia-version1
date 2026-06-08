@@ -1,272 +1,353 @@
 "use client";
 /**
- * HR Attendance — Department accordion groups with daily attendance table.
+ * HR Staff Attendance — full parity with Student Attendance, grouped by HR-setup
+ * DEPARTMENTS. Week date strip + KPI cards + MARK ALL VISIBLE header; expand a
+ * department to reveal its staff with a rich table (absent toggle, arrival,
+ * sign-in/out, lunch, notes, edit), then Save. Persisted via
+ * /api/v1/hr/staff-attendance/bulk-store/.
  */
-import { useState } from "react";
-import { ChevronDown, ChevronRight, Check, X, Clock, Edit2, Save } from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
-  HrButton, HrBadge, HrKpiCard, HrModal, HrField, HrInput, HrSelect,
-  HrHero, HrSkeleton, useHrToast,
-} from "@/components/hr/HrUi";
-import { useAttendance, useStaff, useDepartments, saveAttendanceBatch, updateAttendance } from "@/hooks/useHrApi";
-import type { AttendanceRecord } from "@/types/hr";
+  useStaffList, useAllDepartments, useStaffAttendanceForDate, saveStaffAttendanceBulk,
+} from "@/hooks/useHrApi";
+import type { Staff } from "@/types/hr";
+import { useHrToast } from "@/components/hr/HrUi";
+import DeptTypeCard from "./components/DeptTypeCard";
+import HrGlobalControls from "./components/HrGlobalControls";
+import HrAttendanceKPIs from "./components/HrAttendanceKPIs";
+import { useHrAttendanceData } from "./hooks/useHrAttendanceData";
+import StaffMonthlyReport from "./StaffMonthlyReport";
+import StaffAbsentNoteDialog from "./components/StaffAbsentNoteDialog";
+import StaffAttendanceImportDialog from "./components/StaffAttendanceImportDialog";
+import { getAccessToken } from "@/lib/auth";
+import { API_BASE_URL } from "@/lib/api";
 
-const STATUS_OPTIONS = ["present", "absent", "late", "half_day", "on_leave"] as const;
-type AttendanceStatus = typeof STATUS_OPTIONS[number];
-
-const STATUS_META: Record<AttendanceStatus, { label: string; color: string; icon: React.ReactNode }> = {
-  present:  { label: "Present",  color: "var(--green)", icon: <Check size={13} /> },
-  absent:   { label: "Absent",   color: "var(--red)",   icon: <X size={13} /> },
-  late:     { label: "Late",     color: "var(--amber)", icon: <Clock size={13} /> },
-  half_day: { label: "Half Day", color: "#2563EB",      icon: <Clock size={13} /> },
-  on_leave: { label: "On Leave", color: "#64748b",      icon: <Clock size={13} /> },
+// ─── Status model (matches backend StaffAttendance.STATUS_CHOICES) ──────────────
+type AttCode = "P" | "A" | "L" | "F" | "H";
+const STATUS_META: Record<AttCode, { label: string; color: string; bg: string }> = {
+  P: { label: "Present", color: "#0A8C5A", bg: "#E4F6ED" },
+  A: { label: "Absent", color: "#C2264E", bg: "#FCE8EE" },
+  L: { label: "Leave", color: "#2563EB", bg: "#EFF6FF" },
+  F: { label: "Half Day", color: "#B4721B", bg: "#FDF1DC" },
+  H: { label: "Holiday", color: "#6B6B7B", bg: "#F1F1F5" },
 };
 
-function today() {
-  return new Date().toISOString().split("T")[0];
+interface StaffMark {
+  attendance_type?: AttCode;
+  arrival_time?: string | null;
+  sign_in_time?: string | null;
+  sign_out_time?: string | null;
+  lunch?: boolean;
+  note?: string;
 }
 
-// ─── Edit Record Modal ─────────────────────────────────────────────────────────
-function EditModal({
-  record, onClose, onSaved,
-}: {
-  record: AttendanceRecord;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const { toast } = useHrToast();
-  const [status, setStatus] = useState<AttendanceStatus>(record.status as AttendanceStatus);
-  const [signIn, setSignIn] = useState(record.time_in ?? "");
-  const [lunchOut, setLunchOut] = useState(record.lunch_out ?? "");
-  const [lunchIn, setLunchIn] = useState(record.lunch_in ?? "");
-  const [signOut, setSignOut] = useState(record.time_out ?? "");
-  const [saving, setSaving] = useState(false);
+const AVATAR_COLORS = ["#4729F4", "#0A8C5A", "#B4721B", "#C2264E", "#2563EB", "#9333EA", "#0891B2"];
+const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      await updateAttendance(record.id, {
-        status, time_in: signIn, time_out: signOut,
-        lunch_out: lunchOut, lunch_in: lunchIn,
-      });
-      toast("Attendance updated");
-      onSaved(); onClose();
-    } catch { toast("Failed to update", "error"); }
-    finally { setSaving(false); }
-  };
-
-  return (
-    <HrModal isOpen onClose={onClose} title={`Edit — ${record.staff_name}`} size="md">
-      <div className="p-[20px] grid gap-4">
-        <HrField label="Status">
-          <HrSelect value={status} onChange={(e) => setStatus(e.target.value as AttendanceStatus)}>
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s} value={s}>{STATUS_META[s].label}</option>
-            ))}
-          </HrSelect>
-        </HrField>
-        <div className="grid grid-cols-2 gap-4">
-          <HrField label="Sign In">
-            <HrInput type="time" value={signIn} onChange={(e) => setSignIn(e.target.value)} />
-          </HrField>
-          <HrField label="Sign Out">
-            <HrInput type="time" value={signOut} onChange={(e) => setSignOut(e.target.value)} />
-          </HrField>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <HrField label="Lunch Out">
-            <HrInput type="time" value={lunchOut} onChange={(e) => setLunchOut(e.target.value)} />
-          </HrField>
-          <HrField label="Lunch In">
-            <HrInput type="time" value={lunchIn} onChange={(e) => setLunchIn(e.target.value)} />
-          </HrField>
-        </div>
-        <div className="flex justify-end gap-2 pt-2 border-t border-[#f1f5f9]">
-          <HrButton variant="ghost" onClick={onClose}>Cancel</HrButton>
-          <HrButton variant="primary" onClick={() => void handleSave()} loading={saving}>
-            <Save size={13} /> Save
-          </HrButton>
-        </div>
-      </div>
-    </HrModal>
-  );
+function today() { return fmt(new Date()); }
+function nowHHMM() { return new Date().toTimeString().slice(0, 5); }
+function hhmm(t?: string | null) { return t ? t.slice(0, 5) : null; }
+function fmt(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function staffName(s: Staff) {
+  return s.full_name?.trim() || `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || s.staff_no;
+}
+function initials(s: Staff) {
+  const a = (s.first_name || "").trim()[0] || "";
+  const b = (s.last_name || "").trim()[0] || "";
+  return (a + b).toUpperCase() || (s.staff_no || "?").slice(0, 2).toUpperCase();
+}
+function ringColor(pct: number) {
+  if (pct === 0) return "#D8D8E4";
+  if (pct >= 90) return "#0A8C5A";
+  if (pct >= 75) return "#4729F4";
+  if (pct >= 50) return "#B4721B";
+  return "#C2264E";
+}
+function getMonday(date: Date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  d.setDate(d.getDate() - ((day === 0 ? 7 : day) - 1));
+  return d;
+}
+function getWeekDates(centerDate: string) {
+  const monday = getMonday(new Date(`${centerDate}T00:00:00`));
+  return Array.from({ length: 7 }, (_, i) => { const d = new Date(monday); d.setDate(monday.getDate() + i); return d; });
+}
+function monthOptions(selectedDate: string) {
+  const y = new Date(`${selectedDate}T00:00:00`).getFullYear();
+  return Array.from({ length: 12 }, (_, m) => ({
+    value: `${y}-${String(m + 1).padStart(2, "0")}`,
+    label: new Date(y, m, 1).toLocaleDateString("en-GB", { month: "short", year: "numeric" }),
+  }));
+}
+function weekOptionsForMonth(monthValue: string) {
+  const [yt, mt] = monthValue.split("-");
+  const year = Number(yt); const month = Number(mt) - 1;
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const options: { value: string; label: string }[] = [];
+  let cursor = getMonday(firstDay); let idx = 1;
+  while (cursor <= lastDay || cursor.getMonth() === month) {
+    const weekStart = new Date(cursor);
+    const weekEnd = new Date(cursor); weekEnd.setDate(weekEnd.getDate() + 6);
+    const inStart = weekStart.getMonth() === month ? weekStart : firstDay;
+    const inEnd = weekEnd.getMonth() === month ? weekEnd : lastDay;
+    options.push({ value: fmt(weekStart), label: `Week ${idx} (${inStart.getDate()}-${inEnd.getDate()})` });
+    cursor.setDate(cursor.getDate() + 7); idx += 1;
+    if (idx > 7) break;
+  }
+  return options;
 }
 
-// ─── Department Attendance Group ───────────────────────────────────────────────
-function DeptAttendanceAccordion({
-  deptName,
-  records,
-  onEdit,
-  onToggleAbsent,
-}: {
-  deptName: string;
-  records: AttendanceRecord[];
-  onEdit: (r: AttendanceRecord) => void;
-  onToggleAbsent: (r: AttendanceRecord) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  const present = records.filter((r) => r.status === "present").length;
-  const absent = records.filter((r) => r.status === "absent").length;
-
+// ─── Percentage ring ────────────────────────────────────────────────────────────
+function Ring({ pct, size = 38, strokeWidth = 3.5 }: { pct: number; size?: number; strokeWidth?: number }) {
+  const r = size / 2 - strokeWidth;
+  const c = 2 * Math.PI * r;
+  const offset = c - (pct / 100) * c;
   return (
-    <div className="border border-[var(--line)] rounded-[12px] overflow-hidden mb-3">
-      <button
-        onClick={() => setOpen((p) => !p)}
-        className="w-full flex items-center gap-3 p-[12px_16px] text-left"
-        style={{ background: open ? "#f8f6ff" : "#fafafa", borderLeft: "4px solid var(--strong)" }}
-      >
-        <span className="flex-1 font-[850] text-[14px]">{deptName}</span>
-        <HrBadge variant="green">{present} present</HrBadge>
-        <HrBadge variant="red">{absent} absent</HrBadge>
-        {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
-      </button>
-      {open && (
-        <table className="w-full border-collapse">
-          <thead>
-            <tr className="bg-[#fafafa] text-[11px] uppercase text-[#64748b] tracking-[0.08em]">
-              <th className="px-3 py-[10px] text-left">Staff</th>
-              <th className="px-3 py-[10px] text-left">Status</th>
-              <th className="px-3 py-[10px] text-left">Sign In</th>
-              <th className="px-3 py-[10px] text-left">Lunch</th>
-              <th className="px-3 py-[10px] text-left">Sign Out</th>
-              <th className="px-3 py-[10px] text-left">Mark Absent</th>
-              <th className="px-3 py-[10px] text-left">Edit</th>
-            </tr>
-          </thead>
-          <tbody>
-            {records.map((r) => {
-              const meta = STATUS_META[r.status as AttendanceStatus] ?? STATUS_META.present;
-              return (
-                <tr key={r.id} className="border-t border-[#f4f4f8] hover:bg-[#fafafd] transition-colors">
-                  <td className="px-3 py-3 font-[750] text-[13px]">{r.staff_name}</td>
-                  <td className="px-3 py-3">
-                    <div className="flex items-center gap-1" style={{ color: meta.color }}>
-                      {meta.icon}
-                      <span className="text-[12px] font-[700]">{meta.label}</span>
-                    </div>
-                  </td>
-                  <td className="px-3 py-3 text-[12px] text-[var(--muted)]">{r.time_in || "—"}</td>
-                  <td className="px-3 py-3 text-[12px] text-[var(--muted)]">
-                    {r.lunch_out ? `${r.lunch_out} – ${r.lunch_in ?? "?"}` : "—"}
-                  </td>
-                  <td className="px-3 py-3 text-[12px] text-[var(--muted)]">{r.time_out || "—"}</td>
-                  <td className="px-3 py-3">
-                    <button
-                      onClick={() => onToggleAbsent(r)}
-                      className="w-[22px] h-[22px] rounded-[5px] border-2 flex items-center justify-center transition-colors"
-                      style={{
-                        borderColor: r.status === "absent" ? "var(--red)" : "#cbd5e1",
-                        background: r.status === "absent" ? "var(--red)" : "transparent",
-                      }}
-                      title={r.status === "absent" ? "Mark Present" : "Mark Absent"}
-                    >
-                      {r.status === "absent" && <X size={11} className="text-white" />}
-                    </button>
-                  </td>
-                  <td className="px-3 py-3">
-                    <HrButton variant="icon" size="icon" onClick={() => onEdit(r)}>
-                      <Edit2 size={12} />
-                    </HrButton>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      )}
+    <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: "rotate(-90deg)" }}>
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#F0F0F6" strokeWidth={strokeWidth} />
+        {pct > 0 && <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={ringColor(pct)} strokeWidth={strokeWidth} strokeLinecap="round" strokeDasharray={c} strokeDashoffset={offset} />}
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-[#0B0B14]">{pct === 0 ? "—" : `${pct}%`}</span>
     </div>
   );
 }
 
-// ─── Main Attendance Page ─────────────────────────────────────────────────────
-export default function HrAttendancePage() {
-  const [date, setDate] = useState(today);
-  const { data, loading, refetch } = useAttendance(date);
-  const { data: deptData } = useDepartments();
+// ─── KPI card ───────────────────────────────────────────────────────────────────
+function KpiCard({ label, value, sub, badge, badgeBg, badgeColor }: {
+  label: string; value: string | number; sub?: string; badge: string; badgeBg: string; badgeColor: string;
+}) {
+  return (
+    <article className="min-w-0 rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3">
+      <div className="flex items-center justify-between">
+        <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-[#64748B]">{label}</span>
+        <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[10px] font-bold" style={{ background: badgeBg, color: badgeColor }}>{badge}</span>
+      </div>
+      <div className="mt-2 text-[40px] font-bold leading-none text-[#111827]">{value}</div>
+      {sub ? <span className="mt-2 block text-xs text-[#64748B]">{sub}</span> : null}
+    </article>
+  );
+}
+
+// ─── Department accordion card ──────────────────────────────────────────────────
+
+// ─── Page ────────────────────────────────────────────────────────────────────
+export default function HrStaffAttendancePage() {
+  const [date, setDate] = useState(today());
+  const { data: deptData } = useAllDepartments();
+  const { staffByDept, marksByDept, loadingDepts, loadDepartment, updateMark, saveBulk } = useHrAttendanceData(date);
   const { toast } = useHrToast();
 
-  const [editRecord, setEditRecord] = useState<AttendanceRecord | null>(null);
   const [saving, setSaving] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [openDepts, setOpenDepts] = useState<Set<string>>(new Set());
 
-  const records = data?.results ?? [];
-  const departments = deptData?.results ?? [];
+  const departments = useMemo(() => deptData?.results ?? [], [deptData]);
 
-  const presentCount = records.filter((r) => r.status === "present").length;
-  const absentCount = records.filter((r) => r.status === "absent").length;
-  const lateCount = records.filter((r) => r.status === "late").length;
+  const deptsByType = useMemo(() => {
+    const groups: Record<string, any[]> = {};
+    for (const d of departments) {
+      if (typeFilter !== "all" && d.dept_type !== typeFilter) continue;
+      const typeName = d.dept_type?.trim() || "Other";
+      if (!groups[typeName]) groups[typeName] = [];
+      groups[typeName].push(d);
+    }
+    return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [departments, typeFilter]);
 
-  // Group by department
-  const byDept = records.reduce<Record<string, AttendanceRecord[]>>((acc, r) => {
-    const d = r.department_name || "Unassigned";
-    (acc[d] = acc[d] || []).push(r);
-    return acc;
-  }, {});
+  const deptTypes = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of departments) if (d.dept_type) set.add(d.dept_type);
+    return Array.from(set).sort();
+  }, [departments]);
 
-  const handleToggleAbsent = async (r: AttendanceRecord) => {
-    const newStatus = r.status === "absent" ? "present" : "absent";
+  useEffect(() => {
+    if (deptsByType.length > 0 && openDepts.size === 0) {
+      setOpenDepts(new Set([deptsByType[0][0]]));
+    }
+  }, [deptsByType, openDepts]);
+
+  const handleMarkAllVisible = (statusCode: "P" | "A" | "L") => {
+    let count = 0;
+    deptsByType.forEach(([deptType, typeDepts]) => {
+      if (openDepts.has(deptType)) {
+        typeDepts.forEach((d: any) => {
+          const staff = staffByDept[d.id] || [];
+          staff.forEach((s: any) => {
+            const marks = marksByDept[d.id] || {};
+            const currentMark = marks[s.id] || {};
+            const q = search.trim().toLowerCase();
+            const matchesSearch = !q || (s.full_name || "").toLowerCase().includes(q) || (s.staff_no || "").toLowerCase().includes(q);
+            const matchesStatus = statusFilter === "all" || (currentMark.attendance_type || "P") === statusFilter;
+            
+            if (matchesSearch && matchesStatus) {
+              if (currentMark.attendance_type !== statusCode) {
+                updateMark(d.id, s.id, { attendance_type: statusCode });
+                count++;
+              }
+            }
+          });
+        });
+      }
+    });
+    if (count > 0) {
+      toast(`Marked ${count} staff as ${statusCode}`, "success");
+    } else {
+      toast("No visible staff to update. Make sure a department is open.", "info");
+    }
+  };
+
+  const saveRows = async (deptId: number, staffIds: number[]) => {
+    const marks = marksByDept[deptId] || {};
+    const rows = staffIds
+      .filter((id) => marks[id]?.attendance_type || marks[id]?.sign_in_time)
+      .map((id) => {
+        const m = marks[id];
+        return {
+          staff: id, attendance_date: date, attendance_type: m.attendance_type ?? "P",
+          note: m.note ?? "", arrival_time: m.arrival_time ?? null,
+          sign_in_time: m.sign_in_time ?? null, sign_out_time: m.sign_out_time ?? null, lunch: !!m.lunch,
+        };
+      });
+    if (rows.length === 0) { toast("Mark at least one staff member first", "error"); return; }
+    setSaving(true);
+    await saveBulk(rows, () => {
+      toast(`Attendance saved for ${rows.length} staff`, "success");
+      loadDepartment(deptId);
+      setSaving(false);
+    }, (msg: string) => {
+      toast(msg, "error");
+      setSaving(false);
+    });
+  };
+
+  const handleDownloadSample = async () => {
     try {
-      await updateAttendance(r.id, { status: newStatus });
-      void refetch();
-    } catch { toast("Failed to update", "error"); }
+      const token = getAccessToken();
+      const resp = await fetch(`${API_BASE_URL}/api/v1/hr/staff-attendance/download-sample/`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error(`Error ${resp.status}`);
+      const blob = await resp.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "staff_attendance_sheet.xlsx";
+      link.click();
+    } catch (e: any) {
+      toast(e.message || "Failed to download sample", "error");
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      const token = getAccessToken();
+      const resp = await fetch(`${API_BASE_URL}/api/v1/hr/staff-attendance/export/?date=${date}&format=csv`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error(`Error ${resp.status}`);
+      const blob = await resp.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `staff_attendance_${date}.csv`;
+      link.click();
+    } catch (e: any) {
+      toast(e.message || "Failed to export", "error");
+    }
   };
 
   return (
-    <div>
-      <HrHero
-        eyebrow="HR Module"
-        title="Daily"
-        accent="Attendance"
-        sub="Track and manage staff attendance by department."
-        actions={
-          <div className="flex items-center gap-3">
-            <HrInput
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              style={{ width: "160px" }}
-            />
-          </div>
-        }
-      />
-
-      {/* KPI Cards */}
-      <div className="grid grid-cols-4 gap-3 mb-5">
-        <HrKpiCard label="Total Staff" value={records.length} />
-        <HrKpiCard label="Present" value={presentCount} color="var(--green)" />
-        <HrKpiCard label="Absent" value={absentCount} color="var(--red)" />
-        <HrKpiCard label="Late" value={lateCount} color="var(--amber)" />
+    <div className="p-6 bg-[#F0EFFE] min-h-full overflow-x-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-5">
+        <div>
+          <h1 style={{ margin: 0, fontFamily: 'var(--font-playfair), "Playfair Display", Georgia, serif', fontSize: 32, fontWeight: 700, lineHeight: 1.15, letterSpacing: "-0.02em", color: "#0f172a" }}>
+            Staff <span style={{ color: "#6c3ce1", fontFamily: 'var(--font-playfair), "Playfair Display", Georgia, serif', fontStyle: "italic", fontSize: 32, fontWeight: 400 }}>Attendance</span>
+          </h1>
+          <p className="text-sm text-[#6B6B80] mt-0.5">Track and manage daily staff attendance by department</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={handleDownloadSample} className="h-9 px-4 text-[13px] font-semibold text-[#3A3A4A] bg-white border border-[#E6E6EC] rounded-lg shadow-sm flex items-center gap-2 hover:bg-[#FAFAFD] transition-colors">
+            <svg className="w-4 h-4 text-[#6B6B7B]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+            Download Sample
+          </button>
+          <button onClick={() => setImportOpen(true)} className="h-9 px-4 text-[13px] font-semibold text-[#3A3A4A] bg-white border border-[#E6E6EC] rounded-lg shadow-sm flex items-center gap-2 hover:bg-[#FAFAFD] transition-colors">
+            <svg className="w-4 h-4 text-[#6B6B7B]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+            Import
+          </button>
+          <button onClick={handleExport} className="h-9 px-4 text-[13px] font-semibold text-[#3A3A4A] bg-white border border-[#E6E6EC] rounded-lg shadow-sm flex items-center gap-2 hover:bg-[#FAFAFD] transition-colors">
+            <svg className="w-4 h-4 text-[#6B6B7B]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+            Export
+          </button>
+        </div>
       </div>
 
-      {/* Attendance by Department */}
-      {loading ? (
-        <HrSkeleton rows={6} />
-      ) : records.length === 0 ? (
-        <div
-          className="bg-white border border-[var(--line)] rounded-[14px] py-16 text-center text-[var(--muted)]"
-          style={{ boxShadow: "var(--shadow)" }}
-        >
-          No attendance records for {date}. Records are generated when staff check in.
-        </div>
-      ) : (
-        Object.entries(byDept).map(([deptName, deptRecords]) => (
-          <DeptAttendanceAccordion
-            key={deptName}
-            deptName={deptName}
-            records={deptRecords}
-            onEdit={setEditRecord}
-            onToggleAbsent={(r) => void handleToggleAbsent(r)}
-          />
-        ))
-      )}
+      <HrAttendanceKPIs
+        departments={departments}
+        staffByDept={staffByDept}
+        marksByDept={marksByDept}
+        loading={Object.values(loadingDepts).some(v => v)}
+      />
 
-      {/* Edit Modal */}
-      {editRecord && (
-        <EditModal
-          record={editRecord}
-          onClose={() => setEditRecord(null)}
-          onSaved={() => void refetch()}
-        />
-      )}
+      <HrGlobalControls
+        selectedDate={date}
+        onDateChange={setDate}
+        searchQuery={search}
+        onSearchChange={setSearch}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        typeFilter={typeFilter}
+        onTypeFilterChange={setTypeFilter}
+        deptTypes={deptTypes}
+        onMarkAllVisible={handleMarkAllVisible}
+      />
+
+      <div className="space-y-3">
+        {deptsByType.map(([deptType, typeDepts]) => (
+          <DeptTypeCard
+            key={deptType}
+            deptType={deptType}
+            departments={typeDepts}
+            staffByDept={staffByDept}
+            marksByDept={marksByDept}
+            loadingDepts={loadingDepts}
+            open={openDepts.has(deptType)}
+            onToggle={() => setOpenDepts(p => { const n = new Set(p); if (n.has(deptType)) n.delete(deptType); else n.add(deptType); return n; })}
+            loadDepartment={loadDepartment}
+            updateMark={updateMark}
+            saveRows={saveRows}
+            saving={saving}
+            search={search}
+            statusFilter={statusFilter}
+          />
+        ))}
+        {deptsByType.length === 0 && (
+          <div className="py-20 text-center text-[#6B6B7B]">
+            <div className="w-16 h-16 bg-[#E6E6EC] rounded-full flex items-center justify-center mx-auto mb-3 text-2xl">👥</div>
+            <p className="text-[15px] font-semibold text-[#0B0B14]">No departments found</p>
+            <p className="text-[13px] mt-1">Try adjusting your filters</p>
+          </div>
+        )}
+      </div>
+
+      {/* Monthly report */}
+      <StaffMonthlyReport departments={departments} />
+      <StaffAttendanceImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          Object.keys(loadingDepts).forEach(d => loadDepartment(Number(d)));
+        }}
+        onNotify={(msg, tone) => toast(msg, tone)}
+      />
     </div>
   );
 }

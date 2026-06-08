@@ -6,7 +6,7 @@ import { MODULES } from '@/lib/routes';
 import { useModuleStore } from '@/lib/moduleStore';
 
 // Modules that are visible but show Coming Soon tooltip on hover
-const COMING_SOON_IDS = new Set(['attendance', 'exam', 'reports', 'hr']);
+const COMING_SOON_IDS = new Set(['exam', 'reports', 'hr']);
 
 export function ModuleGrid() {
   const { isEnabled } = useModuleStore();

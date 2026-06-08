@@ -308,6 +308,10 @@ class StaffAttendance(models.Model):
     attendance_date = models.DateField()
     attendance_type = models.CharField(max_length=1, choices=STATUS_CHOICES, default=STATUS_PRESENT)
     note = models.TextField(blank=True)
+    arrival_time = models.TimeField(null=True, blank=True)
+    sign_in_time = models.TimeField(null=True, blank=True)
+    sign_out_time = models.TimeField(null=True, blank=True)
+    lunch = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

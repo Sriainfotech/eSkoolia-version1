@@ -1,0 +1,152 @@
+"use client";
+
+import React, { useMemo } from "react";
+import type { Department, Staff } from "@/types/hr";
+import type { StaffMark } from "../hooks/useHrAttendanceData";
+
+interface KPICardProps {
+  label: string;
+  value: string | number;
+  sub?: React.ReactNode;
+  badgeText: string;
+  badgeBg: string;
+  badgeColor: string;
+  trend?: string;
+  trendColor?: string;
+}
+
+function KPICard({
+  label,
+  value,
+  sub,
+  badgeText,
+  badgeBg,
+  badgeColor,
+  trend,
+  trendColor = "#16A34A",
+}: KPICardProps) {
+  return (
+    <article className="min-w-0 rounded-2xl border border-[#E5E7EB] bg-white px-4 py-3">
+      <div className="flex items-center justify-between">
+        <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-[#64748B]">{label}</span>
+        <span
+          className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[10px] font-bold"
+          style={{ background: badgeBg, color: badgeColor }}
+        >
+          {badgeText}
+        </span>
+      </div>
+      <div className="mt-2 flex items-end justify-between">
+        <span className="text-[40px] font-bold leading-none text-[#111827]">{value}</span>
+        {trend ? <span className="text-xs font-semibold" style={{ color: trendColor }}>{trend}</span> : null}
+      </div>
+      {sub ? <span className="mt-2 block text-xs text-[#64748B]">{sub}</span> : null}
+    </article>
+  );
+}
+
+interface HrAttendanceKPIsProps {
+  departments: Department[];
+  staffByDept: Record<number, Staff[]>;
+  marksByDept: Record<number, Record<number, StaffMark>>;
+  loading: boolean;
+}
+
+export default function HrAttendanceKPIs({ departments, staffByDept, marksByDept, loading }: HrAttendanceKPIsProps) {
+  const { totalStaff, presentCount, absentCount, absentWithReason } = useMemo(() => {
+    let total = 0;
+    let present = 0;
+    let absent = 0;
+    let absentWithReason = 0;
+
+    departments.forEach((d) => {
+      const staffList = staffByDept[d.id] || [];
+      total += staffList.length;
+
+      staffList.forEach((s) => {
+        const mark = marksByDept[d.id]?.[s.id] || {};
+        const status = mark.attendance_type || "P";
+        
+        if (status === "P") {
+          present += 1;
+        } else if (status === "A") {
+          absent += 1;
+          if (mark.note && mark.note.trim() !== "") {
+            absentWithReason += 1;
+          }
+        }
+      });
+    });
+
+    return { totalStaff: total, presentCount: present, absentCount: absent, absentWithReason };
+  }, [departments, staffByDept, marksByDept]);
+
+  if (loading && totalStaff === 0) {
+    return (
+      <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="animate-pulse rounded-2xl border border-[#E6E6EC] bg-white px-4 py-3">
+            <div className="flex items-center justify-between">
+              <div className="h-3 w-1/3 rounded bg-gray-200" />
+              <div className="h-7 w-7 rounded-lg bg-gray-200" />
+            </div>
+            <div className="mt-3 h-10 w-1/4 rounded bg-gray-200" />
+            <div className="mt-3 h-3 w-2/3 rounded bg-gray-200" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  const presentPct = totalStaff > 0 ? Math.round((presentCount / totalStaff) * 100) : 0;
+  
+  const absentReasonSub = absentCount === 0
+    ? "No absences marked."
+    : absentWithReason > 0
+      ? `${absentWithReason} of ${absentCount} absent entr${absentCount === 1 ? "y has" : "ies have"} a recorded reason.`
+      : "Reasons are pending for absent entries.";
+
+  return (
+    <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <KPICard
+        label="Present Today"
+        value={`${presentCount}/${totalStaff}`}
+        sub={`${presentPct}% attendance today`}
+        badgeText="PR"
+        badgeBg="#ECFDF5"
+        badgeColor="#16A34A"
+        trend={`+0%`} // placeholder for trend
+        trendColor="#16A34A"
+      />
+
+      <KPICard
+        label="Absent Today"
+        value={absentCount}
+        sub={absentReasonSub}
+        badgeText="AB"
+        badgeBg="#FFF1F2"
+        badgeColor="#E11D48"
+        trend="Same as yesterday"
+        trendColor="#9CA0AE"
+      />
+
+      <KPICard
+        label="Late Arrivals"
+        value={0}
+        sub="No late entries"
+        badgeText="LT"
+        badgeBg="#FFFBEB"
+        badgeColor="#D97706"
+      />
+
+      <KPICard
+        label="RTE Compliance Risk"
+        value={0}
+        sub="Shows staff below 75% cumulative attendance. Calculated as present days / working days."
+        badgeText="RT"
+        badgeBg="#F5F3FF"
+        badgeColor="#7C3AED"
+      />
+    </div>
+  );
+}

@@ -86,7 +86,7 @@ describe('Super Admin API clients', () => {
   test('dashboard: GET /api/super-admin/dashboard/ with bearer token', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({
-        active_schools_count: 1,
+        activeSchools: 1,
         new_schools_today: 0,
         suspended_schools_count: 0,
         mrr: 0,
@@ -100,7 +100,7 @@ describe('Super Admin API clients', () => {
     expect(url).toContain('/api/super-admin/dashboard/');
     expect(init.method ?? 'GET').toBe('GET');
     expect(authHeader(init)).toBe(`Bearer ${ACCESS}`);
-    expect(result.active_schools_count).toBe(1);
+    expect(result.activeSchools).toBe(1);
   });
 
   test('schools list: GET /api/super-admin/schools/ with filters', async () => {
