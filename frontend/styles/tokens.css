@@ -1,42 +1,72 @@
-/* ─── Eskoolia Design Tokens ─── */
+/* ─── Eskoolia Design Tokens — matches claude.ai/design handoff ─── */
 :root {
   /* Brand */
-  --pu: #6D4AFF;
-  --pu-soft: #F3F0FF;
+  --pu:      #6D4AFF;
+  --pu-soft: #EEEAFF;
   --pu-deep: #4F35CC;
+  --pu-tint: #F6F3FF;
 
   /* Ink (text) */
-  --ink-1: #181B2A;
-  --ink-2: #5B5E72;
-  --ink-3: #A0A3B8;
+  --ink-1: #0F1222;
+  --ink-2: #5A607A;
+  --ink-3: #9197AE;
+  --ink-4: #BCC0D0;
 
   /* Surfaces */
-  --bg-0: #FAFAFB;
+  --bg-0: #FAFAFC;
   --bg-1: #FFFFFF;
-  --bg-2: #F3F4FB;
-  --bd:   #E8E8EE;
+  --bg-2: #F4F4F8;
+  --bg-3: #EFEFF4;
+
+  /* Borders */
+  --bd:   #ECECF2;
+  --bd-2: #E3E3EC;
+  --bd-3: #D6D7E0;
 
   /* Status */
-  --ok:   #22C55E;
-  --warn: #F59E0B;
-  --err:  #E0463A;
+  --ok:          #0E9F6E;
+  --ok-soft:     #DDF6E4;
+  --warn:        #A65D08;
+  --warn-soft:   #FEF1CC;
+  --danger:      #E0463A;
+  --danger-soft: #FEE2E5;
+  --info:        #1A4ACF;
+  --info-soft:   #E0EAFE;
+  /* legacy alias */
+  --err: #E0463A;
 
   /* Shadows */
-  --sh-1: 0 1px 2px rgba(15,18,34,0.04);
-  --sh-2: 0 4px 16px -4px rgba(15,18,34,0.10);
-  --sh-3: 0 14px 32px -10px rgba(14,16,32,0.18);
+  --sh-1:   0 1px 2px rgba(15,18,34,0.04);
+  --sh-2:   0 4px 12px -4px rgba(15,18,34,0.08);
+  --sh-3:   0 14px 32px -10px rgba(14,16,32,0.18);
   --sh-bot: 0 18px 50px -18px rgba(15,18,34,0.28);
+
+  /* Typography */
+  --font-dm-sans: 'DM Sans', Arial, sans-serif;
+  --font-playfair: 'Playfair Display', Georgia, serif;
+  --font-instrument: 'Instrument Sans', Arial, sans-serif;
+  --font-instrument-serif: 'Instrument Serif', Georgia, serif;
   --font-fraunces: 'Fraunces', Georgia, serif;
   --font-inter: 'Inter', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 [data-theme="dark"] {
-  --ink-1: #F5F5FB;
-  --ink-2: #9A9DB0;
-  --ink-3: #5B5E72;
-  --bg-0: #0E1020;
-  --bg-1: #15172A;
-  --bg-2: #1F2138;
+  --ink-1: #F0F0F8;
+  --ink-2: #B0B3C8;
+  --ink-3: #7E83A2;
+  --ink-4: #5A6080;
+  --bg-0: #0F1222;
+  --bg-1: #181A2E;
+  --bg-2: #23253A;
+  --bg-3: #2D2F46;
   --bd:   #2A2D44;
-  --pu-soft: rgba(124,91,255,0.16);
+  --bd-2: #383B55;
+  --bd-3: #494D6A;
+  --pu-soft:     rgba(124,91,255,0.18);
+  --pu-tint:     rgba(109,74,255,0.12);
+  --ok-soft:     rgba(14,159,110,0.15);
+  --warn-soft:   rgba(166,93,8,0.18);
+  --danger-soft: rgba(224,70,58,0.15);
+  --info-soft:   rgba(26,74,207,0.15);
 }

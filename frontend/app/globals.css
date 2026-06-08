@@ -80,12 +80,10 @@ html,
 body {
   padding: 0;
   margin: 0;
-  background:
-    radial-gradient(circle at top left, rgba(245, 158, 11, 0.12), transparent 32%),
-    radial-gradient(circle at top right, rgba(14, 165, 233, 0.1), transparent 26%),
-    linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
-  color: var(--text);
+  background: var(--bg-0, #FAFAFC);
+  color: var(--ink-1, #0F1222);
   font-family: var(--font-inter), "Inter", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Layout geometry (height, overflow, flex) lives on the layout component

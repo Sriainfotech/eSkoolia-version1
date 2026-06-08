@@ -2,16 +2,29 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Clock } from 'lucide-react';
-import { MODULES } from '@/lib/routes';
-import { useModuleStore } from '@/lib/moduleStore';
+import type { ModuleRoute } from '@/lib/routes';
+import { useVisibleModules } from '@/hooks/useVisibleModules';
 
-// Modules that are visible but show Coming Soon tooltip on hover
+// Modules that show a "Coming Soon" tooltip even when the user has access
 const COMING_SOON_IDS = new Set(['attendance', 'fees', 'exam', 'reports', 'hr']);
 
-export function ModuleGrid() {
-  const { isEnabled } = useModuleStore();
-  const visibleModules = MODULES.filter(m => isEnabled(m.id));
+interface Props {
+  /**
+   * Pre-filtered module list (teacher / parent portals pass this in).
+   * When omitted the grid calls useVisibleModules() for the admin home.
+   */
+  modules?: ModuleRoute[];
+}
+
+export function ModuleGrid({ modules: modulesProp }: Props = {}) {
+  // useVisibleModules() is only called when modulesProp is absent (admin home).
+  // It reads portal_type + permission_codes so the list is always permission-driven.
+  const hookModules = useVisibleModules();
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+
+  const visibleModules = modulesProp
+    ? modulesProp.filter(m => m.id !== 'teacher-home' && m.id !== 'parent-home')
+    : hookModules;
 
   return (
     <div style={{
@@ -26,7 +39,6 @@ export function ModuleGrid() {
             key={mod.id}
             href={mod.path}
             style={{ textDecoration: 'none', position: 'relative', display: 'block' }}
-            className="group"
             onMouseEnter={() => setHoveredId(mod.id)}
             onMouseLeave={() => setHoveredId(null)}
           >
@@ -42,7 +54,7 @@ export function ModuleGrid() {
                 const el = e.currentTarget as HTMLDivElement;
                 el.style.transform = 'translateY(-2px)';
                 el.style.boxShadow = '0 4px 12px -4px rgba(15,18,34,0.10)';
-                el.style.borderColor = comingSoon ? 'rgba(124,91,255,0.35)' : 'rgba(124,91,255,0.35)';
+                el.style.borderColor = 'rgba(124,91,255,0.35)';
               }}
               onMouseLeave={e => {
                 const el = e.currentTarget as HTMLDivElement;
@@ -62,7 +74,6 @@ export function ModuleGrid() {
               </div>
             </div>
 
-            {/* Coming Soon tooltip on hover */}
             {comingSoon && hoveredId === mod.id && (
               <div style={{
                 position: 'absolute', bottom: 'calc(100% + 6px)', left: '50%',
@@ -92,5 +103,3 @@ export function ModuleGrid() {
     </div>
   );
 }
-
-

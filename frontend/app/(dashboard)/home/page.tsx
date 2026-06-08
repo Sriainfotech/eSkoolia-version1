@@ -8,15 +8,18 @@ import { SectionLabel } from '@/components/home/SectionLabel';
 import { ManagePinsModal } from '@/components/home/ManagePinsModal';
 import { useUserPrefs } from '@/lib/userPrefs';
 import { useWidgetStore } from '@/lib/widgetStore';
+import { useVisibleModules } from '@/hooks/useVisibleModules';
 import { LeftRail } from '@/components/widgets/LeftRail';
 import { RightRail } from '@/components/widgets/RightRail';
-import { MODULES, FLAT_INDEX } from '@/lib/routes';
+import { FLAT_INDEX } from '@/lib/routes';
 
 function HomeCenter() {
   const { prefs, addPin, removePin } = useUserPrefs();
   const [managePinsOpen, setManagePinsOpen] = useState(false);
   // Filter out pinned items whose module has been hidden from routes
   const visiblePins = prefs.pins.filter(pin => FLAT_INDEX.some(f => f.path === pin.path));
+  // Accurate count: same filter ModuleGrid applies
+  const visibleModuleCount = useVisibleModules().length;
 
   return (
     <div style={{ minWidth: 0 }}>
@@ -46,7 +49,7 @@ function HomeCenter() {
       )}
 
       {prefs.showRecents !== false && <RecentsRow />}
-      <SectionLabel title="All Modules" count={MODULES.length} />
+      <SectionLabel title="All Modules" count={visibleModuleCount} />
       <ModuleGrid />
 
       {managePinsOpen && (

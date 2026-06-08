@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Clock } from 'lucide-react';
-import { MODULES, FLAT_INDEX } from '@/lib/routes';
+import { MODULES, FLAT_INDEX, type ModuleRoute } from '@/lib/routes';
 import { getAccessToken } from '@/lib/auth';
 import { API_BASE_URL } from '@/lib/api';
 import { loadRecentsLS } from '@/lib/recentsStore';
@@ -11,6 +11,8 @@ interface RecentItem {
   path: string;
   visited_at: string;
 }
+
+type FlatEntry = { modId: string; label: string; path: string; icon?: React.ElementType; bg: string; ic: string };
 
 function relativeTime(iso: string) {
   const diff = Date.now() - new Date(iso).getTime();
@@ -23,8 +25,17 @@ function relativeTime(iso: string) {
   return `${days}d ago`;
 }
 
-export function RecentsRow() {
+interface Props {
+  /** Override flat index for non-admin portals (e.g. TEACHER_FLAT_INDEX) */
+  flatIndex?: FlatEntry[];
+  /** Override modules list used for display names */
+  modules?: ModuleRoute[];
+}
+
+export function RecentsRow({ flatIndex: flatIndexProp, modules: modulesProp }: Props = {}) {
   const [recents, setRecents] = useState<RecentItem[]>([]);
+  const activeFlatIndex = flatIndexProp ?? FLAT_INDEX;
+  const activeModules   = modulesProp   ?? MODULES;
 
   useEffect(() => {
     // Show localStorage recents immediately
@@ -43,8 +54,8 @@ export function RecentsRow() {
       .catch(() => {}); // keep showing localStorage data on API failure
   }, []);
 
-  // Filter to only paths that exist in FLAT_INDEX
-  const validRecents = recents.filter(r => FLAT_INDEX.some(f => f.path === r.path)).slice(0, 8);
+  // Filter to only paths that exist in the active flat index
+  const validRecents = recents.filter(r => activeFlatIndex.some(f => f.path === r.path)).slice(0, 8);
 
   if (validRecents.length === 0) return null;
 
@@ -70,10 +81,10 @@ export function RecentsRow() {
         gap: 10, marginBottom: 4,
       }}>
         {validRecents.map(r => {
-          const entry = FLAT_INDEX.find(f => f.path === r.path);
+          const entry = activeFlatIndex.find(f => f.path === r.path);
           if (!entry) return null;
           const Icon = entry.icon;
-          const mod = MODULES.find(m => m.id === entry.modId);
+          const mod = activeModules.find(m => m.id === entry.modId);
           const modName = mod?.name ?? '';
           return (
             <Link key={r.path} href={r.path} style={{ textDecoration: 'none' }}>
