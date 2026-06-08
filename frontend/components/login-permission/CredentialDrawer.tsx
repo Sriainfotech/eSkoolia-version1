@@ -5,7 +5,10 @@ import { X, Eye, EyeOff, Loader2, Copy, Check } from 'lucide-react';
 import { loginPermissionApi } from '@/lib/login-permission/api';
 import { initials } from '@/lib/login-permission/utils';
 import type { LPUser } from '@/lib/login-permission/types';
+import { MOCK_ACCOUNTS } from '@/lib/login-permission/mock-data';
 import { SetInitialPasswordModal } from './SetInitialPasswordModal';
+
+const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
 
 interface Props {
   user: LPUser;
@@ -15,12 +18,24 @@ interface Props {
 }
 
 export function CredentialDrawer({ user, onClose, onSuccess, onError }: Props) {
-  const [loading, setLoading]       = useState(false);
-  const [result, setResult]         = useState<string | null>(null);
+  const [loading, setLoading]           = useState(false);
+  const [result, setResult]             = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
-  const [copied, setCopied]         = useState(false);
+  const [copied, setCopied]             = useState(false);
   const [showInitialModal, setShowInitialModal] = useState(false);
+  const [showDevPwd, setShowDevPwd]     = useState(false);
+  const [copiedField, setCopiedField]   = useState<'username' | 'password' | null>(null);
   const isNew = !user.lastLogin;
+
+  const devAccount = USE_MOCK ? MOCK_ACCOUNTS.find((a) => a.id === user.id) : undefined;
+
+  async function copyText(text: string, field: 'username' | 'password') {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedField(field);
+      setTimeout(() => setCopiedField(null), 2000);
+    } catch { /* clipboard unavailable */ }
+  }
 
   async function handleAction(action: 'reset_temp' | 'set_initial') {
     setLoading(true);
@@ -84,6 +99,51 @@ export function CredentialDrawer({ user, onClose, onSuccess, onError }: Props) {
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {/* Dev credentials card — mock mode only */}
+          {devAccount && (
+            <div className="rounded-xl border border-[var(--pu,#3b5bdb)] bg-[var(--pu-soft,#e0eaff)] p-4 text-sm space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--pu,#3b5bdb)]">
+                Dev Login Credentials
+              </p>
+              {/* Username */}
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--ink-3,#64748b)] mb-1">Username</p>
+                <div className="flex items-center gap-2">
+                  <span className="flex-1 font-mono text-sm bg-white border border-[var(--bd,#dbe4f0)] rounded-lg px-3 py-2 text-[var(--ink-1,#0f172a)]">
+                    {devAccount.username}
+                  </span>
+                  <button
+                    onClick={() => copyText(devAccount.username, 'username')}
+                    className="p-2 rounded-lg border border-[var(--bd,#dbe4f0)] bg-white text-[var(--pu,#3b5bdb)] hover:bg-[var(--pu-soft,#e0eaff)] transition-colors"
+                  >
+                    {copiedField === 'username' ? <Check size={14} /> : <Copy size={14} />}
+                  </button>
+                </div>
+              </div>
+              {/* Password */}
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-[var(--ink-3,#64748b)] mb-1">Password</p>
+                <div className="flex items-center gap-2">
+                  <span className="flex-1 font-mono text-sm bg-white border border-[var(--bd,#dbe4f0)] rounded-lg px-3 py-2 text-[var(--ink-1,#0f172a)]">
+                    {showDevPwd ? devAccount.password : '••••••••'}
+                  </span>
+                  <button
+                    onClick={() => setShowDevPwd((v) => !v)}
+                    className="p-2 rounded-lg border border-[var(--bd,#dbe4f0)] bg-white text-[var(--pu,#3b5bdb)] hover:bg-[var(--pu-soft,#e0eaff)] transition-colors"
+                  >
+                    {showDevPwd ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                  <button
+                    onClick={() => copyText(devAccount.password, 'password')}
+                    className="p-2 rounded-lg border border-[var(--bd,#dbe4f0)] bg-white text-[var(--pu,#3b5bdb)] hover:bg-[var(--pu-soft,#e0eaff)] transition-colors"
+                  >
+                    {copiedField === 'password' ? <Check size={14} /> : <Copy size={14} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* User info card */}
           <div className="rounded-xl border border-[var(--bd,#dbe4f0)] bg-[var(--bg-0,#f8fafc)] p-4 text-sm space-y-2">
             <div className="flex justify-between">

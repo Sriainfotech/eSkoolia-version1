@@ -1,12 +1,14 @@
 'use client';
 import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { Sliders, X, Home } from 'lucide-react';
-import { ALL_WIDGETS, useWidgetStore } from '@/lib/widgetStore';
+import { widgetsForRole, useWidgetStore, type PortalRole, ALL_WIDGETS } from '@/lib/widgetStore';
+import { usePermissions } from '@/hooks/usePermissions';
 
 export function WidgetManager() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const { enabled, toggle, enabledCount } = useWidgetStore();
+  const { enabled, toggle } = useWidgetStore();
+  const { me } = usePermissions();
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -16,8 +18,14 @@ export function WidgetManager() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const leftWidgets  = ALL_WIDGETS.filter(w => w.rail === 'left');
-  const rightWidgets = ALL_WIDGETS.filter(w => w.rail === 'right');
+  const role: PortalRole = (me?.portal_type as PortalRole) ?? 'admin';
+  const visibleWidgets = widgetsForRole(role);
+  const leftWidgets    = visibleWidgets.filter(w => w.rail === 'left');
+  const rightWidgets   = visibleWidgets.filter(w => w.rail === 'right');
+  const enabledCount   = visibleWidgets.filter(w => !w.disabled && !!enabled[w.id]).length;
+
+  const leftLabel  = role === 'teacher' ? 'My Day'       : role === 'parent' ? 'Child Summary'  : "Today's Pulse";
+  const rightLabel = role === 'teacher' ? 'My Tools'     : role === 'parent' ? 'School Info'    : 'Admin Cockpit';
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
@@ -71,19 +79,21 @@ export function WidgetManager() {
             </button>
           </div>
 
-          {/* Left Rail */}
-          <Section title="Today's Pulse" subtitle="Left sidebar" color="#6D4AFF">
-            {leftWidgets.map(w => (
-              <WidgetRow key={w.id} widget={w} enabled={!!enabled[w.id]} onToggle={() => toggle(w.id)} />
-            ))}
-          </Section>
+          {leftWidgets.length > 0 && (
+            <Section title={leftLabel} subtitle="Left sidebar" color="#6D4AFF">
+              {leftWidgets.map(w => (
+                <WidgetRow key={w.id} widget={w} enabled={!!enabled[w.id]} onToggle={() => toggle(w.id)} />
+              ))}
+            </Section>
+          )}
 
-          {/* Right Rail */}
-          <Section title="Admin Cockpit" subtitle="Right sidebar" color="#0EA5E9">
-            {rightWidgets.map(w => (
-              <WidgetRow key={w.id} widget={w} enabled={!!enabled[w.id]} onToggle={() => toggle(w.id)} />
-            ))}
-          </Section>
+          {rightWidgets.length > 0 && (
+            <Section title={rightLabel} subtitle="Right sidebar" color="#0EA5E9">
+              {rightWidgets.map(w => (
+                <WidgetRow key={w.id} widget={w} enabled={!!enabled[w.id]} onToggle={() => toggle(w.id)} />
+              ))}
+            </Section>
+          )}
 
           <div style={{ padding: '10px 16px', borderTop: '1px solid var(--bd)', fontSize: 10.5, color: 'var(--ink-3)', display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#22C55E', flexShrink: 0 }} />

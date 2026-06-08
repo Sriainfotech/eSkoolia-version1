@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { API_BASE_URL } from "@/lib/api";
 import { setAuthTokens } from "@/lib/auth";
+import { MOCK_ACCOUNTS } from "@/lib/login-permission/mock-data";
+
+const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -143,7 +146,16 @@ function LoginPage() {
       if (result.must_change_password) {
         router.push("/change-password");
       } else {
-        router.push("/home");
+        // Route to the correct portal based on portal_type from /me response.
+        // Superusers and school admins always land on the admin console (/home).
+        const portalType = result.portal_type ?? "admin";
+        if (portalType === "teacher") {
+          router.push("/teacher/home");
+        } else if (portalType === "parent") {
+          router.push("/parent/home");  // Sprint 7
+        } else {
+          router.push("/home");
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed. Please try again.");
@@ -379,6 +391,36 @@ function LoginPage() {
                   <span>Institutional-grade 256-bit AES encryption active.</span>
                 </div>
               </div>
+
+              {/* Dev accounts panel — visible only in mock mode */}
+              {USE_MOCK && (
+                <div style={{
+                  marginTop: '16px',
+                  borderRadius: '12px',
+                  border: '1px solid #c7d2fe',
+                  background: '#eef2ff',
+                  padding: '14px 16px',
+                  fontSize: '12px',
+                }}>
+                  <p style={{ fontWeight: 700, color: '#3730a3', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '0.08em', fontSize: '10px' }}>
+                    🧪 Dev Test Accounts
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {MOCK_ACCOUNTS.map((a) => (
+                      <div key={a.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'white', borderRadius: '8px', padding: '8px 10px', border: '1px solid #c7d2fe' }}>
+                        <div>
+                          <p style={{ fontWeight: 600, color: '#1e1b4b', marginBottom: '2px' }}>{a.name}</p>
+                          <p style={{ color: '#6b7280', fontSize: '11px' }}>{a.roleType === 'teacher' ? '👩‍🏫 Teacher' : '👨‍👩‍👧 Parent'}</p>
+                        </div>
+                        <div style={{ textAlign: 'right', fontFamily: 'monospace' }}>
+                          <p style={{ color: '#3730a3', fontWeight: 600 }}>{a.username}</p>
+                          <p style={{ color: '#6b7280', fontSize: '11px' }}>{a.password}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </aside>
         </section>
