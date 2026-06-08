@@ -1,11 +1,27 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
-import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { ToastContainer, toast } from "react-toastify";
+import s from "./VisitorBookPanel.module.css";
 
-type ApiList<T> = T[] | { results?: T[] };
+type Tab = "add" | "filter" | "list";
+
+// --- Icons ---
+const ChevronIcon = ({ open }: { open: boolean }) => (
+  <svg className={`${s.chevron} ${open ? s.chevronOpen : ""}`} width="14" height="14" viewBox="0 0 14 14" fill="none">
+    <path d="M3.5 5.25L7 8.75L10.5 5.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+);
+const CheckIcon = () => (<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5L4.2 7.5L8 3" stroke="white" strokeWidth="1.6" strokeLinecap="round" /></svg>);
+const PencilIcon = ({ size = 13 }: { size?: number }) => (<svg width={size} height={size} viewBox="0 0 14 14" fill="none"><path d="M9.5 2.5L11.5 4.5L5 11H3V9L9.5 2.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" /></svg>);
+const FunnelIcon = () => (<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12l-4.5 5V14L6.5 13V8L2 3Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" /></svg>);
+const DocIcon = () => (<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="1" width="8" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3" /><path d="M4.5 5H8M4.5 7.5H7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" /><path d="M9 4l2 2-2 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" /></svg>);
+const PlusIcon = () => (<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 2v9M2 6.5h9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg>);
+const TrashIcon = () => (<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 3h8M5 3V2h2v1M4 3l.5 7h3L8 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" /></svg>);
+const LinkIcon = () => (<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6.5 3.5a2 2 0 112.83 2.83l-1.5 1.5a2 2 0 01-2.83 0m-2.83 2.83a2 2 0 11-2.83-2.83l1.5-1.5a2 2 0 012.83 0" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" /></svg>);
+
+type ApiList<T> = T[] | { results?: T[]; count?: number; next?: string | null; previous?: string | null };
 
 type PhoneCallRow = {
   id: number;
@@ -21,19 +37,26 @@ type PhoneCallRow = {
 type SortKey = "name" | "phone" | "date" | "next_follow_up_date" | "call_duration" | "call_type";
 type SortDir = "asc" | "desc";
 
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (message && message !== "[object Object]") return message;
+  }
+  return fallback;
+}
+
 function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
 }
 
-async function apiGet<T>(path: string): Promise<T> {
-  return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
+function getTotalCount<T>(value: ApiList<T>): number {
+  if (Array.isArray(value)) return value.length;
+  if (typeof value.count === "number") return value.count;
+  return (value.results || []).length;
 }
 
-async function apiDelete(path: string): Promise<void> {
-  await apiRequestWithRefresh<void>(path, {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-  });
+async function apiGet<T>(path: string): Promise<T> {
+  return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
 }
 
 async function apiMutate<T>(path: string, method: "POST" | "PATCH", payload: unknown): Promise<T> {
@@ -44,36 +67,14 @@ async function apiMutate<T>(path: string, method: "POST" | "PATCH", payload: unk
   });
 }
 
-function boxStyle() {
-  return {
-    background: "var(--surface)",
-    border: "1px solid var(--line)",
-    borderRadius: "var(--radius)",
-    padding: 16,
-  } as const;
+async function apiDelete(path: string): Promise<void> {
+  await apiRequestWithRefresh<void>(path, { method: "DELETE", headers: { "Content-Type": "application/json" } });
 }
 
-function fieldStyle(hasError = false) {
-  return {
-    width: "100%",
-    minHeight: 36,
-    border: `1px solid ${hasError ? "#dc3545" : "#ced4da"}`,
-    borderRadius: 8,
-    padding: "0 10px",
-  } as const;
-}
-
-function buttonStyle(color = "var(--primary)") {
-  return {
-    height: 36,
-    border: `1px solid ${color}`,
-    background: color,
-    color: "#fff",
-    borderRadius: 8,
-    padding: "0 12px",
-    cursor: "pointer",
-    fontSize: 13,
-  } as const;
+function displayValue(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text || text === "-") return <span style={{ color: "#94a3b8", fontStyle: "italic" }}>N/A</span>;
+  return text;
 }
 
 function sanitizePlain(value: string) {
@@ -100,44 +101,20 @@ function formatCallDuration(duration: string): string {
   return text;
 }
 
-function displayValue(value: unknown) {
-  const text = String(value ?? "").trim();
-  if (!text || text === "-") {
-    return <span style={{ color: "#94a3b8", fontStyle: "italic" }}>N/A</span>;
-  }
-  return text;
-}
-
-function formatRange(start: number, end: number, total: number) {
-  if (total === 0) return "Showing 0-0 of 0 records";
-  return `Showing ${start}-${end} of ${total} records`;
-}
-
-function getErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error) {
-    const message = error.message.trim();
-    if (message && message !== "[object Object]") return message;
-  }
-  return fallback;
-}
-
 export function PhoneCallLogPanel() {
   const [items, setItems] = useState<PhoneCallRow[]>([]);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [tableBusy, setTableBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const [sortKey, setSortKey] = useState<SortKey>("date");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [deleteTarget, setDeleteTarget] = useState<PhoneCallRow | null>(null);
-
+  const [formBanner, setFormBanner] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
+
+  // Form Fields
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [date, setDate] = useState("");
@@ -146,15 +123,47 @@ export function PhoneCallLogPanel() {
   const [description, setDescription] = useState("");
   const [callType, setCallType] = useState<"I" | "O">("I");
 
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  // Filters
+  const [search, setSearch] = useState("");
+  const [filterType, setFilterType] = useState("");
+  const [filterDate, setFilterDate] = useState("");
+  const [filterChips, setFilterChips] = useState<string[]>([]);
+
+  // Table
+  const [tableBusy, setTableBusy] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [deleteTarget, setDeleteTarget] = useState<PhoneCallRow | null>(null);
+
+  // Nav Tabs
+  const [activeTab, setActiveTab] = useState<Tab>("add");
+  const [filterOpen, setFilterOpen] = useState(false);
+  const addSecRef = useRef<HTMLDivElement | null>(null);
+  const filterSecRef = useRef<HTMLDivElement | null>(null);
+  const listSecRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollToTab = (id: Tab) => {
+    const el = id === "add" ? addSecRef.current : id === "filter" ? filterSecRef.current : listSecRef.current;
+    if (el) {
+      setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    }
+  };
+
+  const todayDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
   const load = async () => {
     try {
       setLoading(true);
       setError("");
       const data = await apiGet<ApiList<PhoneCallRow>>("/api/v1/admissions/phone-call-logs/");
-      setItems(listData(data));
-    } catch {
+      const rows = listData(data);
+      const count = getTotalCount(data);
+      setItems(rows);
+      setTotalRecords(count);
+      setTotalPages(Math.max(1, Math.ceil(count / pageSize)));
+    } catch (err: unknown) {
       const message = "Unable to load phone call logs.";
       setError(message);
       toast.error(message, { autoClose: 5000 });
@@ -164,18 +173,26 @@ export function PhoneCallLogPanel() {
   };
 
   useEffect(() => {
-    setDate(today);
-    setFollowUpDate(today);
-    void load();
-  }, [today]);
+    setDate(todayDate);
+    setFollowUpDate(todayDate);
+  }, [todayDate]);
 
   useEffect(() => {
-    const previousTitle = document.title;
-    document.title = "Phone Call Log - Eskoolia";
-    return () => {
-      document.title = previousTitle;
-    };
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
+
+  useEffect(() => {
+    if (!formBanner) return;
+    const timer = window.setTimeout(() => setFormBanner(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [formBanner]);
 
   useEffect(() => {
     if (loading) {
@@ -185,163 +202,39 @@ export function PhoneCallLogPanel() {
     setTableBusy(true);
     const timer = window.setTimeout(() => setTableBusy(false), 250);
     return () => window.clearTimeout(timer);
-  }, [loading, items, search, sortKey, sortDir, page, pageSize]);
+  }, [loading, search, items, sortKey, sortDir, page, pageSize, filterType, filterDate]);
 
-  const reset = () => {
+  const resetForm = () => {
     setEditingId(null);
     setName("");
     setPhone("");
-    setDate(today);
-    setFollowUpDate(today);
+    setDate(todayDate);
+    setFollowUpDate(todayDate);
     setCallDuration("");
     setDescription("");
     setCallType("I");
     setFieldErrors({});
+    setFormBanner("");
   };
 
-  const edit = (row: PhoneCallRow) => {
+  const editRow = (row: PhoneCallRow) => {
     setEditingId(row.id);
     setName(row.name || "");
     setPhone(row.phone || "");
-    setDate(row.date || today);
+    setDate(row.date || todayDate);
     setFollowUpDate(row.next_follow_up_date || "");
     setCallDuration(formatCallDuration(row.call_duration || ""));
     setDescription(sanitizePlain(row.description || ""));
     setCallType((row.call_type || "I") as "I" | "O");
     setFieldErrors({});
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  const setErrorField = (field: string, message: string) => {
-    setFieldErrors((prev) => ({ ...prev, [field]: message }));
-  };
-
-  const readApiFieldErrors = (err: unknown) => {
-    const details = (err as { details?: unknown } | null)?.details;
-    if (!details || typeof details !== "object") return null;
-    const detailsRaw = details as Record<string, unknown>;
-    const fieldErrorsRaw =
-      detailsRaw.field_errors && typeof detailsRaw.field_errors === "object"
-        ? (detailsRaw.field_errors as Record<string, unknown>)
-        : {};
-    const next: Record<string, string> = {};
-
-    const pick = (key: string) => {
-      const value = detailsRaw[key] ?? fieldErrorsRaw[key];
-      if (typeof value === "string") return value;
-      if (Array.isArray(value) && value.length > 0) return String(value[0]);
-      return "";
-    };
-
-    const topMessage = typeof detailsRaw.message === "string" ? detailsRaw.message.trim() : "";
-    const nonFieldError = pick("non_field_errors") || pick("detail");
-
-    if (pick("name")) next.name = pick("name");
-    if (pick("phone")) next.phone = pick("phone");
-    if (pick("date")) next.date = pick("date");
-    if (pick("next_follow_up_date")) next.followUpDate = pick("next_follow_up_date");
-    if (pick("call_duration")) next.callDuration = pick("call_duration");
-    if (pick("description")) next.description = pick("description");
-    if (pick("call_type")) next.callType = pick("call_type");
-    next.main =
-      topMessage ||
-      nonFieldError ||
-      pick("name") ||
-      pick("phone") ||
-      pick("date") ||
-      pick("next_follow_up_date") ||
-      pick("call_duration") ||
-      pick("description") ||
-      pick("call_type");
-
-    if (!next.main) {
-      delete next.main;
-    }
-
-    return Object.keys(next).length > 0 ? next : null;
-  };
-
-  const validateField = (field: string, value?: string) => {
-    const v = value ??
-      (field === "name"
-        ? name
-        : field === "phone"
-          ? phone
-          : field === "date"
-            ? date
-            : field === "followUpDate"
-              ? followUpDate
-              : field === "callDuration"
-                ? callDuration
-                : field === "description"
-                  ? description
-                  : field === "callType"
-                    ? callType
-                    : "");
-
-    if (field === "name") {
-      if (!v.trim()) return "Name is required.";
-      if (v.trim().length < 2) return "Name must be at least 2 characters.";
-      if (v.trim().length > 100) return "Name must not exceed 100 characters.";
-      if (!/^[A-Za-z0-9\s\-'.,()]+$/.test(v.trim())) return "Invalid characters in Name.";
-      return "";
-    }
-
-    if (field === "phone") {
-      if (!v.trim()) return "Phone is required.";
-      if (!/^\+?\d{10,12}$/.test(v.trim())) return "Phone number must be 10-12 digits.";
-      return "";
-    }
-
-    if (field === "date") {
-      if (!v) return "From Date is required.";
-      if (v > today) return "From Date cannot be in the future.";
-      return "";
-    }
-
-    if (field === "followUpDate") {
-      if (!v) return "";
-      if (date && v < date) return "To Date cannot be before From Date.";
-      if (v > today) return "To Date cannot be in the future.";
-      return "";
-    }
-
-    if (field === "callDuration") {
-      if (!v.trim()) return "Call Duration is required.";
-      if (!/^([0-9]{1,2}):([0-5][0-9]):([0-5][0-9])$/.test(v.trim())) {
-        return "Enter duration in HH:MM:SS format (e.g., 00:10:00).";
-      }
-      return "";
-    }
-
-    if (field === "description") {
-      if (v.length > 500) return "Description must not exceed 500 characters.";
-      return "";
-    }
-
-    if (field === "callType") {
-      if (v !== "I" && v !== "O") return "Call Type is invalid.";
-      return "";
-    }
-
-    return "";
-  };
-
-  const validateAll = () => {
-    const keys = ["name", "phone", "date", "followUpDate", "callDuration", "description", "callType"];
-    const nextErrors: Record<string, string> = {};
-    keys.forEach((key) => {
-      const msg = validateField(key);
-      if (msg) nextErrors[key] = msg;
-    });
-    setFieldErrors(nextErrors);
-    return nextErrors;
+    setFormBanner("");
+    setActiveTab("add");
+    scrollToTab("add");
   };
 
   const toggleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
-    } else {
+    if (sortKey === key) setSortDir((prev) => (prev === "asc" ? "desc" : "asc"));
+    else {
       setSortKey(key);
       setSortDir("asc");
     }
@@ -350,12 +243,34 @@ export function PhoneCallLogPanel() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    const nextErrors: Record<string, string> = {};
+    if (!name.trim()) nextErrors.name = "Name is required.";
+    else if (name.trim().length < 2) nextErrors.name = "Name must be at least 2 characters.";
+    else if (!/^[A-Za-z0-9\s\-'.,()]+$/.test(name.trim())) nextErrors.name = "Invalid characters in Name.";
 
-    const nextErrors = validateAll();
+    if (!phone.trim()) nextErrors.phone = "Phone is required.";
+    else if (!/^\+?\d{10,12}$/.test(phone.trim())) nextErrors.phone = "Phone number must be 10-12 digits.";
+
+    if (!date) nextErrors.date = "From Date is required.";
+    else if (date > todayDate) nextErrors.date = "From Date cannot be in the future.";
+
+    if (followUpDate) {
+      if (date && followUpDate < date) nextErrors.followUpDate = "To Date cannot be before From Date.";
+      if (followUpDate > todayDate) nextErrors.followUpDate = "To Date cannot be in the future.";
+    }
+
+    if (!callDuration.trim()) nextErrors.callDuration = "Call Duration is required.";
+    else if (!/^([0-9]{1,2}):([0-5][0-9]):([0-5][0-9])$/.test(callDuration.trim())) {
+      nextErrors.callDuration = "Enter duration in HH:MM:SS format (e.g., 00:10:00).";
+    }
+
+    if (description && description.length > 500) nextErrors.description = "Description must not exceed 500 characters.";
+
     if (Object.keys(nextErrors).length > 0) {
-      const message = "Please fix the errors below.";
-      setError(message);
-      toast.error(message, { autoClose: 5000 });
+      setFieldErrors(nextErrors);
+      setFormBanner("Please fix the errors below before submitting.");
+      setError("Please fix the errors below before submitting.");
+      toast.error("Please fix the errors below before submitting.", { autoClose: 5000 });
       return;
     }
 
@@ -374,29 +289,24 @@ export function PhoneCallLogPanel() {
       setError("");
       setSuccess("");
       setFieldErrors({});
+      setFormBanner("");
       if (editingId) {
         await apiMutate(`/api/v1/admissions/phone-call-logs/${editingId}/`, "PATCH", payload);
-        setSuccess("Phone call log updated successfully.");
-        toast.success("Phone call log updated successfully", { autoClose: 5000 });
+        setSuccess("Record updated successfully.");
+        toast.success("Record updated successfully.", { autoClose: 4000 });
       } else {
         await apiMutate("/api/v1/admissions/phone-call-logs/", "POST", payload);
-        setSuccess("Phone call log added successfully.");
-        toast.success("Phone call log added successfully", { autoClose: 5000 });
+        setSuccess("Record created successfully.");
+        toast.success("Record created successfully.", { autoClose: 4000 });
       }
-      reset();
+      resetForm();
       await load();
+      setActiveTab("list");
+      scrollToTab("list");
     } catch (err: unknown) {
-      const apiFieldErrors = readApiFieldErrors(err);
-      if (apiFieldErrors) {
-        setFieldErrors(apiFieldErrors);
-        const message = apiFieldErrors.main || "Please fix the errors below.";
-        setError(message);
-        toast.error(message, { autoClose: 5000 });
-      } else {
-        const message = getErrorMessage(err, editingId ? "Unable to update phone call." : "Unable to save phone call.");
-        setError(message);
-        toast.error(message, { autoClose: 5000 });
-      }
+      const message = getErrorMessage(err, editingId ? "Unable to update phone call." : "Unable to add phone call.");
+      setError(message);
+      toast.error(message, { autoClose: 6000 });
     } finally {
       setSaving(false);
     }
@@ -408,37 +318,48 @@ export function PhoneCallLogPanel() {
       setError("");
       setSuccess("");
       await apiDelete(`/api/v1/admissions/phone-call-logs/${id}/`);
-      setItems((prev) => prev.filter((row) => row.id !== id));
-      setSuccess("Phone call log deleted successfully.");
-      toast.success("Phone call log deleted successfully", { autoClose: 5000 });
+      setSuccess("Record deleted successfully.");
+      toast.success("Record deleted successfully.", { autoClose: 4000 });
+      await load();
     } catch (err: unknown) {
-      const message = getErrorMessage(err, "Unable to delete phone call log.");
+      const message = getErrorMessage(err, "Unable to delete phone call record.");
       setError(message);
-      toast.error(message, { autoClose: 5000 });
+      toast.error(message, { autoClose: 6000 });
     } finally {
       setBusyId(null);
     }
   };
 
-  const filteredSorted = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const filtered = !q
-      ? items
-      : items.filter((row) =>
-        [
-          row.name || "",
-          row.phone || "",
-          row.call_duration || "",
-          row.description || "",
-          row.call_type === "I" ? "incoming" : "outgoing",
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(q),
-      );
+  const applyFilters = () => {
+    const chips: string[] = [];
+    if (search.trim()) chips.push(`Search: ${search}`);
+    if (filterType) chips.push(`Type: ${filterType === "I" ? "Incoming" : "Outgoing"}`);
+    if (filterDate) chips.push(`Date: ${filterDate}`);
+    setFilterChips(chips);
+    setFilterOpen(false);
+  };
 
-    const sorted = [...filtered];
-    sorted.sort((a, b) => {
+  const clearFilters = () => {
+    setSearch("");
+    setFilterType("");
+    setFilterDate("");
+    setFilterChips([]);
+  };
+
+  const filteredSorted = useMemo(() => {
+    let next = [...items];
+    const q = search.trim().toLowerCase();
+    if (q) {
+      next = next.filter((row) => [row.name, row.phone, row.description].join(" ").toLowerCase().includes(q));
+    }
+    if (filterType) {
+      next = next.filter(row => row.call_type === filterType);
+    }
+    if (filterDate) {
+      next = next.filter(row => row.date === filterDate);
+    }
+
+    next.sort((a, b) => {
       const mult = sortDir === "asc" ? 1 : -1;
       if (sortKey === "name") return String(a.name || "").localeCompare(String(b.name || "")) * mult;
       if (sortKey === "phone") return String(a.phone || "").localeCompare(String(b.phone || "")) * mult;
@@ -447,372 +368,245 @@ export function PhoneCallLogPanel() {
       if (sortKey === "call_duration") return formatCallDuration(String(a.call_duration || "")).localeCompare(formatCallDuration(String(b.call_duration || ""))) * mult;
       return String(a.call_type || "").localeCompare(String(b.call_type || "")) * mult;
     });
+    return next;
+  }, [items, search, sortKey, sortDir, filterType, filterDate]);
 
-    return sorted;
-  }, [items, search, sortKey, sortDir]);
-
-  const totalRecords = filteredSorted.length;
-  const totalPages = Math.max(1, Math.ceil(totalRecords / pageSize));
   const safePage = Math.min(page, totalPages);
   const pageStart = (safePage - 1) * pageSize;
   const pageEnd = pageStart + pageSize;
   const pageRows = filteredSorted.slice(pageStart, pageEnd);
-  const pageText = formatRange(totalRecords ? pageStart + 1 : 0, Math.min(pageEnd, totalRecords), totalRecords);
-
-  const pageNumbers = useMemo(() => {
-    const pages: number[] = [];
-    const from = Math.max(1, safePage - 2);
-    const to = Math.min(totalPages, safePage + 2);
-    for (let i = from; i <= to; i += 1) pages.push(i);
-    return pages;
-  }, [safePage, totalPages]);
-
-  useEffect(() => {
-    if (page !== safePage) setPage(safePage);
-  }, [page, safePage]);
 
   return (
-    <>
-      <a href="#main-content" className="skip-link">Skip to main content</a>
-      <div className="legacy-panel phone-call-log-wrap">
-        <ToastContainer position="top-right" newestOnTop closeOnClick pauseOnHover />
-      <section className="sms-breadcrumb mb-20">
-        <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>Phone Call Log</h1>
-            <nav aria-label="Breadcrumb">
-              <ol style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13, listStyle: "none", margin: 0, padding: 0 }}>
-                <li><a href="/dashboard">Dashboard</a></li>
-                <li>/</li>
-                <li><a href="/administration">Admin Section</a></li>
-                <li>/</li>
-                <li aria-current="page">Phone Call Log</li>
-              </ol>
-            </nav>
+    <div className={s.root} style={{ padding: "16px 24px" }}>
+      <ToastContainer position="top-right" newestOnTop closeOnClick pauseOnHover />
+
+      <div className={s.pageCard}>
+        <div className={s.pageBody} style={{ padding: "20px" }}>
+
+          {/* Action Nav */}
+          <div className={s.actionNav}>
+            {[
+              { id: "add" as Tab, step: "01", label: editingId ? "Edit Phone Call" : "Add Phone Call", icon: <PlusIcon /> },
+              { id: "filter" as Tab, step: "02", label: "Smart Filter", icon: <FunnelIcon /> },
+              { id: "list" as Tab, step: "03", label: "Call Logs", icon: <DocIcon /> }
+            ].map(t => (
+              <button key={t.id} type="button" className={`${s.navTab} ${activeTab === t.id ? s.navTabActive : ""}`}
+                onClick={() => { setActiveTab(t.id); if (t.id === "filter") setFilterOpen(true); scrollToTab(t.id); }}>
+                <span className={s.navTabStep}>{t.step}</span>{t.icon} {t.label}
+              </button>
+            ))}
           </div>
-        </div>
-      </section>
 
-      <section className="admin-visitor-area up_admin_visitor">
-        <div className="container-fluid p-0" style={{ maxWidth: "100%" }}>
-          <div className="phone-call-grid" style={{ display: "grid", gridTemplateColumns: "minmax(280px, 1fr) minmax(400px, 2fr)", gap: 12, alignItems: "start", width: "100%", maxWidth: "100%" }}>
-            <div className="white-box phone-call-form-panel" style={{ ...boxStyle(), height: "auto" }}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Phone Call" : "Add Phone Call"}</h3>
-              <form onSubmit={submit} style={{ display: "grid", gap: 8 }}>
-                <div className="form-group">
-                  <label htmlFor="pcl-name">Name *</label>
-                  <input
-                    id="pcl-name"
-                    name="callerName"
-                    type="text"
-                    required
-                    aria-required="true"
-                    aria-label="Caller Name"
-                    minLength={2}
-                    maxLength={100}
-                    pattern="[A-Za-z0-9\s\-'.,()]+"
-                    value={name}
-                    onInput={(e) => {
-                      const cleaned = sanitizePlain(e.currentTarget.value).slice(0, 100);
-                      setName(cleaned);
-                      setErrorField("name", validateField("name", cleaned));
-                    }}
-                    onBlur={() => setErrorField("name", validateField("name", name))}
-                    placeholder="Name *"
-                    style={fieldStyle(Boolean(fieldErrors.name))}
-                  />
-                  <small className="form-error" style={{ display: fieldErrors.name ? "block" : "none" }}>{fieldErrors.name || ""}</small>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="pcl-phone">Phone *</label>
-                  <input
-                    id="pcl-phone"
-                    name="phone"
-                    type="tel"
-                    required
-                    aria-required="true"
-                    aria-label="Phone Number"
-                    minLength={10}
-                    maxLength={13}
-                    inputMode="tel"
-                    pattern="\+?\d{10,12}"
-                    value={phone}
-                    onChange={(e) => {
-                      const cleaned = e.target.value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "").slice(0, 13);
-                      setPhone(cleaned);
-                      setErrorField("phone", "");
-                    }}
-                    onBlur={() => setErrorField("phone", validateField("phone", phone))}
-                    placeholder="e.g. 9876543210 or +919876543210"
-                    style={fieldStyle(Boolean(fieldErrors.phone))}
-                  />
-                  <small className="form-error" style={{ display: fieldErrors.phone ? "block" : "none" }}>{fieldErrors.phone || ""}</small>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="pcl-from-date">From Date</label>
-                  <input
-                    id="pcl-from-date"
-                    name="fromDate"
-                    type="date"
-                    required
-                    max={today}
-                    value={date}
-                    onChange={(e) => {
-                      setDate(e.target.value);
-                      if (followUpDate && e.target.value && followUpDate < e.target.value) {
-                        setFollowUpDate(e.target.value);
-                      }
-                      setErrorField("date", validateField("date", e.target.value));
-                    }}
-                    style={fieldStyle(Boolean(fieldErrors.date))}
-                  />
-                  <small className="form-error" style={{ display: fieldErrors.date ? "block" : "none" }}>{fieldErrors.date || ""}</small>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="pcl-to-date">To Date</label>
-                  <input
-                    id="pcl-to-date"
-                    name="toDate"
-                    type="date"
-                    min={date || undefined}
-                    max={today}
-                    value={followUpDate}
-                    onChange={(e) => {
-                      setFollowUpDate(e.target.value);
-                      setErrorField("followUpDate", validateField("followUpDate", e.target.value));
-                    }}
-                    style={fieldStyle(Boolean(fieldErrors.followUpDate))}
-                  />
-                  <small className="form-error" style={{ display: fieldErrors.followUpDate ? "block" : "none" }}>{fieldErrors.followUpDate || ""}</small>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="pcl-duration">Call Duration (HH:MM:SS)</label>
-                  <input
-                    id="pcl-duration"
-                    name="callDuration"
-                    type="text"
-                    maxLength={8}
-                    pattern="^([0-9]{1,2}):([0-5][0-9]):([0-5][0-9])$"
-                    placeholder="HH:MM:SS"
-                    value={callDuration}
-                    onChange={(e) => {
-                      const cleaned = sanitizePlain(e.target.value).slice(0, 8);
-                      setCallDuration(cleaned);
-                      setErrorField("callDuration", validateField("callDuration", cleaned));
-                    }}
-                    style={fieldStyle(Boolean(fieldErrors.callDuration))}
-                  />
-                  <small className="form-error" style={{ display: fieldErrors.callDuration ? "block" : "none" }}>{fieldErrors.callDuration || ""}</small>
-                </div>
-
-                <div className="form-group">
-                  <label htmlFor="pcl-description">Description</label>
-                  <textarea
-                    id="pcl-description"
-                    name="description"
-                    rows={3}
-                    maxLength={500}
-                    value={description}
-                    onChange={(e) => {
-                      const cleaned = sanitizePlain(e.target.value).slice(0, 500);
-                      setDescription(cleaned);
-                      setErrorField("description", validateField("description", cleaned));
-                    }}
-                    placeholder="Description"
-                    style={{ ...fieldStyle(Boolean(fieldErrors.description)), minHeight: 80, padding: "8px 10px" }}
-                  />
-                  <small style={{ fontSize: 12, color: "#6b7280" }}>{description.length} / 500 characters</small>
-                </div>
-
-                <div style={{ display: "flex", gap: 16, alignItems: "center", fontSize: 13 }}>
-                  <label htmlFor="pcl-incoming" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <input id="pcl-incoming" name="callType" type="radio" value="I" checked={callType === "I"} aria-label="Incoming call" onChange={() => setCallType("I")} />
-                    Incoming
-                  </label>
-                  <label htmlFor="pcl-outgoing" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <input id="pcl-outgoing" name="callType" type="radio" value="O" checked={callType === "O"} aria-label="Outgoing call" onChange={() => setCallType("O")} />
-                    Outgoing
-                  </label>
-                </div>
-
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button type="submit" disabled={saving} style={buttonStyle()}>{saving ? "Saving..." : editingId ? "Update" : "Save"}</button>
-                  {editingId ? <button type="button" onClick={reset} style={buttonStyle("#6b7280")}>Cancel</button> : null}
-                </div>
-              </form>
+          {/* Section 01: Add/Edit Phone Call */}
+          <div className={s.assignCard} ref={addSecRef}>
+            <div className={s.assignCardTop}>
+              <div>
+                <div className={s.assignCardTitle}>{editingId ? "Edit Phone Call Details" : "Log New Phone Call"}</div>
+                <div className={s.assignCardSub}>Fields marked with * are mandatory. Keep records of important incoming and outgoing calls.</div>
+              </div>
+              {editingId && <span className={s.enrollChip}><LinkIcon /> Editing Log: {name}</span>}
             </div>
 
-            <div className="white-box" style={{ ...boxStyle(), overflowX: "auto" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
-                <h3 style={{ margin: 0 }}>Phone Call List</h3>
-                <input
-                  id="pcl-search"
-                  name="search"
-                  type="search"
-                  aria-label="Search phone call logs"
-                  value={search}
-                  onChange={(e) => {
-                    setSearch(e.target.value);
-                    setPage(1);
-                  }}
-                  placeholder="Quick search"
-                  style={{ ...fieldStyle(), maxWidth: 250, width: "100%" }}
-                />
+            {formBanner && (
+              <div style={{ background: "#fff5f5", border: "1px solid #ffd0cc", color: "var(--red)", padding: "10px 14px", borderRadius: 10, marginBottom: 16, fontSize: 13, fontWeight: 600 }}>
+                {formBanner}
               </div>
+            )}
 
-              <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch", position: "relative" }}>
-                <table aria-label="Phone Call List" style={{ width: "100%", minWidth: 900, borderCollapse: "collapse" }}>
-                  <caption className="sr-only">Phone Call List</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col" onClick={() => toggleSort("name")} style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left", cursor: "pointer" }}>Name {sortKey === "name" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
-                      <th scope="col" onClick={() => toggleSort("phone")} style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left", cursor: "pointer" }}>Phone {sortKey === "phone" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
-                      <th scope="col" onClick={() => toggleSort("date")} style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left", cursor: "pointer" }}>From Date {sortKey === "date" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
-                      <th scope="col" onClick={() => toggleSort("next_follow_up_date")} style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left", cursor: "pointer" }}>To Date {sortKey === "next_follow_up_date" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
-                      <th scope="col" onClick={() => toggleSort("call_duration")} style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left", cursor: "pointer" }}>Call Duration {sortKey === "call_duration" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
-                      <th scope="col" style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Description</th>
-                      <th scope="col" onClick={() => toggleSort("call_type")} style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left", cursor: "pointer" }}>Call Type {sortKey === "call_type" ? (sortDir === "asc" ? "▲" : "▼") : ""}</th>
-                      <th scope="col" style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {!loading && pageRows.length === 0 ? (
-                      <tr><td colSpan={8} style={{ padding: 12, color: "var(--text-muted)" }}>No phone calls found.</td></tr>
-                    ) : (
-                      pageRows.map((row, index) => (
-                        <tr key={row.id} style={{ background: index % 2 === 1 ? "#f8fafc" : "transparent" }}>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(row.name)}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(row.phone)}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(row.date)}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(row.next_follow_up_date)}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(formatCallDuration(row.call_duration || ""))}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(row.description)}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.call_type === "I" ? "Incoming" : "Outgoing"}</td>
-                          <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                            <div style={{ display: "flex", gap: 6 }}>
-                              <button type="button" aria-label={`Edit phone call log for ${String(row.name || "Unknown")}`} onClick={() => edit(row)} style={buttonStyle("#0ea5e9")}>Edit</button>
-                              <button type="button" aria-label={`Delete phone call log for ${String(row.name || "Unknown")}`} disabled={busyId === row.id} onClick={() => setDeleteTarget(row)} style={buttonStyle("#dc2626")}>Delete</button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-                {tableBusy ? (
-                  <div style={{ position: "absolute", inset: 0, background: "rgba(255,255,255,0.68)", display: "grid", placeItems: "center", fontSize: 13, color: "#334155" }}>
-                    Loading records...
-                  </div>
-                ) : null}
-              </div>
+            <form onSubmit={submit}>
+              <div className={s.roGrid} style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "12px 16px" }}>
 
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
-                <span style={{ fontSize: 13, color: "var(--text-muted)" }}>{pageText}</span>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} style={{ ...fieldStyle(), width: 110 }}>
-                    <option value={10}>10 / page</option>
-                    <option value={25}>25 / page</option>
-                    <option value={50}>50 / page</option>
+                <div className={s.roField}>
+                  <label>Caller Name *</label>
+                  <input type="text" required minLength={2} maxLength={100} value={name} onChange={(e) => setName(e.target.value)} className={s.roInput} placeholder="Enter name" />
+                </div>
+
+                <div className={s.roField}>
+                  <label>Phone No. *</label>
+                  <input type="tel" required inputMode="tel" maxLength={13} pattern="\+?\d{10,12}" value={phone} onChange={(e) => setPhone(e.target.value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "").slice(0, 13))} className={s.roInput} placeholder="e.g. +919876543210" />
+                </div>
+
+                <div className={s.roField}>
+                  <label>Call Type *</label>
+                  <select required value={callType} onChange={(e) => setCallType(e.target.value as "I" | "O")} className={s.roInput}>
+                    <option value="I">Incoming</option>
+                    <option value="O">Outgoing</option>
                   </select>
-                  <button type="button" disabled={safePage === 1} onClick={() => setPage((prev) => Math.max(1, prev - 1))} style={buttonStyle("#64748b")}>Previous</button>
-                  {pageNumbers.map((n) => (
-                    <button key={n} type="button" onClick={() => setPage(n)} style={buttonStyle(n === safePage ? "var(--primary)" : "#94a3b8")}>
-                      {n}
-                    </button>
-                  ))}
-                  <button type="button" disabled={safePage >= totalPages} onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))} style={buttonStyle("#64748b")}>Next</button>
                 </div>
+
+                <div className={s.roField}>
+                  <label>Date *</label>
+                  <input type="date" required max={todayDate} value={date} onChange={(e) => setDate(e.target.value)} className={s.roInput} />
+                </div>
+
+                <div className={s.roField}>
+                  <label>Follow-up Date</label>
+                  <input type="date" min={date || undefined} max={todayDate} value={followUpDate} onChange={(e) => setFollowUpDate(e.target.value)} className={s.roInput} />
+                </div>
+
+                <div className={s.roField}>
+                  <label>Call Duration *</label>
+                  <input type="text" required pattern="^([0-9]{1,2}):([0-5][0-9]):([0-5][0-9])$" value={callDuration} onChange={(e) => setCallDuration(e.target.value)} className={s.roInput} placeholder="HH:MM:SS" />
+                </div>
+
+                <div className={s.roField} style={{ gridColumn: "1 / -1" }}>
+                  <label>Description</label>
+                  <input type="text" maxLength={500} value={description} onChange={(e) => setDescription(e.target.value)} className={s.roInput} placeholder="Brief summary of the call" />
+                </div>
+
               </div>
 
-              {loading && <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading phone calls...</p>}
-              {error && <p style={{ marginTop: 10, color: "#dc3545" }}>{error}</p>}
-              {success && <p style={{ marginTop: 10, color: "#0f766e" }}>{success}</p>}
+              <hr className={s.previewDivider} style={{ marginTop: 20 }} />
+              <div className={s.saveRow}>
+                <div>
+                  <span style={{ fontSize: 11, color: "var(--ink-mute)" }}>All records are securely saved into the communication log module.</span>
+                </div>
+                <div className={s.saveButtons}>
+                  <button type="button" className={s.btnReset} onClick={resetForm}>{editingId ? "Cancel" : "Reset"}</button>
+                  <button type="submit" disabled={saving} className={s.btnSave} style={{ minWidth: 140, justifyContent: "center" }}>
+                    <CheckIcon /> {saving ? "Saving..." : editingId ? "Update Log" : "Save Log"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          {/* Section 02 Smart Filter */}
+          <div className={s.filterCard} ref={filterSecRef}>
+            <div className={`${s.filterTrigger} ${filterOpen ? s.filterTriggerOpen : ""}`} onClick={() => setFilterOpen(v => !v)}>
+              <span className={s.stepBadge}>02</span>
+              <span className={s.filterIconBox}><FunnelIcon /></span>
+              <div>
+                <div className={s.filterTitle}>Smart filters</div>
+                <div className={s.filterSub}>Find call logs easily by search, type, or date.</div>
+              </div>
+              <div className={s.triggerRight}>
+                {filterChips.map(c => (
+                  <span key={c} className={s.darkChip}>{c} <span className={s.darkChipX} onClick={(e) => { e.stopPropagation(); setFilterChips(fc => fc.filter(x => x !== c)); }}>&#215;</span></span>
+                ))}
+                {filterChips.length > 0 && (
+                  <button type="button" className={s.btnGhost} style={{ fontSize: 11, padding: "4px 8px" }} onClick={(e) => { e.stopPropagation(); clearFilters(); }}>Clear</button>
+                )}
+                <ChevronIcon open={filterOpen} />
+              </div>
+            </div>
+            {filterOpen && (
+              <div className={s.filterBody}>
+                <div className={s.filterGrid8} style={{ gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
+                  <label className={s.fLbl}>
+                    <span>Search</span>
+                    <input className={s.filterInput} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Name, Phone..." />
+                  </label>
+                  <label className={s.fLbl}>
+                    <span>Call Type</span>
+                    <select className={s.filterInput} value={filterType} onChange={(e) => setFilterType(e.target.value)}>
+                      <option value="">All Types</option>
+                      <option value="I">Incoming</option>
+                      <option value="O">Outgoing</option>
+                    </select>
+                  </label>
+                  <label className={s.fLbl}>
+                    <span>Date</span>
+                    <input type="date" className={s.filterInput} value={filterDate} onChange={(e) => setFilterDate(e.target.value)} />
+                  </label>
+                </div>
+                <div className={s.filterBottom}>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {filterChips.map(c => <span key={c} className={s.darkChip}>{c} <span className={s.darkChipX} onClick={() => setFilterChips(fc => fc.filter(x => x !== c))}>&#215;</span></span>)}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button type="button" className={s.btnGhost} onClick={clearFilters}>Clear filters</button>
+                    <button type="button" className={s.btnPrimary} onClick={applyFilters}>Apply Filters</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Section 03 Browse */}
+          <div className={s.browseSection} ref={listSecRef}>
+            <div className={s.sectionHeading}>
+              <span className={s.stepBadge}>03</span>
+              <span className={s.sectionTitle}>Browse Call Logs</span>
+              <span className={s.sectionSub}>&mdash; view, edit, or delete existing records.</span>
+            </div>
+
+            <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: "12px", overflow: "hidden" }}>
+              <div className={s.tblWrap}>
+                <div className={s.tblHead} style={{ gridTemplateColumns: "40px 1.5fr 1fr 1fr 1fr 1fr 1fr 100px", background: "#f8f8fc" }}>
+                  <span>SL</span>
+                  <span onClick={() => toggleSort("name")} style={{ cursor: "pointer" }}>Name {sortKey === "name" ? (sortDir === "asc" ? "↑" : "↓") : ""}</span>
+                  <span>Phone</span>
+                  <span>Type</span>
+                  <span onClick={() => toggleSort("date")} style={{ cursor: "pointer" }}>Date {sortKey === "date" ? (sortDir === "asc" ? "↑" : "↓") : ""}</span>
+                  <span>Duration</span>
+                  <span>Follow-up</span>
+                  <span style={{ textAlign: "right" }}>Actions</span>
+                </div>
+
+                {!loading && filteredSorted.length === 0 && (
+                  <div style={{ padding: "32px", textAlign: "center", color: "var(--ink-mute)", fontSize: 13 }}>No phone call records found matching criteria.</div>
+                )}
+
+                {pageRows.map((row, index) => (
+                  <div key={row.id} className={s.tblRow} style={{ gridTemplateColumns: "40px 1.5fr 1fr 1fr 1fr 1fr 1fr 100px" }}>
+                    <span style={{ fontSize: 11, color: "var(--ink-mute)" }}>{(page - 1) * pageSize + index + 1}</span>
+                    <div className={s.studentCell}>
+                      <span className={s.studentName}>{row.name}</span>
+                    </div>
+                    <span className={s.admNo}>{displayValue(row.phone)}</span>
+                    <span className={s.admNo}>{row.call_type === "I" ? "Incoming" : "Outgoing"}</span>
+                    <span className={s.admNo}>{row.date}</span>
+                    <span className={s.admNo}>{displayValue(formatCallDuration(row.call_duration || ""))}</span>
+                    <span className={s.admNo}>{displayValue(row.next_follow_up_date)}</span>
+                    <div className={s.tblLastCol}>
+                      <button type="button" className={s.editBtn} onClick={() => editRow(row)} title="Edit"><PencilIcon /></button>
+                      <button type="button" className={s.editBtn} onClick={() => setDeleteTarget(row)} title="Delete" style={{ color: "var(--red)", borderColor: "rgba(229, 83, 75, 0.2)" }}><TrashIcon /></button>
+                    </div>
+                  </div>
+                ))}
+
+                <div className={s.tblFooter}>
+                  <span className={s.tblFooterTxt}>
+                    Showing page {page} of {totalPages} ({totalRecords} total records)
+                  </span>
+
+                  <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 11, color: "var(--ink-mute)" }}>Page size:</span>
+                      <select value={pageSize} onChange={(e) => { setPage(1); setPageSize(Number(e.target.value)); }} style={{ padding: "4px 8px", fontSize: 11, borderRadius: 6, border: "1px solid var(--line)", background: "#fff", outline: "none" }}>
+                        {[5, 10, 20, 30, 40, 50].map(sz => <option key={sz} value={sz}>{sz}</option>)}
+                      </select>
+                    </div>
+                    <div className={s.pager}>
+                      <button type="button" className={s.pagerBtn} disabled={loading || page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹</button>
+                      <button type="button" className={s.pagerBtn} disabled={loading || page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>›</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {tableBusy && <div style={{ height: 3, background: "var(--primary)", width: "100%", animation: "pulse 1s infinite" }} />}
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      {deleteTarget && (
+        <div className={s.backdrop} onClick={() => setDeleteTarget(null)}>
+          <div className={s.modal} style={{ maxWidth: 400, padding: 24, textAlign: "center" }} onClick={e => e.stopPropagation()}>
+            <div style={{ width: 48, height: 48, background: "#fff5f5", borderRadius: "50%", color: "var(--red)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+              <TrashIcon />
+            </div>
+            <h3 style={{ margin: "0 0 8px", fontSize: 18, color: "var(--ink)" }}>Confirm Delete</h3>
+            <p style={{ margin: "0 0 24px", color: "var(--ink-mute)", fontSize: 13 }}>Are you sure you want to delete this phone call log? This action cannot be undone.</p>
+            <div style={{ display: "flex", gap: 12 }}>
+              <button type="button" className={s.btnReset} style={{ flex: 1 }} onClick={() => setDeleteTarget(null)}>Cancel</button>
+              <button type="button" className={s.btnSave} style={{ flex: 1, background: "var(--red)", justifyContent: "center", boxShadow: "none" }} onClick={async () => { const id = deleteTarget.id; setDeleteTarget(null); await remove(id); }}>Delete</button>
             </div>
           </div>
         </div>
-      </section>
-
-      <ConfirmationModal
-        isOpen={Boolean(deleteTarget)}
-        title="Confirm Delete"
-        message="Are you sure you want to delete this phone call log? This action cannot be undone."
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
-        isConfirming={Boolean(deleteTarget && busyId === deleteTarget.id)}
-        onCancel={() => setDeleteTarget(null)}
-        onConfirm={async () => {
-          if (!deleteTarget) return;
-          const id = deleteTarget.id;
-          setDeleteTarget(null);
-          await remove(id);
-        }}
-      />
-
-      <style jsx>{`
-        .phone-call-log-wrap {
-          overflow-x: hidden;
-        }
-
-        .phone-call-grid {
-          max-width: 100%;
-          align-items: start;
-        }
-
-        .form-group {
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-        }
-
-        .form-group label {
-          font-size: 14px;
-          font-weight: 500;
-          color: var(--text);
-        }
-
-        .form-error {
-          font-size: 12px;
-          color: #dc3545;
-        }
-
-        .skip-link {
-          position: absolute;
-          left: -9999px;
-          top: 8px;
-          z-index: 999;
-          background: #0f172a;
-          color: #fff;
-          border-radius: 8px;
-          padding: 8px 12px;
-        }
-
-        .skip-link:focus {
-          left: 12px;
-        }
-
-        @media (max-width: 768px) {
-          .phone-call-grid {
-            grid-template-columns: 1fr !important;
-          }
-
-          .phone-call-form-panel {
-            grid-column: 1 / -1;
-          }
-        }
-
-        :global(body),
-        :global(.dashboard-main),
-        :global(.admin-visitor-area),
-        :global(.container-fluid) {
-          overflow-x: hidden;
-          max-width: 100%;
-        }
-      `}</style>
-      </div>
-    </>
+      )}
+    </div>
   );
 }

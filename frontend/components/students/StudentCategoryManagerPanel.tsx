@@ -814,8 +814,9 @@ export function StudentCategoryManagerPanel() {
 
   return (
     <div className="legacy-panel student-category-manager">
-      <section className="sms-breadcrumb mb-20">
-        <div className="container-fluid">
+      <main className="page">
+        <section className="sms-breadcrumb mb-20">
+          <div className="container-fluid">
           <div className="crumbs">
             <Link href="/dashboard">Dashboard</Link>
             <span>/</span>
@@ -1108,6 +1109,7 @@ export function StudentCategoryManagerPanel() {
 
         </div>
       </section>
+      </main>
 
       {/* ── Fixed-position Agentic Summary popover — renders outside the table so it never causes scroll ── */}
       {openViewId !== null && popoverRect && (() => {
@@ -1416,6 +1418,7 @@ export function StudentCategoryManagerPanel() {
 
       <style jsx>{`
         .student-category-manager {
+          padding: 8px;
           padding-bottom: 20px;
           color: #111827;
           font-family: "Inter", "Poppins", "Segoe UI", Arial, sans-serif;
@@ -1425,6 +1428,13 @@ export function StudentCategoryManagerPanel() {
           --brand-light: #f3eeff;
           --surface-border: #e5e7eb;
           --surface-bg: #ffffff;
+          --line: #dfdfea;
+        }
+        .page {
+          background: #f8f8fc;
+          border: 1px solid var(--line);
+          border-radius: 16px;
+          padding: 18px;
         }
         .crumbs {
           display: flex;
