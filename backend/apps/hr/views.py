@@ -1274,15 +1274,19 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
 
 
 class StaffAttendanceViewSet(SchoolScopedModelViewSet):
-    queryset = StaffAttendance.objects.select_related("school", "staff").all()
+    queryset = StaffAttendance.objects.select_related(
+        "school", "staff", "staff__department", "staff__designation"
+    ).all()
     serializer_class = StaffAttendanceSerializer
-    filterset_fields = ["staff", "attendance_date", "attendance_type"]
+    filterset_fields = ["staff", "attendance_date", "attendance_type", "staff__department"]
     search_fields = ["staff__staff_no", "staff__first_name", "staff__last_name", "note"]
     ordering_fields = ["attendance_date", "created_at"]
     permission_codes = {
         "*": "human_resource.staff_attendance.view",
         "bulk_store": "human_resource.staff_attendance.view",
         "report": "human_resource.staff_attendance.view",
+        "daily_summary": "human_resource.staff_attendance.view",
+        "monthly_report": "human_resource.staff_attendance.view",
     }
 
     @action(detail=False, methods=["post"], url_path="bulk-store")
@@ -1308,6 +1312,10 @@ class StaffAttendanceViewSet(SchoolScopedModelViewSet):
                 defaults={
                     "attendance_type": validated.get("attendance_type", StaffAttendance.STATUS_PRESENT),
                     "note": validated.get("note", ""),
+                    "arrival_time": validated.get("arrival_time"),
+                    "sign_in_time": validated.get("sign_in_time"),
+                    "sign_out_time": validated.get("sign_out_time"),
+                    "lunch": validated.get("lunch", False),
                 },
             )
             created_or_updated += 1
@@ -1323,6 +1331,112 @@ class StaffAttendanceViewSet(SchoolScopedModelViewSet):
             by_type[code] = queryset.filter(attendance_type=code).count()
 
         return Response({"total": total, "by_type": by_type})
+
+    def _active_staff_qs(self, request, department=None):
+        """Active staff in the requesting user's school, optionally filtered by department."""
+        staff_qs = Staff.objects.filter(status="active")
+        if not request.user.is_superuser and request.user.school_id:
+            staff_qs = staff_qs.filter(school_id=request.user.school_id)
+        if department:
+            staff_qs = staff_qs.filter(department_id=department)
+        return staff_qs
+
+    @action(detail=False, methods=["get"], url_path="daily-summary")
+    def daily_summary(self, request):
+        """KPI counts for a single date: total active staff + per-status tallies."""
+        date = request.query_params.get("date") or request.query_params.get("attendance_date")
+        if not date:
+            raise ValidationError("date is required (YYYY-MM-DD).")
+        department = request.query_params.get("department")
+
+        total_staff = self._active_staff_qs(request, department).count()
+
+        records = self.get_queryset().filter(attendance_date=date)
+        if department:
+            records = records.filter(staff__department_id=department)
+
+        counts = {code: records.filter(attendance_type=code).count() for code, _ in StaffAttendance.STATUS_CHOICES}
+        present = counts["P"]
+        return Response({
+            "total_staff": total_staff,
+            "present": present,
+            "absent": counts["A"],
+            "leave": counts["L"],
+            "half_day": counts["F"],
+            "holiday": counts["H"],
+            "marked": records.count(),
+            "present_pct": round((present / total_staff) * 100) if total_staff else 0,
+        })
+
+    @action(detail=False, methods=["get"], url_path="monthly-report")
+    def monthly_report(self, request):
+        """
+        Monthly report payload consumed by the staff MonthlyReport UI:
+          { records, rows, insights }
+        - records: one entry per attendance row in the month (for the week donut cards)
+        - rows: per-staff present/absent/leave/half_day/holiday totals
+        - insights: top absent + leave reasons mined from notes
+        """
+        try:
+            month = int(request.query_params.get("month"))
+            year = int(request.query_params.get("year"))
+        except (TypeError, ValueError):
+            raise ValidationError("month and year are required integers.")
+        department = request.query_params.get("department")
+        staff_id = request.query_params.get("staff")
+
+        qs = self.get_queryset().filter(
+            attendance_date__month=month, attendance_date__year=year
+        )
+        if department:
+            qs = qs.filter(staff__department_id=department)
+        if staff_id:
+            qs = qs.filter(staff_id=staff_id)
+
+        records = []
+        per_staff = {}
+        absent_reasons = {}
+        leave_reasons = {}
+
+        for rec in qs:
+            records.append({
+                "staff": rec.staff_id,
+                "attendance_date": rec.attendance_date.isoformat(),
+                "attendance_type": rec.attendance_type,
+            })
+
+            bucket = per_staff.setdefault(rec.staff_id, {
+                "staff_id": rec.staff_id,
+                "name": f"{(rec.staff.first_name or '').strip()} {(rec.staff.last_name or '').strip()}".strip(),
+                "staff_no": rec.staff.staff_no or "",
+                "department_name": rec.staff.department.name if rec.staff.department_id else "",
+                "present": 0, "absent": 0, "leave": 0, "half_day": 0, "holiday": 0,
+            })
+            key = {"P": "present", "A": "absent", "L": "leave", "F": "half_day", "H": "holiday"}.get(rec.attendance_type)
+            if key:
+                bucket[key] += 1
+
+            note = (rec.note or "").strip()
+            if note:
+                if rec.attendance_type == "A":
+                    absent_reasons[note] = absent_reasons.get(note, 0) + 1
+                elif rec.attendance_type == "L":
+                    leave_reasons[note] = leave_reasons.get(note, 0) + 1
+
+        def top(reasons):
+            return [
+                {"reason": r, "count": c}
+                for r, c in sorted(reasons.items(), key=lambda kv: kv[1], reverse=True)[:5]
+            ]
+
+        return Response({
+            "records": records,
+            "rows": sorted(per_staff.values(), key=lambda r: r["name"].lower()),
+            "insights": {
+                "top_absent_reasons": top(absent_reasons),
+                "top_leave_reasons": top(leave_reasons),
+            },
+        })
 
 
 class PayrollRecordViewSet(SchoolScopedModelViewSet):

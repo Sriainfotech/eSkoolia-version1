@@ -393,6 +393,10 @@ class StaffSerializer(serializers.ModelSerializer):
             "invalid": "Designation not found",
         },
     )
+    department_name = serializers.SerializerMethodField(read_only=True)
+    designation_name = serializers.SerializerMethodField(read_only=True)
+    role_name = serializers.SerializerMethodField(read_only=True)
+    full_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Staff
@@ -449,6 +453,10 @@ class StaffSerializer(serializers.ModelSerializer):
             "status",
             "created_at",
             "updated_at",
+            "department_name",
+            "designation_name",
+            "role_name",
+            "full_name",
         ]
         read_only_fields = ["id", "school", "created_at", "updated_at"]
 
@@ -481,6 +489,19 @@ class StaffSerializer(serializers.ModelSerializer):
             return [text]
 
         return [str(value).strip()] if str(value).strip() else []
+
+    def get_department_name(self, obj):
+        return getattr(getattr(obj, "department", None), "name", None)
+
+    def get_designation_name(self, obj):
+        return getattr(getattr(obj, "designation", None), "name", None)
+
+    def get_role_name(self, obj):
+        return getattr(getattr(obj, "role", None), "name", None)
+
+    def get_full_name(self, obj):
+        parts = [p for p in [obj.first_name, getattr(obj, 'middle_name', ''), obj.last_name] if p]
+        return " ".join(parts)
 
     @staticmethod
     def _normalize_text_input(value):
@@ -2039,6 +2060,9 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
 
 class StaffAttendanceSerializer(serializers.ModelSerializer):
     staff_name = serializers.SerializerMethodField(read_only=True)
+    staff_no = serializers.SerializerMethodField(read_only=True)
+    department_name = serializers.SerializerMethodField(read_only=True)
+    designation_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = StaffAttendance
@@ -2047,16 +2071,35 @@ class StaffAttendanceSerializer(serializers.ModelSerializer):
             "school",
             "staff",
             "staff_name",
+            "staff_no",
+            "department_name",
+            "designation_name",
             "attendance_date",
             "attendance_type",
             "note",
+            "arrival_time",
+            "sign_in_time",
+            "sign_out_time",
+            "lunch",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "school", "created_at", "updated_at", "staff_name"]
+        read_only_fields = [
+            "id", "school", "created_at", "updated_at",
+            "staff_name", "staff_no", "department_name", "designation_name",
+        ]
 
     def get_staff_name(self, obj):
         return f"{(obj.staff.first_name or '').strip()} {(obj.staff.last_name or '').strip()}".strip()
+
+    def get_staff_no(self, obj):
+        return obj.staff.staff_no or ""
+
+    def get_department_name(self, obj):
+        return obj.staff.department.name if obj.staff.department_id else ""
+
+    def get_designation_name(self, obj):
+        return obj.staff.designation.name if obj.staff.designation_id else ""
 
     def validate(self, attrs):
         request = self.context.get("request")
