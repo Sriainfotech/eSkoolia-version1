@@ -33,6 +33,8 @@ urlpatterns = [
     path("api/chat/", include("apps.chat.urls")),
     path("api/v1/utilities/communication/", include("apps.communication.urls")),
     path("api/v1/competitions/", include("apps.competitions.urls")),
+    path("api/v1/teacher/", include("apps.teacher_portal.urls")),
+    path("api/v1/parent/", include("apps.parent_portal.urls")),
 ]
 
 if settings.DEBUG:

@@ -23,11 +23,25 @@ class Permission(models.Model):
         return self.code
 
 
+class PortalType(models.TextChoices):
+    ADMIN   = "admin",   "Admin Console"
+    TEACHER = "teacher", "Teacher Portal"
+    PARENT  = "parent",  "Parent Portal"
+    STUDENT = "student", "Student Portal"
+    CUSTOM  = "custom",  "Custom"
+
+
 class Role(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="roles", null=True, blank=True)
     name = models.CharField(max_length=30)
     is_system = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    portal_type = models.CharField(
+        max_length=20,
+        choices=PortalType.choices,
+        default=PortalType.ADMIN,
+        help_text="Which portal this role belongs to. Controls post-login redirect.",
+    )
     permissions = models.ManyToManyField(Permission, through="RolePermission", related_name="roles")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

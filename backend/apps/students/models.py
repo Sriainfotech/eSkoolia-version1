@@ -70,6 +70,14 @@ class Guardian(models.Model):
     email = models.EmailField(blank=True)
     occupation = models.CharField(max_length=120, blank=True)
     address = models.TextField(blank=True)
+    # Portal login account for this parent/guardian
+    user = models.OneToOneField(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="guardian_profile",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
