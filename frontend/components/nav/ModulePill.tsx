@@ -18,7 +18,7 @@ const COMING_SOON_PATHS = new Set([
   '/hr/leave', '/hr/offboarding',
 ]);
 
-export function ModulePill({ mod }: { mod: ModuleRoute }) {
+export function ModulePill({ mod, exactMatch = false }: { mod: ModuleRoute; exactMatch?: boolean }) {
   const comingSoon = COMING_SOON_IDS.has(mod.id);
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
@@ -31,8 +31,10 @@ export function ModulePill({ mod }: { mod: ModuleRoute }) {
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const seg = mod.path.split('/')[1];
-  const active = Boolean(seg && pathname.startsWith('/' + seg)) ||
-    (mod.path === '/dashboard' && (pathname === '/dashboard' || pathname === '/'));
+  const active = exactMatch
+    ? pathname === mod.path || pathname.startsWith(mod.path + '/')
+    : Boolean(seg && pathname.startsWith('/' + seg)) ||
+      (mod.path === '/dashboard' && (pathname === '/dashboard' || pathname === '/'));
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {

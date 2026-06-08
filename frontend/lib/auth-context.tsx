@@ -21,6 +21,8 @@ export interface LoginResponse {
   school_code?: string | null;   // e.g. "springdale" — null for super-admin
   tenant_id?: string | null;     // e.g. "SCH-001"    — null for super-admin
   is_super_admin?: boolean;
+  /** Derived from the user's primary role — controls post-login redirect */
+  portal_type?: 'admin' | 'teacher' | 'parent' | 'student' | 'custom';
 }
 
 export interface MeResponse {
@@ -181,10 +183,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Restore session from stored tokens on mount.
   useEffect(() => {
     const token = getAccessToken();
-    if (!token) {
+    if (!token) { setIsLoading(false); return; }
+
+    // Mock mode: restore the mock user saved at login time.
+    if (token === 'mock-access-token') {
+      try {
+        const stored = localStorage.getItem('mock_user');
+        if (stored) setUser(JSON.parse(stored) as MeResponse);
+      } catch { /* ignore */ }
       setIsLoading(false);
       return;
     }
+
     apiGetMe()
       .then((me) => setUser(me))
       .catch(() => clearAuthTokens())
@@ -193,6 +203,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (username: string, password: string): Promise<LoginResponse> => {
+      // Mock mode: bypass Django for dev test accounts.
+      if (process.env.NEXT_PUBLIC_USE_MOCK === 'true') {
+        const { MOCK_ACCOUNTS } = await import('./login-permission/mock-data');
+        const found = MOCK_ACCOUNTS.find(
+          (a) => a.username === username && a.password === password
+        );
+        if (found) {
+          const mockResp: LoginResponse = {
+            access: 'mock-access-token',
+            refresh: 'mock-refresh-token',
+            must_change_password: false,
+            portal_type: found.roleType as LoginResponse['portal_type'],
+          };
+          setAuthTokens(mockResp.access, mockResp.refresh);
+          const nameParts = found.name.split(' ');
+          const mockUser: MeResponse = {
+            id: parseInt(found.id.replace(/\D/g, '')) || 9999,
+            username: found.username,
+            email: found.email,
+            first_name: nameParts[0] ?? '',
+            last_name: nameParts[1] ?? '',
+            must_change_password: false,
+            is_superuser: false,
+            role_names: [found.roleType],
+          };
+          localStorage.setItem('mock_user', JSON.stringify(mockUser));
+          setUser(mockUser);
+          return mockResp;
+        }
+      }
+
       const result = await apiLogin(username, password);
       setAuthTokens(result.access, result.refresh);
       // Persist tenant context so any component can read the active school.
@@ -225,6 +266,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Always clear local tokens even if the server call fails.
     }
     clearAuthTokens();
+    localStorage.removeItem('mock_user');
     sessionStorage.removeItem("school_code");
     sessionStorage.removeItem("tenant_id");
     setUser(null);

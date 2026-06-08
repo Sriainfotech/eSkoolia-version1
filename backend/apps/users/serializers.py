@@ -196,10 +196,21 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
                 school_code = tenant.subdomain_url
                 tenant_id = tenant.tenant_id
 
+        # Derive portal_type from user's first non-admin role.
+        # Superusers and school admins always get the admin console.
+        portal_type = "admin"
+        if not user.is_superuser and not getattr(user, "is_school_admin", False):
+            for row in user.user_roles.select_related("role").all():
+                if row.role and getattr(row.role, "portal_type", "admin") != "admin":
+                    portal_type = row.role.portal_type
+                    break
+
         return {
             "refresh": str(refresh),
             "access": str(refresh.access_token),
             "school_code": school_code,
             "tenant_id": tenant_id,
             "is_super_admin": bool(user.is_superuser),
+            "must_change_password": bool(getattr(user, "must_change_password", False)),
+            "portal_type": portal_type,
         }

@@ -3760,7 +3760,6 @@ Staff onboarding wizard is now fully functional end-to-end. Next priorities:
 
 ---
 
-<<<<<<< HEAD
 ## Day 14 ΓÇö 2026-06-04 ΓÇö Student Attendance Module
 
 ### Student Attendance - 04/06/2026
@@ -4096,3 +4095,169 @@ Academic Year enhancements complete. Next priorities:
 4. Test HR Directory single-expand accordion behavior
 5. Continue with Staff Assignment UI improvements (if needed)
 
+
+---
+
+## Day 12 -- 2026-06-05 -- Teacher Portal, Parent Portal and Universal Permission System
+
+**Branch:** demo (working tree -- all changes uncommitted as of 2026-06-05)
+
+---
+
+### Overview
+
+Full teacher portal (Sprints 0-8d) and parent portal (Sprints 7-8b) built from scratch on top of the existing admin console. A universal permission architecture was introduced and a series of permission prefix bugs were audited and fixed.
+
+---
+
+### 1. Backend -- Teacher Portal (backend/apps/teacher_portal/)
+
+New app. Key files:
+- permissions.py -- IsTeacherPortalUser (requires portal_type=teacher on role)
+- views.py -- TeacherMeView, TimetableView, MyClassesView, StudentsListView, StudentDetailView, StudentCredentialsView, AttendanceView
+- utils.py -- build_teacher_me(), build_students_list() with bulk attendance_pct, assert_can_mark_attendance(), assert_can_view_class()
+- urls.py -- all teacher portal routes under /api/v1/teacher/
+- management/commands/create_test_teacher.py -- dev helper
+
+Migration 0014_role_portal_type: adds portal_type field to Role model (admin/teacher/parent/student/custom).
+Migration 0022_guardian_user: Guardian.user OneToOneField so parents can log in.
+
+---
+
+### 2. Backend -- Parent Portal (backend/apps/parent_portal/)
+
+New app. Key files:
+- permissions.py -- IsParentPortalUser
+- views.py -- ParentMeView, ChildrenListView, ChildDetailView, ChildAttendanceCalendarView, ChildFeesView, ParentNoticesView
+- urls.py -- all parent portal routes under /api/v1/parent/
+
+---
+
+### 3. Frontend -- Teacher Portal (frontend/app/(teacher-portal)/)
+
+New files:
+- layout.tsx -- teacher topbar (module pills, search, avatar, logout) + sub-nav + WidgetManager on home only
+- teacher/home/page.tsx -- 3-col grid: greeting, quick access, recents, class assignments, ALL MODULES
+- teacher/attendance/page.tsx -- mark/view daily student attendance, 800ms auto-save
+- teacher/classes/page.tsx -- My Classes + student roster
+- teacher/timetable/page.tsx -- weekly timetable grid
+- frontend/hooks/useVisibleModules.ts -- single hook for all portals, calls getModulesForUser()
+- frontend/lib/teacher-routes.ts -- TEACHER_MODULES + TEACHER_FLAT_INDEX
+- frontend/lib/api/teacher.ts -- typed teacherGet wrapper
+- components/teacher/StudentProfileDrawer.tsx -- slide-in with 7 tabs
+- components/widgets/teacher/TeacherDayPlanner.tsx
+
+---
+
+### 4. Frontend -- Parent Portal (frontend/app/(parent-portal)/)
+
+New files:
+- layout.tsx -- parent topbar with child-switcher pill + WidgetManager on home only
+- parent/home/page.tsx -- 3-col grid: greeting, quick access 8 tiles, recents, ALL MODULES 8 grouped tiles
+- parent/children/page.tsx -- child profile: attendance ring, exam results, behaviour, quick actions
+- parent/attendance/page.tsx -- monthly calendar grid with prev/next nav
+- parent/fees/page.tsx -- fee summary bar + grouped fee rows with status badges
+- parent/notices/page.tsx -- expandable notice cards with NEW badge (under 3 days old)
+- frontend/lib/parent-routes.ts -- PARENT_MODULES (8 grouped modules with sub-pages)
+- frontend/lib/api/parent.ts -- typed parentGet wrapper + all parent API types
+- frontend/contexts/ParentChildContext.tsx -- selected child state
+- Widgets: ParentAttendanceWidget, ParentResultsWidget, ParentNoticesWidget, ParentFeesWidget
+
+---
+
+### 5. Frontend -- Portal Module Registry (frontend/lib/portal-modules.ts)
+
+New file -- central registry mapping portal_type to module list.
+
+CRITICAL RULES (do not change without team discussion):
+1. admin/custom portals: nav IS permission-filtered -- users see only modules matching permission_codes.
+2. teacher/parent/future portals: base module list ALWAYS shown in full. Permissions gate data on backend, not nav visibility.
+3. Extra cross-portal modules: TEACHER ONLY. Admins can grant admin modules (Fees, HR) to teacher roles; they appear automatically. Parent/student portals NEVER get admin pages appended.
+4. Deduplication: by both id AND path -- prevents duplicate tiles.
+5. No-permissions fallback: admin/custom user with zero permission_codes + not superuser/school_admin -> /no-access.
+
+---
+
+### 6. Frontend -- AuthGate (frontend/components/layout/AuthGate.tsx)
+
+Extended for multi-portal routing. Fetches /api/v1/auth/me/ on every page load.
+- portal_type=teacher -> /teacher/home (if on admin route)
+- portal_type=parent -> /parent/home (if on admin route)
+- Zero permission_codes + not superuser/school_admin + not teacher/parent -> /no-access
+
+NOTE: Highest conflict-risk file. Review against any branch that touched AuthGate before merging.
+
+---
+
+### 7. Frontend -- No-Access Page (frontend/app/no-access/page.tsx)
+
+New standalone page (outside any portal layout). Shows when a role has no permissions assigned.
+Fetches /me for user name, shows contact admin message, has sign out button.
+
+---
+
+### 8. Permission Prefix Bug Fixes (frontend/lib/routes.ts)
+
+Critical fixes -- these were wrong and caused modules to silently never show:
+- Roles and Permissions module: permission was 'roles' -> fixed to 'access_control'
+- HR module: permission was 'hr' -> fixed to 'human_resource'
+- Roles sub-page permissions updated to match actual backend codes
+
+Backend permission code prefixes (ground truth from DB):
+  academics, access_control, accounts, admin_section, admissions, ai, behaviour,
+  conversation, dashboard, examination, fees, human_resource, inventory, library,
+  reports, settings_section, student_info, transport, utilities
+
+---
+
+### 9. Shared Component Updates
+
+- components/home/ModuleGrid.tsx: added optional modules prop
+- components/home/RecentsRow.tsx: added optional flatIndex + modules props
+- components/nav/TopBar.tsx: simplified to use usePermissions + useVisibleModules
+- frontend/hooks/usePermissions.ts: full rewrite with 5-min TTL cache, visibilitychange refresh, clearPermissionsCache() on logout
+- lib/widgetStore.ts: parent widgets added
+
+---
+
+### 10. Design System (frontend/styles/tokens.css)
+
+- --ok: #0E9F6E (was #059669); added --ok-soft, --warn-soft, --danger-soft, --info, --info-soft, --pu-tint, --ink-4, --bg-3, --bd-2, --bd-3
+- Geist_Mono removed from app/layout.tsx (Vercel font -- caused build error); replaced with JetBrains Mono
+- Body background changed to flat var(--bg-0)
+- Page shell pattern: borderRadius 18, padding 28px 30px, Instrument Serif italic title in var(--pu)
+
+---
+
+### Dead Code Removed -- Do Not Re-add
+
+- getVisibleTeacherModules() in teacher-routes.ts -- replaced by useVisibleModules()
+- getVisibleParentModules() in parent-routes.ts -- replaced by useVisibleModules()
+
+---
+
+### Test Credentials
+
+- Teacher: test_teacher_priya / Test@1234 (Class Teacher Grade 5A)
+- Parent: 6985743215 / Test@1234 (Sunil, 4 children)
+- Parent: 9949876903 / Test@1234 (Mohan, 1 child Ravi Koti Grade 7)
+
+Login at localhost:3000
+
+---
+
+### Known Issues
+
+- venu (Driver, portal_type=admin) has transport.* codes but Transport is commented out in routes.ts. Sees Dashboard + HR only. Resolves when Transport pages are built.
+- Sprint 6 Homework Module (/teacher/homework/) not yet started.
+- All sprint 8 work is UNCOMMITTED. Stage selectively -- do not git add .
+
+---
+
+### Start Next With
+
+1. Run migrations: 0014_role_portal_type and 0022_guardian_user
+2. Set portal_type=teacher on Teacher roles and portal_type=parent on Parent roles (Django admin or shell)
+3. Test login as test_teacher_priya (teacher portal) and 6985743215 (parent portal)
+4. Commit in batches: backend apps -> migrations -> frontend lib -> frontend portals -> shared components
+5. Sprint 6: Homework Module

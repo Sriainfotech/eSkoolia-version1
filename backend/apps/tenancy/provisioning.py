@@ -17,6 +17,7 @@ from datetime import datetime
 from django.conf import settings
 from django.db import connection, connections
 from django.apps import apps as django_apps
+from django.utils import timezone
 from apps.tenancy.models import SchoolTenant, Domain
 from apps.tenancy.audit import log_audit
 
@@ -356,9 +357,9 @@ def provision_tenant(
         logger.info(
             f"Tenant provisioning completed: {tenant_id} ({schema_name}) in {duration_ms}ms"
         )
-        
+
         return tenant
-    
+
     except Exception as exc:
         # Log failure
         duration_ms = int((time.time() - start_time) * 1000)
@@ -391,6 +392,3 @@ def provision_tenant(
         
         logger.error(f"Tenant provisioning failed: {exc}", exc_info=True)
         raise
-
-
-from django.utils import timezone

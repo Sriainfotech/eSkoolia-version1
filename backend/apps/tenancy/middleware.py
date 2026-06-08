@@ -18,7 +18,7 @@ from django.utils.deprecation import MiddlewareMixin
 
 from .context import clear_tenant_context, is_multi_tenancy_enabled, set_current_tenant
 from .models import SchoolTenant
-from .resolvers import get_tenant_from_request, resolve_tenant_schema
+from .resolvers import get_tenant_from_request
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,10 @@ class TenantMainMiddleware(MiddlewareMixin):
         try:
             # Resolve tenant from request (X-Tenant header, Host, X-School-Id)
             tenant = get_tenant_from_request(request)
-            schema_name = resolve_tenant_schema(request)
+            # Derive schema name directly from the already-resolved tenant to
+            # avoid a second DB round-trip (resolve_tenant_schema would call
+            # get_tenant_from_request again internally).
+            schema_name = tenant.schema_name if tenant else None
 
             if tenant is None:
                 # Tenant mode enabled but no tenant resolved

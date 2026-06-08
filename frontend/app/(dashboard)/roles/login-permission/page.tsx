@@ -265,7 +265,7 @@ export default function LoginPermissionPage() {
       <Hero role={role} />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 space-y-3">
-        <StatsRow counts={result?.counts ?? null} loading={loading && !result} role={role} />
+        <StatsRow counts={result?.counts ?? null} loading={loading && !result} role={role} roleCount={roleOptions.length || undefined} />
 
         <FilterBar
           role={role}

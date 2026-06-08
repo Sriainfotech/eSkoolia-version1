@@ -117,7 +117,7 @@ export function UsersTable({
                 User
               </th>
               <th className="px-4 py-3 text-left font-semibold text-[var(--ink-2,#475569)]">
-                Role / Class
+                Role / Details
               </th>
               <th className="px-4 py-3 text-left font-semibold text-[var(--ink-2,#475569)]">
                 Email

@@ -6,7 +6,11 @@ import type { RoleCounts } from '@/lib/login-permission/types';
 const ROLE_LABELS: Record<string, string> = {
   staff:       'Staff',
   parent:      'Parents',
+  parents:     'Parents',
   student:     'Students',
+  students:    'Students',
+  teacher:     'Teachers',
+  teachers:    'Teachers',
   admin:       'Admins',
   accountant:  'Accountants',
   librarian:   'Librarians',
@@ -16,6 +20,7 @@ interface Props {
   counts: RoleCounts | null;
   loading: boolean;
   role: string;
+  roleCount?: number;
 }
 
 function Shimmer() {
@@ -24,7 +29,7 @@ function Shimmer() {
   );
 }
 
-export function StatsRow({ counts, loading, role }: Props) {
+export function StatsRow({ counts, loading, role, roleCount }: Props) {
   const roleName = role ? (ROLE_LABELS[role] ?? role) : '';
   const pct =
     counts && counts.total > 0
@@ -55,7 +60,7 @@ export function StatsRow({ counts, loading, role }: Props) {
     },
     {
       label:   'ROLES AVAILABLE',
-      value:   6 as number | null,
+      value:   (roleCount ?? 3) as number | null,
       sub:     'Across the system',
       Icon:    Settings2,
       iconCls: 'text-teal-500',

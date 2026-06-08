@@ -60,10 +60,36 @@ class MeView(APIView):
         role_names = [row.role.name for row in role_rows if row.role]
         role_ids = [row.role_id for row in role_rows if row.role_id]
 
+        # Derive portal_type from the user's first active role.
+        # Superusers and school admins always get the admin console.
+        portal_type = "admin"
+        if not user.is_superuser and not getattr(user, "is_school_admin", False):
+            for row in role_rows:
+                if row.role and row.role.portal_type and row.role.portal_type != "admin":
+                    portal_type = row.role.portal_type
+                    break
+
         school = user.school
         school_name = school.name if school else None
         # Super admins have no school — grant them LLM access for preview
         llm_enabled = school.llm_enabled if school else True
+
+        # School branding — only fields that exist on the School model
+        school_branding = {
+            "name": school_name,
+            "brand_color": None,
+            "logo_url": None,
+        }
+        # If SchoolTenant exists for this school, pull richer branding
+        if school:
+            try:
+                from apps.tenancy.models import SchoolTenant
+                tenant = SchoolTenant.objects.filter(name=school.name).first()
+                if tenant:
+                    school_branding["brand_color"] = getattr(tenant, "brand_color", None)
+                    school_branding["logo_url"] = getattr(tenant, "logo_url", None)
+            except Exception:
+                pass  # SchoolTenant not available — silently fall back
 
         class_section = None
         try:
@@ -82,6 +108,8 @@ class MeView(APIView):
                 "last_name": user.last_name,
                 "school_id": user.school_id,
                 "school_name": school_name,
+                "portal_type": portal_type,
+                "school_branding": school_branding,
                 "is_superuser": bool(user.is_superuser),
                 "is_school_admin": bool(getattr(user, "is_school_admin", False)),
                 "role_ids": role_ids,

@@ -15,6 +15,7 @@ from typing import Optional, Tuple
 
 from django.contrib.auth import get_user_model
 from django.conf import settings
+from django.http import HttpRequest
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework.request import Request
@@ -141,7 +142,7 @@ class TenantAwareAuthenticationMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
     
-    def __call__(self, request: Request) -> Request:
+    def __call__(self, request: HttpRequest) -> HttpRequest:
         """Process request and authenticate user if needed.
         
         Args:
