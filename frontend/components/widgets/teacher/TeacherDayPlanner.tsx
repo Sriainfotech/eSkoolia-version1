@@ -62,7 +62,7 @@ export function TeacherDayPlanner({ periods, loading }: Props) {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
         <div>
           <p style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--muted, #5B5E72)', margin: 0 }}>
-            Today's Schedule
+            Today&apos;s Schedule
           </p>
           <p style={{ fontSize: 11, color: 'var(--muted, #5B5E72)', marginTop: 2 }}>{today}</p>
         </div>

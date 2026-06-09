@@ -10,9 +10,9 @@ interface Props {
   onSearchChange: (q: string) => void;
   statusFilter: string;
   onStatusFilterChange: (v: string) => void;
-  typeFilter: string;
-  onTypeFilterChange: (v: string) => void;
-  deptTypes: string[];
+  deptFilter: string;
+  onDeptFilterChange: (v: string) => void;
+  deptNames: string[];
   onMarkAllVisible: (status: "P" | "A" | "L") => void;
   allVisibleMarked?: boolean;
 }
@@ -93,9 +93,9 @@ export default function HrGlobalControls({
   onSearchChange,
   statusFilter,
   onStatusFilterChange,
-  typeFilter,
-  onTypeFilterChange,
-  deptTypes,
+  deptFilter,
+  onDeptFilterChange,
+  deptNames,
   onMarkAllVisible,
   allVisibleMarked = false,
 }: Props) {
@@ -275,15 +275,15 @@ export default function HrGlobalControls({
           <option value="H">Holiday</option>
         </select>
 
-        {/* Type filter */}
+        {/* Department filter */}
         <select
-          value={typeFilter}
-          onChange={(e) => onTypeFilterChange(e.target.value)}
-          className="h-9 px-2.5 text-[11px] border border-[#E6E6EC] rounded-lg bg-[#FAFAFD] flex-shrink-0 min-w-[100px] outline-none focus:border-[#4729F4] cursor-pointer"
+          value={deptFilter}
+          onChange={(e) => onDeptFilterChange(e.target.value)}
+          className="h-9 px-2.5 text-[11px] border border-[#E6E6EC] rounded-lg bg-[#FAFAFD] flex-shrink-0 min-w-[100px] max-w-[200px] outline-none focus:border-[#4729F4] cursor-pointer"
         >
-          <option value="all">All Types</option>
-          {deptTypes.map(t => (
-             <option key={t} value={t}>{t}</option>
+          <option value="all">All Departments</option>
+          {deptNames.map(n => (
+             <option key={n} value={n}>{n}</option>
           ))}
         </select>
 

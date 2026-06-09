@@ -19,7 +19,22 @@ export interface StaffMark {
 export function useHrAttendanceData(date: string) {
   const [staffByDept, setStaffByDept] = useState<Record<number, Staff[]>>({});
   const [marksByDept, setMarksByDept] = useState<Record<number, Record<number, StaffMark>>>({});
+  const [originalMarksByDept, setOriginalMarksByDept] = useState<Record<number, Record<number, StaffMark>>>({});
   const [loadingDepts, setLoadingDepts] = useState<Record<number, boolean>>({});
+  const [kpiSummary, setKpiSummary] = useState<any>(null);
+  const [loadingKpis, setLoadingKpis] = useState(false);
+
+  const refreshSummary = useCallback(async () => {
+    setLoadingKpis(true);
+    try {
+      const res = await apiRequestWithRefresh<any>(`/api/v1/hr/staff-attendance/daily-summary/?date=${date}`, { method: "GET" });
+      setKpiSummary(res);
+    } catch (e) {
+      console.error("Failed to fetch daily summary", e);
+    } finally {
+      setLoadingKpis(false);
+    }
+  }, [date]);
 
   const loadDepartment = useCallback(async (deptId: number) => {
     // If we've already loaded this department for this date, skip
@@ -50,6 +65,7 @@ export function useHrAttendanceData(date: string) {
 
       setStaffByDept(prev => ({ ...prev, [deptId]: staffList }));
       setMarksByDept(prev => ({ ...prev, [deptId]: marks }));
+      setOriginalMarksByDept(prev => ({ ...prev, [deptId]: marks }));
     } catch (e) {
       console.error(e);
     } finally {
@@ -84,8 +100,10 @@ export function useHrAttendanceData(date: string) {
   useEffect(() => {
     setStaffByDept({});
     setMarksByDept({});
+    setOriginalMarksByDept({});
     setLoadingDepts({});
-  }, [date]);
+    refreshSummary();
+  }, [date, refreshSummary]);
 
-  return { staffByDept, marksByDept, loadingDepts, loadDepartment, updateMark, saveBulk };
+  return { staffByDept, marksByDept, originalMarksByDept, loadingDepts, loadDepartment, updateMark, saveBulk, kpiSummary, loadingKpis, refreshSummary };
 }

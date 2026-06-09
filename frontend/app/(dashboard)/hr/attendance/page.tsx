@@ -12,7 +12,7 @@ import {
 } from "@/hooks/useHrApi";
 import type { Staff } from "@/types/hr";
 import { useHrToast } from "@/components/hr/HrUi";
-import DeptTypeCard from "./components/DeptTypeCard";
+import DeptCard from "./components/DeptCard";
 import HrGlobalControls from "./components/HrGlobalControls";
 import HrAttendanceKPIs from "./components/HrAttendanceKPIs";
 import { useHrAttendanceData } from "./hooks/useHrAttendanceData";
@@ -21,6 +21,7 @@ import StaffAbsentNoteDialog from "./components/StaffAbsentNoteDialog";
 import StaffAttendanceImportDialog from "./components/StaffAttendanceImportDialog";
 import { getAccessToken } from "@/lib/auth";
 import { API_BASE_URL } from "@/lib/api";
+import ConfirmDialogHost from "@/app/(dashboard)/attendance/student/components/ConfirmDialog";
 
 // ─── Status model (matches backend StaffAttendance.STATUS_CHOICES) ──────────────
 type AttCode = "P" | "A" | "L" | "F" | "H";
@@ -139,61 +140,54 @@ function KpiCard({ label, value, sub, badge, badgeBg, badgeColor }: {
 export default function HrStaffAttendancePage() {
   const [date, setDate] = useState(today());
   const { data: deptData } = useAllDepartments();
-  const { staffByDept, marksByDept, loadingDepts, loadDepartment, updateMark, saveBulk } = useHrAttendanceData(date);
+  const { staffByDept, marksByDept, originalMarksByDept, loadingDepts, loadDepartment, updateMark, saveBulk, kpiSummary, loadingKpis, refreshSummary } = useHrAttendanceData(date);
   const { toast } = useHrToast();
 
   const [saving, setSaving] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [typeFilter, setTypeFilter] = useState("all");
-  const [openDepts, setOpenDepts] = useState<Set<string>>(new Set());
+  const [deptFilter, setDeptFilter] = useState("all");
+  const [openDepts, setOpenDepts] = useState<Set<number>>(new Set());
 
   const departments = useMemo(() => deptData?.results ?? [], [deptData]);
 
-  const deptsByType = useMemo(() => {
-    const groups: Record<string, any[]> = {};
-    for (const d of departments) {
-      if (typeFilter !== "all" && d.dept_type !== typeFilter) continue;
-      const typeName = d.dept_type?.trim() || "Other";
-      if (!groups[typeName]) groups[typeName] = [];
-      groups[typeName].push(d);
-    }
-    return Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [departments, typeFilter]);
+  const filteredDepartments = useMemo(() => {
+    return departments
+      .filter((d: any) => deptFilter === "all" || d.name === deptFilter)
+      .sort((a: any, b: any) => (a.name || "").localeCompare(b.name || ""));
+  }, [departments, deptFilter]);
 
-  const deptTypes = useMemo(() => {
+  const deptNames = useMemo(() => {
     const set = new Set<string>();
-    for (const d of departments) if (d.dept_type) set.add(d.dept_type);
+    for (const d of departments) if (d.name) set.add(d.name);
     return Array.from(set).sort();
   }, [departments]);
 
   useEffect(() => {
-    if (deptsByType.length > 0 && openDepts.size === 0) {
-      setOpenDepts(new Set([deptsByType[0][0]]));
+    if (filteredDepartments.length > 0 && openDepts.size === 0) {
+      setOpenDepts(new Set([filteredDepartments[0].id]));
     }
-  }, [deptsByType, openDepts]);
+  }, [filteredDepartments, openDepts]);
 
   const handleMarkAllVisible = (statusCode: "P" | "A" | "L") => {
     let count = 0;
-    deptsByType.forEach(([deptType, typeDepts]) => {
-      if (openDepts.has(deptType)) {
-        typeDepts.forEach((d: any) => {
-          const staff = staffByDept[d.id] || [];
-          staff.forEach((s: any) => {
-            const marks = marksByDept[d.id] || {};
-            const currentMark = marks[s.id] || {};
-            const q = search.trim().toLowerCase();
-            const matchesSearch = !q || (s.full_name || "").toLowerCase().includes(q) || (s.staff_no || "").toLowerCase().includes(q);
-            const matchesStatus = statusFilter === "all" || (currentMark.attendance_type || "P") === statusFilter;
-            
-            if (matchesSearch && matchesStatus) {
-              if (currentMark.attendance_type !== statusCode) {
-                updateMark(d.id, s.id, { attendance_type: statusCode });
-                count++;
-              }
+    filteredDepartments.forEach((d: any) => {
+      if (openDepts.has(d.id)) {
+        const staff = staffByDept[d.id] || [];
+        staff.forEach((s: any) => {
+          const marks = marksByDept[d.id] || {};
+          const currentMark = marks[s.id] || {};
+          const q = search.trim().toLowerCase();
+          const matchesSearch = !q || (s.full_name || "").toLowerCase().includes(q) || (s.staff_no || "").toLowerCase().includes(q);
+          const matchesStatus = statusFilter === "all" || (currentMark.attendance_type || "P") === statusFilter;
+
+          if (matchesSearch && matchesStatus) {
+            if (currentMark.attendance_type !== statusCode) {
+              updateMark(d.id, s.id, { attendance_type: statusCode });
+              count++;
             }
-          });
+          }
         });
       }
     });
@@ -221,6 +215,7 @@ export default function HrStaffAttendancePage() {
     await saveBulk(rows, () => {
       toast(`Attendance saved for ${rows.length} staff`, "success");
       loadDepartment(deptId);
+      refreshSummary();
       setSaving(false);
     }, (msg: string) => {
       toast(msg, "error");
@@ -240,7 +235,10 @@ export default function HrStaffAttendancePage() {
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
       link.download = "staff_attendance_sheet.xlsx";
+      document.body.appendChild(link);
       link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
     } catch (e: any) {
       toast(e.message || "Failed to download sample", "error");
     }
@@ -249,16 +247,45 @@ export default function HrStaffAttendancePage() {
   const handleExport = async () => {
     try {
       const token = getAccessToken();
-      const resp = await fetch(`${API_BASE_URL}/api/v1/hr/staff-attendance/export/?date=${date}&format=csv`, {
+      const query = new URLSearchParams({ date, fmt: "xlsx" });
+      if (deptFilter !== "all") query.set("department", deptFilter.toString());
+      if (statusFilter !== "all") query.set("attendance_type", statusFilter);
+
+      const resp = await fetch(`${API_BASE_URL}/api/v1/hr/staff-attendance/export/?${query.toString()}`, {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!resp.ok) throw new Error(`Error ${resp.status}`);
+      if (!resp.ok) {
+        // Surface the server's error detail (e.g. permission denied) instead of a bare code.
+        let detail = `Error ${resp.status}`;
+        try { const j = await resp.json(); if (j?.detail) detail = j.detail; } catch { /* not JSON */ }
+        throw new Error(detail);
+      }
+
+      // Name the file from what the server ACTUALLY returned so the extension
+      // always matches the real bytes. Otherwise a CSV saved as ".xlsx" makes
+      // Excel report "file format or extension is not valid".
+      const contentType = resp.headers.get("Content-Type") || "";
+      const disposition = resp.headers.get("Content-Disposition") || "";
+      const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition);
+      let filename = match ? decodeURIComponent(match[1]) : "";
+      if (!filename) {
+        const ext = contentType.includes("spreadsheetml")
+          ? "xlsx"
+          : contentType.includes("csv")
+          ? "csv"
+          : "xlsx";
+        filename = `staff_attendance_${date}.${ext}`;
+      }
+
       const blob = await resp.blob();
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `staff_attendance_${date}.csv`;
+      link.download = filename;
+      document.body.appendChild(link);
       link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
     } catch (e: any) {
       toast(e.message || "Failed to export", "error");
     }
@@ -294,7 +321,9 @@ export default function HrStaffAttendancePage() {
         departments={departments}
         staffByDept={staffByDept}
         marksByDept={marksByDept}
-        loading={Object.values(loadingDepts).some(v => v)}
+        originalMarksByDept={originalMarksByDept}
+        loading={loadingKpis || Object.values(loadingDepts).some(v => v)}
+        kpiSummary={kpiSummary}
       />
 
       <HrGlobalControls
@@ -304,32 +333,32 @@ export default function HrStaffAttendancePage() {
         onSearchChange={setSearch}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
-        typeFilter={typeFilter}
-        onTypeFilterChange={setTypeFilter}
-        deptTypes={deptTypes}
+        deptFilter={deptFilter}
+        onDeptFilterChange={setDeptFilter}
+        deptNames={deptNames}
         onMarkAllVisible={handleMarkAllVisible}
       />
 
       <div className="space-y-3">
-        {deptsByType.map(([deptType, typeDepts]) => (
-          <DeptTypeCard
-            key={deptType}
-            deptType={deptType}
-            departments={typeDepts}
+        {filteredDepartments.map((d: any) => (
+          <DeptCard
+            key={d.id}
+            department={d}
             staffByDept={staffByDept}
             marksByDept={marksByDept}
-            loadingDepts={loadingDepts}
-            open={openDepts.has(deptType)}
-            onToggle={() => setOpenDepts(p => { const n = new Set(p); if (n.has(deptType)) n.delete(deptType); else n.add(deptType); return n; })}
+            loading={!!loadingDepts[d.id]}
+            open={openDepts.has(d.id)}
+            onToggle={() => setOpenDepts(p => { const n = new Set(p); if (n.has(d.id)) n.delete(d.id); else n.add(d.id); return n; })}
             loadDepartment={loadDepartment}
             updateMark={updateMark}
             saveRows={saveRows}
             saving={saving}
             search={search}
             statusFilter={statusFilter}
+            isToday={date === today()}
           />
         ))}
-        {deptsByType.length === 0 && (
+        {filteredDepartments.length === 0 && (
           <div className="py-20 text-center text-[#6B6B7B]">
             <div className="w-16 h-16 bg-[#E6E6EC] rounded-full flex items-center justify-center mx-auto mb-3 text-2xl">👥</div>
             <p className="text-[15px] font-semibold text-[#0B0B14]">No departments found</p>
@@ -348,6 +377,7 @@ export default function HrStaffAttendancePage() {
         }}
         onNotify={(msg, tone) => toast(msg, tone)}
       />
+      <ConfirmDialogHost />
     </div>
   );
 }

@@ -133,15 +133,16 @@ class DepartmentSerializer(serializers.ModelSerializer):
     )
     head_name = serializers.SerializerMethodField()
     deputy_head_name = serializers.SerializerMethodField()
+    staff_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Department
         fields = [
             "id", "school", "name", "dept_type", "description", "is_active",
-            "head_id", "deputy_head_id", "head_name", "deputy_head_name",
+            "head_id", "deputy_head_id", "head_name", "deputy_head_name", "staff_count",
             "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "school", "head_name", "deputy_head_name", "created_at", "updated_at"]
+        read_only_fields = ["id", "school", "head_name", "deputy_head_name", "staff_count", "created_at", "updated_at"]
         extra_kwargs = {
             "name": {
                 "error_messages": {
@@ -155,6 +156,9 @@ class DepartmentSerializer(serializers.ModelSerializer):
 
     def get_deputy_head_name(self, obj):
         return str(obj.deputy_head) if obj.deputy_head_id else None
+
+    def get_staff_count(self, obj):
+        return obj.staff_members.filter(status='active').count()
 
     def validate_dept_type(self, value):
         cleaned = (value or "").strip()
