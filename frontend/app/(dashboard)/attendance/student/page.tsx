@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Student, StudentNote, LevelFilter, AttendanceStatus } from './types';
@@ -84,6 +84,7 @@ export default function StudentAttendancePage() {
   const [absentDialogState, setAbsentDialogState] = useState<{ classId: number; sectionId: number; student: Student; mode: 'mark' | 'edit' } | null>(null);
   const [lateDialogState, setLateDialogState] = useState<{ classId: number; sectionId: number; student: Student; signInTime: string; minutesLate: number } | null>(null);
   const [notesDialogState, setNotesDialogState] = useState<{ classId: number; sectionId: number; studentId: number; mode: 'add' | 'view' } | null>(null);
+  const [bulkAbsentDialogState, setBulkAbsentDialogState] = useState<{ requests: { classId: number; sectionId: number; targets: Student[] }[] } | null>(null);
 
   // -- Data hooks -----------------------------------------------
   const { classes, loading: classesLoading, refreshClassSummary } = useClasses(selectedDate);
@@ -380,7 +381,7 @@ export default function StudentAttendancePage() {
         () => {
           pushToast(options?.successMessage ?? 'Attendance updated.', 'success');
           clearStudentMeta(selectedDate, [student.id]);
-          // Optimistic update via updateStudent() already reflects the new state — no refetch needed
+          refreshClassSummary();
         },
         (msg) => {
           updateStudent(classId, sectionId, student, selectedDate);
@@ -589,7 +590,7 @@ export default function StudentAttendancePage() {
       () => {
         pushToast(combinedNoteText ? 'Sign-out saved with note.' : 'Sign-out saved.', 'success');
         clearStudentMeta(selectedDate, [student.id]);
-        // Optimistic update already reflects sign-out — no refetch needed
+        refreshClassSummary();
       },
       (msg) => {
         updateStudent(classId, sectionId, student, selectedDate);
@@ -598,20 +599,15 @@ export default function StudentAttendancePage() {
     );
   }, [isReadOnly, students, updateStudent, selectedDate, patchMark, pushToast, clearStudentMeta]);
 
-  const handleBulkMark = useCallback((classId: number, sectionId: number, status: AttendanceStatus) => {
+  const processBulkMark = useCallback((classId: number, sectionId: number, targets: Student[], status: AttendanceStatus, absentReason?: string) => {
     const key = `${classId}-${sectionId}`;
-    const ids = selectedRows[key] ?? new Set<number>();
-    const sectionStudents = students[key] ?? [];
-    // If no rows are selected, treat as "mark all"; otherwise mark only selected rows
-    const baseTargets = ids.size > 0 ? sectionStudents.filter((s) => ids.has(s.id)) : sectionStudents;
-    // For mark-all-present, preserve students already marked absent.
-    const targets = status === 'present' ? baseTargets.filter((s) => s.status !== 'absent') : baseTargets;
-    if (targets.length === 0) return;
     const now = new Date().toTimeString().slice(0, 5);
-    // Issue #1: marking present must auto sign-in (and mirror arrival = sign-in).
     const shouldSignIn = status === 'present';
     targets.forEach((s) => {
       const update: Student = { ...s, status };
+      if (status === 'absent' && absentReason !== undefined) {
+        update.absent_reason = absentReason;
+      }
       if (shouldSignIn && !s.sign_in_time) {
         update.sign_in_time = now;
         update.arrival_time = s.arrival_time ?? now;
@@ -622,23 +618,52 @@ export default function StudentAttendancePage() {
       const base: Record<string, unknown> = {
         student_id: s.id, date: selectedDate, class_id: classId, section_id: sectionId, status,
       };
+      if (status === 'absent' && absentReason !== undefined) {
+        base.absent_reason = absentReason;
+        base.note = absentReason;
+      }
       if (shouldSignIn && !s.sign_in_time) {
         base.sign_in_time = now;
         base.arrival_time = s.arrival_time ?? now;
       }
-      return base as { student_id: number; date: string; class_id: number; section_id: number; status: AttendanceStatus };
+      return base as { student_id: number; date: string; class_id: number; section_id: number; status: AttendanceStatus; absent_reason?: string; note?: string };
     });
     saveBulk(
       marks,
       (saved) => {
         pushToast(`${saved} attendance record(s) updated.`, 'success');
         clearStudentMeta(selectedDate, targets.map((t) => t.id));
-        // Optimistic update already reflects bulk mark — no refetch needed
+        refreshClassSummary();
       },
       () => pushToast('Failed to update attendance.', 'error'),
     );
     setSelectedRows((prev) => ({ ...prev, [key]: new Set() }));
-  }, [selectedRows, students, selectedDate, saveBulk, updateStudent, pushToast, clearStudentMeta]);
+  }, [selectedDate, saveBulk, updateStudent, pushToast, clearStudentMeta]);
+
+  const handleBulkMark = useCallback(async (classId: number, sectionId: number, status: AttendanceStatus) => {
+    const key = `${classId}-${sectionId}`;
+    const ids = selectedRows[key] ?? new Set<number>();
+    const sectionStudents = students[key] ?? [];
+    // If no rows are selected, treat as "mark all"; otherwise mark only selected rows
+    const baseTargets = ids.size > 0 ? sectionStudents.filter((s) => ids.has(s.id)) : sectionStudents;
+    // For mark-all-present, preserve students already marked absent.
+    const targets = status === 'present' ? baseTargets.filter((s) => s.status !== 'absent') : baseTargets;
+    if (targets.length === 0) return;
+
+    if (status === 'absent') {
+      const { ok } = await confirmDialog({
+        title: 'Mark students absent?',
+        message: `Confirm marking ${targets.length} student(s) as absent for today. You'll be asked to add a reason next.`,
+        tone: 'danger',
+        confirmLabel: 'Mark absent',
+      });
+      if (!ok) return;
+      setBulkAbsentDialogState({ requests: [{ classId, sectionId, targets }] });
+      return;
+    }
+
+    processBulkMark(classId, sectionId, targets, status);
+  }, [selectedRows, students, processBulkMark]);
 
   const handleBulkSignIn = useCallback((classId: number, sectionId: number) => {
     const key = `${classId}-${sectionId}`;
@@ -664,7 +689,7 @@ export default function StudentAttendancePage() {
       (saved) => {
         pushToast(`${saved} sign-in record(s) saved.`, 'success');
         clearStudentMeta(selectedDate, targets.map((t) => t.id));
-        // Optimistic update already reflects sign-in — no refetch needed
+        refreshClassSummary();
       },
       () => pushToast('Failed to save bulk sign-in.', 'error'),
     );
@@ -827,14 +852,41 @@ export default function StudentAttendancePage() {
     loadSection(classId, sectionId, selectedDate);
   }, [students, selectedDate, saveBulk, updateStudent, pushToast, loadSection, clearStudentMeta]);
 
-  const handleMarkAllVisible = useCallback((status: AttendanceStatus) => {
+  const handleMarkAllVisible = useCallback(async (status: AttendanceStatus) => {
+    const requests: { classId: number; sectionId: number; targets: Student[] }[] = [];
+    
     openClasses.forEach((classId) => {
       const cls = classes.find((c) => c.id === classId);
       if (!cls) return;
       const sectionId = activeSections[classId] ?? cls.sections[0]?.id;
-      if (sectionId) handleBulkMark(classId, sectionId, status);
+      if (!sectionId) return;
+      const key = `${classId}-${sectionId}`;
+      const ids = selectedRows[key] ?? new Set<number>();
+      const sectionStudents = students[key] ?? [];
+      const baseTargets = ids.size > 0 ? sectionStudents.filter((s) => ids.has(s.id)) : sectionStudents;
+      const targets = status === 'present' ? baseTargets.filter((s) => s.status !== 'absent') : baseTargets;
+      if (targets.length > 0) {
+        requests.push({ classId, sectionId, targets });
+      }
     });
-  }, [openClasses, classes, activeSections, handleBulkMark]);
+
+    if (requests.length === 0) return;
+
+    if (status === 'absent') {
+      const totalTargets = requests.reduce((sum, req) => sum + req.targets.length, 0);
+      const { ok } = await confirmDialog({
+        title: 'Mark visible students absent?',
+        message: `Confirm marking ${totalTargets} student(s) as absent for today. You'll be asked to add a reason next.`,
+        tone: 'danger',
+        confirmLabel: 'Mark absent',
+      });
+      if (!ok) return;
+      setBulkAbsentDialogState({ requests });
+      return;
+    }
+
+    requests.forEach(req => processBulkMark(req.classId, req.sectionId, req.targets, status));
+  }, [openClasses, classes, activeSections, students, selectedRows, processBulkMark]);
 
   const handleMarkAllPresentForClass = useCallback((classId: number) => {
     const cls = classes.find((c) => c.id === classId);
@@ -869,6 +921,35 @@ export default function StudentAttendancePage() {
       pushToast(`Marked ${touched} student(s) present in ${cls.display_label}.`, 'success');
     }
   }, [classes, students, selectedDate, updateStudent, saveBulk, pushToast]);
+
+  const handleMarkAllAbsentForClass = useCallback(async (classId: number) => {
+    const cls = classes.find((c) => c.id === classId);
+    if (!cls) return;
+    
+    const requests: { classId: number; sectionId: number; targets: Student[] }[] = [];
+    cls.sections.forEach((sec) => {
+      const key = `${classId}-${sec.id}`;
+      const sectionStudents = students[key];
+      if (!sectionStudents || sectionStudents.length === 0) return;
+      const targets = sectionStudents.filter((s) => s.status !== 'absent');
+      if (targets.length > 0) {
+        requests.push({ classId, sectionId: sec.id, targets });
+      }
+    });
+
+    if (requests.length === 0) return;
+
+    const totalTargets = requests.reduce((sum, req) => sum + req.targets.length, 0);
+    const { ok } = await confirmDialog({
+      title: 'Mark class absent?',
+      message: `Confirm marking ${totalTargets} student(s) in ${cls.display_label} as absent for today. You'll be asked to add a reason next.`,
+      tone: 'danger',
+      confirmLabel: 'Mark absent',
+    });
+    if (!ok) return;
+
+    setBulkAbsentDialogState({ requests });
+  }, [classes, students]);
 
   return (
     <div className="p-6 bg-[#F0EFFE] min-h-full overflow-x-hidden">
@@ -966,6 +1047,7 @@ export default function StudentAttendancePage() {
           onRequestUnlock={() => setShowUnlockDialog(true)}
           isSundayLocked={isSundaySelected && !isEditUnlocked && dateMode === 'today'}
           onMarkAllPresentForClass={handleMarkAllPresentForClass}
+          onMarkAllAbsentForClass={handleMarkAllAbsentForClass}
           isEditUnlocked={isEditUnlocked}
           onLogoutPastEdit={() => {
             setIsEditUnlocked(false);
@@ -1003,6 +1085,35 @@ export default function StudentAttendancePage() {
               );
             }
             setAbsentDialogState(null);
+          }}
+        />
+      ) : null}
+
+      {bulkAbsentDialogState ? (
+        <AbsentNoteDialog
+          studentCount={bulkAbsentDialogState.requests.reduce((sum, req) => sum + req.targets.length, 0)}
+          onConfirm={(reason) => {
+            bulkAbsentDialogState.requests.forEach(req => 
+              processBulkMark(
+                req.classId,
+                req.sectionId,
+                req.targets,
+                'absent',
+                reason || undefined,
+              )
+            );
+            setBulkAbsentDialogState(null);
+          }}
+          onSkip={() => {
+            bulkAbsentDialogState.requests.forEach(req => 
+              processBulkMark(
+                req.classId,
+                req.sectionId,
+                req.targets,
+                'absent',
+              )
+            );
+            setBulkAbsentDialogState(null);
           }}
         />
       ) : null}

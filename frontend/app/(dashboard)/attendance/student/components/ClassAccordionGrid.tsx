@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useState } from 'react';
 import type { ClassInfo, Student, SectionSummary, LevelFilter, AttendanceStatus } from '../types';
@@ -196,9 +196,10 @@ interface ClassCardProps {
   readOnly?: boolean;
   dateMode?: 'today' | 'past' | 'future';
   onMarkAllPresentForClass?: (classId: number) => void;
+  onMarkAllAbsentForClass?: (classId: number) => void;
 }
 
-function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, students, loadingStudents, selectedRows, searchQuery, statusFilter, sectionFilter, onSelectionChange, onToggleAbsent, onEditStatusPrompt, onToggleLunch, onSignIn, onSignOut, onBulkMark, onBulkSignIn, onSave, onReset, onOpenNote, readOnly = false, dateMode, onMarkAllPresentForClass }: ClassCardProps) {
+function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, students, loadingStudents, selectedRows, searchQuery, statusFilter, sectionFilter, onSelectionChange, onToggleAbsent, onEditStatusPrompt, onToggleLunch, onSignIn, onSignOut, onBulkMark, onBulkSignIn, onSave, onReset, onOpenNote, readOnly = false, dateMode, onMarkAllPresentForClass, onMarkAllAbsentForClass }: ClassCardProps) {
   const [showMarkAll, setShowMarkAll] = useState(false);
   const [markAllCooldown, setMarkAllCooldown] = useState(false);
   const filteredSections = sectionFilter === 'all' ? cls.sections : cls.sections.filter((sec) => { const name = (sec.name || '').trim().toUpperCase(); const target = sectionFilter.toUpperCase(); return name === target || name.endsWith(` ${target}`) || name.replace(/^SECTION\s+/i, '') === target; });
@@ -280,19 +281,36 @@ function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, st
         </div>
         <div className="flex-1" />
         {!isOpen && dateMode === 'today' && !readOnly && showMarkAll && onMarkAllPresentForClass && attendanceStatus !== 'complete' && (
-          <button
-            disabled={markAllCooldown}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (markAllCooldown) return;
-              onMarkAllPresentForClass(cls.id);
-              setMarkAllCooldown(true);
-              setTimeout(() => setMarkAllCooldown(false), 1500);
-            }}
-            className="flex-shrink-0 h-7 px-3 text-[10px] font-bold bg-[#E4F6ED] text-[#0A8C5A] rounded-lg border border-[#0A8C5A]/20 hover:bg-[#c8edd8] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            ✓ Mark All Present
-          </button>
+          <div className="flex gap-2 items-center shrink-0">
+            <button
+              disabled={markAllCooldown}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (markAllCooldown) return;
+                onMarkAllPresentForClass(cls.id);
+                setMarkAllCooldown(true);
+                setTimeout(() => setMarkAllCooldown(false), 1500);
+              }}
+              className="flex-shrink-0 h-7 px-3 text-[10px] font-bold bg-[#E4F6ED] text-[#0A8C5A] rounded-lg border border-[#0A8C5A]/20 hover:bg-[#c8edd8] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              ✓ Mark All Present
+            </button>
+            {onMarkAllAbsentForClass && (
+              <button
+                disabled={markAllCooldown}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (markAllCooldown) return;
+                  onMarkAllAbsentForClass(cls.id);
+                  setMarkAllCooldown(true);
+                  setTimeout(() => setMarkAllCooldown(false), 1500);
+                }}
+                className="flex-shrink-0 h-7 px-3 text-[10px] font-bold bg-[#FCE8EE] text-[#C2264E] rounded-lg border border-[#C2264E]/20 hover:bg-[#fbd3de] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Mark All Absent
+              </button>
+            )}
+          </div>
         )}
         <AttendanceRing pct={attendancePct} size={38} strokeWidth={3.5} />
         <div className="flex flex-col items-end shrink-0 ml-1">
@@ -348,11 +366,12 @@ export interface ClassAccordionGridProps {
   onRequestUnlock?: () => void;
   isSundayLocked?: boolean;
   onMarkAllPresentForClass?: (classId: number) => void;
+  onMarkAllAbsentForClass?: (classId: number) => void;
   isEditUnlocked?: boolean;
   onLogoutPastEdit?: () => void;
 }
 
-export default function ClassAccordionGrid({ classes, levelFilter, searchQuery, statusFilter, sectionFilter, openClasses, onToggleClass, activeSections, onSectionChange, students, loadingStudents, selectedRows, onSelectionChange, onToggleAbsent, onEditStatusPrompt, onToggleLunch, onSignIn, onSignOut, onBulkMark, onBulkSignIn, onSave, onReset, onOpenNote, readOnly = false, dateMode = 'today', selectedDate, onRequestUnlock, isSundayLocked = false, onMarkAllPresentForClass, isEditUnlocked = false, onLogoutPastEdit }: ClassAccordionGridProps) {
+export default function ClassAccordionGrid({ classes, levelFilter, searchQuery, statusFilter, sectionFilter, openClasses, onToggleClass, activeSections, onSectionChange, students, loadingStudents, selectedRows, onSelectionChange, onToggleAbsent, onEditStatusPrompt, onToggleLunch, onSignIn, onSignOut, onBulkMark, onBulkSignIn, onSave, onReset, onOpenNote, readOnly = false, dateMode = 'today', selectedDate, onRequestUnlock, isSundayLocked = false, onMarkAllPresentForClass, onMarkAllAbsentForClass, isEditUnlocked = false, onLogoutPastEdit }: ClassAccordionGridProps) {
   const q = searchQuery.trim().toLowerCase();
   const visible = classes.filter((cls) => {
     if (levelFilter !== 'all' && cls.level !== levelFilter) return false;
@@ -464,7 +483,7 @@ export default function ClassAccordionGrid({ classes, levelFilter, searchQuery, 
         </div>
       )}
       {visible.map((cls) => (
-        <ClassCard key={cls.id} cls={cls} isOpen={openClasses.has(cls.id)} onToggle={onToggleClass} activeSectionId={activeSections[cls.id]} onSectionChange={onSectionChange} students={students} loadingStudents={loadingStudents} selectedRows={selectedRows} searchQuery={searchQuery} statusFilter={statusFilter} sectionFilter={sectionFilter} onSelectionChange={onSelectionChange} onToggleAbsent={onToggleAbsent} onEditStatusPrompt={onEditStatusPrompt} onToggleLunch={onToggleLunch} onSignIn={onSignIn} onSignOut={onSignOut} onBulkMark={onBulkMark} onBulkSignIn={onBulkSignIn} onSave={onSave} onReset={onReset} onOpenNote={onOpenNote} readOnly={readOnly} dateMode={dateMode} onMarkAllPresentForClass={onMarkAllPresentForClass} />
+        <ClassCard key={cls.id} cls={cls} isOpen={openClasses.has(cls.id)} onToggle={onToggleClass} activeSectionId={activeSections[cls.id]} onSectionChange={onSectionChange} students={students} loadingStudents={loadingStudents} selectedRows={selectedRows} searchQuery={searchQuery} statusFilter={statusFilter} sectionFilter={sectionFilter} onSelectionChange={onSelectionChange} onToggleAbsent={onToggleAbsent} onEditStatusPrompt={onEditStatusPrompt} onToggleLunch={onToggleLunch} onSignIn={onSignIn} onSignOut={onSignOut} onBulkMark={onBulkMark} onBulkSignIn={onBulkSignIn} onSave={onSave} onReset={onReset} onOpenNote={onOpenNote} readOnly={readOnly} dateMode={dateMode} onMarkAllPresentForClass={onMarkAllPresentForClass} onMarkAllAbsentForClass={onMarkAllAbsentForClass} />
       ))}
     </div>
   );
