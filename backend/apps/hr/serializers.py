@@ -134,14 +134,16 @@ class DepartmentSerializer(serializers.ModelSerializer):
     head_name = serializers.SerializerMethodField()
     deputy_head_name = serializers.SerializerMethodField()
 
+    staff_count = serializers.IntegerField(read_only=True, default=0)
+
     class Meta:
         model = Department
         fields = [
-            "id", "school", "name", "dept_type", "description", "is_active",
-            "head_id", "deputy_head_id", "head_name", "deputy_head_name",
+            "id", "school", "name", "short_code", "dept_type", "description", "email", "is_active",
+            "head_id", "deputy_head_id", "head_name", "deputy_head_name", "staff_count",
             "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "school", "head_name", "deputy_head_name", "created_at", "updated_at"]
+        read_only_fields = ["id", "school", "head_name", "deputy_head_name", "staff_count", "created_at", "updated_at"]
         extra_kwargs = {
             "name": {
                 "error_messages": {
@@ -207,6 +209,19 @@ class DepartmentSerializer(serializers.ModelSerializer):
         if len(text) > 255:
             raise serializers.ValidationError("Description must not exceed 255 characters.")
         return text
+
+    def validate_email(self, value):
+        cleaned = (value or "").strip()
+        if not cleaned:
+            return cleaned  # optional field
+        import re as _re
+        # RFC 5322 simplified strict pattern: local@domain.tld
+        pattern = r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$'
+        if not _re.fullmatch(pattern, cleaned):
+            raise serializers.ValidationError(
+                "Enter a valid email address (e.g. science@school.edu)."
+            )
+        return cleaned.lower()
 
 
 class DesignationSerializer(serializers.ModelSerializer):
@@ -398,6 +413,23 @@ class StaffSerializer(serializers.ModelSerializer):
     role_name = serializers.SerializerMethodField(read_only=True)
     full_name = serializers.SerializerMethodField(read_only=True)
 
+    personal_email = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    official_email = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    whatsapp = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    alternate_mobile = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    current_address_line2 = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    permanent_address_line2 = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    city = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    state = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    current_city = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    current_state = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    current_country = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    current_pin = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    permanent_city = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    permanent_state = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    permanent_pin = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    permanent_country = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
     class Meta:
         model = Staff
         fields = [
@@ -457,6 +489,28 @@ class StaffSerializer(serializers.ModelSerializer):
             "designation_name",
             "role_name",
             "full_name",
+            "blood_group",
+            "nationality",
+            "mother_tongue",
+            "religion",
+            "preferred_communication",
+            "num_children",
+            "personal_email",
+            "official_email",
+            "whatsapp",
+            "alternate_mobile",
+            "current_address_line2",
+            "permanent_address_line2",
+            "city",
+            "state",
+            "current_city",
+            "current_state",
+            "current_country",
+            "current_pin",
+            "permanent_city",
+            "permanent_state",
+            "permanent_pin",
+            "permanent_country",
         ]
         read_only_fields = ["id", "school", "created_at", "updated_at"]
 
@@ -542,10 +596,70 @@ class StaffSerializer(serializers.ModelSerializer):
         except Exception:
             pass
 
+        custom = getattr(instance, "custom_field", {}) or {}
+        data["personal_email"] = self._normalize_text_input(custom.get("personal_email") or "")
+        data["official_email"] = self._normalize_text_input(custom.get("official_email") or "")
+        if data["official_email"]:
+            data["email"] = data["official_email"]
+        elif data["personal_email"]:
+            data["email"] = ""
+        else:
+            data["email"] = self._normalize_text_input(getattr(instance, "email", "") or "")
+        data["whatsapp"] = self._normalize_text_input(custom.get("whatsapp") or "")
+        data["alternate_mobile"] = self._normalize_text_input(custom.get("alternate_mobile") or "")
+        data["current_address_line2"] = self._normalize_text_input(custom.get("current_address_line2") or "")
+        data["permanent_address_line2"] = self._normalize_text_input(custom.get("permanent_address_line2") or "")
+        data["city"] = self._normalize_text_input(custom.get("city") or custom.get("current_city") or "")
+        data["state"] = self._normalize_text_input(custom.get("state") or custom.get("current_state") or "")
+        data["current_country"] = self._normalize_text_input(custom.get("current_country") or "")
+        data["current_pin"] = self._normalize_text_input(
+            custom.get("current_pin") or custom.get("pincode") or custom.get("pin") or custom.get("postal_code") or ""
+        )
+
+        if not data["city"]:
+            current_address = self._normalize_text_input(getattr(instance, "current_address", "") or "")
+            if current_address and re.fullmatch(r"[A-Za-z\s'\-]+", current_address) and len(current_address.split()) <= 2:
+                data["city"] = current_address
+        data["permanent_city"] = self._normalize_text_input(custom.get("permanent_city") or "")
+        data["permanent_pin"] = self._normalize_text_input(custom.get("permanent_pin") or "")
+        if not data["permanent_city"]:
+            permanent_address = self._normalize_text_input(getattr(instance, "permanent_address", "") or "")
+            if permanent_address and re.fullmatch(r"[A-Za-z\s'\-]+", permanent_address) and len(permanent_address.split()) <= 2:
+                data["permanent_city"] = permanent_address
+
+        if not data["current_pin"]:
+            current_address = getattr(instance, "current_address", "") or ""
+            match = re.search(r"\b(\d{5,6})\b", current_address)
+            if match:
+                data["current_pin"] = match.group(1)
+        if not data["permanent_pin"]:
+            permanent_address = getattr(instance, "permanent_address", "") or ""
+            match = re.search(r"\b(\d{5,6})\b", permanent_address)
+            if match:
+                data["permanent_pin"] = match.group(1)
+
+        data["current_city"] = data["city"]
+        data["current_state"] = data["state"]
+        data["permanent_city"] = self._normalize_text_input(custom.get("permanent_city") or data.get("permanent_city") or "")
+        data["permanent_state"] = self._normalize_text_input(custom.get("permanent_state") or "")
+        data["permanent_pin"] = self._normalize_text_input(custom.get("permanent_pin") or data.get("permanent_pin") or "")
+        data["permanent_country"] = self._normalize_text_input(custom.get("permanent_country") or "")
+
+        if "emergency_mobile" in data and "emergency_phone" not in data:
+            data["emergency_phone"] = data["emergency_mobile"]
+
+        if isinstance(custom, dict):
+            for k, v in custom.items():
+                if k not in data:
+                    data[k] = v
+
         return data
 
     def to_internal_value(self, data):
         mutable_data = data.copy() if hasattr(data, "copy") else dict(data)
+
+        if "emergency_phone" in mutable_data and "emergency_mobile" not in mutable_data:
+            mutable_data["emergency_mobile"] = mutable_data.get("emergency_phone")
 
         # QueryDict keeps repeated keys in getlist; use that for multi-file/name document input.
         if hasattr(data, "getlist") and "other_document" in data:
@@ -554,16 +668,27 @@ class StaffSerializer(serializers.ModelSerializer):
             mutable_data["other_document"] = self._normalize_other_documents(mutable_data.get("other_document"))
 
         custom_field = mutable_data.get("custom_field")
+        custom_dict = {}
         if isinstance(custom_field, str):
             custom_field_text = custom_field.strip()
             if custom_field_text:
                 try:
                     parsed_custom = json.loads(custom_field_text)
                     if isinstance(parsed_custom, dict):
-                        mutable_data["custom_field"] = parsed_custom
+                        custom_dict = parsed_custom
                 except (TypeError, ValueError, json.JSONDecodeError):
-                    # Preserve original value so serializer can emit a proper validation error if needed.
                     pass
+        elif isinstance(custom_field, dict):
+            custom_dict = dict(custom_field)
+
+        known_fields = set(self.get_fields().keys())
+        for key, value in mutable_data.items():
+            if key not in known_fields and key != "custom_field":
+                if value is not None and value != "":
+                    custom_dict[key] = value
+
+        if custom_dict:
+            mutable_data["custom_field"] = custom_dict
 
         for field_name in [
             "resume",
@@ -826,6 +951,35 @@ class StaffSerializer(serializers.ModelSerializer):
         custom_field_data = get_value("custom_field") or {}
         if not isinstance(custom_field_data, dict):
             custom_field_data = {}
+
+        # Persist top-level contact and address fields into custom_field storage.
+        for key in [
+            "personal_email",
+            "whatsapp",
+            "alternate_mobile",
+            "current_address_line2",
+            "permanent_address_line2",
+            "city",
+            "state",
+            "current_country",
+            "current_pin",
+            "permanent_city",
+            "permanent_state",
+            "permanent_pin",
+            "permanent_country",
+        ]:
+            if key in attrs:
+                value = attrs.pop(key)
+                if value is not None and value != "":
+                    custom_field_data[key] = value
+
+        if "official_email" in attrs:
+            off_email = self._normalize_text_input(attrs.pop("official_email"))
+            if off_email:
+                attrs["email"] = off_email
+                custom_field_data.setdefault("official_email", off_email)
+
+        attrs["custom_field"] = custom_field_data
 
         personal_email = self._normalize_text_input(custom_field_data.get("personal_email"))
         if personal_email and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]{2,}", personal_email):

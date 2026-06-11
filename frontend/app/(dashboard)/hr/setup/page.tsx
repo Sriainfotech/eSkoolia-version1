@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useState } from "react";
 import { Plus, Upload, ChevronDown, X, GripVertical } from "lucide-react";
 import {
@@ -96,6 +96,12 @@ function InlineDeptForm({ initial, onSaved, onCancel, stepLabel = "STEP 1 OF 2" 
     if (!form.name?.trim()) e.name = "Required";
     if (!form.short_code?.trim()) e.short_code = "Required";
     if (form.short_code && form.short_code.length > 6) e.short_code = "Max 6 chars";
+    if (form.email && form.email.trim()) {
+      const emailPattern = /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$/;
+      if (!emailPattern.test(form.email.trim())) {
+        e.email = "Enter a valid email (e.g. science@school.edu)";
+      }
+    }
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -210,7 +216,7 @@ function InlineDeptForm({ initial, onSaved, onCancel, stepLabel = "STEP 1 OF 2" 
         <div>
           <div className="text-[10.5px] font-[900] tracking-[0.12em] text-[#94A3B8] uppercase mb-3">Contact & Notes</div>
           <div className="grid grid-cols-2 gap-4">
-            <HrField label="Department Email">
+            <HrField label="Department Email" error={errors.email}>
               <HrInput value={form.email ?? ""} onChange={(e) => set("email", e.target.value)}
                 type="email" placeholder="e.g. science@school.edu" />
             </HrField>
@@ -304,9 +310,11 @@ function DeptCard({ dept, designationCount, onEdit, onDelete }: {
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0" onClick={(e) => e.stopPropagation()}>
-          <span className="text-[12.5px] font-[700] text-[#22C55E]">
-            {dept.staff_count ? `${dept.staff_count} staff` : "-- staff"}
-          </span>
+          {dept.staff_count ? (
+            <span className="text-[12.5px] font-[700] text-[#22C55E]">
+              {dept.staff_count} staff
+            </span>
+          ) : null}
           <button onClick={onEdit}
             className="text-[13px] font-[600] text-[#475569] hover:text-[#15172A] px-2 py-1 rounded hover:bg-[#f1f5f9]">
             Edit
@@ -480,9 +488,23 @@ function DesignationDeptCard({ dept, deptDesigs, onAddChild, onEdit, onDelete, o
           <HrBadge variant="purple">
             {deptDesigs.length} child designation{deptDesigs.length !== 1 ? "s" : ""}
           </HrBadge>
-          <HrBadge variant={dept.status === "active" ? "green" : "grey"}>
-            {dept.status ?? "active"}
-          </HrBadge>
+          {(() => {
+            const activeCount   = deptDesigs.filter((d) => d.is_active).length;
+            const inactiveCount = deptDesigs.filter((d) => !d.is_active).length;
+            return (
+              <>
+                {activeCount > 0 && (
+                  <HrBadge variant="green">{activeCount} active</HrBadge>
+                )}
+                {inactiveCount > 0 && (
+                  <HrBadge variant="grey">{inactiveCount} inactive</HrBadge>
+                )}
+                {deptDesigs.length === 0 && (
+                  <HrBadge variant="grey">no designations</HrBadge>
+                )}
+              </>
+            );
+          })()}
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -563,6 +585,7 @@ export default function HrSetupPage() {
   const { data: allDeptData, refetch: refetchAllDepts } = useAllDepartments();
   const { data: hierDeptData, loading: hierDeptLoading, refetch: refetchHierDepts } = useHierarchyDepts(desigDeptPage);
   const { data: desigData, loading: desigLoading, refetch: refetchDesigs } = useDesignations();
+  const { data: staffData } = useStaffList();
   const { toast } = useHrToast();
   const departments    = deptData?.results ?? [];
   const allDepartments = allDeptData?.results ?? [];
@@ -641,7 +664,7 @@ export default function HrSetupPage() {
       <div className="grid grid-cols-4 gap-3 mb-5">
         <HrKpiCard label="Departments"    value={deptData?.count  ?? "--"} />
         <HrKpiCard label="Designations"   value={desigData?.count ?? "--"} />
-        <HrKpiCard label="Staff Assigned" value="--" />
+        <HrKpiCard label="Staff Assigned" value={staffData?.count ?? "--"} />
         <HrKpiCard label="Missing Role"   value="--" color="var(--red)" />
       </div>
 
@@ -655,12 +678,21 @@ export default function HrSetupPage() {
         <div>
           {showAddForm && !editDept && (
             <InlineDeptForm
-              onSaved={(a) => { void refetchDepts(); void refetchAllDepts(); if (!a) setShowAddForm(false); }}
+              onSaved={(a) => { 
+                void refetchDepts(); 
+                void refetchAllDepts(); 
+                if (!a) {
+                  setShowAddForm(false);
+                  setStep(2);
+                  document.getElementById('main-content')?.scrollTo({ top: 0, behavior: "smooth" });
+                }
+              }}
               onCancel={() => setShowAddForm(false)}
             />
           )}
           {editDept && (
             <InlineDeptForm
+              key={editDept.id}
               initial={editDept}
               stepLabel="EDIT DEPARTMENT"
               onSaved={() => { void refetchDepts(); void refetchAllDepts(); setEditDept(null); }}
@@ -680,7 +712,7 @@ export default function HrSetupPage() {
                   key={dept.id}
                   dept={dept}
                   designationCount={desigCountForDept(dept.id)}
-                  onEdit={() => { setEditDept(dept); setShowAddForm(false); }}
+                  onEdit={() => { setEditDept(dept); setShowAddForm(false); document.getElementById('main-content')?.scrollTo({ top: 0, behavior: "smooth" }); }}
                   onDelete={() => setDeleteDeptId(dept.id)}
                 />
               ))}
@@ -736,7 +768,15 @@ export default function HrSetupPage() {
               void refetchDesigs();
               void refetchHierDepts();
               setDesigDeptPage(1);
-              if (!addAnother) { setEditDesig(null); setDesigDefaultDept(undefined); }
+              if (!addAnother) { 
+                const wasEdit = !!editDesig;
+                setEditDesig(null); 
+                setDesigDefaultDept(undefined); 
+                if (!wasEdit) {
+                  setStep(3);
+                  document.getElementById('main-content')?.scrollTo({ top: 0, behavior: "smooth" });
+                }
+              }
             }}
             onCancel={editDesig ? () => { setEditDesig(null); setDesigDefaultDept(undefined); } : undefined}
           />
@@ -763,7 +803,7 @@ export default function HrSetupPage() {
                       dept={dept}
                       deptDesigs={deptDesigs}
                       onAddChild={() => { setEditDesig(null); setDesigDefaultDept(dept.id); }}
-                      onEdit={(d) => { setEditDesig(d); setDesigDefaultDept(undefined); window.scrollTo({ top: 0, behavior: "smooth" }); }}
+                      onEdit={(d) => { setEditDesig(d); setDesigDefaultDept(undefined); document.getElementById('main-content')?.scrollTo({ top: 0, behavior: "smooth" }); }}
                       onDelete={(id) => setDeleteDesigId(id)}
                       onReorder={handleReorderDesigs}
                     />

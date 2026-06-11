@@ -4,7 +4,7 @@ import re
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
-from django.db.models import Sum
+from django.db.models import Sum, Count
 from django.db.models.functions import Coalesce
 from django.contrib.auth import get_user_model
 from django.http import Http404
@@ -91,6 +91,10 @@ class DepartmentViewSet(SchoolScopedModelViewSet):
     search_fields = ["name", "description"]
     ordering_fields = ["name", "created_at"]
     permission_codes = {"*": "human_resource.departments.view"}
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return qs.annotate(staff_count=Count("staff_members", distinct=True))
 
     def success_response(self, message, data=None, status_code=status.HTTP_200_OK):
         return Response(

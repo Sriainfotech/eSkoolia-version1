@@ -214,7 +214,25 @@ export async function createStaff(body: Partial<Staff>, photoFile?: File | null)
   return res.json() as Promise<Staff>;
 }
 
-export async function updateStaff(id: number, body: Partial<Staff>) {
+export async function updateStaff(id: number, body: Partial<Staff>, photoFile?: File | null) {
+  if (photoFile) {
+    const fd = new FormData();
+    Object.entries(body).forEach(([key, val]) => {
+      if (val === undefined || val === null) return;
+      if (typeof val === "object") {
+        fd.append(key, JSON.stringify(val));
+      } else {
+        fd.append(key, String(val));
+      }
+    });
+    fd.append("staff_photo", photoFile, photoFile.name);
+    const res = await apiRequestWithRefreshResponse(`/api/v1/hr/staff/${id}/`, {
+      method: "PATCH",
+      body: fd,
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json() as Promise<Staff>;
+  }
   const res = await apiRequestWithRefreshResponse(`/api/v1/hr/staff/${id}/`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -222,6 +240,36 @@ export async function updateStaff(id: number, body: Partial<Staff>) {
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<Staff>;
+}
+
+export async function downloadStaffCSV() {
+  const res = await apiRequestWithRefreshResponse("/api/v1/hr/staff/?page_size=10000", { method: "GET" });
+  if (!res.ok) throw new Error("Failed to fetch staff data for export");
+  const data = await res.json() as PaginatedHR<Staff>;
+  const staffList = data.results || [];
+  
+  const headers = ["Staff ID", "First Name", "Last Name", "Department", "Designation", "Joining Date", "Status", "Mobile", "Email"];
+  const rows = staffList.map(s => [
+    s.staff_no || s.staff_id || "",
+    s.first_name || "",
+    s.last_name || "",
+    s.department_name || "",
+    s.designation_name || "",
+    s.joining_date || "",
+    s.status || "",
+    s.mobile || "",
+    s.official_email || s.email || ""
+  ]);
+  
+  const csvContent = [headers, ...rows].map(row => row.map(v => `"${(v || "").toString().replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.setAttribute("href", url);
+  link.setAttribute("download", `staff_directory_${new Date().toISOString().split("T")[0]}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 export async function updateStaffStatus(id: number, status: string, note?: string) {

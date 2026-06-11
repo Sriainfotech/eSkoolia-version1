@@ -11,7 +11,7 @@ import {
   Plus,
   X,
 } from "lucide-react";
-import { useAllDepartments, useStaff } from "@/hooks/useHrApi";
+import { useAllDepartments, useStaff, downloadStaffCSV } from "@/hooks/useHrApi";
 import type { Department, Staff } from "@/types/hr";
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -101,7 +101,7 @@ function DepartmentAccordion({
         </div>
         <button
           type="button"
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); window.location.href = `/hr/onboard?department=${dept.id}`; }}
           className="hidden sm:inline-flex items-center gap-1.5 h-8 px-3 rounded-[10px] border border-[#E8E8EE] bg-white text-[12px] font-[700] text-[#15172A] hover:border-[var(--brand,#6D4AFF)] hover:text-[var(--brand,#6D4AFF)]"
         >
           <Plus size={13} /> Add staff
@@ -196,9 +196,9 @@ function DepartmentAccordion({
                           <IconBtn title="View" onClick={() => onView(s)}>
                             <Eye size={15} />
                           </IconBtn>
-                          <IconBtn title="Edit"><Pencil size={14} /></IconBtn>
-                          <IconBtn title="Documents"><FileText size={14} /></IconBtn>
-                          <IconBtn title="More"><MoreHorizontal size={15} /></IconBtn>
+                          <IconBtn title="Edit" onClick={() => { window.location.href = `/hr/onboard?staff_id=${s.id}`; }}><Pencil size={14} /></IconBtn>
+                          <IconBtn title="Documents" onClick={() => { window.location.href = `/hr/onboard?staff_id=${s.id}&step=9`; }}><FileText size={14} /></IconBtn>
+                          <IconBtn title="More" onClick={() => { window.location.href = `/hr/onboard?staff_id=${s.id}`; }}><MoreHorizontal size={15} /></IconBtn>
                         </div>
                       </td>
                     </tr>
@@ -298,7 +298,8 @@ function ProfileDrawer({ staff, onClose }: { staff: Staff | null; onClose: () =>
 
         <Section title="Contact">
           <Info label="Mobile" value={staff.mobile || "—"} />
-          <Info label="Email" value={staff.official_email || staff.personal_email || staff.email || "—"} />
+          <Info label="Official Email" value={staff.official_email || staff.email || "—"} />
+          {staff.personal_email ? <Info label="Personal Email" value={staff.personal_email} /> : null}
           <Info label="WhatsApp" value={staff.whatsapp || "—"} />
         </Section>
 
@@ -425,7 +426,7 @@ export default function HrDirectoryPage() {
               className="italic font-[400] text-[var(--brand,#6D4AFF)]"
               style={{ fontFamily: "var(--serif, Georgia, serif)" }}
             >
-              directory
+              list &amp; Onboarding
             </span>
           </h1>
           <p className="text-[14px] text-[#64748B] mt-1 max-w-[640px]">
@@ -435,6 +436,7 @@ export default function HrDirectoryPage() {
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={downloadStaffCSV}
             className="h-10 px-4 rounded-[11px] border border-[#E8E8EE] bg-white text-[13.5px] font-[600] text-[#15172A] hover:border-[var(--brand,#6D4AFF)] hover:text-[var(--brand,#6D4AFF)]"
           >
             Export CSV
@@ -534,6 +536,7 @@ export default function HrDirectoryPage() {
         </label>
         <button
           type="button"
+          onClick={downloadStaffCSV}
           className="inline-flex items-center gap-1 h-8 px-3 rounded-[8px] bg-[#EEEAFF] text-[var(--brand,#6D4AFF)] text-[12px] font-[700]"
         >
           ↓ Export
@@ -612,6 +615,7 @@ export default function HrDirectoryPage() {
             </button>
             <button
               type="button"
+              onClick={downloadStaffCSV}
               className="h-8 px-3 rounded-[9px] border border-[#E8E8EE] bg-white text-[12.5px] font-[600] text-[#15172A] hover:border-[var(--brand,#6D4AFF)] hover:text-[var(--brand,#6D4AFF)]"
             >
               Export view

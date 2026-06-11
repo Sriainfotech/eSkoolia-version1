@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 /**
  * HR Onboard — 10-step wizard matching the mockup design.
  * Layout: page header → QR banner → [252px grouped sidebar | step card] → sticky footer bar
@@ -13,14 +13,15 @@ import {
 } from "@/components/hr/HrUi";
 import SearchableSelect from "@/components/hr/SearchableSelect";
 import {
-  useAllDepartments, useDesignations, useStaffList, createStaff,
+  useAllDepartments, useDesignations, useStaffList, createStaff, updateStaff,
   useMasterLanguages, useMasterReligions, useMasterCountries, useMasterEmploymentTypes,
   useStaffFormOptions,
   useOnboardDrafts, saveOnboardDraft, deleteOnboardDraft, downloadBlankForm, downloadFilledForm,
+  useStaffDocuments,
 } from "@/hooks/useHrApi";
 import type { OnboardDraft } from "@/hooks/useHrApi";
 import { apiRequestWithRefreshResponse } from "@/lib/api-auth";
-import type { Staff } from "@/types/hr";
+import type { Staff, StaffDocument } from "@/types/hr";
 import { isValidEmail, isValidPhoneDigits, isValidPin, hasAlphanumeric, isGibberishAddress, isGibberishPlaceName, isValidIndianMobile, isValidPersonName, PERSON_NAME_ERR, isValidBankAccountName, BANK_ACCOUNT_NAME_ERR } from "@/lib/hrValidation";
 
 // --- Constants ---
@@ -496,11 +497,12 @@ function StepIdentity({
             className="bg-[#F1F5F9] cursor-not-allowed !text-[#94A3B8]"
           />
         </HrField>
-        <HrField label="Biometric / RFID Code">
+        <HrField label="Biometric / RFID Code" error={f.biometric_rfid && /[^A-Za-z0-9]/.test(f.biometric_rfid) ? "Only letters and numbers are allowed." : undefined}>
           <HrInput
             value={f.biometric_rfid ?? ""}
-            onChange={(e) => set("biometric_rfid", e.target.value)}
+            onChange={(e) => set("biometric_rfid", e.target.value.replace(/[^A-Za-z0-9]/g, ""))}
             placeholder="Assigned later"
+            maxLength={30}
           />
         </HrField>
         <HrField label="Status" required>
@@ -1033,7 +1035,7 @@ function StepContact({
           </div>
 
           <HrField label="Official Email">
-            <HrInput type="email" value={f.official_email ?? ""} onChange={(e) => set("official_email", e.target.value)} placeholder="name@school.edu.in" />
+            <HrInput type="email" value={f.official_email ?? ""} onChange={(e) => set("official_email", e.target.value.replace(/\s/g, ""))} placeholder="name@school.edu.in" maxLength={254} />
             {errTxt(officialEmailErr)}
           </HrField>
         </div>
@@ -1044,7 +1046,7 @@ function StepContact({
             <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">
               Personal Email <span className="text-[var(--red)]">*</span>
             </label>
-            <HrInput type="email" value={f.personal_email ?? ""} onChange={(e) => set("personal_email", e.target.value)} placeholder="personal@gmail.com" />
+            <HrInput type="email" value={f.personal_email ?? ""} onChange={(e) => set("personal_email", e.target.value.replace(/\s/g, ""))} placeholder="personal@gmail.com" maxLength={254} />
             {errTxt(emailErr)}
           </div>
 
@@ -1235,15 +1237,32 @@ function StepFamily({ f, set, showErrors, validatorRef }: {
 }) {
   type EC = { name: string; relation: string; mobileCc: string; mobile: string; alt_mobile: string; email: string };
   type Nominee = { name: string; relation: string; share: string };
-  const [ecs, setEcs] = useState<EC[]>(() => [{
-    name: f.emergency_name ?? "",
-    relation: f.emergency_relation ?? "",
-    mobileCc: "+91",
-    mobile: f.emergency_phone ?? "",
-    alt_mobile: "",
-    email: "",
-  }]);
-  const [nominees, setNominees] = useState<Nominee[]>([{ name: "", relation: "", share: "" }]);
+  const [ecs, setEcs] = useState<EC[]>(() => {
+    try {
+      if ((f as any).emergency_contacts) {
+        return typeof (f as any).emergency_contacts === "string" ? JSON.parse((f as any).emergency_contacts) : (f as any).emergency_contacts;
+      }
+    } catch(e) {}
+    return [{
+      name: f.emergency_name ?? "",
+      relation: f.emergency_relation ?? "",
+      mobileCc: "+91",
+      mobile: f.emergency_phone ?? "",
+      alt_mobile: "",
+      email: "",
+    }];
+  });
+  const [nominees, setNominees] = useState<Nominee[]>(() => {
+    try {
+      if ((f as any).nominees) {
+        return typeof (f as any).nominees === "string" ? JSON.parse((f as any).nominees) : (f as any).nominees;
+      }
+    } catch(e) {}
+    return [{ name: "", relation: "", share: "" }];
+  });
+
+  useEffect(() => { set("emergency_contacts", JSON.stringify(ecs)); }, [ecs]);
+  useEffect(() => { set("nominees", JSON.stringify(nominees)); }, [nominees]);
 
   const setEc = (i: number, k: keyof EC, v: string) => {
     setEcs((prev) => prev.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
@@ -1272,7 +1291,7 @@ function StepFamily({ f, set, showErrors, validatorRef }: {
       ? PERSON_NAME_ERR
       : null;
 
-  const childrenRaw = (f.num_children ?? "").trim();
+  const childrenRaw = String(f.num_children ?? "").trim();
   const childrenErr = childrenRaw && (!/^\d+$/.test(childrenRaw) || Number(childrenRaw) > 15)
     ? "Please enter a valid number of children (0–15)."
     : null;
@@ -1791,8 +1810,17 @@ function StepGovId({ f, set, showErrors }: { f: FormData; set: (k: string, v: st
 function StepQualifications({ f, set, validatorRef }: { f: FormData; set: (k: string, v: string) => void; validatorRef?: React.MutableRefObject<() => string | null> }) {
   type Qual = { degree: string; university: string; year: string; spec: string; pct: string };
   type Prev = { employer: string; designation: string; experience: string; from: string; to: string; salary: string };
-  const [quals, setQuals] = useState<Qual[]>([{ degree: "", university: "", year: "", spec: "", pct: "" }]);
-  const [prevs, setPrevs] = useState<Prev[]>([{ employer: "", designation: "", experience: "", from: "", to: "", salary: "" }]);
+  const [quals, setQuals] = useState<Qual[]>(() => {
+    try { if ((f as any).qualifications) return typeof (f as any).qualifications === 'string' ? JSON.parse((f as any).qualifications) : (f as any).qualifications; } catch(e){}
+    return [{ degree: "", university: "", year: "", spec: "", pct: "" }];
+  });
+  const [prevs, setPrevs] = useState<Prev[]>(() => {
+    try { if ((f as any).previous_employment) return typeof (f as any).previous_employment === 'string' ? JSON.parse((f as any).previous_employment) : (f as any).previous_employment; } catch(e){}
+    return [{ employer: "", designation: "", experience: "", from: "", to: "", salary: "" }];
+  });
+
+  useEffect(() => { set("qualifications", JSON.stringify(quals)); }, [quals]);
+  useEffect(() => { set("previous_employment", JSON.stringify(prevs)); }, [prevs]);
 
   const setQ = (i: number, k: keyof Qual, v: string) => setQuals((p) => p.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
   const setP = (i: number, k: keyof Prev, v: string) => setPrevs((p) => p.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
@@ -1838,8 +1866,8 @@ function StepQualifications({ f, set, validatorRef }: { f: FormData; set: (k: st
   function employerErr(v: string): string | null {
     const t = v.trim();
     if (!t) return null;
-    if (t.length < 2 || t.length > 100) return "Employer name must be 2–100 characters.";
-    if (!/^[A-Za-z0-9\s.&'\-]+$/.test(t)) return "Enter a valid employer name.";
+    if (t.length < 2 || t.length > 100) return "Employer name must be 2\u2013100 characters.";
+    if (!/^[A-Za-z\s.&'\-]+$/.test(t)) return "Employer name can only contain letters, spaces, dots, & or hyphens.";
     if (!/[A-Za-z]/.test(t)) return "Enter a valid employer name.";
     if (/(.)\1{2,}/i.test(t)) return "Enter a valid employer name.";
     if (/[bcdfghjklmnpqrstvwxyz]{5,}/i.test(t)) return "Enter a valid employer name.";
@@ -2487,8 +2515,17 @@ function StepPayroll({
   validatorRef?: React.MutableRefObject<() => string | null>;
 }) {
   type CustomLine = { label: string; amount: string; labelErr: string; amountErr: string };
-  const [customEarnings,   setCustomEarnings]   = useState<CustomLine[]>([]);
-  const [customDeductions, setCustomDeductions] = useState<CustomLine[]>([]);
+  const [customEarnings, setCustomEarnings] = useState<CustomLine[]>(() => {
+    try { if ((f as any).custom_earnings) return typeof (f as any).custom_earnings === 'string' ? JSON.parse((f as any).custom_earnings) : (f as any).custom_earnings; } catch(e){}
+    return [];
+  });
+  const [customDeductions, setCustomDeductions] = useState<CustomLine[]>(() => {
+    try { if ((f as any).custom_deductions) return typeof (f as any).custom_deductions === 'string' ? JSON.parse((f as any).custom_deductions) : (f as any).custom_deductions; } catch(e){}
+    return [];
+  });
+
+  useEffect(() => { set("custom_earnings", JSON.stringify(customEarnings)); }, [customEarnings]);
+  useEffect(() => { set("custom_deductions", JSON.stringify(customDeductions)); }, [customDeductions]);
 
   // ── Salary amount constants / sanitizer ─────────────────────────────
   const MAX_PAY  = 999_999;                              // ₹9,99,999
@@ -2977,8 +3014,10 @@ type OnboardDocRecord = { id: number; doc_key: string; file_name: string; status
 
 function StepDocuments({
   validatorRef,
+  externalDocs,
 }: {
   validatorRef: React.MutableRefObject<() => string | null>;
+  externalDocs?: StaffDocument[];
 }) {
   const [uploads, setUploads] = useState<Record<string, OnboardDocRecord>>({});
   const [uploading, setUploading] = useState<Record<string, boolean>>({});
@@ -2986,6 +3025,7 @@ function StepDocuments({
   const [previewMime, setPreviewMime] = useState<string>("application/pdf");
   const { toast } = useHrToast();
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const externalDocMapRef = useRef<Record<string, StaffDocument>>({});
 
   // Load existing uploads on mount
   useEffect(() => {
@@ -3003,6 +3043,30 @@ function StepDocuments({
       }
     })();
   }, []);
+
+  // Merge external staff documents (read-only) into uploads mapping
+  useEffect(() => {
+    if (!externalDocs || externalDocs.length === 0) return;
+    // build lookup and merge into uploads without overwriting existing onboard uploads
+    const lookup: Record<string, StaffDocument> = {};
+    for (const d of externalDocs) {
+      const key = (d.doc_type || d.name || "").toString();
+      if (!key) continue;
+      lookup[key] = d;
+    }
+    externalDocMapRef.current = lookup;
+    setUploads((prev) => {
+      const next = { ...prev };
+      for (const k of Object.keys(lookup)) {
+        if (!next[k]) {
+          const d = lookup[k];
+          const fileName = d.name || (d.file_url ? d.file_url.split("/").pop() || String(d.id) : String(d.id));
+          next[k] = { id: -d.id, doc_key: k, file_name: fileName, status: d.status };
+        }
+      }
+      return next;
+    });
+  }, [externalDocs]);
 
   // Register validator (no dep array → always reads latest uploads)
   useEffect(() => {
@@ -3056,6 +3120,11 @@ function StepDocuments({
   async function handleDelete(doc: { key: string; label: string }) {
     const record = uploads[doc.key];
     if (!record) return;
+    // Prevent deletion of external staff documents (id < 0 marker)
+    if (record.id < 0) {
+      toast("Cannot delete a staff document from onboarding. Remove it from the staff documents section.", "error");
+      return;
+    }
     try {
       await apiRequestWithRefreshResponse(`/api/v1/hr/onboard/documents/${record.id}/`, { method: "DELETE" });
       setUploads((p) => {
@@ -3072,6 +3141,16 @@ function StepDocuments({
     const record = uploads[doc.key];
     if (!record) return;
     try {
+      if (record.id < 0) {
+        // external staff document — open file_url in new tab when available
+        const ext = externalDocMapRef.current[doc.key];
+        if (ext?.file_url) {
+          window.open(ext.file_url, "_blank");
+          return;
+        }
+        toast("Preview not available.", "error");
+        return;
+      }
       const res = await apiRequestWithRefreshResponse(
         `/api/v1/hr/onboard/documents/${record.id}/preview/`,
         { method: "GET" },
@@ -3325,7 +3404,21 @@ function StepReview({
 }
 
 // --- Main Page ---
-export default function HrOnboardPage() {
+type OnboardProps = {
+  popupStaffId?: number | null;
+  popupStep?: number | null;
+  popupDeptId?: number | string | null;
+  onClose?: () => void;
+  isPopup?: boolean;
+};
+
+export default function HrOnboardPage(props: OnboardProps | { params?: any; searchParams?: any }) {
+  const isPopup = "isPopup" in props ? props.isPopup : false;
+  const popupStaffId = "popupStaffId" in props ? props.popupStaffId : null;
+  const popupStep = "popupStep" in props ? props.popupStep : null;
+  const popupDeptId = "popupDeptId" in props ? props.popupDeptId : null;
+  const onClose = "onClose" in props ? props.onClose : undefined;
+
   const [step,                 setStep]                 = useState(1);
   const [form,                 setForm]                 = useState<FormData>({ status: "active" });
   const [saving,               setSaving]               = useState(false);
@@ -3338,6 +3431,8 @@ export default function HrOnboardPage() {
   const [cameraErr,            setCameraErr]            = useState<string | null>(null);
   const [showErrors,           setShowErrors]           = useState(false);
   const [highestStep,          setHighestStep]          = useState(1);
+  const [editingStaffId,       setEditingStaffId]       = useState<number | null>(null);
+  const [isLoadingStaff,       setIsLoadingStaff]       = useState(false);
   // Draft state
   const [draftId,              setDraftId]              = useState<number | null>(null);
   const [draftSaving,          setDraftSaving]          = useState(false);
@@ -3358,6 +3453,175 @@ export default function HrOnboardPage() {
   const { data: allDeptData } = useAllDepartments();
   const { data: desigData }   = useDesignations();
   const { data: staffData }   = useStaffList();
+  // Prefill form when opened with query params (edit or department shortcut)
+  useEffect(() => {
+    try {
+      let staffId: string | null = null;
+      let dept: string | null = null;
+      let stepParam: string | null = null;
+
+      if (typeof window !== "undefined" && !isPopup) {
+        const params = new URLSearchParams(window.location.search);
+        staffId = params.get("staff_id");
+        dept = params.get("department");
+        stepParam = params.get("step");
+      }
+
+      if (popupStaffId !== null && popupStaffId !== undefined) {
+        staffId = String(popupStaffId);
+      }
+
+      if (popupStep !== null && popupStep !== undefined) {
+        stepParam = String(popupStep);
+      }
+
+      if (popupDeptId !== null && popupDeptId !== undefined) {
+        dept = String(popupDeptId);
+      }
+
+      if (stepParam) {
+        const n = Number(stepParam);
+        if (!Number.isNaN(n) && n >= 1 && n <= TOTAL) setStep(n);
+      }
+      if (dept) {
+        setForm((f) => ({ ...f, department: Number(dept) }));
+      }
+      if (staffId) {
+        const id = Number(staffId);
+        if (!Number.isNaN(id)) {
+          setEditingStaffId(id);
+          (async () => {
+            try {
+              const resp = await apiRequestWithRefreshResponse(`/api/v1/hr/staff/${id}/`);
+              if (resp.ok) {
+                const json = await resp.json();
+                console.log("🔍 Backend staff response:", json); // DEBUG: check what backend returns
+                // Reset the form state for edit mode, then map backend keys to frontend form keys.
+                const mapped: Record<string, any> = { ...(json || {}) };
+                if (!Object.prototype.hasOwnProperty.call(mapped, "status")) mapped.status = "active";
+
+                // Ensure empty email fields do not preserve stale values from previous staff loads.
+                mapped.official_email = mapped.official_email ?? "";
+                mapped.personal_email = mapped.personal_email ?? "";
+                mapped.email = mapped.email ?? "";
+
+                // Dates
+                if (json?.join_date && !json?.joining_date) mapped.joining_date = String(json.join_date).slice(0, 10);
+                if (json?.joining_date && !mapped.joining_date) mapped.joining_date = String(json.joining_date).slice(0, 10);
+                if (json?.date_of_birth) mapped.date_of_birth = String(json.date_of_birth).slice(0, 10);
+                if (json?.dob && !mapped.date_of_birth) mapped.date_of_birth = String(json.dob).slice(0, 10);
+
+                // Phone / email
+                if (json?.phone && !json?.mobile) mapped.mobile = json.phone;
+                if (json?.phone_number && !mapped.mobile) mapped.mobile = json.phone_number;
+                if (json?.official_email && !mapped.official_email) mapped.official_email = json.official_email;
+                if (json?.email && !json?.official_email && !mapped.personal_email) mapped.personal_email = json.email;
+                if (json?.personal_email && !mapped.personal_email) mapped.personal_email = json.personal_email;
+                if (!mapped.personal_email && json?.custom_field?.personal_email) mapped.personal_email = json.custom_field.personal_email;
+                if (!mapped.official_email && json?.custom_field?.official_email) mapped.official_email = json.custom_field.official_email;
+                if (!mapped.whatsapp && json?.custom_field?.whatsapp) mapped.whatsapp = json.custom_field.whatsapp;
+                if (!mapped.alternate_mobile && json?.custom_field?.alternate_mobile) mapped.alternate_mobile = json.custom_field.alternate_mobile;
+                if (!mapped.current_address_line2 && json?.custom_field?.current_address_line2) mapped.current_address_line2 = json.custom_field.current_address_line2;
+                if (!mapped.permanent_address_line2 && json?.custom_field?.permanent_address_line2) mapped.permanent_address_line2 = json.custom_field.permanent_address_line2;
+                if (!mapped.city && json?.custom_field?.city) mapped.city = json.custom_field.city;
+                if (!mapped.city && json?.custom_field?.current_city) mapped.city = json.custom_field.current_city;
+                if (!mapped.state && json?.custom_field?.state) mapped.state = json.custom_field.state;
+                if (!mapped.state && json?.custom_field?.current_state) mapped.state = json.custom_field.current_state;
+                if (!mapped.current_country && json?.custom_field?.current_country) mapped.current_country = json.custom_field.current_country;
+                if (!mapped.current_pin && json?.custom_field?.current_pin) mapped.current_pin = json.custom_field.current_pin;
+                if (!mapped.current_pin && json?.custom_field?.pincode) mapped.current_pin = json.custom_field.pincode;
+                if (!mapped.current_pin && json?.custom_field?.pin) mapped.current_pin = json.custom_field.pin;
+                if (!mapped.current_pin && json?.custom_field?.postal_code) mapped.current_pin = json.custom_field.postal_code;
+                if (!mapped.permanent_city && json?.custom_field?.permanent_city) mapped.permanent_city = json.custom_field.permanent_city;
+                if (!mapped.permanent_state && json?.custom_field?.permanent_state) mapped.permanent_state = json.custom_field.permanent_state;
+                if (!mapped.permanent_country && json?.custom_field?.permanent_country) mapped.permanent_country = json.custom_field.permanent_country;
+                if (!mapped.permanent_pin && json?.custom_field?.permanent_pin) mapped.permanent_pin = json.custom_field.permanent_pin;
+
+                // Identity fields
+                if (json?.gender) {
+                  const g = String(json.gender).trim().toLowerCase();
+                  // Backend stores as lowercase: "male", "female", "other"
+                  if (g === "male" || g === "m") mapped.gender = "Male";
+                  else if (g === "female" || g === "f") mapped.gender = "Female";
+                  else if (g === "other") mapped.gender = "Other";
+                  else if (g === "prefer not to say" || g.includes("prefer")) mapped.gender = "Prefer not to say";
+                  else if (g) mapped.gender = String(json.gender).trim(); // fallback to raw value
+                }
+                if (json?.nationality && !mapped.nationality) mapped.nationality = json.nationality;
+
+                // Blood group: map from backend 'blood_group' to frontend 'blood_group_input'
+                if ((json as any).blood_group && !mapped.blood_group_input) mapped.blood_group_input = String((json as any).blood_group).trim();
+
+                // Mother tongue, religion: map directly
+                if ((json as any).mother_tongue && !mapped.mother_tongue) mapped.mother_tongue = String((json as any).mother_tongue).trim();
+                if ((json as any).religion && !mapped.religion) mapped.religion = String((json as any).religion).trim();
+
+                // Designation: prefer numeric id fields; fall back to lookup by name
+                if ((json as any).designation && !mapped.designation) mapped.designation = (json as any).designation;
+                if ((json as any).designation_id && !mapped.designation) mapped.designation = (json as any).designation_id;
+                if (!mapped.designation && (json as any).designation_name && desigData?.results) {
+                  const found = desigData.results.find((d: any) => String(d.name).toLowerCase() === String((json as any).designation_name).toLowerCase());
+                  if (found) mapped.designation = found.id;
+                }
+
+                // Employment type / contract_type => map to readable label
+                if (!mapped.employment_type) {
+                  if (json?.employment_type) mapped.employment_type = String(json.employment_type).trim();
+                  else if (json?.contract_type) {
+                    const ct = String(json.contract_type).toLowerCase();
+                    mapped.employment_type = ct === "contract" ? "Contract" : ct === "permanent" ? "Full-time" : String(json.contract_type);
+                  }
+                }
+
+                // Fallback: ensure employment_type is a string, not an object
+                if (mapped.employment_type && typeof mapped.employment_type === 'object') {
+                  mapped.employment_type = String(mapped.employment_type).trim();
+                }
+
+                // Preferred communication
+                if ((json as any).preferred_communication) mapped.preferred_communication = String((json as any).preferred_communication).trim();
+                if (!mapped.preferred_communication && (json as any).preferred_comm) mapped.preferred_communication = String((json as any).preferred_comm).trim();
+
+                // Address fields
+                if (json?.city && !mapped.city) mapped.city = json.city;
+                if (json?.state && !mapped.state) mapped.state = json.state;
+                if ((json as any).current_city && !mapped.city) mapped.city = (json as any).current_city;
+                if ((json as any).current_state && !mapped.state) mapped.state = (json as any).current_state;
+                // PIN / postal code
+                if ((json as any).current_pin && !mapped.current_pin) mapped.current_pin = (json as any).current_pin;
+                if ((json as any).pin && !mapped.current_pin) mapped.current_pin = (json as any).pin;
+                if ((json as any).pincode && !mapped.current_pin) mapped.current_pin = (json as any).pincode;
+                if ((json as any).postal_code && !mapped.current_pin) mapped.current_pin = (json as any).postal_code;
+
+                // Marital status, children
+                if ((json as any).marital_status && !mapped.marital_status) mapped.marital_status = json.marital_status;
+                if ((json as any).num_children !== undefined && mapped.num_children === undefined) mapped.num_children = String((json as any).num_children);
+
+                // Some backends return `staff_no` vs `staff_id` / `id` — keep both
+                if (json?.staff_no && !mapped.staff_no) mapped.staff_no = json.staff_no;
+                if (json?.id && !mapped.id) mapped.id = json.id;
+
+                console.log("✅ Mapped form data:", mapped); // DEBUG: check what gets mapped
+                console.log("🔍 Gender in mapped:", mapped.gender); // DEBUG: verify gender
+                console.log("🔍 Preferred Communication in mapped:", mapped.preferred_communication); // DEBUG: verify preferred_communication
+                setForm(mapped);
+                setHighestStep(1);
+              } else {
+                console.error("❌ Failed to fetch staff:", resp.status, resp.statusText);
+              }
+            } catch (err) {
+              console.error("❌ Error fetching staff:", err);
+              // ignore load errors; user can continue manually
+            } finally {
+              setIsLoadingStaff(false);
+            }
+          })();
+        }
+      }
+    } catch {
+      // ignore when running server-side or in non-browser env
+    }
+  }, []);
   const { data: langData,    loading: langLoading,    error: langError    } = useMasterLanguages();
   const { data: relData,     loading: relLoading,     error: relError     } = useMasterReligions();
   const { data: countryData, loading: countryLoading, error: countryError } = useMasterCountries();
@@ -3374,6 +3638,8 @@ export default function HrOnboardPage() {
   const draftList    = draftsData?.results ?? [];
 
   const setField = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
+  const { data: staffDocumentsData } = useStaffDocuments(Number(editingStaffId ?? 0));
 
   // Wire camera stream to video element when modal opens
   useEffect(() => {
@@ -3731,7 +3997,7 @@ export default function HrOnboardPage() {
       const contractType = empLabel.includes("contract") ? "contract" : (empLabel ? "permanent" : "");
 
       const fAny = form as Record<string, unknown>;
-      const { joining_date, mobile, personal_email, official_email, employment_type, ...rest } = fAny;
+      const { joining_date, mobile, personal_email, official_email, employment_type, blood_group_input, ...rest } = fAny;
       void employment_type; // mapped to contract_type below
 
       const payload: Record<string, unknown> = {
@@ -3739,9 +4005,10 @@ export default function HrOnboardPage() {
         staff_no: staffNo,
         join_date: joining_date,
         // Field-name mapping (frontend → backend)
-        email: (official_email as string) || (personal_email as string) || "",
+        email: (official_email as string) || "",
         phone: mobile,
         contract_type: contractType,
+        blood_group: blood_group_input ?? rest.blood_group,
         // Carry through originals too so other consumers/saved drafts keep working.
         mobile,
         personal_email,
@@ -3766,9 +4033,19 @@ export default function HrOnboardPage() {
         }
       } catch { /* if fetch fails, backend will surface the missing-signature error */ }
 
-      await createStaff(payload as Partial<Staff>, photoFile ?? undefined);
-      toast("Staff onboarded successfully!");
-      setDone(true);
+      if (editingStaffId) {
+        await updateStaff(editingStaffId, payload as Partial<Staff>, photoFile ?? undefined);
+        toast("Staff updated successfully!");
+      } else {
+        await createStaff(payload as Partial<Staff>, photoFile ?? undefined);
+        toast("Staff onboarded successfully!");
+      }
+
+      if (onClose) {
+        onClose();
+      } else {
+        window.location.href = "/hr/directory";
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to save staff. Please check the form.";
       toast(msg, "error");
@@ -3776,6 +4053,15 @@ export default function HrOnboardPage() {
       setSaving(false);
     }
   };
+
+  // Loading screen
+  if (isLoadingStaff) {
+    return (
+      <div className="flex items-center justify-center h-[400px]">
+        <div className="animate-spin h-8 w-8 border-4 border-[var(--brand)] border-t-transparent rounded-full" />
+      </div>
+    );
+  }
 
   // Success screen
   if (done) {
@@ -3800,11 +4086,11 @@ export default function HrOnboardPage() {
             Onboard another
           </button>
           <button
-            onClick={() => { window.location.href = "/hr/directory"; }}
+            onClick={() => { if (onClose) onClose(); else window.location.href = "/hr/directory"; }}
             className="px-5 py-2 rounded-[10px] text-[13px] font-[700] text-white"
             style={{ background: "var(--brand)" }}
           >
-            View Directory
+            {isPopup ? "Close" : "View Directory"}
           </button>
         </div>
       </div>
@@ -3813,7 +4099,7 @@ export default function HrOnboardPage() {
 
   // Main layout
   return (
-    <div className="flex flex-col" style={{ paddingBottom: "72px", marginLeft: "-20px", marginRight: "-20px", marginBottom: "-40px" }}>
+    <div className="flex flex-col" style={isPopup ? { paddingBottom: "20px" } : { paddingBottom: "72px", marginLeft: "-20px", marginRight: "-20px", marginBottom: "-40px" }}>
       {/* Hidden photo file input */}
       <input ref={photoInputRef} type="file" accept="image/jpeg,image/jpg,image/png" className="hidden" onChange={handlePhotoChange} />
 
@@ -4115,7 +4401,7 @@ export default function HrOnboardPage() {
             {step === 6 && <StepQualifications f={form} set={setField} validatorRef={prevDateValidatorRef} />}
             {step === 7 && <StepMedical f={form} set={setField} validatorRef={medValidatorRef} />}
             {step === 8 && <StepPayroll f={form} set={setField} validatorRef={payrollValidatorRef} />}
-            {step === 9 && <StepDocuments validatorRef={docValidatorRef} />}
+            {step === 9 && <StepDocuments validatorRef={docValidatorRef} externalDocs={staffDocumentsData?.results} />}
             {step === 10 && <StepReview f={form} set={setField} departments={departments} designations={designations} />}
 
             {/* In-card next step nav */}
@@ -4209,7 +4495,7 @@ export default function HrOnboardPage() {
                 className="px-5 py-2 rounded-[10px] text-[13px] font-[700] text-white disabled:opacity-60"
                 style={{ background: "var(--brand)" }}
               >
-                {saving ? "Saving..." : "Submit & Onboard"}
+                {saving ? "Saving..." : editingStaffId ? "Update & Onboard" : "Submit & Onboard"}
               </button>
             )}
           </div>

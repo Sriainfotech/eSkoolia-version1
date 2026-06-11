@@ -1,5 +1,24 @@
 # TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Antigravity (10/06/2026)
+
+**Branch:** `demo` (or current working branch)
+
+### HR Module Enhancements & Fixes
+
+#### 1. Staff Onboarding Data Sync
+- Fixed a bug in `HrOnboardPage` where array-based complex fields (e.g., custom earnings, deductions, emergency contacts, nominees) would fail to pre-populate during Edit Mode.
+- Implemented robust `useState` and `useEffect` hooks in nested components (like `StepPayroll`) to ensure JSON strings from the backend are correctly parsed into objects, managed in local state, and properly synchronized back to the parent `FormData`.
+- Updated the main submission button to dynamically label itself "Submit & Onboard" for new creations and "Update & Onboard" when editing.
+
+#### 2. Staff Directory & Navigation Refinements
+- Consolidated HR navigation in `frontend/lib/routes.ts`: Renamed the "Directory" tab to **"Staff list & Onboarding"** and completely removed the redundant standalone "Onboard" tab.
+- Re-routed the "Add staff", "Edit", "Documents", and "More" action buttons on the Directory page to redirect users to the standalone Onboard page.
+- Implemented an immediate redirect to the Staff list directory upon successful creation/update of a staff record, purposefully bypassing the intermediate success screen to streamline the HR workflow.
+
+#### 3. Design System & Layout Consistency
+- Updated `frontend/app/(dashboard)/hr/layout.tsx` to automatically wrap all standard HR pages (Setup, Directory, Leave, Attendance, Offboarding) in a rounded, light-bordered container (`bg-[#f8f8fc]`, `border-radius: 16px`).
+- This modification ensures the HR module shares the exact same modern visual container aesthetics as the "Student List" and other primary dashboard pages, while allowing the Onboarding wizard to conditionally remain full-width.
 ## Update — GitHub Copilot (06/05/2026)
 
 **Branch:** `demo`
