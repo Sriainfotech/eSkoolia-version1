@@ -1,3 +1,4 @@
+import re
 from django.db import models
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -34,22 +35,190 @@ class FeesType(models.Model):
     A specific fee item, e.g., 'Term 1 Tuition', 'Bus Route A Fee'.
     Belongs to a FeeGroup.
     """
+    TAXABLE_CHOICES = [
+        ('yes', 'Yes'),
+        ('no', 'No'),
+    ]
+    DEFAULT_STRUCTURE_CHOICES = [
+        ('monthly', 'Monthly'),
+        ('quarterly', 'Quarterly'),
+        ('term_wise', 'Term-wise'),
+        ('yearly', 'Yearly'),
+        ('custom', 'Custom'),
+    ]
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+    ]
+
     academic_year = models.ForeignKey('core.AcademicYear', on_delete=models.PROTECT)
     fees_group = models.ForeignKey(FeesGroup, on_delete=models.PROTECT, related_name='fee_types')
     name = models.CharField(max_length=100)
+    gl_code = models.CharField(max_length=50)
+    taxable = models.CharField(max_length=3, choices=TAXABLE_CHOICES, default='no')
+    default_structure = models.CharField(max_length=20, choices=DEFAULT_STRUCTURE_CHOICES, default='term_wise')
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active')
     amount = models.DecimalField(**MONEY_FIELD_KWARGS)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_fee_types',
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='created_fee_types')
 
     class Meta:
-        unique_together = ('fees_group', 'name')
         ordering = ['name']
 
     def __str__(self):
         return f"{self.fees_group.name} - {self.name}"
+
+    def clean(self):
+        super().clean()
+        code = (self.gl_code or '').strip().upper()
+        if not code:
+            raise ValidationError({'gl_code': 'GL Code is required.'})
+        if not re.match(r'^[0-9]{4}-[A-Z0-9]+$', code):
+            raise ValidationError({'gl_code': 'Invalid GL Code format. Use XXXX-CODE (e.g., 4001-TUITION).'})
+
+        qs = FeesType.objects.filter(is_deleted=False, gl_code=code)
+        if self.pk:
+            qs = qs.exclude(pk=self.pk)
+        if qs.exists():
+            raise ValidationError({'gl_code': 'A Fee Type with this GL Code already exists.'})
+
+        account_number = code.split('-')[0]
+        account_qs = FeesType.objects.filter(is_deleted=False, gl_code__startswith=f"{account_number}-")
+        if self.pk:
+            account_qs = account_qs.exclude(pk=self.pk)
+        if account_qs.exists():
+            raise ValidationError({'gl_code': f'Account number {account_number} is already used by another Fee Type. Use a unique account number.'})
+
+    def save(self, *args, **kwargs):
+        if self.gl_code:
+            self.gl_code = self.gl_code.strip().upper()
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+class TermSettings(models.Model):
+    """
+    Defines term structure for an Academic Year.
+    Maps term number, name, dates, and default due date.
+    """
+    academic_year = models.ForeignKey('core.AcademicYear', on_delete=models.CASCADE, related_name='term_settings')
+    term_number = models.PositiveIntegerField(help_text="1, 2, 3, 4 etc.")
+    term_name = models.CharField(max_length=100, help_text="e.g. Term 1 (Apr-Jul)")
+    start_date = models.DateField()
+    end_date = models.DateField()
+    default_due_date = models.DateField(help_text="Default fee due date for this term")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='created_term_settings')
+
+    class Meta:
+        unique_together = ('academic_year', 'term_number')
+        ordering = ['term_number']
+
+    def clean(self):
+        super().clean()
+        if not self.term_name or not self.term_name.strip():
+            raise ValidationError({'term_name': 'Term name is required.'})
+        if not self.default_due_date:
+            raise ValidationError({'default_due_date': 'Default due date is required.'})
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValidationError({'start_date': 'Start date must be before end date.'})
+        if self.academic_year and self.default_due_date:
+            if not (self.academic_year.start_date <= self.default_due_date <= self.academic_year.end_date):
+                raise ValidationError({'default_due_date': 'Due date must fall within the academic year range.'})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.academic_year} - {self.term_name}"
+
+class FeeSchedule(models.Model):
+    """
+    Defines collection schedule for a specific Fee Type in a Fee Group.
+    Links fee type → collection frequency → due dates per term.
+    """
+    FREQUENCY_CHOICES = [
+        ('monthly', 'Monthly'),
+        ('quarterly', 'Quarterly'),
+        ('term_wise', 'Term-wise'),
+        ('half_yearly', 'Half-Yearly'),
+        ('yearly', 'Yearly'),
+        ('one_time', 'One-Time'),
+        ('custom', 'Custom'),
+    ]
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+    ]
+
+    academic_year = models.ForeignKey('core.AcademicYear', on_delete=models.PROTECT)
+    fee_group = models.ForeignKey(FeesGroup, on_delete=models.PROTECT, related_name='schedules')
+    fee_type = models.ForeignKey(FeesType, on_delete=models.PROTECT, related_name='schedules')
+    
+    amount = models.DecimalField(**MONEY_FIELD_KWARGS, help_text="Amount for this schedule")
+    collection_frequency = models.CharField(max_length=20, choices=FREQUENCY_CHOICES)
+    due_date = models.DateField(help_text="Primary due date for collection")
+    late_fee_applicable = models.BooleanField(default=False)
+    grace_period = models.PositiveIntegerField(default=0, help_text="Grace period in days")
+    late_fee_rule = models.CharField(max_length=255, blank=True, default="", help_text="Late fee rule description")
+    term_breakdown = models.JSONField(default=list, blank=True, help_text="Array of term-wise amounts and due dates")
+    
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active')
+    description = models.TextField(blank=True)
+    
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_fee_schedules',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='created_fee_schedules')
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_fee_schedules')
+
+    class Meta:
+        unique_together = ('academic_year', 'fee_group', 'fee_type')
+        ordering = ['-created_at']
+
+    def clean(self):
+        super().clean()
+        if not self.fee_group:
+            raise ValidationError({'fee_group': 'Fee group is required.'})
+        if not self.fee_type:
+            raise ValidationError({'fee_type': 'Fee type is required.'})
+        if not self.amount or self.amount <= 0:
+            raise ValidationError({'amount': 'Amount must be greater than 0.'})
+        if not self.collection_frequency:
+            raise ValidationError({'collection_frequency': 'Collection frequency is required.'})
+        if not self.due_date:
+            raise ValidationError({'due_date': 'Due date is required.'})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.fee_group} - {self.fee_type} ({self.collection_frequency})"
 
 class FeeAssignment(models.Model):
     """

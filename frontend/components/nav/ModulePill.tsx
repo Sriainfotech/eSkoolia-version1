@@ -18,6 +18,11 @@ const COMING_SOON_PATHS = new Set([
   '/hr/leave', '/hr/offboarding',
 ]);
 
+const FEES_SOON_BADGE_PATHS = new Set([
+  '/fees/fee-assignment', '/fees/collection', '/fees/dues-reminders',
+  '/fees/year-end', '/fees/enroll-student',
+]);
+
 export function ModulePill({ mod, exactMatch = false }: { mod: ModuleRoute; exactMatch?: boolean }) {
   const comingSoon = COMING_SOON_IDS.has(mod.id);
   const pathname = usePathname();
@@ -138,6 +143,7 @@ export function ModulePill({ mod, exactMatch = false }: { mod: ModuleRoute; exac
               {!csActive && mod.sub.map(s => {
                 const SubIcon = s.icon ?? mod.icon;
                 const subComingSoon = COMING_SOON_PATHS.has(s.path);
+                const showSoonBadge = subComingSoon || FEES_SOON_BADGE_PATHS.has(s.path);
                 return (
                   <Link
                     key={s.path}
@@ -168,11 +174,11 @@ export function ModulePill({ mod, exactMatch = false }: { mod: ModuleRoute; exac
                       <SubIcon size={13} strokeWidth={1.75} style={{ color: mod.ic }} />
                     </span>
                     <span style={{ flex: 1 }}>{s.label}</span>
-                    {subComingSoon && (
+                    {showSoonBadge && (
                       <span style={{
-                        fontSize: 9.5, fontWeight: 600, letterSpacing: '0.03em',
-                        color: 'var(--pu, #6D28D9)', background: 'var(--pu-soft, #EDE9FE)',
-                        borderRadius: 5, padding: '2px 6px', flexShrink: 0,
+                        fontSize: 10, fontWeight: 700, letterSpacing: '0.02em',
+                        color: '#fff', background: 'var(--pu, #6D28D9)',
+                        borderRadius: 999, padding: '1px 7px', marginLeft: 6, flexShrink: 0,
                       }}>Soon</span>
                     )}
                   </Link>

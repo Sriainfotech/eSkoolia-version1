@@ -101,6 +101,8 @@ export interface SchoolTenant {
   // LLM access
   id?: number;
   llm_enabled?: boolean;
+  // School identity metadata
+  school_type?: string;
 }
 
 export type TenantBillingCycle = 'annual' | 'half_yearly' | 'quarterly' | 'monthly';

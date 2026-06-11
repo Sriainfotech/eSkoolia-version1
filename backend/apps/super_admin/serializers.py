@@ -131,6 +131,7 @@ class SchoolTenantBaseSerializer(serializers.ModelSerializer):
             "affiliation_number",
             "logo_url",
             "brand_color",
+            "school_type",
         ]
         read_only_fields = ["tenant_id"]
 
@@ -178,7 +179,24 @@ class SchoolTenantUpdateSerializer(serializers.ModelSerializer):
             "city",
             "pin_code",
             "affiliation_number",
+            "school_type",
         ]
+
+    _VALID_SCHOOL_TYPES = {
+        "K-12 · Day school",
+        "K-12 · Residential",
+        "Pre-primary only",
+        "Secondary only",
+        "Higher Secondary / Jr. College",
+    }
+
+    def validate_school_type(self, value):
+        if value and value not in self._VALID_SCHOOL_TYPES:
+            raise serializers.ValidationError(
+                f"Invalid school type '{value}'. Must be one of: "
+                + ", ".join(sorted(self._VALID_SCHOOL_TYPES))
+            )
+        return value
 
     def validate_gstin(self, value):
         import re
@@ -201,7 +219,7 @@ class SchoolTenantUpdateSerializer(serializers.ModelSerializer):
             )
         return value
 
-    _VALID_STATUSES = {"active", "suspended", "archived", "pending", "onboarding", "provisioning"}
+    _VALID_STATUSES = {"trial", "active", "suspended", "archived", "pending", "onboarding", "provisioning"}
 
     def validate_status(self, value):
         if value and value not in self._VALID_STATUSES:

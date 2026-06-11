@@ -1,13 +1,13 @@
 from django.shortcuts import get_object_or_404
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from decimal import Decimal
 from django.utils import timezone
 
-from .models import FeesGroup, FeesType, FeeAssignment, Payment
-from .serializers import FeesGroupSerializer, FeesTypeSerializer, FeeAssignmentSerializer, PaymentSerializer
+from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule
+from .serializers import FeesGroupSerializer, FeesTypeSerializer, FeeAssignmentSerializer, PaymentSerializer, TermSettingsSerializer, FeeScheduleSerializer
 from .services import FeeService, FeeServiceError
 from config.pagination import ApiPageNumberPagination
 from apps.core.models import AcademicYear
@@ -258,4 +258,280 @@ class PaymentTransitionAPIView(BaseFeeAPIView):
             return Response(serializer.data)
         except FeeServiceError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+# --- Term Settings Views ---
+
+class TermSettingsListCreateAPIView(BaseFeeAPIView):
+    def get(self, request):
+        queryset = TermSettings.objects.filter(academic_year__school=request.user.school)
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(Q(term_name__icontains=search) | Q(academic_year__name__icontains=search))
+        sort_by = (request.query_params.get("sort_by") or "term_number").strip().lower()
+        sort_map = {"term_number": "term_number", "created_date": "created_at", "updated_date": "updated_at"}
+        order_field = sort_map.get(sort_by, "term_number")
+        queryset = queryset.order_by(order_field, "id")
+        return self.get_paginated_response(queryset, TermSettingsSerializer, request)
+
+    def post(self, request):
+        print("[DEBUG] request.data TYPE:", type(request.data), "data:", request.data)
+        if isinstance(request.data, list):
+            if not request.data:
+                return Response([], status=status.HTTP_200_OK)
+
+            academic_year_ids = {item.get("academic_year") for item in request.data if item.get("academic_year")}
+            if not academic_year_ids:
+                return Response(
+                    {"success": False, "message": "academic_year is required for all terms."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if len(academic_year_ids) != 1:
+                return Response(
+                    {"success": False, "message": "All terms in a bulk save must belong to the exact same Academic Year."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            academic_year_id = list(academic_year_ids)[0]
+
+            from django.db import transaction
+            try:
+                with transaction.atomic():
+                    # Get existing terms for this academic_year belonging to the user's school
+                    existing_terms = TermSettings.objects.filter(
+                        academic_year_id=academic_year_id,
+                        academic_year__school=request.user.school
+                    )
+                    existing_map = {item.term_number: item for item in existing_terms}
+
+                    incoming_term_numbers = set()
+                    saved_data = []
+
+                    create_count = 0
+                    update_count = 0
+                    no_change_count = 0
+                    delete_count = 0
+
+                    for term_data in request.data:
+                        term_num = term_data.get("term_number")
+                        if term_num is None:
+                            return Response(
+                                {"success": False, "message": "term_number is required for all elements."},
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+                        incoming_term_numbers.add(term_num)
+
+                        existing_obj = existing_map.get(term_num)
+                        if existing_obj:
+                            from datetime import datetime, date
+                            def parse_date(date_val):
+                                if isinstance(date_val, (date, datetime)):
+                                    return date_val
+                                if isinstance(date_val, str):
+                                    try:
+                                        return datetime.strptime(date_val.strip(), "%Y-%m-%d").date()
+                                    except ValueError:
+                                        pass
+                                return None
+
+                            income_start = parse_date(term_data.get("start_date"))
+                            income_end = parse_date(term_data.get("end_date"))
+                            income_due = parse_date(term_data.get("default_due_date"))
+                            income_name = (term_data.get("term_name") or "").strip()
+
+                            is_changed = (
+                                existing_obj.term_name.strip() != income_name or
+                                existing_obj.start_date != income_start or
+                                existing_obj.end_date != income_end or
+                                existing_obj.default_due_date != income_due
+                            )
+
+                            if is_changed:
+                                print(f"[TermSettings] [backend/debug] Term {term_num}: UPDATE detected (name: {existing_obj.term_name} -> {income_name})")
+                                serializer = TermSettingsSerializer(
+                                    existing_obj,
+                                    data=term_data,
+                                    partial=True,
+                                    context={"request": request}
+                                )
+                                if not serializer.is_valid():
+                                    return Response(
+                                        {
+                                            "success": False,
+                                            "message": f"Validation failed at term {term_num}.",
+                                            "errors": serializer.errors,
+                                        },
+                                        status=status.HTTP_400_BAD_REQUEST,
+                                    )
+                                serializer.save()
+                                saved_data.append(serializer.data)
+                                update_count += 1
+                            else:
+                                print(f"[TermSettings] [backend/debug] Term {term_num}: NO_CHANGE detected")
+                                serializer = TermSettingsSerializer(existing_obj)
+                                saved_data.append(serializer.data)
+                                no_change_count += 1
+                        else:
+                            print(f"[TermSettings] [backend/debug] Term {term_num}: CREATE detected")
+                            serializer = TermSettingsSerializer(
+                                data=term_data,
+                                context={"request": request}
+                            )
+                            if not serializer.is_valid():
+                                return Response(
+                                    {
+                                        "success": False,
+                                        "message": f"Validation failed at term {term_num}.",
+                                        "errors": serializer.errors,
+                                    },
+                                    status=status.HTTP_400_BAD_REQUEST,
+                                )
+                            serializer.save(created_by=request.user)
+                            saved_data.append(serializer.data)
+                            create_count += 1
+
+                    # Delete any terms that were NOT in the incoming request payload
+                    to_delete = existing_terms.exclude(term_number__in=incoming_term_numbers)
+                    delete_count = to_delete.count()
+                    if delete_count > 0:
+                        print(f"[TermSettings] [backend/debug] Deleting {delete_count} extra terms not included in the payload.")
+                        to_delete.delete()
+
+                    if create_count > 0:
+                        overall_action = "CREATE"
+                    elif update_count > 0 or delete_count > 0:
+                        overall_action = "UPDATE"
+                    else:
+                        overall_action = "NO_CHANGE"
+
+                    print(f"[TermSettings] [backend/debug] Overall Action: {overall_action} (Created: {create_count}, Updated: {update_count}, Unchanged: {no_change_count}, Deleted: {delete_count})")
+
+                return Response(saved_data, status=status.HTTP_201_CREATED)
+            except Exception as e:
+                return Response(
+                    {"success": False, "message": f"Failed bulk save: {str(e)}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        serializer = TermSettingsSerializer(data=request.data, context={"request": request})
+        if serializer.is_valid():
+            serializer.save(created_by=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(
+            {"success": False, "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+class TermSettingsDetailAPIView(BaseFeeAPIView):
+    def get_object(self, pk, user):
+        return get_object_or_404(TermSettings, pk=pk, academic_year__school=user.school)
+
+    def get(self, request, pk):
+        term_setting = self.get_object(pk, request.user)
+        serializer = TermSettingsSerializer(term_setting)
+        return Response(serializer.data)
+
+    def put(self, request, pk):
+        term_setting = self.get_object(pk, request.user)
+        serializer = TermSettingsSerializer(term_setting, data=request.data, context={"request": request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(
+            {"success": False, "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def patch(self, request, pk):
+        term_setting = self.get_object(pk, request.user)
+        serializer = TermSettingsSerializer(term_setting, data=request.data, partial=True, context={"request": request})
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(
+            {"success": False, "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def delete(self, request, pk):
+        term_setting = self.get_object(pk, request.user)
+        term_setting.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+# --- Fee Schedule Views ---
+
+class FeeScheduleListCreateAPIView(BaseFeeAPIView):
+    def get(self, request):
+        queryset = FeeSchedule.objects.filter(academic_year__school=request.user.school, is_deleted=False)
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(fee_group__name__icontains=search) | Q(fee_type__name__icontains=search) | Q(academic_year__name__icontains=search)
+            )
+        status_filter = (request.query_params.get("status") or "").strip().lower()
+        if status_filter in {"active", "inactive"}:
+            queryset = queryset.filter(status=status_filter)
+        sort_by = (request.query_params.get("sort_by") or "created_at").strip().lower()
+        sort_map = {"created_at": "created_at", "updated_at": "updated_at", "amount": "amount", "fee_group": "fee_group__name", "fee_type": "fee_type__name"}
+        order_field = sort_map.get(sort_by, "created_at")
+        queryset = queryset.order_by(f"-{order_field}", "id")
+        return self.get_paginated_response(queryset, FeeScheduleSerializer, request)
+
+    def post(self, request):
+        serializer = FeeScheduleSerializer(data=request.data, context={"request": request})
+        if serializer.is_valid():
+            serializer.save(created_by=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(
+            {"success": False, "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+class FeeScheduleDetailAPIView(BaseFeeAPIView):
+    def get_object(self, pk, user):
+        return get_object_or_404(FeeSchedule, pk=pk, academic_year__school=user.school, is_deleted=False)
+
+    def get(self, request, pk):
+        schedule = self.get_object(pk, request.user)
+        serializer = FeeScheduleSerializer(schedule)
+        return Response(serializer.data)
+
+    def put(self, request, pk):
+        schedule = self.get_object(pk, request.user)
+        serializer = FeeScheduleSerializer(schedule, data=request.data, context={"request": request})
+        if serializer.is_valid():
+            serializer.save(updated_by=request.user)
+            return Response(serializer.data)
+        return Response(
+            {"success": False, "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def patch(self, request, pk):
+        schedule = self.get_object(pk, request.user)
+        serializer = FeeScheduleSerializer(schedule, data=request.data, partial=True, context={"request": request})
+        if serializer.is_valid():
+            serializer.save(updated_by=request.user)
+            return Response(serializer.data)
+        return Response(
+            {"success": False, "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def delete(self, request, pk):
+        schedule = self.get_object(pk, request.user)
+        has_assignments = FeeAssignment.objects.filter(fees_type=schedule.fee_type).exists()
+        has_payments = Payment.objects.filter(assignment__fees_type=schedule.fee_type).exists()
+        
+        if has_assignments or has_payments:
+            return Response(
+                {"success": False, "message": "Deletion blocked.", "errors": {"detail": ["Cannot delete. This fee schedule is already in use."]}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        schedule.is_deleted = True
+        schedule.status = "inactive"
+        schedule.deleted_by = request.user
+        schedule.deleted_at = timezone.now()
+        schedule.save(update_fields=["is_deleted", "status", "deleted_by", "deleted_at", "updated_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
