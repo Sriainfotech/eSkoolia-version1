@@ -3,21 +3,17 @@
 import { Filter, RotateCcw, Search as SearchIcon, Download } from 'lucide-react';
 import type { Role, RoleOption, StatusFilter, ClassOption, SectionOption } from '@/lib/login-permission/types';
 
-const STATUS_PILLS: {
-  value: StatusFilter;
-  label: string;
-  dot?: string;
-}[] = [
+const STATUS_PILLS: { value: StatusFilter; label: string; dot?: string }[] = [
   { value: 'all',      label: 'All' },
-  { value: 'active',   label: 'Active',           dot: 'bg-emerald-500' },
-  { value: 'inactive', label: 'Disabled',          dot: 'bg-red-400'    },
-  { value: 'new',      label: 'Never logged in',   dot: 'bg-amber-400'  },
+  { value: 'active',   label: 'Active',         dot: 'bg-emerald-500' },
+  { value: 'inactive', label: 'Disabled',        dot: 'bg-red-400'    },
+  { value: 'new',      label: 'Never logged in', dot: 'bg-amber-400'  },
 ];
 
 const INPUT_CLS = [
   'w-full h-10 px-3 rounded-lg border border-[var(--bd,#dbe4f0)]',
   'bg-white text-sm text-[var(--ink-1,#0f172a)] outline-none',
-  'focus:ring-2 focus:ring-[var(--pu,#3b5bdb)] focus:border-[var(--pu,#3b5bdb)]',
+  'focus:ring-2 focus:ring-[var(--pu,#6D4AFF)] focus:border-[var(--pu,#6D4AFF)]',
   'placeholder:text-[var(--ink-3,#94a3b8)]',
 ].join(' ');
 
@@ -70,41 +66,42 @@ export function FilterBar({
     if (e.key === 'Enter') onSearch();
   }
 
+  const showSubRole = roleOptions.length > 1;
+
   return (
     <div className="rounded-xl border border-[var(--bd,#dbe4f0)] bg-white px-4 py-3 space-y-3">
-      {/* Section header */}
       <div className="flex items-center gap-2">
-        <div className="flex items-center justify-center w-6 h-6 rounded-md bg-[var(--pu-soft,#e0eaff)] shrink-0">
-          <Filter size={12} className="text-[var(--pu,#3b5bdb)]" />
+        <div className="flex items-center justify-center w-6 h-6 rounded-md bg-[var(--pu-soft,#EEEAFF)] shrink-0">
+          <Filter size={12} className="text-[var(--pu,#6D4AFF)]" />
         </div>
         <p className="text-xs font-semibold text-[var(--ink-2,#475569)]">
-          Find Users
-          <span className="font-normal text-[var(--ink-3,#64748b)] ml-1.5">— pick a role then filter by name, email, or status</span>
+          Filter Users
+          <span className="font-normal text-[var(--ink-3,#64748b)] ml-1.5">
+            — narrow by {showSubRole ? 'sub-role, ' : ''}name, email, or status
+          </span>
         </p>
       </div>
 
-      {/* 3-column inputs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {/* ROLE */}
-        <div>
-          <label className={LABEL_CLS}>
-            Role <span className="text-red-500 normal-case tracking-normal">*</span>
-          </label>
-          <select
-            value={role}
-            onChange={(e) => onRoleChange(e.target.value as Role)}
-            className={INPUT_CLS}
-          >
-            <option value="">Select a role…</option>
-            {roleOptions.map((r) => (
-              <option key={r.id} value={r.name.toLowerCase()}>
-                {r.name}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className={`grid gap-3 ${showSubRole ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1 sm:grid-cols-2'}`}>
+        {/* Sub-role selector — only when tab has multiple roles */}
+        {showSubRole && (
+          <div>
+            <label className={LABEL_CLS}>Role</label>
+            <select
+              value={role}
+              onChange={(e) => onRoleChange(e.target.value as Role)}
+              className={INPUT_CLS}
+            >
+              {roleOptions.map((r) => (
+                <option key={r.id} value={r.name.toLowerCase()}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
-        {/* SEARCH */}
+        {/* Search */}
         <div>
           <label className={LABEL_CLS}>Search</label>
           <div className="relative">
@@ -114,7 +111,7 @@ export function FilterBar({
             />
             <input
               type="text"
-              placeholder="Name, email, or staff ID…"
+              placeholder="Name, email, or ID…"
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
               onKeyDown={handleKey}
@@ -123,7 +120,7 @@ export function FilterBar({
           </div>
         </div>
 
-        {/* LOGIN STATUS */}
+        {/* Login Status */}
         <div>
           <label className={LABEL_CLS}>Login Status</label>
           <select
@@ -146,7 +143,7 @@ export function FilterBar({
             <label className={LABEL_CLS}>Class</label>
             <select
               value={classFilter}
-              onChange={(e) => { onClassFilterChange(e.target.value); }}
+              onChange={(e) => onClassFilterChange(e.target.value)}
               className={INPUT_CLS}
             >
               <option value="">All Classes</option>
@@ -159,7 +156,7 @@ export function FilterBar({
             <label className={LABEL_CLS}>Section</label>
             <select
               value={sectionFilter}
-              onChange={(e) => { onSectionFilterChange(e.target.value); }}
+              onChange={(e) => onSectionFilterChange(e.target.value)}
               className={INPUT_CLS}
               disabled={!classFilter}
             >
@@ -183,8 +180,8 @@ export function FilterBar({
             className={[
               'flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium transition-colors',
               status === t.value
-                ? 'bg-[var(--pu,#3b5bdb)] text-white'
-                : 'border border-[var(--bd,#dbe4f0)] text-[var(--ink-2,#475569)] hover:border-[var(--pu,#3b5bdb)] hover:text-[var(--pu,#3b5bdb)]',
+                ? 'bg-[var(--pu,#6D4AFF)] text-white'
+                : 'border border-[var(--bd,#dbe4f0)] text-[var(--ink-2,#475569)] hover:border-[var(--pu,#6D4AFF)] hover:text-[var(--pu,#6D4AFF)]',
             ].join(' ')}
           >
             {t.dot && (
@@ -196,7 +193,6 @@ export function FilterBar({
           </button>
         ))}
 
-        {/* Push actions to the right */}
         <div className="ml-auto flex items-center gap-2">
           {onExport && role && (
             <button
@@ -221,7 +217,7 @@ export function FilterBar({
           <button
             onClick={onSearch}
             className="h-9 px-5 rounded-lg text-sm font-semibold text-white transition-opacity flex items-center gap-1.5"
-            style={{ background: 'var(--pu,#3b5bdb)' }}
+            style={{ background: 'var(--pu,#6D4AFF)' }}
           >
             <SearchIcon size={13} />
             Search

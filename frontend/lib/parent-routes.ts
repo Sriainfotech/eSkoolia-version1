@@ -12,8 +12,8 @@ import type { ModuleRoute } from "@/lib/routes";
  *   • PARENT_MODULES are ALWAYS shown in full — no permission filtering.
  *     Every parent always sees all parent pages (Attendance, Fees, Results
  *     etc.). Permissions control data access on the backend, not nav visibility.
- *   • Extra admin modules granted to the parent role via Roles & Permissions
- *     are appended automatically (rare, but supported).
+ *   • Parent portal never receives extra admin modules — it is consumer-facing.
+ *     Only the teacher portal can have admin-granted extras appended.
  *
  * The `permission` fields are documentation-only — they record the backend
  * prefix but are not evaluated for nav visibility in the parent portal.

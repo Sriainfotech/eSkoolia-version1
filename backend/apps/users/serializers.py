@@ -4,7 +4,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import User
-from apps.tenancy.context import get_current_tenant, is_multi_tenancy_enabled
+from apps.tenancy.context import get_current_tenant, is_multi_tenancy_enabled  # noqa: F401 — kept for external callers
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -98,8 +98,13 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
         # When on a school subdomain the authenticated user MUST belong to
         # that school. This blocks staff/admins from one school logging into
         # another school's portal even if their credentials are valid.
-        if is_multi_tenancy_enabled() and not user.is_superuser:
-            current_tenant = get_current_tenant()
+        if not user.is_superuser:
+            try:
+                from apps.tenancy.resolvers import get_tenant_from_request as _resolve_tenant
+                _req = self.context.get("request") if hasattr(self, "context") else None
+                current_tenant = _resolve_tenant(_req) if _req is not None else None
+            except Exception:
+                current_tenant = None
             if current_tenant is not None:
                 user_school_id = getattr(user, 'school_id', None)
                 if not user_school_id:
@@ -145,7 +150,7 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
             return (getattr(t, "status", "") or "").lower() not in ("active", "trial")
 
         request_tenant = None
-        if not user.is_superuser and is_multi_tenancy_enabled():
+        if not user.is_superuser:
             try:
                 request = self.context.get("request") if hasattr(self, "context") else None
                 if request is not None:

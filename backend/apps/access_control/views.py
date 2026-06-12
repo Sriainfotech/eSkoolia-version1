@@ -965,9 +965,12 @@ class LoginPermissionViewSet(viewsets.ViewSet):
 
         roles = []
         for r in self._roles_qs(request):
-            if _is_parent_role(r):
-                continue
-            roles.append({"id": str(r.id), "name": r.name, "isStudent": _is_student_role(r)})
+            roles.append({
+                "id": str(r.id),
+                "name": r.name,
+                "isStudent": _is_student_role(r),
+                "portalType": r.portal_type or "admin",
+            })
 
         classes = [{"id": str(c.id), "name": c.name} for c in classes_qs]
         sections = [{"id": str(s.id), "name": s.name, "classId": str(s.school_class_id)} for s in sections_qs]
@@ -1123,6 +1126,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
             "total": total,
             "active": sum(1 for u in raw_users if u["loginAccess"]),
             "disabled": sum(1 for u in raw_users if not u["loginAccess"]),
+            "neverLoggedIn": sum(1 for u in raw_users if u["lastLogin"] is None),
         }
         start = (page_num - 1) * page_size
         paginated = raw_users[start: start + page_size]
@@ -1175,7 +1179,8 @@ class LoginPermissionViewSet(viewsets.ViewSet):
         alphabet = _string.ascii_letters + _string.digits
         temp_password = "".join(secrets.choice(alphabet) for _ in range(10))
         user_obj.set_password(temp_password)
-        user_obj.save(update_fields=["password"])
+        user_obj.must_change_password = True
+        user_obj.save(update_fields=["password", "must_change_password"])
 
         return Response(
             {
@@ -1211,7 +1216,10 @@ class LoginPermissionViewSet(viewsets.ViewSet):
                 return Response({"affected": affected}, status=status.HTTP_200_OK)
         elif ids:
             safe_ids = [int(i) for i in ids if str(i).lstrip("-").isdigit()]
-            affected = User.objects.filter(id__in=safe_ids).update(access_status=login_access)
+            qs = User.objects.filter(id__in=safe_ids)
+            if not request.user.is_superuser and request.user.school_id:
+                qs = qs.filter(school_id=request.user.school_id)
+            affected = qs.update(access_status=login_access)
             return Response({"affected": affected}, status=status.HTTP_200_OK)
 
         return Response({"affected": 0}, status=status.HTTP_200_OK)
@@ -1254,8 +1262,11 @@ class LoginPermissionViewSet(viewsets.ViewSet):
                 return Response({"affected": count}, status=status.HTTP_200_OK)
         elif ids:
             safe_ids = [int(i) for i in ids if str(i).lstrip("-").isdigit()]
+            qs = User.objects.filter(id__in=safe_ids)
+            if not request.user.is_superuser and request.user.school_id:
+                qs = qs.filter(school_id=request.user.school_id)
             count = 0
-            for u in User.objects.filter(id__in=safe_ids):
+            for u in qs:
                 u.set_password(gen_pwd())
                 u.save(update_fields=["password"])
                 count += 1

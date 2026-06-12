@@ -968,21 +968,31 @@ class StudentViewSet(TenantScopedModelViewSet):
     def _auto_create_student_user(self, student):
         """Create a User account for the student and link student.user to it.
 
-        Username format:  {admission_no}_{school_code}  (lowercase, max 150 chars)
-        Default password: date of birth as DDMMYYYY, or admission_no if DOB absent.
+        Username: student's primary email if provided, otherwise admission_no.
+        Password: DOB as DDMMYYYY, or admission_no if DOB is absent.
         must_change_password is set so the student is forced to change on first login.
         Failures are logged as warnings; they never rollback the student record.
+        Credentials are stored on self._student_creds for inclusion in the API response.
         """
         User = get_user_model()
+        self._student_creds = None
         try:
             student_school = student.school
-            school_code = (student_school.code if student_school else "school").lower()
-            base_username = f"{student.admission_no}_{school_code}"[:150]
-            username = base_username
-            counter = 1
-            while User.objects.filter(username=username).exists():
-                username = f"{base_username}_{counter}"[:150]
-                counter += 1
+
+            # Username = full name (e.g. "ArjunKumar"); if taken, append last 2 digits of admission_no
+            email = (student.email or "").strip()
+            full_name = f"{student.first_name or ''}{student.last_name or ''}".strip()
+            base_username = re.sub(r"\s+", "", full_name).lower() or student.admission_no
+            if not User.objects.filter(username=base_username).exists():
+                username = base_username
+            else:
+                suffix = (student.admission_no or "")[-2:]
+                username = f"{base_username}{suffix}"
+                # Last resort: keep incrementing if suffix still collides
+                counter = 1
+                while User.objects.filter(username=username).exists():
+                    username = f"{base_username}{suffix}{counter}"
+                    counter += 1
 
             default_password = (
                 student.date_of_birth.strftime("%d%m%Y")
@@ -994,7 +1004,7 @@ class StudentViewSet(TenantScopedModelViewSet):
                 username=username,
                 first_name=student.first_name,
                 last_name=student.last_name,
-                email=student.email or "",
+                email=email,
                 school=student_school,
                 must_change_password=True,
             )
@@ -1003,10 +1013,78 @@ class StudentViewSet(TenantScopedModelViewSet):
 
             student.user = user
             student.save(update_fields=["user"])
+            self._student_creds = {"username": username, "password": default_password}
         except Exception:
             logger.warning(
                 "Auto-create user failed for student admission_no=%s; "
                 "student saved without login account.",
+                student.admission_no,
+                exc_info=True,
+            )
+
+    def _auto_create_guardian_user(self, student):
+        """Create a User account for the student's guardian and link guardian.user to it.
+
+        Username = Guardian 1's phone number.
+        Password = phone number (must_change_password=True forces change on first login).
+        If the phone already has an account, re-use it and add the Parent role.
+        Failures never roll back the student record.
+        Credentials are stored on self._guardian_creds for inclusion in the API response.
+        """
+        guardian = getattr(student, "guardian", None)
+        self._guardian_creds = None
+        if guardian is None:
+            return
+        if guardian.user_id:
+            return  # Already has a login account
+
+        phone = (guardian.phone or "").strip()
+        if not phone:
+            return
+
+        User = get_user_model()
+        try:
+            from apps.access_control.models import Role, UserRole
+
+            # Re-use the account if the phone is already registered.
+            user = User.objects.filter(username=phone).first()
+            already_existed = user is not None
+            if user is None:
+                user = User(
+                    username=phone,
+                    first_name=(guardian.full_name or "").split()[0] if guardian.full_name else "",
+                    last_name=" ".join((guardian.full_name or "").split()[1:]),
+                    email=guardian.email or "",
+                    school=student.school,
+                    must_change_password=True,
+                )
+                # Initial password = phone number itself (shown to admin after enrollment)
+                user.set_password(phone)
+                user.save()
+                self._guardian_creds = {"username": phone, "password": phone}
+
+            # Link guardian → user
+            guardian.user = user
+            guardian.save(update_fields=["user"])
+
+            # Assign the school's "Parent" role (portal_type='parent') if it exists.
+            parent_role = (
+                Role.objects.filter(
+                    school=student.school,
+                    portal_type="parent",
+                ).first()
+                or Role.objects.filter(
+                    school=student.school,
+                    name__icontains="parent",
+                ).first()
+            )
+            if parent_role:
+                UserRole.objects.get_or_create(user=user, role=parent_role)
+
+        except Exception:
+            logger.warning(
+                "Auto-create guardian user failed for student admission_no=%s; "
+                "student saved without guardian login account.",
                 student.admission_no,
                 exc_info=True,
             )
@@ -1017,6 +1095,13 @@ class StudentViewSet(TenantScopedModelViewSet):
             school = self.request.school
         student = serializer.save(school=school) if school else serializer.save()
         self._auto_create_student_user(student)
+        self._auto_create_guardian_user(student)
+        # Aggregate credentials for the create() response
+        self._enrollment_credentials = {}
+        if getattr(self, "_student_creds", None):
+            self._enrollment_credentials["student"] = self._student_creds
+        if getattr(self, "_guardian_creds", None):
+            self._enrollment_credentials["parent"] = self._guardian_creds
 
     def get_serializer_class(self):
         if getattr(self, "action", None) == "list":
@@ -1424,6 +1509,7 @@ class StudentViewSet(TenantScopedModelViewSet):
                 "message": "Student added successfully",
                 "warning": warning,
                 "data": serializer.data,
+                "credentials": getattr(self, "_enrollment_credentials", {}),
             },
             status=status.HTTP_201_CREATED,
             headers=headers,

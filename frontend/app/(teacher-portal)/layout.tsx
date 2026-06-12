@@ -24,8 +24,6 @@ import { usePermissions, clearPermissionsCache } from "@/hooks/usePermissions";
 import { useVisibleModules } from "@/hooks/useVisibleModules";
 import { clearAuthTokens, getAccessToken, getRefreshToken } from "@/lib/auth";
 import { API_BASE_URL } from "@/lib/api";
-import { TEACHER_MODULES } from "@/lib/teacher-routes";
-import { MODULES } from "@/lib/routes";
 import { PageNotesPanel } from "@/components/notes/PageNotesPanel";
 
 // ── Teacher TopBar ────────────────────────────────────────────────────────────

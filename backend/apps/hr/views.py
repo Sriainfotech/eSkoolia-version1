@@ -697,8 +697,15 @@ class StaffViewSet(SchoolScopedModelViewSet):
         return queryset.order_by("first_name", "last_name")
 
     def _generate_username(self, staff):
+        """Username = full email address when available (e.g. jane@school.com).
+        Falls back to firstname.lastname or staff_no when no email is set."""
         User = get_user_model()
 
+        # Prefer full email as username — clear, memorable, matches what staff expect
+        if staff.email and not User.objects.filter(username=staff.email.strip()).exists():
+            return staff.email.strip()
+
+        # Fallback: firstname.lastname (for staff with no email)
         base = ""
         if staff.email:
             base = staff.email.split("@", 1)[0]
@@ -739,7 +746,9 @@ class StaffViewSet(SchoolScopedModelViewSet):
         if not matched_user:
             try:
                 username = self._generate_username(staff)
-                matched_user = User.objects.create(
+                # Initial password = staff number (admin sees this in the create response)
+                initial_password = staff.staff_no or "Staff@123"
+                matched_user = User(
                     username=username,
                     first_name=(staff.first_name or "").strip(),
                     last_name=(staff.last_name or "").strip(),
@@ -747,9 +756,11 @@ class StaffViewSet(SchoolScopedModelViewSet):
                     school_id=staff.school_id,
                     is_active=True,
                     access_status=True,
+                    must_change_password=True,
                 )
-                matched_user.set_unusable_password()
-                matched_user.save(update_fields=["password"])
+                matched_user.set_password(initial_password)
+                matched_user.save()
+                self._staff_creds = {"username": username, "password": initial_password}
             except IntegrityError as exc:
                 # Likely a race condition or unique constraint violation
                 import logging
@@ -797,10 +808,22 @@ class StaffViewSet(SchoolScopedModelViewSet):
         if not school and not user.is_superuser:
             raise PermissionDenied("School context is required.")
 
+        self._staff_creds = None
         submitted_staff_no = (serializer.validated_data.get("staff_no") or "").strip()
         staff_no = submitted_staff_no or self._generate_staff_no(school)
         staff = serializer.save(school=school, staff_no=staff_no)
         self._ensure_staff_user(staff)
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        response_data = dict(serializer.data)
+        creds = getattr(self, "_staff_creds", None)
+        if creds:
+            response_data["credentials"] = creds
+        return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_update(self, serializer):
         staff = serializer.save()

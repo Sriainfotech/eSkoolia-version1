@@ -847,6 +847,16 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                 admin_role.permissions.add(wildcard_perm)
                 UserRole.objects.get_or_create(user=admin_user, role=admin_role)
 
+                # 5. Seed system roles for the three core portals.
+                #    Without these, teachers and parents can't log into their portals
+                #    because portal_type defaults to 'admin' for any role created via UI.
+                for role_name, portal in [("Teacher", "teacher"), ("Parent", "parent"), ("Principal", "admin")]:
+                    Role.objects.get_or_create(
+                        school=erp_school,
+                        name=role_name,
+                        defaults={"is_system": True, "is_active": True, "portal_type": portal},
+                    )
+
         except Exception as exc:
             return Response(
                 {"detail": f"Provisioning failed: {exc}"},

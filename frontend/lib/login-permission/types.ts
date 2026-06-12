@@ -3,10 +3,13 @@ export type StatusFilter = 'all' | 'active' | 'inactive' | 'new';
 export type BulkAction = 'enable' | 'disable' | 'reset';
 export type CredentialAction = 'reset_temp' | 'set_initial';
 
+export type PortalTab = 'teacher' | 'principal' | 'student' | 'parent' | 'driver' | 'staff';
+
 export interface RoleOption {
   id: string;
   name: string;
   isStudent: boolean;
+  portalType?: string;
 }
 
 export interface ClassOption {
@@ -41,6 +44,7 @@ export interface RoleCounts {
   total: number;
   active: number;
   disabled: number;
+  neverLoggedIn?: number;
 }
 
 export interface PageResult {

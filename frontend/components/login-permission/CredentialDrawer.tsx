@@ -187,7 +187,7 @@ export function CredentialDrawer({ user, onClose, onSuccess, onError }: Props) {
             <button
               disabled={loading}
               onClick={() => handleAction('reset_temp')}
-              className="w-full px-4 py-3 rounded-xl border border-[var(--bd,#dbe4f0)] hover:border-[var(--pu,#3b5bdb)] hover:bg-[var(--pu-soft,#e0eaff)] transition-colors disabled:opacity-50 text-left"
+              className="w-full px-4 py-3 rounded-xl border border-[var(--bd,#dbe4f0)] hover:border-[var(--pu,#6D4AFF)] hover:bg-[var(--pu-soft,#EEEAFF)] transition-colors disabled:opacity-50 text-left"
             >
               <div className="flex items-center justify-between mb-1">
                 <p className="text-sm font-medium text-[var(--ink-1,#0f172a)]">
@@ -198,7 +198,7 @@ export function CredentialDrawer({ user, onClose, onSuccess, onError }: Props) {
                 </span>
               </div>
               <p className="text-xs text-[var(--ink-3,#64748b)] leading-relaxed">
-                System generates a secure random password and emails it to {user.email}. A one-time backup copy is shown here. Use this whenever the user has a working email.
+                Generates a secure random 10-character password. The one-time backup is shown here — share it with the user and they will be required to change it on next login.
               </p>
               {loading && (
                 <Loader2 size={13} className="mt-2 animate-spin text-[var(--pu,#3b5bdb)]" />
