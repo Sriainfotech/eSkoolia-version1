@@ -99,7 +99,7 @@ export default function FeesTypesPanel() {
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.amount}</td>
                     <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
                       <div style={{ display: "flex", gap: 6 }}>
-                        <button type="button" style={btn("#0ea5e9")} onClick={() => { setEditingId(row.id); setYearId(String(row.academic_year)); setGroupId(String(row.fees_group)); setName(row.name); setAmount(row.amount); setDescription(row.description || ""); }}>Edit</button>
+                        <button type="button" style={btn("#0ea5e9")} onClick={() => { setEditingId(row.id); setYearId(String(row.academic_year)); setGroupId(String(row.fees_group)); setName(row.name); setAmount(row.amount || ""); setDescription(row.description || ""); }}>Edit</button>
                         <button type="button" style={btn("#dc2626")} onClick={() => void feesApi.deleteType(row.id).then(load).catch((e) => setError(e instanceof Error ? e.message : "Delete failed."))}>Delete</button>
                       </div>
                     </td>

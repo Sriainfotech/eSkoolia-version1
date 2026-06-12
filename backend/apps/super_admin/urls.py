@@ -31,6 +31,7 @@ from .views import (
     SchoolTenantExportXlsxView,
     SchoolTenantListView,
     SchoolTenantProvisionView,
+    SchoolFormChoicesView,
     ToggleSchoolLLMView,
 )
 
@@ -39,6 +40,7 @@ urlpatterns = [
     path("dashboard/kpis/", DashboardKPIView.as_view(), name="dashboard-kpis"),
     path("schools/", SchoolTenantListView.as_view(), name="schools"),
     path("school-tenants/", SchoolTenantListView.as_view(), name="school-tenants"),
+    path("schools/form-choices/", SchoolFormChoicesView.as_view(), name="schools-form-choices"),
     path("schools/provision/", SchoolTenantProvisionView.as_view(), name="schools-provision"),
     path("schools/export-xlsx/", SchoolTenantExportXlsxView.as_view(), name="schools-export-xlsx"),
     path("school-tenants/provision/", SchoolTenantProvisionView.as_view(), name="school-tenants-provision"),

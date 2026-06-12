@@ -3412,7 +3412,7 @@ type OnboardProps = {
   isPopup?: boolean;
 };
 
-export default function HrOnboardPage(props: OnboardProps | { params?: any; searchParams?: any }) {
+export default function HrOnboardPage(props: any) {
   const isPopup = "isPopup" in props ? props.isPopup : false;
   const popupStaffId = "popupStaffId" in props ? props.popupStaffId : null;
   const popupStep = "popupStep" in props ? props.popupStep : null;

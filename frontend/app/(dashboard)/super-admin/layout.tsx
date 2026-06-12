@@ -39,7 +39,7 @@ export default function SuperAdminAuthLayout({ children }: { children: ReactNode
 
   if (!ok) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 80 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 80, position: 'fixed', inset: 0, background: 'var(--bg-1, #ffffff)', zIndex: 9999 }}>
         <div style={{ textAlign: 'center' }}>
           <div
             style={{

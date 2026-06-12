@@ -1,3 +1,9 @@
+# NOTE: This file is NOT wired into URL routing. It is preserved for future use
+# when MULTI_TENANCY_ENABLED=True. The active provisioning endpoint is
+# SchoolTenantProvisionView in apps/super_admin/views.py.
+# Do NOT register provision_tenant_view in URL conf — its Domain record format
+# is incompatible with System 1 and will break subdomain resolution.
+
 """API endpoints for tenant provisioning (super-admin only)."""
 import logging
 from rest_framework import serializers, status

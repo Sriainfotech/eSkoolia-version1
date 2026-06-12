@@ -8,11 +8,18 @@ import { usePermissions } from '@/hooks/usePermissions';
 
 const COMING_SOON_PATHS = new Set([
   '/hr/leave',
-  '/hr/attendance',
   '/hr/offboarding',
   '/academics/timetable',
   '/academics/planning-studio',
   '/academics/academic-reports',
+]);
+
+const FEES_SOON_BADGE_PATHS = new Set([
+  '/fees/fee-assignment',
+  '/fees/collection',
+  '/fees/dues-reminders',
+  '/fees/year-end',
+  '/fees/enroll-student',
 ]);
 
 /** Finds the module that "owns" the given pathname */
@@ -150,6 +157,7 @@ export function ModuleSubNav() {
             if (!allowed) return null;
 
             const subComingSoon = COMING_SOON_PATHS.has(s.path);
+            const showSoonBadge = subComingSoon || FEES_SOON_BADGE_PATHS.has(s.path);
 
             return (
               <Link
@@ -179,11 +187,11 @@ export function ModuleSubNav() {
               >
                 {!mod.cleanTabs && <SubIcon size={12} strokeWidth={1.8} />}
                 {s.label}
-                {subComingSoon && (
+                {showSoonBadge && (
                   <span style={{
-                    fontSize: 9, fontWeight: 700, letterSpacing: '0.03em',
-                    color: 'var(--pu, #6D28D9)', background: 'var(--pu-soft, #EDE9FE)',
-                    borderRadius: 4, padding: '1px 5px', marginLeft: 2, flexShrink: 0,
+                    fontSize: 10, fontWeight: 700, letterSpacing: '0.02em',
+                    color: '#fff', background: 'var(--pu, #6D28D9)',
+                    borderRadius: 999, padding: '1px 6px', marginLeft: 4, flexShrink: 0,
                   }}>Soon</span>
                 )}
               </Link>

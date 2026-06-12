@@ -85,7 +85,7 @@ function getErrorMessage(error: unknown, fallback: string): string {
         }
       }
     }
-    
+
     // Fall back to error.message
     const message = error.message.trim();
     if (message && message !== "[object Object]") {
@@ -186,14 +186,14 @@ function buttonStyle(color = "var(--primary)") {
 
 function dependencyLinksFromMessage(message: string): DependencyLink[] {
   const normalized = (message || "").toLowerCase();
-  
+
   // Check if this is a dependency error message
   if (!normalized.includes("cannot delete") || !normalized.includes("used in")) {
     return [];
   }
 
   const links: DependencyLink[] = [];
-  
+
   // Check for various module names
   if (
     normalized.includes("visitor book") ||
@@ -201,28 +201,28 @@ function dependencyLinksFromMessage(message: string): DependencyLink[] {
   ) {
     links.push({ label: "Open Visitor Book", href: "/administration/visitor-book" });
   }
-  
+
   if (
     normalized.includes("complaint type") ||
     (normalized.includes("complaint") && normalized.includes("type"))
   ) {
     links.push({ label: "Open Complaints", href: "/administration/complaint" });
   }
-  
+
   if (
     normalized.includes("admission inquiries source") ||
     normalized.includes("admission") && normalized.includes("source")
   ) {
     links.push({ label: "Open Admission Query", href: "/administration/admission-query" });
   }
-  
+
   if (
     normalized.includes("admission inquiries reference") ||
     (normalized.includes("admission") && normalized.includes("reference"))
   ) {
     links.push({ label: "Open Admission Query", href: "/administration/admission-query" });
   }
-  
+
   if (
     normalized.includes("complaints source") ||
     (normalized.includes("complaint") && normalized.includes("source"))
@@ -420,15 +420,22 @@ export function AdminSetupPanel() {
 
   return (
     <div className="legacy-panel">
-      <TopToast
-        message={error || success}
-        tone={error ? "error" : "success"}
-        onClose={() => {
-          setError("");
-          setSuccess("");
-        }}
-      />
-      <style>{`
+      <main className="page">
+        <TopToast
+          message={error || success}
+          tone={error ? "error" : "success"}
+          onClose={() => {
+            setError("");
+            setSuccess("");
+          }}
+        />
+        <style>{`
+        .page {
+          background: #f8f8fc;
+          border: 1px solid #dfdfea;
+          border-radius: 16px;
+          padding: 18px;
+        }
         .white-box {
           background: #ffffff !important;
           border-radius: 14px !important;
@@ -628,206 +635,207 @@ export function AdminSetupPanel() {
         }
       `}</style>
 
-      {dependencyLinks.length > 0 ? (
-        <div className="dependency-help" role="alert">
-          <p className="dependency-help-title">This setup is linked with existing records. Remove them first from:</p>
-          <div className="dependency-actions">
-            {dependencyLinks.map((link) => (
-              <a key={link.href} className="dependency-link" href={link.href}>
-                {link.label}
-              </a>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      <section className="sms-breadcrumb mb-20">
-        <div className="container-fluid">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h1 style={{ margin: 0, fontSize: 24 }}>Admin Setup</h1>
-            <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
-              <span>Dashboard</span>
-              <span>/</span>
-              <span>Admin Section</span>
-              <span>/</span>
-              <span>Admin Setup</span>
+        {dependencyLinks.length > 0 ? (
+          <div className="dependency-help" role="alert">
+            <p className="dependency-help-title">This setup is linked with existing records. Remove them first from:</p>
+            <div className="dependency-actions">
+              {dependencyLinks.map((link) => (
+                <a key={link.href} className="dependency-link" href={link.href}>
+                  {link.label}
+                </a>
+              ))}
             </div>
           </div>
-        </div>
-      </section>
+        ) : null}
 
-      <section className="admin-visitor-area up_admin_visitor">
-        <div className="container-fluid p-0">
-          <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 12 }}>
-            <div className="white-box" style={boxStyle()}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Admin Setup" : "Add Admin Setup"}</h3>
-              <form onSubmit={submit} id="admin-setup-form">
-                <div className="form-group-enhanced">
-                  <label htmlFor="admin-type">Type <span className="required-star">*</span></label>
-                  <select
-                    id="admin-type"
-                    value={type}
-                    onChange={(e) => {
-                      setType(e.target.value as AdminSetupRow["type"]);
-                      if (touched.type || e.target.value) upsertFieldError("type", e.target.value ? undefined : "Please select a type.");
-                    }}
-                    onBlur={() => {
-                      setTouched((prev) => ({ ...prev, type: true }));
-                      upsertFieldError("type", type ? undefined : "Please select a type. This field is required.");
-                    }}
-                    className={getInputClass(fieldErrors.type, Boolean(type))}
-                    aria-describedby="type-helper type-error"
-                  >
-                    <option value="">-- Select a type --</option>
-                    {TYPE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
-                  <span className="helper-text" id="type-helper">Select the category type for this admin setup entry.</span>
-                  <span className={`error-message ${fieldErrors.type ? "visible" : ""}`} id="type-error">{fieldErrors.type || ""}</span>
-                </div>
-
-                <div className="form-group-enhanced">
-                  <label htmlFor="admin-name">Name <span className="required-star">*</span></label>
-                  <input
-                    id="admin-name"
-                    type="text"
-                    value={name}
-                    maxLength={100}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setName(value);
-                      if (touched.name || value.length > 0) upsertFieldError("name", validateName(value));
-                    }}
-                    onBlur={() => {
-                      setTouched((prev) => ({ ...prev, name: true }));
-                      upsertFieldError("name", validateName(name));
-                    }}
-                    className={getInputClass(fieldErrors.name, name.trim().length > 0 && !fieldErrors.name)}
-                    aria-describedby="name-helper name-error"
-                    autoComplete="off"
-                  />
-                  <span className="helper-text" id="name-helper">Enter a meaningful name (3-100 characters). Must start with a letter.</span>
-                  <span className={`error-message ${fieldErrors.name ? "visible" : ""}`} id="name-error">{fieldErrors.name || ""}</span>
-                  <div className="char-counter" id="name-counter">{name.length} / 100</div>
-                </div>
-
-                <div className="form-group-enhanced">
-                  <label htmlFor="admin-desc">Description</label>
-                  <textarea
-                    id="admin-desc"
-                    value={description}
-                    maxLength={500}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setDescription(value);
-                      if (touched.description || value.length > 0) upsertFieldError("description", validateDescription(value));
-                    }}
-                    onBlur={() => {
-                      setTouched((prev) => ({ ...prev, description: true }));
-                      upsertFieldError("description", validateDescription(description));
-                    }}
-                    className={getInputClass(fieldErrors.description, description.trim().length > 0 && !fieldErrors.description)}
-                    aria-describedby="desc-helper desc-error"
-                  />
-                  <span className="helper-text" id="desc-helper">Optional: Brief description (5-500 chars). Avoid meaningless text.</span>
-                  <span className={`error-message ${fieldErrors.description ? "visible" : ""}`} id="desc-error">{fieldErrors.description || ""}</span>
-                  <div className="char-counter" id="desc-counter">{description.length} / 500</div>
-                </div>
-
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button type="submit" disabled={saving} className="btn-save-enhanced">{saving ? "Saving..." : editingId ? "Update" : "Save"}</button>
-                  {editingId ? <button type="button" onClick={reset} style={buttonStyle("#6b7280")}>Cancel</button> : null}
-                </div>
-              </form>
+        <section className="sms-breadcrumb mb-20">
+          <div className="container-fluid">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h1 style={{ margin: 0, fontSize: 24 }}>Admin Setup</h1>
+              <div style={{ display: "flex", gap: 8, color: "var(--text-muted)", fontSize: 13 }}>
+                <span>Dashboard</span>
+                <span>/</span>
+                <span>Admin Section</span>
+                <span>/</span>
+                <span>Admin Setup</span>
+              </div>
             </div>
+          </div>
+        </section>
 
-            <div className="white-box" style={boxStyle()}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>Admin Setup List</h3>
-              <div style={{ display: "grid", gap: 10 }}>
-                {TYPE_OPTIONS.map((group) => {
-                  const rows = groupRows[group.value] || [];
-                  const currentPage = groupPage[group.value];
-                  const currentPageSize = groupPageSize[group.value];
-                  const currentTotal = groupTotalRecords[group.value];
-                  const currentTotalPages = groupTotalPages[group.value];
-                  return (
-                    <details key={group.value} className={`category-accordion ${CATEGORY_CLASS[group.value]}`}>
-                      <summary>
-                        <span className="cat-summary-left">
-                          <span>{group.label}</span>
-                          <span className="cat-badge">{currentTotal} items</span>
-                        </span>
-                        <span className="cat-chevron">
-                          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
-                            <polyline points="6 9 12 15 18 9"/>
-                          </svg>
-                        </span>
-                      </summary>
-                      <div className="cat-items-container">
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                          <span style={{ color: "#64748b", fontSize: 12 }}>Page {currentPage} of {currentTotalPages}</span>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                            <label htmlFor={`as-page-size-${group.value}`} style={{ fontSize: 12, color: "#475569" }}>Page size</label>
-                            <select
-                              id={`as-page-size-${group.value}`}
-                              value={currentPageSize}
-                              onChange={(e) => void handleGroupPageSizeChange(group.value, Number(e.target.value))}
-                              style={{ ...fieldStyle(), width: 100 }}
-                            >
-                              {[5, 10, 25, 50].map((size) => (
-                                <option key={size} value={size}>{size}</option>
-                              ))}
-                            </select>
-                            <button
-                              type="button"
-                              disabled={loading || currentPage <= 1}
-                              onClick={() => void handleGroupPageChange(group.value, Math.max(1, currentPage - 1))}
-                              style={buttonStyle("#64748b")}
-                            >
-                              Previous
-                            </button>
-                            <button
-                              type="button"
-                              disabled={loading || currentPage >= currentTotalPages}
-                              onClick={() => void handleGroupPageChange(group.value, Math.min(currentTotalPages, currentPage + 1))}
-                              style={buttonStyle("#0f766e")}
-                            >
-                              Next
-                            </button>
-                          </div>
-                        </div>
-                        {rows.length === 0 ? (
-                          <div className="cat-empty">No entries yet.</div>
-                        ) : (
-                          rows.map((row) => (
-                            <div key={row.id} className="cat-item">
-                              <div className="cat-item-info">
-                                <h4>{row.name}</h4>
-                                <p>{row.description || "No description"}</p>
-                              </div>
-                              <div className="cat-item-actions">
-                                <button type="button" className="icon-btn icon-btn-edit" onClick={() => edit(row)} title="Edit">
-                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                                </button>
-                                <button type="button" className="icon-btn icon-btn-delete" disabled={busyId === row.id} onClick={() => void remove(row)} title="Delete">
-                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-                                </button>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </details>
-                  );
-                })}
+        <section className="admin-visitor-area up_admin_visitor">
+          <div className="container-fluid p-0">
+            <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 12 }}>
+              <div className="white-box" style={boxStyle()}>
+                <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Admin Setup" : "Add Admin Setup"}</h3>
+                <form onSubmit={submit} id="admin-setup-form">
+                  <div className="form-group-enhanced">
+                    <label htmlFor="admin-type">Type <span className="required-star">*</span></label>
+                    <select
+                      id="admin-type"
+                      value={type}
+                      onChange={(e) => {
+                        setType(e.target.value as AdminSetupRow["type"]);
+                        if (touched.type || e.target.value) upsertFieldError("type", e.target.value ? undefined : "Please select a type.");
+                      }}
+                      onBlur={() => {
+                        setTouched((prev) => ({ ...prev, type: true }));
+                        upsertFieldError("type", type ? undefined : "Please select a type. This field is required.");
+                      }}
+                      className={getInputClass(fieldErrors.type, Boolean(type))}
+                      aria-describedby="type-helper type-error"
+                    >
+                      <option value="">-- Select a type --</option>
+                      {TYPE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>{opt.label}</option>
+                      ))}
+                    </select>
+                    <span className="helper-text" id="type-helper">Select the category type for this admin setup entry.</span>
+                    <span className={`error-message ${fieldErrors.type ? "visible" : ""}`} id="type-error">{fieldErrors.type || ""}</span>
+                  </div>
+
+                  <div className="form-group-enhanced">
+                    <label htmlFor="admin-name">Name <span className="required-star">*</span></label>
+                    <input
+                      id="admin-name"
+                      type="text"
+                      value={name}
+                      maxLength={100}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setName(value);
+                        if (touched.name || value.length > 0) upsertFieldError("name", validateName(value));
+                      }}
+                      onBlur={() => {
+                        setTouched((prev) => ({ ...prev, name: true }));
+                        upsertFieldError("name", validateName(name));
+                      }}
+                      className={getInputClass(fieldErrors.name, name.trim().length > 0 && !fieldErrors.name)}
+                      aria-describedby="name-helper name-error"
+                      autoComplete="off"
+                    />
+                    <span className="helper-text" id="name-helper">Enter a meaningful name (3-100 characters). Must start with a letter.</span>
+                    <span className={`error-message ${fieldErrors.name ? "visible" : ""}`} id="name-error">{fieldErrors.name || ""}</span>
+                    <div className="char-counter" id="name-counter">{name.length} / 100</div>
+                  </div>
+
+                  <div className="form-group-enhanced">
+                    <label htmlFor="admin-desc">Description</label>
+                    <textarea
+                      id="admin-desc"
+                      value={description}
+                      maxLength={500}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setDescription(value);
+                        if (touched.description || value.length > 0) upsertFieldError("description", validateDescription(value));
+                      }}
+                      onBlur={() => {
+                        setTouched((prev) => ({ ...prev, description: true }));
+                        upsertFieldError("description", validateDescription(description));
+                      }}
+                      className={getInputClass(fieldErrors.description, description.trim().length > 0 && !fieldErrors.description)}
+                      aria-describedby="desc-helper desc-error"
+                    />
+                    <span className="helper-text" id="desc-helper">Optional: Brief description (5-500 chars). Avoid meaningless text.</span>
+                    <span className={`error-message ${fieldErrors.description ? "visible" : ""}`} id="desc-error">{fieldErrors.description || ""}</span>
+                    <div className="char-counter" id="desc-counter">{description.length} / 500</div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button type="submit" disabled={saving} className="btn-save-enhanced">{saving ? "Saving..." : editingId ? "Update" : "Save"}</button>
+                    {editingId ? <button type="button" onClick={reset} style={buttonStyle("#6b7280")}>Cancel</button> : null}
+                  </div>
+                </form>
               </div>
 
-              {loading && <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading admin setups...</p>}
+              <div className="white-box" style={boxStyle()}>
+                <h3 style={{ marginTop: 0, marginBottom: 12 }}>Admin Setup List</h3>
+                <div style={{ display: "grid", gap: 10 }}>
+                  {TYPE_OPTIONS.map((group) => {
+                    const rows = groupRows[group.value] || [];
+                    const currentPage = groupPage[group.value];
+                    const currentPageSize = groupPageSize[group.value];
+                    const currentTotal = groupTotalRecords[group.value];
+                    const currentTotalPages = groupTotalPages[group.value];
+                    return (
+                      <details key={group.value} className={`category-accordion ${CATEGORY_CLASS[group.value]}`}>
+                        <summary>
+                          <span className="cat-summary-left">
+                            <span>{group.label}</span>
+                            <span className="cat-badge">{currentTotal} items</span>
+                          </span>
+                          <span className="cat-chevron">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
+                              <polyline points="6 9 12 15 18 9" />
+                            </svg>
+                          </span>
+                        </summary>
+                        <div className="cat-items-container">
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                            <span style={{ color: "#64748b", fontSize: 12 }}>Page {currentPage} of {currentTotalPages}</span>
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                              <label htmlFor={`as-page-size-${group.value}`} style={{ fontSize: 12, color: "#475569" }}>Page size</label>
+                              <select
+                                id={`as-page-size-${group.value}`}
+                                value={currentPageSize}
+                                onChange={(e) => void handleGroupPageSizeChange(group.value, Number(e.target.value))}
+                                style={{ ...fieldStyle(), width: 100 }}
+                              >
+                                {[5, 10, 25, 50].map((size) => (
+                                  <option key={size} value={size}>{size}</option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                disabled={loading || currentPage <= 1}
+                                onClick={() => void handleGroupPageChange(group.value, Math.max(1, currentPage - 1))}
+                                style={buttonStyle("#64748b")}
+                              >
+                                Previous
+                              </button>
+                              <button
+                                type="button"
+                                disabled={loading || currentPage >= currentTotalPages}
+                                onClick={() => void handleGroupPageChange(group.value, Math.min(currentTotalPages, currentPage + 1))}
+                                style={buttonStyle("#0f766e")}
+                              >
+                                Next
+                              </button>
+                            </div>
+                          </div>
+                          {rows.length === 0 ? (
+                            <div className="cat-empty">No entries yet.</div>
+                          ) : (
+                            rows.map((row) => (
+                              <div key={row.id} className="cat-item">
+                                <div className="cat-item-info">
+                                  <h4>{row.name}</h4>
+                                  <p>{row.description || "No description"}</p>
+                                </div>
+                                <div className="cat-item-actions">
+                                  <button type="button" className="icon-btn icon-btn-edit" onClick={() => edit(row)} title="Edit">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
+                                  </button>
+                                  <button type="button" className="icon-btn icon-btn-delete" disabled={busyId === row.id} onClick={() => void remove(row)} title="Delete">
+                                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </details>
+                    );
+                  })}
+                </div>
+
+                {loading && <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading admin setups...</p>}
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </main>
     </div>
   );
 }

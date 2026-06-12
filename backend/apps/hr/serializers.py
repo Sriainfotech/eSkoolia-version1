@@ -133,6 +133,7 @@ class DepartmentSerializer(serializers.ModelSerializer):
     )
     head_name = serializers.SerializerMethodField()
     deputy_head_name = serializers.SerializerMethodField()
+    staff_count = serializers.SerializerMethodField()
 
     staff_count = serializers.IntegerField(read_only=True, default=0)
 
@@ -157,6 +158,9 @@ class DepartmentSerializer(serializers.ModelSerializer):
 
     def get_deputy_head_name(self, obj):
         return str(obj.deputy_head) if obj.deputy_head_id else None
+
+    def get_staff_count(self, obj):
+        return obj.staff_members.filter(status='active').count()
 
     def validate_dept_type(self, value):
         cleaned = (value or "").strip()

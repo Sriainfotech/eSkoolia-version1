@@ -1,4 +1,140 @@
-# TEAM_CONTEXT — Eskoolia ERP (Combined)
+﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
+
+## Update — GitHub Copilot (11/06/2026)
+
+**Branch:** `demo`
+
+### School Tenancy — 23 Bug Fixes (Spec B1–B13, F1–F10) + School Type Dropdown
+
+#### 1. Backend Bug Fixes (B1–B13)
+
+- **B1** `backend/apps/super_admin/views.py` — Provision sets `status="active"` (was `"onboarding"`)
+- **B2** `backend/apps/users/serializers.py` — Tenant status check skipped for superusers and when multi-tenancy is disabled
+- **B3** `backend/apps/users/serializers.py` — Login subdomain lookup uses exact match `subdomain_url__iexact` (removed fuzzy OR query)
+- **B4** `backend/apps/super_admin/views.py` — `School.is_active` synced after tenant PATCH
+- **B5** `backend/apps/super_admin/serializers.py` — `_VALID_STATUSES` now includes `"trial"` (was missing)
+- **B6** `backend/apps/tenancy/urls.py` + `tenancy/api.py` — Removed duplicate `provision_tenant_view` endpoint that conflicted with System 1 domain format
+- **B7** `backend/apps/tenancy/resolvers.py` — All 3 `raise Http404` replaced with `return None`; dead `except Http404: raise` removed
+- **B8** `backend/apps/super_admin/views.py` — `schema_context()` gated by `is_multi_tenancy_enabled()`; monolithic path uses `school=erp_school`
+- **B9** `backend/apps/super_admin/views.py` — Password reset lookup uses `subdomain__iexact`
+- **B10** `backend/apps/tenancy/permissions.py` — `has_object_permission()` resolves `School.id` via `subdomain__iexact` and compares integer PKs
+- **B11** `backend/apps/tenancy/permissions.py` — Duplicate `IsSuperAdminOnly` class removed; single backward-compatible alias kept
+- **B12** `backend/apps/users/views.py` — MeView branding lookup uses `subdomain_url__iexact`
+- **B13** `backend/apps/super_admin/views.py` — `_generate_unique_tenant_id()` helper with 5-retry collision guard
+
+#### 2. Frontend Bug Fixes (F1–F10)
+
+- **F1** `frontend/lib/auth-context.tsx` — `clearPermissionsCache()` called in `login()` before setting tokens
+- **F2** `frontend/lib/auth-context.tsx` — `clearPermissionsCache()` called in `logout()` after clearing tokens
+- **F3** `frontend/hooks/usePermissions.ts` + `frontend/lib/portal-modules.ts` + `backend/apps/super_admin/views.py` — `is_school_admin` wildcard bypass removed; only `is_superuser` bypasses; Default School Admin role with `*` permission seeded in `transaction.atomic()` block on provision
+- **F4** `frontend/hooks/usePermissions.ts` — `can()` and `canAnyPrefix()` return `false` when `me` is `null` (was `true`)
+- **F5** `frontend/components/layout/AuthGate.tsx` — After token refresh, full `/me` call runs with `must_change_password`, `portal_type`, `permission_codes` checks
+- **F6** `frontend/app/(dashboard)/super-admin/layout.tsx` — Loading overlay uses `position:fixed, inset:0` so it covers the full viewport
+- **F7** `frontend/app/login/page.tsx` — Dead `schoolNotFound` state and render block removed; branding 404 silently ignored
+- **F8** `frontend/app/(dashboard)/super-admin/schools/page.tsx` — `"trial"` status option works (enabled by B5)
+- **F9** `frontend/app/(dashboard)/super-admin/schools/page.tsx` — `udise_code` edit-load uses `school.udise_code ?? school.udiseCode ?? ''`
+- **F10** `backend/apps/super_admin/views.py` + `frontend/app/(dashboard)/super-admin/schools/page.tsx` — Impersonation tokens passed via `sessionStorage` (no token in URL); backend handoff URL is clean `/login?impersonate=1`
+
+#### 3. School Type Dropdown — Unicode Fix + Full Validation
+
+**Problem:** School type `<select>` was rendering raw `\u00b7` escape sequences (literal backslash-u) instead of the actual `·` middle-dot character. The field also had no state, no validation, and was not wired to the API.
+
+**Backend changes:**
+- `backend/apps/tenancy/models.py` — Added `school_type = models.CharField(max_length=64, blank=True)` to `SchoolTenant`
+- `backend/apps/tenancy/migrations/0018_schooltenant_school_type.py` — New migration (applied ✅)
+- `backend/apps/super_admin/serializers.py` — Added `school_type` to `SchoolTenantBaseSerializer` fields and `SchoolTenantUpdateSerializer` fields + `validate_school_type()` that enforces the 5 allowed values
+- `backend/apps/super_admin/views.py` — New `SchoolFormChoicesView` (`GET /api/super-admin/schools/form-choices/`) returns `school_types` and `mediums_of_instruction` arrays from backend
+- `backend/apps/super_admin/urls.py` — Registered `schools/form-choices/` route
+
+**Frontend changes:**
+- `frontend/types/super-admin/index.ts` — Added `school_type?: string` to `SchoolTenant` interface
+- `frontend/lib/api/super-admin/schools.ts` — Added `getSchoolFormChoices()` function and `SchoolFormChoices` interface
+- `frontend/app/(dashboard)/super-admin/schools/page.tsx`:
+  - `FALLBACK_SCHOOL_TYPES` constant with correct `·` character (used as initial state before fetch)
+  - `schoolTypes` state populated via `useEffect → getSchoolFormChoices()` on mount (backend-driven)
+  - `school_type` added to `EMPTY_EDIT_FIELDS`
+  - `<select>` fully wired: `value`, `onChange`, `required`, inline error highlight
+  - Required validation: `'School type is required.'`
+  - `school_type` included in `updateSchool` PATCH payload
+  - `school_type` populated from school object when opening edit mode
+
+**Files changed this session:**
+- `backend/apps/tenancy/models.py`
+- `backend/apps/tenancy/migrations/0018_schooltenant_school_type.py` *(new)*
+- `backend/apps/super_admin/serializers.py`
+- `backend/apps/super_admin/views.py`
+- `backend/apps/super_admin/urls.py`
+- `backend/apps/users/serializers.py`
+- `backend/apps/users/views.py`
+- `backend/apps/tenancy/resolvers.py`
+- `backend/apps/tenancy/permissions.py`
+- `backend/apps/tenancy/urls.py`
+- `frontend/lib/auth-context.tsx`
+- `frontend/hooks/usePermissions.ts`
+- `frontend/lib/portal-modules.ts`
+- `frontend/components/layout/AuthGate.tsx`
+- `frontend/app/(dashboard)/super-admin/layout.tsx`
+- `frontend/app/login/page.tsx`
+- `frontend/app/(dashboard)/super-admin/schools/page.tsx`
+- `frontend/types/super-admin/index.ts`
+- `frontend/lib/api/super-admin/schools.ts`
+
+#### 4. Build & Deployment Verification
+
+- **`py manage.py migrate`** — All migrations applied cleanly including `0018_schooltenant_school_type` ✅
+- **`npm run build`** — Next.js production build passes with 0 TypeScript errors ✅
+- **Daphne server** restarted, listening on `0.0.0.0:8000` ✅
+- **School provisioning** confirmed live: `POST /api/super-admin/schools/provision/` → `201` ✅
+- **School detail fetch** confirmed live: `GET /api/super-admin/schools/<tenant_id>/` → `200` ✅
+
+#### 5. Known Pre-existing 404s (Not Introduced This Session)
+
+The following dashboard widget endpoints are called by the frontend but are **not yet implemented** in the backend. They are pre-existing stubs — no action needed from the tenancy team:
+
+| Endpoint | Used by |
+|---|---|
+| `GET /api/sickbay/active/` | Dashboard health widget |
+| `GET /api/fees/today-summary/` | Dashboard fees widget |
+| `GET /api/transport/fleet-status/` | Dashboard transport widget |
+| `GET /api/attendance/student/today/` | Dashboard attendance widget |
+| `GET /api/hr/today-leave/` | Dashboard HR widget |
+| `GET /api/dashboard/attention-count/` | Dashboard alert badge |
+| `GET /api/calendar/week-ahead/` | Dashboard calendar widget |
+| `GET /api/notifications/` | Notification bell |
+| `GET /api/ai/brief/` | AI daily brief |
+| `GET /api/ai/calls-queue/` | AI calls queue |
+| `GET /api/user/recents/` | Recent pages widget |
+| `GET /api/user/todos/` | To-do widget |
+| `GET /api/notes/` | Page notes widget |
+
+All return 404; frontend handles them gracefully (silent fail / empty state). These need to be implemented by the respective feature teams.
+
+---
+
+## Update — Teerdaveni (09/06/2026)
+
+**Branch:** `demo`
+
+### Fee Schedules & Term Settings Complete Synchronization
+
+#### 1. Collapsible Animated School Term Settings
+- Integrated collapsible animated smooth-accordion wrapper around the School Term Settings in [frontend/components/fees/FeeConfigurationPanel.tsx](frontend/components/fees/FeeConfigurationPanel.tsx) with state persistence and transition timers.
+- Integrated comprehensive dirty checking of state objects to trace exact client-side changes without any redundant saves.
+- Enabled atomic transactional list save in a single DRF POST payload routine, solving multiple hitting routines.
+
+#### 2. Redesigned "Fee Schedule per Group" Popup Modals
+- Created fully responsive side-by-side adaptive layout forms and dialog selectors inside [frontend/components/fees/FeeConfigurationPanel.tsx](frontend/components/fees/FeeConfigurationPanel.tsx).
+- Automatically shrinks dialog width to `540px` for basic payment periods and adaptive panels to `950px` whenever `Term-wise` collection categories are toggled.
+- Equipped term rows with circular count badge fields (T1, T2, T3...) prefilled with dates/term configurations from the active Academic Year.
+- Implemented real-time dynamic total amount summation as the user types custom value breakdowns.
+
+#### 3. Database Schema and DRF Serials Integration
+- Appended `grace_period`, `late_fee_rule`, and `term_breakdown` fields inside backend schemas in [backend/apps/fees/models.py](backend/apps/fees/models.py) and applied Python database migrations correctly.
+- Aligned validation parameters and serialized outputs inside [backend/apps/fees/serializers.py](backend/apps/fees/serializers.py) to map frontend arrays flawlessly.
+
+#### 4. Absolute TypeScript Type Safety Check
+- Cleared and rectified type mapping conflicts (e.g. `number | ""` vs `number | undefined`) across both [frontend/components/fees/FeeConfigurationPanel.tsx](frontend/components/fees/FeeConfigurationPanel.tsx) and [frontend/components/fees/FeesTypesPanel.tsx](frontend/components/fees/FeesTypesPanel.tsx).
+- TypeScript compile validation checklist (`npx tsc --noEmit`) passes cleanly with no compiler warnings.
 
 ## Update — SwethaD (11/06/2026)
 
@@ -113,6 +249,19 @@ Resolved Next.js compiler errors across 6 locations in AdmissionsCommandCenter.t
 - ✅ Continue button creates inquiry after duplicate confirmation
 - ✅ Cancel button clears phone field for re-entry
 - ✅ Dev server compiles without errors
+
+---
+
+
+## Update — Rithwika (08/06/2026)
+I am Rithwika. Today 08/06/2026 I have worked on the following UI improvements:
+
+**Branch:** `administration`
+
+### Administration Module UI Modernization & Standardization
+- **Communication Hub (`VisitorBookPanel.tsx`, `ComplaintPanel.tsx`, `PhoneCallLogPanel.tsx`)**: Replaced the previous vertical alignment with a horizontal grid layout. Implemented a unified single-table structure and included Smart Filter functionality, matching the design used in the Multiple Subject Assignment panel.
+- **Postal Management (`PostalDispatchReceivePanel.tsx`)**: Implemented a row-wise structure similar to the Communication Hub for both Postal Received and Postal Dispatched pages to maintain consistent dashboard design.
+- **System Config (`AdminSetupPanel.tsx`, `StudentCategoryManagerPanel.tsx`)**: Added the `.page` container wrapper to both panels to ensure visual consistency with the Student Enroll & List module. This standardized the background colors, added border styling, and implemented proper padding/drop-shadows to give the panels a unified and premium aesthetic.
 
 ---
 
@@ -4325,3 +4474,23 @@ Login at localhost:3000
 3. Test login as test_teacher_priya (teacher portal) and 6985743215 (parent portal)
 4. Commit in batches: backend apps -> migrations -> frontend lib -> frontend portals -> shared components
 5. Sprint 6: Homework Module
+
+08/06/2026
+1.Designed and developed the Staff Attendance module.
+2.Built the frontend user interface for attendance management.
+3.Integrated the frontend with backend APIs.
+4.Implemented attendance marking, attendance listing, and reporting features.
+5.Connected backend data with frontend components for real-time updates.
+6.Tested and fixed integration issues between frontend and backend.
+
+
+09/06/2026
+1.Implemented Excel export functionality for Staff Attendance.
+2.Fixed issues with department filter application in exports.
+3.Improved data filtering logic for attendance reports.
+
+
+11/06/2026
+1.Fixed issues student attendance marking module. 
+2.improved data filtering and updating logic for student attendance 
+3.Fixed bulk update of student attendance data

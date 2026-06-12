@@ -1361,6 +1361,8 @@ class StaffAttendanceViewSet(SchoolScopedModelViewSet):
 
         counts = {code: records.filter(attendance_type=code).count() for code, _ in StaffAttendance.STATUS_CHOICES}
         present = counts["P"]
+        late_arrivals = records.exclude(arrival_time__isnull=True).count()
+
         return Response({
             "total_staff": total_staff,
             "present": present,
@@ -1368,9 +1370,58 @@ class StaffAttendanceViewSet(SchoolScopedModelViewSet):
             "leave": counts["L"],
             "half_day": counts["F"],
             "holiday": counts["H"],
+            "late_arrivals": late_arrivals,
             "marked": records.count(),
             "present_pct": round((present / total_staff) * 100) if total_staff else 0,
         })
+
+    @action(detail=False, methods=["get"], url_path="export")
+    def export(self, request):
+        date_str = request.query_params.get("date") or request.query_params.get("attendance_date")
+        if not date_str:
+            raise ValidationError("date is required (YYYY-MM-DD).")
+        export_format = request.query_params.get("format", "excel").lower()
+        department = request.query_params.get("department")
+        attendance_type = request.query_params.get("attendance_type")
+
+        from apps.reports.export_utils import build_export_response
+
+        qs = self.get_queryset().filter(attendance_date=date_str)
+        if department:
+            qs = qs.filter(staff__department_id=department)
+        if attendance_type:
+            qs = qs.filter(attendance_type=attendance_type)
+
+        rows = []
+        status_map = dict(StaffAttendance.STATUS_CHOICES)
+        for rec in qs:
+            rows.append({
+                "staff_no": rec.staff.staff_no or "",
+                "name": f"{rec.staff.first_name} {rec.staff.last_name}".strip(),
+                "department": rec.staff.department.name if rec.staff.department else "",
+                "status": status_map.get(rec.attendance_type, rec.attendance_type),
+                "sign_in": rec.sign_in_time.strftime("%H:%M") if rec.sign_in_time else "",
+                "sign_out": rec.sign_out_time.strftime("%H:%M") if rec.sign_out_time else "",
+                "note": rec.note or "",
+            })
+
+        columns = [
+            ("Staff ID", "staff_no"),
+            ("Name", "name"),
+            ("Department", "department"),
+            ("Status", "status"),
+            ("Sign In", "sign_in"),
+            ("Sign Out", "sign_out"),
+            ("Note", "note"),
+        ]
+
+        return build_export_response(
+            export_format=export_format,
+            rows=rows,
+            columns=columns,
+            filename=f"staff_attendance_{date_str}",
+            title=f"Staff Attendance ({date_str})",
+        )
 
     @action(detail=False, methods=["get"], url_path="monthly-report")
     def monthly_report(self, request):

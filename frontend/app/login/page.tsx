@@ -79,30 +79,43 @@ function LoginPage() {
     logo_url: string | null;
     brand_color: string;
   } | null>(null);
-  const [schoolNotFound, setSchoolNotFound] = useState(false);
 
   // Fetch school name + branding from the public API when on a tenant subdomain.
   useEffect(() => {
     if (!subdomain) return;
     fetch(`${API_BASE_URL}/api/v1/tenancy/school-info/?subdomain=${encodeURIComponent(subdomain)}`)
       .then((r) => {
-        if (r.status === 404) { setSchoolNotFound(true); return null; }
+        // 404 means branding not found — fall back to generic name, do NOT block login.
         return r.ok ? r.json() : null;
       })
       .then((data) => { if (data) setSchoolInfo(data); })
-      .catch(() => { /* silently ignore — fall back to env var */ });
+      .catch(() => { /* silently ignore — generic branding shown */ });
   }, [subdomain]);
 
   // Derive display name: use full name from backend, or fall back to env var constant.
   const displaySchoolName = schoolInfo?.name ?? SCHOOL_NAME;
 
-  // Impersonation: super-admin opens a school tab with ?impersonate=1&token=ACCESS&refresh=REFRESH.
+  // Impersonation: super-admin opens a school tab with ?impersonate=1.
   // Read the tokens, store them, then redirect to /home — skipping the login form entirely.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('impersonate') !== '1') return;
-    const access = params.get('token');
-    const refresh = params.get('refresh');
+    // Tokens are passed via sessionStorage, not URL params.
+    const schoolSubdomain = getSubdomainFromHost() || 'unknown';
+    const storageKey = `impersonate_${schoolSubdomain}`;
+    let access = params.get('token');
+    let refresh = params.get('refresh');
+    if (!access || !refresh) {
+      try {
+        const stored = sessionStorage.getItem(storageKey);
+        if (stored) {
+          const parsed = JSON.parse(stored) as { access: string; refresh: string };
+          access = parsed.access;
+          refresh = parsed.refresh;
+          sessionStorage.removeItem(storageKey); // consume once
+        }
+      } catch { /* ignore */ }
+    }
     if (!access || !refresh) return;
     setIsImpersonating(true);
     setAuthTokens(access, refresh);
@@ -163,17 +176,6 @@ function LoginPage() {
       setSubmitting(false);
     }
   };
-
-  if (schoolNotFound) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0f172a', color: '#94a3b8', fontFamily: 'sans-serif', flexDirection: 'column', gap: '16px' }}>
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        <span style={{ fontSize: '1.2rem', color: '#f1f5f9' }}>School not found</span>
-        <span style={{ fontSize: '0.875rem' }}>The subdomain <strong style={{ color: '#f8fafc' }}>{subdomain}</strong> is not registered.</span>
-        <span style={{ fontSize: '0.875rem' }}>Please contact your administrator.</span>
-      </div>
-    );
-  }
 
   if (isImpersonating) {
     return (

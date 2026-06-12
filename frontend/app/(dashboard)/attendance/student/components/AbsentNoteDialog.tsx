@@ -10,7 +10,15 @@ const QUICK_REASONS = [
 
 const NO_INTIMATION_REASON = 'No intimation';
 
-function generateAbsentReason(studentName: string): string {
+function generateAbsentReason(studentName?: string, count?: number): string {
+  if (!studentName) {
+    const templates = [
+      `${count} students are on approved leave today.`,
+      `Students have informed the class teacher in advance.`,
+      `Medical appointments or transport issues reported.`,
+    ];
+    return templates[Math.floor(Date.now() / 1000) % templates.length];
+  }
   const templates = [
     `${studentName} is on approved family leave today.`,
     `${studentName} is unwell and has informed the class teacher in advance.`,
@@ -22,13 +30,14 @@ function generateAbsentReason(studentName: string): string {
 }
 
 interface Props {
-  student: Student;
+  student?: Student;
+  studentCount?: number;
   initialReason?: string;
   onConfirm: (reason: string) => void;
   onSkip: () => void;
 }
 
-export default function AbsentNoteDialog({ student, initialReason, onConfirm, onSkip }: Props) {
+export default function AbsentNoteDialog({ student, studentCount, initialReason, onConfirm, onSkip }: Props) {
   const normalizedInitialReason = initialReason?.trim() ?? '';
   const [selected, setSelected] = useState<string | null>(
     QUICK_REASONS.includes(normalizedInitialReason as (typeof QUICK_REASONS)[number])
@@ -63,7 +72,7 @@ export default function AbsentNoteDialog({ student, initialReason, onConfirm, on
               </svg>
             </span>
             <h3 className="text-[14px] font-semibold text-[#0B0B14] m-0">
-              Mark {student.full_name} Absent
+              {student ? `Mark ${student.full_name} Absent` : `Mark ${studentCount} Students Absent`}
             </h3>
           </div>
           <p className="text-[12px] text-[#6B6B7B] m-0 ml-7">
@@ -74,7 +83,7 @@ export default function AbsentNoteDialog({ student, initialReason, onConfirm, on
               type="button"
               onClick={() => {
                 setSelected(null);
-                setCustom(generateAbsentReason(student.full_name));
+                setCustom(generateAbsentReason(student?.full_name, studentCount));
               }}
               className="h-7 px-3 text-[10px] font-semibold text-[#4C1D95] bg-[#F5F3FF] border border-[#DDD6FE] rounded-lg cursor-pointer hover:bg-[#EDE9FE] transition-colors"
             >
