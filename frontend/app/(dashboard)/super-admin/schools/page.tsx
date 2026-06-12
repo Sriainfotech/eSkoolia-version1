@@ -9,7 +9,7 @@ import {
   Edit2, ExternalLink, FileText, Filter, Info, Pause, Plus, RefreshCw, RotateCcw, Shield, Trash2,
   Users, BarChart2, DollarSign, Bell, X,
 } from 'lucide-react';
-import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSchool, uploadSchoolLogo, getLLMStates, toggleSchoolLLM } from '@/lib/api/super-admin/schools';
+import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSchool, uploadSchoolLogo, getLLMStates, toggleSchoolLLM, getSchoolFormChoices } from '@/lib/api/super-admin/schools';
 import type { LLMSchoolState } from '@/lib/api/super-admin/schools';
 import { getPlans } from '@/lib/api/super-admin/billing';
 import { apiRequestWithRefreshResponse } from '@/lib/api-auth';
@@ -31,6 +31,14 @@ const BOARDS = [
 
 const DEFAULT_SCHOOLS: PaginatedResponse<SchoolTenant> = { count: 0, next: null, previous: null, results: [] };
 
+const FALLBACK_SCHOOL_TYPES = [
+  'K-12 · Day school',
+  'K-12 · Residential',
+  'Pre-primary only',
+  'Secondary only',
+  'Higher Secondary / Jr. College',
+];
+
 const EMPTY_EDIT_FIELDS = {
   short_code: '', gstin: '', pan: '', udise_code: '', seats: '',
   api_access: 'disabled', brand_color: '', gst_registered: 'yes',
@@ -40,6 +48,7 @@ const EMPTY_EDIT_FIELDS = {
   campus_address: '', city: '', pin_code: '', affiliation_number: '',
   student_seat_limit: '', staff_seat_limit: '', storage_cap_gb: '',
   trial_days: '30', go_live_date: '', billing_cycle: 'annual',
+  school_type: '',
 };
 
 const AVATAR_GRADIENT_CLS = [
@@ -685,6 +694,7 @@ export default function SuperAdminSchoolsPage() {
   const [impersonatingId, setImpersonatingId] = useState<string | null>(null);
   const [llmStates, setLlmStates] = useState<Map<string, LLMSchoolState>>(new Map());
   const [llmToggling, setLlmToggling] = useState<Set<string>>(new Set());
+  const [schoolTypes, setSchoolTypes] = useState<string[]>(FALLBACK_SCHOOL_TYPES);
   const [confirmDialog, setConfirmDialog] = useState<{ type: 'suspend' | 'archive' | 'restore' | 'reactivate' | 'permanent_delete'; school: SchoolTenant } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [editSchool, setEditSchool] = useState<SchoolTenant | null>(null);
@@ -756,6 +766,7 @@ export default function SuperAdminSchoolsPage() {
 
   useEffect(() => { void loadSchools(); }, [loadSchools]);
   useEffect(() => { getLLMStates().then(setLlmStates).catch(() => {}); }, []);
+  useEffect(() => { getSchoolFormChoices().then(c => setSchoolTypes(c.school_types)).catch(() => {}); }, []);
   useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
 
   // Fetch global stats — extracted so it can be re-called after any status change
@@ -785,6 +796,7 @@ export default function SuperAdminSchoolsPage() {
 
     if (!provisionForm.name.trim()) errors.name = 'School name is required.';
     if (!provisionForm.state.trim()) errors.state = 'State is required.';
+    if (!editFields.school_type) errors.school_type = 'School type is required.';
 
     const pName = editFields.principal_name.trim();
     if (!pName) errors.principal_name = 'Principal name is required.';
@@ -858,6 +870,7 @@ export default function SuperAdminSchoolsPage() {
           city: editFields.city || undefined,
           pin_code: editFields.pin_code || undefined,
           affiliation_number: editFields.affiliation_number || undefined,
+          school_type: editFields.school_type || undefined,
           student_seat_limit: editFields.student_seat_limit !== '' ? Number(editFields.student_seat_limit) : null,
           staff_seat_limit: editFields.staff_seat_limit !== '' ? Number(editFields.staff_seat_limit) : null,
           storage_cap_gb: editFields.storage_cap_gb !== '' ? Number(editFields.storage_cap_gb) : null,
@@ -993,7 +1006,18 @@ export default function SuperAdminSchoolsPage() {
       const baseDomain = process.env.NEXT_PUBLIC_BASE_DOMAIN || window.location.hostname;
       const portSuffix = port ? `:${port}` : '';
       const subdomain = school.subdomain_url || data.tenant_id;
-      const handoffUrl = `${protocol}//${subdomain}.${baseDomain}${portSuffix}/login?impersonate=1&token=${data.access}&refresh=${data.refresh}`;
+      // Store tokens in sessionStorage keyed by subdomain so the target tab
+      // can read them. Tokens never appear in the URL or proxy logs.
+      let handoffUrl = `${protocol}//${subdomain}.${baseDomain}${portSuffix}/login?impersonate=1`;
+      const storageKey = `impersonate_${subdomain}`;
+      try {
+        sessionStorage.setItem(storageKey, JSON.stringify({ access: data.access, refresh: data.refresh }));
+      } catch {
+        // sessionStorage unavailable — do NOT fall back to URL (security risk).
+        toast.error('Impersonation requires session storage. Please disable private browsing mode and try again.');
+        setImpersonatingId(null);
+        return;
+      }
       window.open(handoffUrl, '_blank', 'noopener,noreferrer');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Impersonation failed.');
@@ -1077,7 +1101,7 @@ export default function SuperAdminSchoolsPage() {
       short_code: school.short_code ?? '',
       gstin: school.gstin ?? '',
       pan: school.pan ?? '',
-      udise_code: school.udiseCode ?? '',
+      udise_code: school.udise_code ?? school.udiseCode ?? '',
       seats: school.seats != null ? String(school.seats) : '',
       api_access: school.api_access ? 'enabled' : 'disabled',
       brand_color: school.brand_color ?? '',
@@ -1095,6 +1119,7 @@ export default function SuperAdminSchoolsPage() {
       trial_days: school.trial_days != null ? String(school.trial_days) : '30',
       go_live_date: school.go_live_date ?? '',
       billing_cycle: school.billing_cycle ?? 'annual',
+      school_type: school.school_type ?? '',
     });
     setSelectedColor(school.brand_color || PALETTE_COLORS[0]!.hex);
     setLogoPreview(school.logo_url || null);
@@ -1317,11 +1342,19 @@ export default function SuperAdminSchoolsPage() {
                   <span className="flex items-center border-l border-[var(--bd-2)] bg-[var(--bg-2)] px-[11px] font-mono text-[12px] text-[var(--ink-3)]">.eskoolia.com</span>
                 </div>
               </Fld>
-              <Fld label="School type">
-                <select className={selectCls} title="School type">
-                  <option>K-12 \u00b7 Day school</option><option>K-12 \u00b7 Residential</option>
-                  <option>Pre-primary only</option><option>Secondary only</option>
-                  <option>Higher Secondary / Jr. College</option>
+              <Fld label="School type" required error={fieldErrors.school_type}>
+                <select
+                  className={`${selectCls}${fieldErrors.school_type ? ' !border-[var(--danger)] focus:!border-[var(--danger)]' : ''}`}
+                  data-field-error={fieldErrors.school_type ? 'true' : undefined}
+                  title="School type"
+                  value={editFields.school_type}
+                  onChange={e => {
+                    setEditFields(f => ({ ...f, school_type: e.target.value }));
+                    if (fieldErrors.school_type) setFieldErrors(f => ({ ...f, school_type: '' }));
+                  }}
+                >
+                  <option value="">Select school type…</option>
+                  {schoolTypes.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </Fld>
               <Fld label="Established year">
@@ -2248,8 +2281,8 @@ export default function SuperAdminSchoolsPage() {
                         </td>
                         <td className="border-b border-[var(--bd)] px-3.5 py-3.5 align-middle">
                           <Chip label={boardLabel(school.board)} variant={boardVariant(school.board)} />
-                          {school.udiseCode ? (
-                            <span className="mt-1.5 block font-mono text-[10.5px] text-[var(--ink-3)]">{school.udiseCode}</span>
+                          {school.udise_code ?? school.udiseCode ? (
+                            <span className="mt-1.5 block font-mono text-[10.5px] text-[var(--ink-3)]">{school.udise_code ?? school.udiseCode}</span>
                           ) : null}
                         </td>
                         <td className="border-b border-[var(--bd)] px-3.5 py-3.5 align-middle">

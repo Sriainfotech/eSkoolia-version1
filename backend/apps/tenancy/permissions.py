@@ -143,37 +143,6 @@ class TenantNotSuspended(BasePermission):
         return True
 
 
-class IsSuperAdminOnly(BasePermission):
-    """Permission allowing only super-admins.
-    
-    Used for cross-tenant admin APIs (reporting, tenant management).
-    Super-admins must:
-    - Be is_superuser=True
-    - Have no tenant context (authenticate in public schema)
-    """
-    
-    message = "Only super-administrators can access this resource."
-    
-    def has_permission(self, request, view):
-        # Must be authenticated
-        if not request.user or not request.user.is_authenticated:
-            return False
-        
-        # Must be superuser
-        if not request.user.is_superuser:
-            raise PermissionDenied(self.message)
-        
-        # Must NOT have tenant context (must be in public schema)
-        if is_tenant_mode():
-            tenant = get_current_tenant()
-            if tenant:
-                raise PermissionDenied(
-                    "Cross-tenant APIs cannot be accessed from tenant context."
-                )
-        
-        return True
-
-
 class IsSuperAdmin(BasePermission):
     """Strict permission for super-admin APIs.
 
@@ -291,9 +260,13 @@ class TenantDataIsolation(BasePermission):
             return False
         
         # Check if object has school_id field (monolithic safety layer)
-        if hasattr(obj, "school_id"):
-            # Verify school_id matches tenant (should already be filtered by schema)
-            if obj.school_id and obj.school_id != tenant.tenant_id:
+        if hasattr(obj, "school_id") and obj.school_id:
+            # Resolve the School record linked to this tenant and compare PKs.
+            from apps.tenancy.models import School
+            tenant_school = School.objects.filter(
+                subdomain__iexact=tenant.subdomain_url
+            ).values_list("id", flat=True).first()
+            if tenant_school is not None and obj.school_id != tenant_school:
                 return False
         
         return True

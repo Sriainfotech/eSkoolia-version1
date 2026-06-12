@@ -163,6 +163,16 @@ export interface LLMSchoolState {
   is_active: boolean;
 }
 
+export interface SchoolFormChoices {
+  school_types: string[];
+  mediums_of_instruction: string[];
+}
+
+/** Fetch dropdown choices for the school form from the backend. */
+export async function getSchoolFormChoices(): Promise<SchoolFormChoices> {
+  return apiRequestWithRefresh<SchoolFormChoices>('/api/super-admin/schools/form-choices/');
+}
+
 /**
  * Fetch LLM enabled/disabled status for all schools.
  * Returns a Map keyed by school code (matches SchoolTenant.short_code).

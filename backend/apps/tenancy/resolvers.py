@@ -7,7 +7,6 @@ This resolver supports:
 """
 import logging
 from django.db.models import Q
-from django.http import Http404
 from apps.tenancy.models import Domain, SchoolTenant
 
 logger = logging.getLogger(__name__)
@@ -29,7 +28,7 @@ def get_tenant_from_request(request):
             return SchoolTenant.objects.get(tenant_id=tenant_id)
         except SchoolTenant.DoesNotExist:
             logger.warning(f"Tenant not found: {tenant_id}")
-            raise Http404(f"Tenant {tenant_id} not found")
+            return None
     
     # Priority 2: Extract subdomain from Host header
     host = request.META.get("HTTP_HOST", "").lower()
@@ -52,7 +51,7 @@ def get_tenant_from_request(request):
         )
         if domain is None:
             logger.warning(f"Domain not found for local subdomain: {subdomain}")
-            raise Http404(f"Tenant {subdomain} not found")
+            return None
         return domain.tenant
     
     # Check for production format: {subdomain}.eskoolia.app
@@ -63,7 +62,7 @@ def get_tenant_from_request(request):
             return domain.tenant
         except Domain.DoesNotExist:
             logger.warning(f"Domain not found: {subdomain}")
-            raise Http404(f"Tenant {subdomain} not found")
+            return None
 
     # Production domain: {subdomain}.eskoolia.com (e.g. springdale.eskoolia.com)
     if ".eskoolia.com" in host:
@@ -77,7 +76,7 @@ def get_tenant_from_request(request):
             return domain.tenant
         except Domain.DoesNotExist:
             logger.warning(f"Tenant not found for subdomain: {subdomain}")
-            raise Http404(f"School '{subdomain}' not found")
+            return None
 
     # Priority 3: Fallback to legacy X-School-Id for backward compatibility
     school_id = request.META.get("HTTP_X_SCHOOL_ID")
@@ -101,8 +100,6 @@ def resolve_tenant_schema(request):
         tenant = get_tenant_from_request(request)
         if tenant:
             return tenant.schema_name
-    except Http404:
-        raise
     except Exception as exc:
         logger.error(f"Failed to resolve tenant schema: {exc}")
     

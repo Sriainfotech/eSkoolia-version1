@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { feesApi, listData, type AcademicYear, type FeesGroup, type SchoolClass } from "@/lib/fees-api";
+import { feesApi, listData, type AcademicYear, type FeeTypeListParams, type FeesGroup, type FeesType, type SchoolClass, type TermSettings, type FeeSchedule, type SearchParams } from "@/lib/fees-api";
 import { sortAcademicsClasses } from "@/lib/classOrdering";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -29,7 +29,13 @@ type FeeGroup = {
   feeTypes: FeeTypeRow[];
 };
 
-type TermConfig = { name: string; dueDate: string };
+type TermConfig = {
+  id?: number;
+  name: string;
+  startDate: string;
+  endDate: string;
+  dueDate: string;
+};
 
 // ─── Static data ───────────────────────────────────────────────────────────────
 
@@ -42,10 +48,10 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 const DEFAULT_TERMS: TermConfig[] = [
-  { name: "Term 1 (Apr–Jul)", dueDate: "2026-04-10" },
-  { name: "Term 2 (Aug–Nov)", dueDate: "2026-08-10" },
-  { name: "Term 3 (Dec–Mar)", dueDate: "2026-12-10" },
-  { name: "Term 4", dueDate: "2027-03-10" },
+  { name: "Term 1 (Apr–Jul)", startDate: "2026-04-01", endDate: "2026-07-31", dueDate: "2026-04-10" },
+  { name: "Term 2 (Aug–Nov)", startDate: "2026-08-01", endDate: "2026-11-30", dueDate: "2026-08-10" },
+  { name: "Term 3 (Dec–Mar)", startDate: "2026-12-01", endDate: "2027-03-31", dueDate: "2026-12-10" },
+  { name: "Term 4", startDate: "2027-04-01", endDate: "2027-05-31", dueDate: "2027-04-10" },
 ];
 
 const ACADEMIC_TERMS = [
@@ -179,11 +185,25 @@ const FEE_GROUPS_DATA = [
   { id: 4, name: "Scholarship Review", description: "Students under financial assistance review",   students: "8 students",  status: "Draft"  },
 ];
 
-const FEE_TYPES_DATA = [
-  { id: 1, name: "Tuition Fee",      glCode: "4001-TUITION", taxable: "No",           structure: "Term-wise" },
-  { id: 2, name: "Transport Fee",    glCode: "4002-TRANS",   taxable: "No",           structure: "Monthly"   },
-  { id: 3, name: "Development Fund", glCode: "4003-DEVFUND", taxable: "No",           structure: "Custom"    },
-  { id: 4, name: "Lunch Fee",        glCode: "4004-LUNCH",   taxable: "Yes (GST 5%)", structure: "Monthly"   },
+const FEE_TAXABLE_OPTIONS: Array<"Yes" | "No"> = ["Yes", "No"];
+const FEE_STRUCTURE_OPTIONS: Array<"Monthly" | "Quarterly" | "Term-wise" | "Yearly" | "Custom"> = [
+  "Monthly",
+  "Quarterly",
+  "Term-wise",
+  "Yearly",
+  "Custom",
+];
+const FEE_STATUS_OPTIONS: Array<"Active" | "Inactive"> = ["Active", "Inactive"];
+const GL_CODE_REGEX = /^[0-9]{4}-[A-Z0-9]+$/;
+const GL_CODE_SUGGESTIONS: Array<{ label: string; code: string }> = [
+  { label: "Tuition Fee", code: "4001-TUITION" },
+  { label: "Development Fee", code: "4002-DEVFEE" },
+  { label: "Examination Fee", code: "4003-EXAM" },
+  { label: "Transport Fee", code: "4004-TRANS" },
+  { label: "Library Fee", code: "4005-LIBRARY" },
+  { label: "Computer Fee", code: "4006-COMPUTER" },
+  { label: "Sports Fee", code: "4007-SPORTS" },
+  { label: "Activity Fee", code: "4008-ACTIVITY" },
 ];
 
 // ─── Style helpers ─────────────────────────────────────────────────────────────
@@ -288,6 +308,100 @@ export default function FeeConfigurationPanel() {
   const [togglingGroupId, setTogglingGroupId] = useState<number | null>(null);
   const classDropdownRef = useRef<HTMLDivElement | null>(null);
   const editClassDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  const [feeTypes, setFeeTypes] = useState<FeesType[]>([]);
+  const [isLoadingTypes, setIsLoadingTypes] = useState(false);
+  const [isSavingType, setIsSavingType] = useState(false);
+  const [typeGroupId, setTypeGroupId] = useState<number | "">("");
+  const [typeName, setTypeName] = useState("");
+  const [typeGlCode, setTypeGlCode] = useState("");
+  const [typeTaxable, setTypeTaxable] = useState<"Yes" | "No">("No");
+  const [typeStructure, setTypeStructure] = useState<"Monthly" | "Quarterly" | "Term-wise" | "Yearly" | "Custom">("Term-wise");
+  const [typeStatus, setTypeStatus] = useState<"Active" | "Inactive">("Active");
+  const [typeErrors, setTypeErrors] = useState<Record<string, string>>({});
+  const [typeSearch, setTypeSearch] = useState("");
+  const [typeSortBy, setTypeSortBy] = useState<FeeTypeListParams["sort_by"]>("name");
+  const [typeSortDir, setTypeSortDir] = useState<"asc" | "desc">("asc");
+  const [typeStatusFilter, setTypeStatusFilter] = useState<"" | "active" | "inactive">("");
+  const [typePage, setTypePage] = useState(1);
+  const [typePageSize] = useState(10);
+  const [typeTotalCount, setTypeTotalCount] = useState(0);
+  const [typeTotalPages, setTypeTotalPages] = useState(1);
+  const [editingType, setEditingType] = useState<FeesType | null>(null);
+  const [isEditTypeOpen, setIsEditTypeOpen] = useState(false);
+  const [isSavingTypeEdit, setIsSavingTypeEdit] = useState(false);
+  const [editTypeGroupId, setEditTypeGroupId] = useState<number | "">("");
+  const [editTypeName, setEditTypeName] = useState("");
+  const [editTypeGlCode, setEditTypeGlCode] = useState("");
+  const [editTypeTaxable, setEditTypeTaxable] = useState<"Yes" | "No">("No");
+  const [editTypeStructure, setEditTypeStructure] = useState<"Monthly" | "Quarterly" | "Term-wise" | "Yearly" | "Custom">("Term-wise");
+  const [editTypeStatus, setEditTypeStatus] = useState<"Active" | "Inactive">("Active");
+  const [editTypeErrors, setEditTypeErrors] = useState<Record<string, string>>({});
+  const [deleteType, setDeleteType] = useState<FeesType | null>(null);
+  const [isDeleteTypeOpen, setIsDeleteTypeOpen] = useState(false);
+  const [isDeletingType, setIsDeletingType] = useState(false);
+  const [deleteTypeError, setDeleteTypeError] = useState("");
+
+  // ── Term Settings state ──
+  const [termSettings, setTermSettings] = useState<any[]>([]);
+  const [initialTerms, setInitialTerms] = useState<TermConfig[]>([]);
+  const [isLoadingTermSettings, setIsLoadingTermSettings] = useState(false);
+  const [isSavingTermSettings, setIsSavingTermSettings] = useState(false);
+  const [isTermSettingsOpen, setIsTermSettingsOpen] = useState(false);
+  const [termSearch, setTermSearch] = useState("");
+  const [termSortBy, setTermSortBy] = useState("term_number");
+  const [termPage, setTermPage] = useState(1);
+  const [termPageSize] = useState(10);
+
+  // ── Fee Schedules state ──
+  const [feeSchedules, setFeeSchedules] = useState<any[]>([]);
+  const [isLoadingSchedules, setIsLoadingSchedules] = useState(false);
+  const [scheduleSearch, setScheduleSearch] = useState("");
+  const [scheduleSortBy, setScheduleSortBy] = useState("created_at");
+  const [scheduleStatusFilter, setScheduleStatusFilter] = useState<"" | "active" | "inactive">("");
+  const [schedulePage, setSchedulePage] = useState(1);
+  const [schedulePageSize] = useState(10);
+  const [scheduleTotalCount, setScheduleTotalCount] = useState(0);
+  const [scheduleTotalPages, setScheduleTotalPages] = useState(1);
+
+  // ── Create Schedule Form state ──
+  const [isCreateScheduleOpen, setIsCreateScheduleOpen] = useState(false);
+  const [scheduleAcademicYear, setScheduleAcademicYear] = useState<number | "">("");
+  const [scheduleFeeGroup, setScheduleFeeGroup] = useState<number | "">("");
+  const [scheduleFeeType, setScheduleFeeType] = useState<number | "">("");
+  const [scheduleAmount, setScheduleAmount] = useState("");
+  const [scheduleFrequency, setScheduleFrequency] = useState("Monthly");
+  const [scheduleDueDate, setScheduleDueDate] = useState("");
+  const [scheduleLateFee, setScheduleLateFee] = useState(false);
+  const [scheduleGracePeriod, setScheduleGracePeriod] = useState<number | "">(0);
+  const [scheduleLateFeeRule, setScheduleLateFeeRule] = useState("");
+  const [scheduleTermBreakdown, setScheduleTermBreakdown] = useState<any[]>([]);
+  const [scheduleStatus, setScheduleStatus] = useState("active");
+  const [scheduleErrors, setScheduleErrors] = useState<Record<string, string>>({});
+  const [isSavingSchedule, setIsSavingSchedule] = useState(false);
+
+  // ── Edit Schedule state ──
+  const [editingSchedule, setEditingSchedule] = useState<any | null>(null);
+  const [isEditScheduleOpen, setIsEditScheduleOpen] = useState(false);
+  const [editScheduleAcademicYear, setEditScheduleAcademicYear] = useState<number | "">("");
+  const [editScheduleFeeGroup, setEditScheduleFeeGroup] = useState<number | "">("");
+  const [editScheduleFeeType, setEditScheduleFeeType] = useState<number | "">("");
+  const [editScheduleAmount, setEditScheduleAmount] = useState("");
+  const [editScheduleFrequency, setEditScheduleFrequency] = useState("Monthly");
+  const [editScheduleDueDate, setEditScheduleDueDate] = useState("");
+  const [editScheduleLateFee, setEditScheduleLateFee] = useState(false);
+  const [editScheduleGracePeriod, setEditScheduleGracePeriod] = useState<number | "">(0);
+  const [editScheduleLateFeeRule, setEditScheduleLateFeeRule] = useState("");
+  const [editScheduleTermBreakdown, setEditScheduleTermBreakdown] = useState<any[]>([]);
+  const [editScheduleStatus, setEditScheduleStatus] = useState("active");
+  const [editScheduleErrors, setEditScheduleErrors] = useState<Record<string, string>>({});
+  const [isSavingScheduleEdit, setIsSavingScheduleEdit] = useState(false);
+
+  // ── Delete Schedule state ──
+  const [deleteSchedule, setDeleteSchedule] = useState<any | null>(null);
+  const [isDeleteScheduleOpen, setIsDeleteScheduleOpen] = useState(false);
+  const [isDeletingSchedule, setIsDeletingSchedule] = useState(false);
+  const [deleteScheduleError, setDeleteScheduleError] = useState("");
 
   // ── Add Fee Schedule inline form ──
   const [showAddForm, setShowAddForm] = useState(false);
@@ -624,6 +738,380 @@ export default function FeeConfigurationPanel() {
     background: "#5B4FCF",
     borderRadius: "0 4px 4px 0",
   };
+
+  // ── Term Settings functions ──────────────────────────────────────────────────
+
+  const generateDefaultTerms = (year?: AcademicYear, count = 3): TermConfig[] => {
+    const startStr = year?.start_date || "2026-06-12";
+    const endStr = year?.end_date || "2027-03-14";
+    
+    console.log(`[TermSettings] generateDefaultTerms called for year:`, year?.name, `start:`, startStr, `end:`, endStr, `count:`, count);
+    const start = new Date(startStr);
+    const end = new Date(endStr);
+    const totalDuration = end.getTime() - start.getTime();
+    const termDuration = totalDuration / count;
+    
+    const generated: TermConfig[] = [];
+    for (let i = 0; i < count; i++) {
+      const tStart = new Date(start.getTime() + i * termDuration);
+      const tEnd = new Date(start.getTime() + (i + 1) * termDuration - 86400000); // end day before next
+      // Set default due date 20 days after start of term, or fallback to end of term
+      const tDue = new Date(tStart.getTime() + 20 * 86400000);
+      const finalDue = tDue.getTime() < tEnd.getTime() ? tDue : tEnd;
+      
+      generated.push({
+        name: `Term ${i + 1}`,
+        startDate: tStart.toISOString().split("T")[0],
+        endDate: tEnd.toISOString().split("T")[0],
+        dueDate: finalDue.toISOString().split("T")[0],
+      });
+    }
+    return generated;
+  };
+
+  const hasTermSettingsChanged = (): boolean => {
+    const currentActiveTerms = terms.slice(0, numTerms);
+    if (currentActiveTerms.length !== initialTerms.length) {
+      return true;
+    }
+    for (let i = 0; i < numTerms; i++) {
+      const cur = currentActiveTerms[i];
+      const init = initialTerms[i];
+      if (!init) return true;
+      if ((cur.name || "").trim() !== (init.name || "").trim()) return true;
+      if ((cur.startDate || "") !== (init.startDate || "")) return true;
+      if ((cur.endDate || "") !== (init.endDate || "")) return true;
+      if ((cur.dueDate || "") !== (init.dueDate || "")) return true;
+    }
+    return false;
+  };
+
+  const fetchTermSettings = async (yearId: number) => {
+    setIsLoadingTermSettings(true);
+    console.log(`[TermSettings] fetchTermSettings called for academic year: ${yearId}`);
+    try {
+      const payload = await feesApi.listTermSettings();
+      const allSettings = listData(payload);
+      const filtered = allSettings.filter(item => item.academic_year === yearId);
+      console.log(`[TermSettings] Loaded records for academic year ID ${yearId}:`, filtered);
+      
+      setTermSettings(filtered);
+      
+      if (filtered.length > 0) {
+        setNumTerms(filtered.length);
+        const mapped = filtered.map(item => ({
+          id: item.id,
+          name: item.term_name,
+          startDate: item.start_date,
+          endDate: item.end_date,
+          dueDate: item.default_due_date,
+        }));
+        setTerms(mapped);
+        setInitialTerms(JSON.parse(JSON.stringify(mapped)));
+      } else {
+        const year = academicYears.find(y => y.id === yearId);
+        const nextTerms = generateDefaultTerms(year, numTerms);
+        setTerms(nextTerms);
+        setInitialTerms([]);
+      }
+    } catch (err) {
+      console.error("[TermSettings] Failed to fetch term settings:", err);
+      showToast("Failed to load school term settings.");
+    } finally {
+      setIsLoadingTermSettings(false);
+    }
+  };
+
+  const handleSaveTermSettings = async () => {
+    if (!academicYearId) {
+      showToast("Select an academic year first.");
+      return;
+    }
+
+    if (!hasTermSettingsChanged()) {
+      console.log("[TermSettings] [frontend/debug] Action: NO_CHANGE - No values changed since last load.");
+      showToast("No changes detected.");
+      return;
+    }
+
+    setIsSavingTermSettings(true);
+    const actionType = initialTerms.length === 0 ? "CREATE" : "UPDATE";
+    console.log(`[TermSettings] [frontend/debug] Action: ${actionType} - Changes detected. Preparing bulk payload...`);
+
+    try {
+      const payloadList = Array.from({ length: numTerms }).map((_, i) => {
+        const term = terms[i];
+        if (!term) {
+          throw new Error(`Term configuration for Term ${i + 1} is missing.`);
+        }
+        if (!term.name || !term.name.trim()) {
+          throw new Error(`Term Name is required for Term ${i + 1}.`);
+        }
+        if (!term.startDate || !term.endDate) {
+          throw new Error(`Start Date and End Date are required for Term ${i + 1}.`);
+        }
+        if (!term.dueDate) {
+          throw new Error(`Default Due Date is required for Term ${i + 1}.`);
+        }
+
+        const item: any = {
+          academic_year: academicYearId,
+          term_number: i + 1,
+          term_name: term.name,
+          start_date: term.startDate,
+          end_date: term.endDate,
+          default_due_date: term.dueDate,
+        };
+
+        const existingRecord = termSettings.find(ts => ts.term_number === i + 1);
+        if (existingRecord && existingRecord.id) {
+          item.id = existingRecord.id;
+        }
+        return item;
+      });
+
+      console.log("[TermSettings] Dispatching bulk API call with payload:", payloadList);
+      await feesApi.createTermSettings(payloadList);
+
+      console.log("[TermSettings] Term settings successfully saved in bulk.");
+      showToast("Term settings updated successfully.");
+      
+      // Reload from backend
+      await fetchTermSettings(academicYearId);
+    } catch (error) {
+      console.error("[TermSettings] Bulk save failed with error:", error);
+      const e = error as { details?: unknown; message?: string };
+      const errorMessage = e.message || "Failed to save term settings.";
+      showToast(errorMessage);
+    } finally {
+      setIsSavingTermSettings(false);
+    }
+  };
+
+  useEffect(() => {
+    if (academicYearId) {
+      fetchTermSettings(academicYearId);
+    }
+  }, [academicYearId, academicYears]);
+
+  // ── Fee Schedules functions ──────────────────────────────────────────────────
+
+  const fetchFeeSchedules = async () => {
+    setIsLoadingSchedules(true);
+    try {
+      const payload = await feesApi.listSchedules({
+        page: schedulePage,
+        page_size: schedulePageSize,
+        search: scheduleSearch.trim() || undefined,
+        status: scheduleStatusFilter || undefined,
+        sort_by: scheduleSortBy,
+      });
+
+      if (Array.isArray(payload)) {
+        setFeeSchedules(payload);
+        setScheduleTotalCount(payload.length);
+        setScheduleTotalPages(1);
+      } else if ("results" in payload) {
+        const results = payload.results || [];
+        setFeeSchedules(results);
+        const count = (payload as { count?: number }).count || results.length;
+        setScheduleTotalCount(count);
+        setScheduleTotalPages(Math.max(1, Math.ceil(count / schedulePageSize)));
+      } else {
+        const rows = listData(payload as { results?: FeeSchedule[] });
+        setFeeSchedules(rows);
+        setScheduleTotalCount(rows.length);
+        setScheduleTotalPages(1);
+      }
+    } catch (error) {
+      showToast("Unable to load fee schedules.");
+    } finally {
+      setIsLoadingSchedules(false);
+    }
+  };
+
+  const handleCreateSchedule = async () => {
+    if (!academicYearId) {
+      showToast("Select an academic year first.");
+      return;
+    }
+    const nextErrors: Record<string, string> = {};
+    if (!scheduleFeeGroup) nextErrors.fee_group = "Fee Group is required.";
+    if (!scheduleFeeType) nextErrors.fee_type = "Fee Type is required.";
+    
+    if (scheduleFrequency === "Term-wise") {
+      if (!scheduleTermBreakdown || scheduleTermBreakdown.length === 0) {
+        showToast("Please configure school terms under 'School Term Settings' first.");
+        return;
+      }
+      const hasInvalidTerm = scheduleTermBreakdown.some(tb => !tb.amount || isNaN(Number(tb.amount)) || Number(tb.amount) < 0 || !tb.due_date);
+      if (hasInvalidTerm) {
+        showToast("Please provide a valid amount and due date for all terms.");
+        return;
+      }
+    } else {
+      if (!scheduleAmount || isNaN(Number(scheduleAmount)) || Number(scheduleAmount) <= 0) nextErrors.amount = "Valid amount required.";
+      if (!scheduleDueDate) nextErrors.due_date = "Due date is required.";
+    }
+    
+    setScheduleErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      showToast("Please fix validation errors before submitting.");
+      return;
+    }
+
+    let finalAmount = scheduleAmount;
+    let finalDueDate = scheduleDueDate;
+    if (scheduleFrequency === "Term-wise") {
+      const sum = scheduleTermBreakdown.reduce((acc, current) => acc + (Number(current.amount) || 0), 0);
+      finalAmount = sum.toString();
+      if (scheduleTermBreakdown.length > 0) {
+        finalDueDate = scheduleTermBreakdown[0].due_date;
+      }
+    }
+
+    setIsSavingSchedule(true);
+    try {
+      await feesApi.createSchedule({
+        academic_year: academicYearId,
+        fee_group: scheduleFeeGroup === "" ? undefined : scheduleFeeGroup,
+        fee_type: scheduleFeeType === "" ? undefined : scheduleFeeType,
+        amount: finalAmount,
+        collection_frequency: scheduleFrequency,
+        due_date: finalDueDate,
+        late_fee_applicable: scheduleLateFee,
+        grace_period: Number(scheduleGracePeriod) || 0,
+        late_fee_rule: scheduleLateFeeRule,
+        term_breakdown: scheduleFrequency === "Term-wise" ? scheduleTermBreakdown : [],
+        status: scheduleStatus as "active" | "inactive",
+      });
+      showToast("Fee schedule created successfully.");
+      setScheduleAcademicYear("");
+      setScheduleFeeGroup("");
+      setScheduleFeeType("");
+      setScheduleAmount("");
+      setScheduleFrequency("Monthly");
+      setScheduleDueDate("");
+      setScheduleLateFee(false);
+      setScheduleGracePeriod(0);
+      setScheduleLateFeeRule("");
+      setScheduleTermBreakdown([]);
+      setScheduleStatus("active");
+      setIsCreateScheduleOpen(false);
+      fetchFeeSchedules();
+    } catch (error) {
+      const e = error as { details?: unknown; message?: string };
+      const mapped = mapApiFieldErrors(e.details);
+      setScheduleErrors(mapped);
+      const errorMsg = Object.values(mapped)[0] || e.message || "Failed to create fee schedule.";
+      showToast(errorMsg as string);
+    } finally {
+      setIsSavingSchedule(false);
+    }
+  };
+
+  const handleUpdateSchedule = async () => {
+    if (!editingSchedule) return;
+    const nextErrors: Record<string, string> = {};
+    if (!editScheduleFeeGroup) nextErrors.fee_group = "Fee Group is required.";
+    if (!editScheduleFeeType) nextErrors.fee_type = "Fee Type is required.";
+    
+    if (editScheduleFrequency === "Term-wise") {
+      if (!editScheduleTermBreakdown || editScheduleTermBreakdown.length === 0) {
+        showToast("No terms configured for this academic year.");
+        return;
+      }
+      const hasInvalidTerm = editScheduleTermBreakdown.some(tb => !tb.amount || isNaN(Number(tb.amount)) || Number(tb.amount) < 0 || !tb.due_date);
+      if (hasInvalidTerm) {
+        showToast("Please provide a valid amount and due date for all terms.");
+        return;
+      }
+    } else {
+      if (!editScheduleAmount || isNaN(Number(editScheduleAmount)) || Number(editScheduleAmount) <= 0) nextErrors.amount = "Valid amount required.";
+      if (!editScheduleDueDate) nextErrors.due_date = "Due date is required.";
+    }
+    
+    setEditScheduleErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      showToast("Please fix validation errors before submitting.");
+      return;
+    }
+
+    let finalAmount = editScheduleAmount;
+    let finalDueDate = editScheduleDueDate;
+    if (editScheduleFrequency === "Term-wise") {
+      const sum = editScheduleTermBreakdown.reduce((acc, current) => acc + (Number(current.amount) || 0), 0);
+      finalAmount = sum.toString();
+      if (editScheduleTermBreakdown.length > 0) {
+        finalDueDate = editScheduleTermBreakdown[0].due_date;
+      }
+    }
+
+    setIsSavingScheduleEdit(true);
+    try {
+      await feesApi.updateSchedule(editingSchedule.id, {
+        fee_group: editScheduleFeeGroup === "" ? undefined : editScheduleFeeGroup,
+        fee_type: editScheduleFeeType === "" ? undefined : editScheduleFeeType,
+        amount: finalAmount,
+        collection_frequency: editScheduleFrequency,
+        due_date: finalDueDate,
+        late_fee_applicable: editScheduleLateFee,
+        grace_period: Number(editScheduleGracePeriod) || 0,
+        late_fee_rule: editScheduleLateFeeRule,
+        term_breakdown: editScheduleFrequency === "Term-wise" ? editScheduleTermBreakdown : [],
+        status: editScheduleStatus as "active" | "inactive",
+      });
+      showToast("Fee schedule updated successfully.");
+      setIsEditScheduleOpen(false);
+      setEditingSchedule(null);
+      setEditScheduleGracePeriod(0);
+      setEditScheduleLateFeeRule("");
+      setEditScheduleTermBreakdown([]);
+      fetchFeeSchedules();
+    } catch (error) {
+      const e = error as { details?: unknown; message?: string };
+      const mapped = mapApiFieldErrors(e.details);
+      setEditScheduleErrors(mapped);
+      const errorMsg = Object.values(mapped)[0] || e.message || "Failed to update fee schedule.";
+      showToast(errorMsg as string);
+    } finally {
+      setIsSavingScheduleEdit(false);
+    }
+  };
+
+  const handleDeleteSchedule = async () => {
+    if (!deleteSchedule) return;
+    setIsDeletingSchedule(true);
+    try {
+      await feesApi.deleteSchedule(deleteSchedule.id);
+      showToast("Fee schedule deleted successfully.");
+      setIsDeleteScheduleOpen(false);
+      setDeleteSchedule(null);
+      setDeleteScheduleError("");
+      fetchFeeSchedules();
+    } catch (error) {
+      const e = error as { details?: unknown; message?: string };
+      const mapped = mapApiFieldErrors(e.details);
+      const errorMsg = mapped.detail || e.message || "Failed to delete fee schedule.";
+      setDeleteScheduleError(errorMsg as string);
+    } finally {
+      setIsDeletingSchedule(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== "fee-schedules") return;
+    fetchFeeSchedules();
+  }, [activeTab, schedulePage, scheduleSortBy, scheduleStatusFilter]);
+
+  useEffect(() => {
+    if (activeTab !== "fee-schedules") return;
+    const timer = setTimeout(() => {
+      setSchedulePage(1);
+      fetchFeeSchedules();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [scheduleSearch]);
 
   // ── Fee Groups tab ──────────────────────────────────────────────────────────
 
@@ -996,6 +1484,251 @@ export default function FeeConfigurationPanel() {
     </div>
   );
 
+  const mapApiFieldErrors = (details: unknown): Record<string, string> => {
+    const mapped: Record<string, string> = {};
+    const errorBag = (details && typeof details === "object" ? (details as { errors?: Record<string, unknown> }).errors : null) ||
+      (details && typeof details === "object" ? (details as Record<string, unknown>) : null);
+    if (!errorBag || typeof errorBag !== "object") return mapped;
+
+    const toMessage = (value: unknown): string => {
+      if (Array.isArray(value)) return String(value[0] || "");
+      return typeof value === "string" ? value : "";
+    };
+
+    const source = errorBag as Record<string, unknown>;
+    if (source.fees_group) mapped.fees_group = toMessage(source.fees_group);
+    if (source.non_field_errors && !Object.keys(mapped).length) mapped.general = toMessage(source.non_field_errors);
+    if (source.name) mapped.name = toMessage(source.name);
+    if (source.gl_code) mapped.gl_code = toMessage(source.gl_code);
+    if (source.taxable) mapped.taxable = toMessage(source.taxable);
+    if (source.default_structure) mapped.default_structure = toMessage(source.default_structure);
+    if (source.status) mapped.status = toMessage(source.status);
+    if (source.detail && !Object.keys(mapped).length) mapped.general = toMessage(source.detail);
+    return mapped;
+  };
+
+  const validateGlCodeClient = (rawValue: string, currentId?: number): string => {
+    const value = (rawValue || "").trim().toUpperCase();
+    if (!value) return "GL Code is required.";
+    if (!GL_CODE_REGEX.test(value)) return "Invalid GL Code format. Use XXXX-CODE (e.g., 4001-TUITION).";
+
+    const duplicateCode = feeTypes.some(row => row.gl_code?.toUpperCase() === value && row.id !== currentId);
+    if (duplicateCode) return "A Fee Type with this GL Code already exists.";
+
+    const accountNumber = value.split("-")[0];
+    const duplicateAccount = feeTypes.some(row => {
+      if (row.id === currentId) return false;
+      const rowCode = (row.gl_code || "").toUpperCase();
+      return rowCode.startsWith(`${accountNumber}-`);
+    });
+    if (duplicateAccount) return `Account number ${accountNumber} is already used by another Fee Type. Use a unique account number.`;
+
+    return "";
+  };
+
+  const normalizeFeeTypeName = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  const suggestedCodeForName = (name: string): string | null => {
+    const normalized = normalizeFeeTypeName(name);
+    if (!normalized) return null;
+    const match = GL_CODE_SUGGESTIONS.find(option => {
+      const optionName = normalizeFeeTypeName(option.label);
+      return normalized.includes(optionName.replace("fee", "")) || optionName.includes(normalized);
+    });
+    return match?.code || null;
+  };
+
+  const getSuggestedCodes = (name: string): Array<{ label: string; code: string }> => {
+    const preferred = suggestedCodeForName(name);
+    if (!preferred) return GL_CODE_SUGGESTIONS;
+    const first = GL_CODE_SUGGESTIONS.find(option => option.code === preferred);
+    const rest = GL_CODE_SUGGESTIONS.filter(option => option.code !== preferred);
+    return first ? [first, ...rest] : GL_CODE_SUGGESTIONS;
+  };
+
+  const fetchFeeTypes = async () => {
+    setIsLoadingTypes(true);
+    try {
+      const payload = await feesApi.listTypes({
+        page: typePage,
+        page_size: typePageSize,
+        search: typeSearch.trim() || undefined,
+        status: typeStatusFilter || undefined,
+        sort_by: typeSortBy,
+        sort_dir: typeSortDir,
+      });
+
+      if (Array.isArray(payload)) {
+        setFeeTypes(payload);
+        setTypeTotalCount(payload.length);
+        setTypeTotalPages(1);
+      } else if ("results" in payload) {
+        const results = payload.results || [];
+        setFeeTypes(results);
+        const count = (payload as { count?: number }).count || results.length;
+        setTypeTotalCount(count);
+        setTypeTotalPages(Math.max(1, Math.ceil(count / typePageSize)));
+      } else {
+        const rows = listData(payload as { results?: FeesType[] });
+        setFeeTypes(rows);
+        setTypeTotalCount(rows.length);
+        setTypeTotalPages(1);
+      }
+    } catch (error) {
+      showToast("Unable to load fee types.");
+    } finally {
+      setIsLoadingTypes(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== "fee-types") return;
+    fetchFeeTypes();
+  }, [activeTab, typePage, typeSortBy, typeSortDir, typeStatusFilter]);
+
+  useEffect(() => {
+    if (activeTab !== "fee-types") return;
+    const timer = setTimeout(() => {
+      setTypePage(1);
+      fetchFeeTypes();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [typeSearch]);
+
+  const handleCreateType = async () => {
+    if (!academicYearId) {
+      showToast("Select an academic year first.");
+      return;
+    }
+    const glCodeError = validateGlCodeClient(typeGlCode);
+    const nextErrors: Record<string, string> = {};
+    if (glCodeError) nextErrors.gl_code = glCodeError;
+    setTypeErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      showToast("Please fix validation errors before submitting.");
+      return;
+    }
+    setIsSavingType(true);
+    try {
+      await feesApi.createType({
+        academic_year: academicYearId,
+        fees_group: typeGroupId !== "" ? typeGroupId : undefined,
+        name: typeName,
+        gl_code: typeGlCode,
+        taxable: typeTaxable,
+        default_structure: typeStructure,
+        status: typeStatus,
+      });
+      showToast("Fee type created successfully.");
+      setTypeGroupId("");
+      setTypeName("");
+      setTypeGlCode("");
+      setTypeTaxable("No");
+      setTypeStructure("Term-wise");
+      setTypeStatus("Active");
+      fetchFeeTypes();
+    } catch (error) {
+      const e = error as { details?: unknown; message?: string };
+      const mapped = mapApiFieldErrors(e.details);
+      setTypeErrors(mapped);
+      const errorMsg = mapped.name || e.message || "Failed to create fee type.";
+      showToast(errorMsg);
+    } finally {
+      setIsSavingType(false);
+    }
+  };
+
+  const openEditTypeModal = (row: FeesType) => {
+    setEditingType(row);
+    setEditTypeGroupId(row.fees_group ?? "");
+    setEditTypeName(row.name || "");
+    setEditTypeGlCode(row.gl_code || "");
+    setEditTypeTaxable((row.taxable || "No") as "Yes" | "No");
+    setEditTypeStructure((row.default_structure || "Term-wise") as "Monthly" | "Quarterly" | "Term-wise" | "Yearly" | "Custom");
+    setEditTypeStatus((row.status || "Active") as "Active" | "Inactive");
+    setEditTypeErrors({});
+    setIsEditTypeOpen(true);
+  };
+
+  const closeEditTypeModal = () => {
+    setIsEditTypeOpen(false);
+    setEditingType(null);
+    setEditTypeErrors({});
+  };
+
+  const handleUpdateType = async () => {
+    if (!editingType) return;
+    const glCodeError = validateGlCodeClient(editTypeGlCode, editingType.id);
+    const nextErrors: Record<string, string> = {};
+    if (glCodeError) nextErrors.gl_code = glCodeError;
+    setEditTypeErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      showToast("Please fix validation errors before submitting.");
+      return;
+    }
+    setIsSavingTypeEdit(true);
+    try {
+      await feesApi.updateType(editingType.id, {
+        fees_group: editTypeGroupId !== "" ? editTypeGroupId : undefined,
+        name: editTypeName,
+        gl_code: editTypeGlCode,
+        taxable: editTypeTaxable,
+        default_structure: editTypeStructure,
+        status: editTypeStatus,
+      });
+      showToast("Fee type updated successfully.");
+      closeEditTypeModal();
+      fetchFeeTypes();
+    } catch (error) {
+      const e = error as { details?: unknown; message?: string };
+      const mapped = mapApiFieldErrors(e.details);
+      setEditTypeErrors(mapped);
+      const errorMsg = mapped.name || e.message || "Failed to update fee type.";
+      showToast(errorMsg);
+    } finally {
+      setIsSavingTypeEdit(false);
+    }
+  };
+
+  const openDeleteTypeModal = (row: FeesType) => {
+    setDeleteType(row);
+    setDeleteTypeError("");
+    setIsDeleteTypeOpen(true);
+  };
+
+  const closeDeleteTypeModal = () => {
+    setDeleteType(null);
+    setDeleteTypeError("");
+    setIsDeleteTypeOpen(false);
+  };
+
+  const handleDeleteType = async () => {
+    if (!deleteType) return;
+    setDeleteTypeError("");
+    setIsDeletingType(true);
+    try {
+      await feesApi.deleteType(deleteType.id);
+      showToast("Fee type deleted successfully.");
+      closeDeleteTypeModal();
+      fetchFeeTypes();
+    } catch (error) {
+      const e = error as { message?: string };
+      const message = e.message || "This fee type could not be deleted.";
+      setDeleteTypeError(message);
+      showToast(message);
+    } finally {
+      setIsDeletingType(false);
+    }
+  };
+
+  const typePaginationPages = (() => {
+    const pages: number[] = [];
+    const start = Math.max(1, typePage - 2);
+    const end = Math.min(typeTotalPages, start + 4);
+    for (let page = start; page <= end; page += 1) pages.push(page);
+    return pages;
+  })();
+
   // ── Fee Types tab ────────────────────────────────────────────────────────────
 
   const renderFeeTypes = () => (
@@ -1004,51 +1737,154 @@ export default function FeeConfigurationPanel() {
       <div style={card}>
         <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>Create Fee Type</div>
         <div style={{ fontSize: 12.5, color: "#A0A3B8", marginBottom: 18 }}>
-          Rows update immediately — each action maps to a feesApi call in production.
+          Create fee types with GL code, taxation, structure, and status.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
-          {[
-            { label: "FEE TYPE NAME",      ph: "Tuition Fee" },
-            { label: "GL CODE",            ph: "4001-TUITION" },
-            { label: "TAXABLE",            ph: "No" },
-            { label: "DEFAULT STRUCTURE",  ph: "Term-wise" },
-          ].map(f => (
-            <div key={f.label}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>{f.label}</div>
-              <input placeholder={f.ph} style={inputField(f.ph)} />
-            </div>
-          ))}
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>FEE GROUP</div>
+            <select
+              value={typeGroupId}
+              onChange={event => setTypeGroupId(event.target.value === "" ? "" : Number(event.target.value))}
+              style={inputField("Select Fee Group")}
+            >
+              <option value="">Select Fee Group</option>
+              {feeGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+            {typeErrors.fees_group ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.fees_group}</div> : null}
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>FEE TYPE NAME</div>
+            <input
+              placeholder="Tuition Fee"
+              style={inputField("Tuition Fee")}
+              value={typeName}
+              onChange={event => {
+                const nextName = event.target.value;
+                setTypeName(nextName);
+                if (!typeGlCode.trim()) {
+                  const suggested = suggestedCodeForName(nextName);
+                  if (suggested) setTypeGlCode(suggested);
+                }
+              }}
+            />
+            {typeErrors.name ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.name}</div> : null}
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>GL CODE</div>
+            <input
+              placeholder="4001-TUITION"
+              style={{ ...inputField("4001-TUITION"), border: typeErrors.gl_code ? "1px solid #ef4444" : "1px solid #E8E8EE" }}
+              value={typeGlCode}
+              onChange={event => {
+                const value = event.target.value.toUpperCase();
+                setTypeGlCode(value);
+                if (typeErrors.gl_code) {
+                  const msg = validateGlCodeClient(value);
+                  setTypeErrors(prev => ({ ...prev, gl_code: msg }));
+                }
+              }}
+            />
+            <div style={{ marginTop: 6, color: "#6b7280", fontSize: 11.5 }}>Format: 4001-TUITION</div>
+            {typeErrors.gl_code ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.gl_code}</div> : null}
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>TAXABLE</div>
+            <select value={typeTaxable} onChange={event => setTypeTaxable(event.target.value as "Yes" | "No")} style={inputField("Taxable")}>
+              {FEE_TAXABLE_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+            </select>
+            {typeErrors.taxable ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.taxable}</div> : null}
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>DEFAULT STRUCTURE</div>
+            <select value={typeStructure} onChange={event => setTypeStructure(event.target.value as "Monthly" | "Quarterly" | "Term-wise" | "Yearly" | "Custom")} style={inputField("Default Structure")}>
+              {FEE_STRUCTURE_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+            </select>
+            {typeErrors.default_structure ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.default_structure}</div> : null}
+          </div>
         </div>
+        {typeErrors.general ? <div style={{ marginBottom: 12, color: "#dc2626", fontSize: 12.5, fontWeight: 600 }}>{typeErrors.general}</div> : null}
         <button
           style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
-          onClick={() => showToast("Fee type added — would save to feesApi in production.")}
+          onClick={handleCreateType}
+          disabled={isSavingType}
         >
-          Add
+          {isSavingType ? "Saving..." : "Add"}
         </button>
       </div>
 
       {/* Table */}
       <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr .9fr .8fr", gap: 10, padding: "14px 16px", borderBottom: "1px solid #E8E8EE" }}>
+          <input
+            placeholder="Search by fee type name or GL code"
+            value={typeSearch}
+            onChange={event => setTypeSearch(event.target.value)}
+            style={inputField("Search")}
+          />
+          <select value={typeSortBy || "name"} onChange={event => { setTypeSortBy(event.target.value as FeeTypeListParams["sort_by"]); setTypePage(1); }} style={inputField("Sort by")}>
+            <option value="name">Sort: Name</option>
+            <option value="gl_code">Sort: GL Code</option>
+            <option value="status">Sort: Status</option>
+            <option value="created_date">Sort: Created Date</option>
+            <option value="updated_date">Sort: Updated Date</option>
+          </select>
+          <select value={typeStatusFilter} onChange={event => { setTypeStatusFilter(event.target.value as "" | "active" | "inactive"); setTypePage(1); }} style={inputField("Status filter")}>
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "#F8F8FB" }}>
-              {["NAME", "GL CODE", "TAXABLE", "DEFAULT STRUCTURE", "ACTIONS"].map(h => (
+              {["NAME", "GL CODE", "TAXABLE", "DEFAULT STRUCTURE", "STATUS", "ACTIONS"].map(h => (
                 <th key={h} style={thStyle}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {FEE_TYPES_DATA.map((ft, i) => (
-              <tr key={ft.id} style={{ borderBottom: i < FEE_TYPES_DATA.length - 1 ? "1px solid #E8E8EE" : "none" }}>
-                <td style={{ ...tdStyle, fontWeight: 600 }}>{ft.name}</td>
-                <td style={tdMuted}>{ft.glCode}</td>
-                <td style={tdMuted}>{ft.taxable}</td>
-                <td style={tdMuted}>{ft.structure}</td>
-                <td style={tdStyle}>{rowActionsLite(ft.name)}</td>
+            {isLoadingTypes ? (
+              <tr>
+                <td colSpan={6} style={{ ...tdStyle, color: "#5B5E72" }}>Loading fee types...</td>
               </tr>
-            ))}
+            ) : feeTypes.length === 0 ? (
+              <tr>
+                <td colSpan={6} style={{ ...tdStyle, color: "#5B5E72" }}>No fee types found.</td>
+              </tr>
+            ) : (
+              feeTypes.map((ft, i) => (
+                <tr key={ft.id} style={{ borderBottom: i < feeTypes.length - 1 ? "1px solid #E8E8EE" : "none" }}>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>{ft.name}</td>
+                  <td style={tdMuted}>{ft.gl_code}</td>
+                  <td style={tdMuted}>{ft.taxable}</td>
+                  <td style={tdMuted}>{ft.default_structure}</td>
+                  <td style={tdStyle}>{statusPill(ft.status)}</td>
+                  <td style={tdStyle}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button style={outlineBtn(true)} onClick={() => openEditTypeModal(ft)}>Edit</button>
+                      <button style={dangerBtn(true)} onClick={() => openDeleteTypeModal(ft)}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
+        {!isLoadingTypes && typeTotalCount > 0 && (
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, alignItems: "center", padding: "10px 14px", borderTop: "1px solid #E8E8EE" }}>
+            <button type="button" onClick={() => setTypePage(prev => Math.max(1, prev - 1))} disabled={typePage <= 1} style={{ height: 28, minWidth: 44, borderRadius: 8, border: "1px solid #E8E8EE", background: "#fff", color: "#5B5E72", fontSize: 12, cursor: typePage <= 1 ? "not-allowed" : "pointer", opacity: typePage <= 1 ? 0.5 : 1 }}>
+              Prev
+            </button>
+            {typePaginationPages.map(page => (
+              <button key={page} type="button" onClick={() => setTypePage(page)} style={{ height: 28, minWidth: 28, borderRadius: 8, border: "1px solid #E8E8EE", background: page === typePage ? "#5B4FCF" : "#fff", color: page === typePage ? "#fff" : "#5B5E72", fontSize: 12, cursor: "pointer" }}>
+                {page}
+              </button>
+            ))}
+            <button type="button" onClick={() => setTypePage(prev => Math.min(typeTotalPages, prev + 1))} disabled={typePage >= typeTotalPages} style={{ height: 28, minWidth: 44, borderRadius: 8, border: "1px solid #E8E8EE", background: "#fff", color: "#5B5E72", fontSize: 12, cursor: typePage >= typeTotalPages ? "not-allowed" : "pointer", opacity: typePage >= typeTotalPages ? 0.5 : 1 }}>
+              Next
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1113,438 +1949,1120 @@ export default function FeeConfigurationPanel() {
 
       {/* School Term Settings */}
       <div style={{ ...card, marginBottom: 20, borderRadius: 12 }}>
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 4 }}>School Term Settings</div>
-          <div style={{ fontSize: 13, color: "#A0A3B8" }}>
-            Set how many terms your school uses. This controls term slots in all fee schedules below.
+        <button
+          type="button"
+          onClick={() => setIsTermSettingsOpen(prev => !prev)}
+          style={{
+            width: "100%",
+            background: "none",
+            border: "none",
+            padding: 0,
+            textAlign: "left",
+            cursor: "pointer",
+            outline: "none",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 4 }}>
+              School Term Settings
+            </div>
+            <div style={{ fontSize: 13, color: "#A0A3B8" }}>
+              Set how many terms your school uses. This controls term slots in all fee schedules below.
+            </div>
           </div>
-        </div>
+          <div
+            style={{
+              fontSize: 18,
+              color: "#6D4AFF",
+              fontWeight: 700,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 32,
+              height: 32,
+              borderRadius: "50%",
+              border: "1px solid #E8E8EE",
+              background: "#fff",
+              transform: isTermSettingsOpen ? "rotate(180deg)" : "rotate(0deg)",
+              transition: "transform 0.2s ease",
+            }}
+          >
+            ▼
+          </div>
+        </button>
 
-        <div style={{ display: "flex", alignItems: "flex-start", gap: 24, marginBottom: 20 }}>
-          <div style={{ flex: "0 0 auto", minWidth: 180 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 8 }}>
-              NUMBER OF TERMS PER YEAR
+        <div
+          style={{
+            maxHeight: isTermSettingsOpen ? "1500px" : "0px",
+            opacity: isTermSettingsOpen ? 1 : 0,
+            overflow: "hidden",
+            transition: "max-height 0.3s ease-in-out, opacity 0.25s ease-in-out, margin-top 0.25s ease-in-out",
+            marginTop: isTermSettingsOpen ? 20 : 0,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 24, marginBottom: 20 }}>
+            <div style={{ flex: "0 0 auto", minWidth: 180 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 8 }}>
+                NUMBER OF TERMS PER YEAR
+              </div>
+              <select
+                value={numTerms}
+                onChange={e => {
+                  const count = Number(e.target.value);
+                  setNumTerms(count);
+                  const year = academicYears.find(y => y.id === academicYearId);
+                  const nextTerms = generateDefaultTerms(year, count);
+                  setTerms(nextTerms);
+                }}
+                style={{
+                  height: 40, border: "1px solid #E8E8EE", borderRadius: 8,
+                  padding: "0 12px", fontSize: 13.5, width: "100%",
+                  background: "#fff", cursor: "pointer",
+                }}
+              >
+                {[1, 2, 3, 4].map(n => (
+                  <option key={n} value={n}>{n} Term{n > 1 ? "s" : ""} per year</option>
+                ))}
+              </select>
             </div>
-            <select
-              value={numTerms}
-              onChange={e => setNumTerms(Number(e.target.value))}
-              style={{
-                height: 40, border: "1px solid #E8E8EE", borderRadius: 8,
-                padding: "0 12px", fontSize: 13.5, width: "100%",
-                background: "#fff", cursor: "pointer",
-              }}
-            >
-              {[1, 2, 3, 4].map(n => (
-                <option key={n} value={n}>{n} Term{n > 1 ? "s" : ""} per year</option>
-              ))}
-            </select>
-          </div>
-          <div style={{ flex: 1, paddingTop: 20 }}>
-            <div style={{ fontSize: 13, color: "#A0A3B8", lineHeight: 1.5 }}>
-              Changing the term count re-slots all fee schedules.<br />
-              Term names and due dates below update automatically.
+            <div style={{ flex: 1, paddingTop: 20 }}>
+              <div style={{ fontSize: 13, color: "#A0A3B8", lineHeight: 1.5 }}>
+                Changing the term count re-slots all fee schedules.<br />
+                Term names and due dates below update automatically.
+              </div>
+            </div>
+            <div style={{ paddingTop: 18 }}>
+              <button
+                style={{
+                  ...primaryBtn(),
+                  background: (isSavingTermSettings || !hasTermSettingsChanged()) ? "#a3a5b3" : "#6D4AFF",
+                  opacity: (isSavingTermSettings || !hasTermSettingsChanged()) ? 0.65 : 1,
+                  cursor: (isSavingTermSettings || !hasTermSettingsChanged()) ? "not-allowed" : "pointer",
+                  transition: "all 0.2s ease"
+                }}
+                onClick={handleSaveTermSettings}
+                disabled={isSavingTermSettings || !hasTermSettingsChanged()}
+              >
+                {isSavingTermSettings ? "Saving..." : "Save Term Settings"}
+              </button>
             </div>
           </div>
-          <div style={{ paddingTop: 18 }}>
-            <button style={primaryBtn()} onClick={() => showToast("Term settings saved successfully.")}>
-              Save Term Settings
-            </button>
-          </div>
-        </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-          {Array.from({ length: numTerms }).map((_, i) => (
-            <div
-              key={i}
-              style={{
-                display: "flex", alignItems: "center", gap: 20,
-                padding: "18px 0",
-                borderTop: i > 0 ? "1px solid #E8E8EE" : "none",
-              }}
-            >
-              <div style={{
-                width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
-                background: "#6D4AFF", color: "#fff",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 13, fontWeight: 700,
-              }}>
-                {i + 1}
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>
-                  TERM {i + 1} NAME
+          <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            {Array.from({ length: numTerms }).map((_, i) => (
+              <div
+                key={i}
+                style={{
+                  display: "flex", alignItems: "center", gap: 20,
+                  padding: "18px 0",
+                  borderTop: i > 0 ? "1px solid #E8E8EE" : "none",
+                }}
+              >
+                <div style={{
+                  width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
+                  background: "#6D4AFF", color: "#fff",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 13, fontWeight: 700,
+                }}>
+                  {i + 1}
                 </div>
-                <input
-                  type="text"
-                  value={terms[i]?.name ?? `Term ${i + 1}`}
-                  onChange={e => {
-                    const next = [...terms];
-                    next[i] = { ...next[i], name: e.target.value };
-                    setTerms(next);
-                  }}
-                  style={{
-                    width: "100%", height: 40, border: "1px solid #E8E8EE",
-                    borderRadius: 8, padding: "0 12px", fontSize: 13.5,
-                  }}
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>
-                  DEFAULT DUE DATE
+                <div style={{ flex: 1.5 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>
+                    TERM {i + 1} NAME
+                  </div>
+                  <input
+                    type="text"
+                    value={terms[i]?.name ?? `Term ${i + 1}`}
+                    onChange={e => {
+                      const next = [...terms];
+                      next[i] = { ...next[i], name: e.target.value };
+                      setTerms(next);
+                    }}
+                    style={{
+                      width: "100%", height: 40, border: "1px solid #E8E8EE",
+                      borderRadius: 8, padding: "0 12px", fontSize: 13.5,
+                    }}
+                  />
                 </div>
-                <input
-                  type="date"
-                  value={terms[i]?.dueDate ?? "2026-04-10"}
-                  onChange={e => {
-                    const next = [...terms];
-                    next[i] = { ...next[i], dueDate: e.target.value };
-                    setTerms(next);
-                  }}
-                  style={{
-                    width: "100%", height: 40, border: "1px solid #E8E8EE",
-                    borderRadius: 8, padding: "0 12px", fontSize: 13.5,
-                    background: "#fff", cursor: "pointer",
-                  }}
-                />
+                <div style={{ flex: 1.2 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>
+                    START DATE
+                  </div>
+                  <input
+                    type="date"
+                    value={terms[i]?.startDate ?? ""}
+                    onChange={e => {
+                      const next = [...terms];
+                      next[i] = { ...next[i], startDate: e.target.value };
+                      setTerms(next);
+                    }}
+                    style={{
+                      width: "100%", height: 40, border: "1px solid #E8E8EE",
+                      borderRadius: 8, padding: "0 12px", fontSize: 13.5,
+                      background: "#fff", cursor: "pointer",
+                    }}
+                  />
+                </div>
+                <div style={{ flex: 1.2 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>
+                    END DATE
+                  </div>
+                  <input
+                    type="date"
+                    value={terms[i]?.endDate ?? ""}
+                    onChange={e => {
+                      const next = [...terms];
+                      next[i] = { ...next[i], endDate: e.target.value };
+                      setTerms(next);
+                    }}
+                    style={{
+                      width: "100%", height: 40, border: "1px solid #E8E8EE",
+                      borderRadius: 8, padding: "0 12px", fontSize: 13.5,
+                      background: "#fff", cursor: "pointer",
+                    }}
+                  />
+                </div>
+                <div style={{ flex: 1.2 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>
+                    DEFAULT DUE DATE
+                  </div>
+                  <input
+                    type="date"
+                    value={terms[i]?.dueDate ?? "2026-04-10"}
+                    onChange={e => {
+                      const next = [...terms];
+                      next[i] = { ...next[i], dueDate: e.target.value };
+                      setTerms(next);
+                    }}
+                    style={{
+                      width: "100%", height: 40, border: "1px solid #E8E8EE",
+                      borderRadius: 8, padding: "0 12px", fontSize: 13.5,
+                      background: "#fff", cursor: "pointer",
+                    }}
+                  />
+                </div>
               </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Fee Schedule per Group */}
+      {/* Fee Schedules List */}
       <div style={card}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: showAddForm ? 16 : 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 4 }}>Fee Schedule per Group</div>
-            <div style={{ fontSize: 13, color: "#A0A3B8", lineHeight: 1.5 }}>
-              Each group contains multiple fee types — configure amounts and collection structures independently for each type.
-            </div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 4 }}>Fee Schedules</div>
+            <div style={{ fontSize: 13, color: "#A0A3B8" }}>Manage fee collection schedules for each fee type per group.</div>
           </div>
-          {showAddForm ? (
-            <button
-              style={{ ...outlineBtn(), color: "#dc2626", borderColor: "#fca5a5" }}
-              onClick={resetAddForm}
-            >
-              – Close Form
-            </button>
-          ) : (
-            <button style={primaryBtn()} onClick={() => { setFormGroup(FEE_GROUPS[0].name); setShowAddForm(true); }}>
-              + Add Fee Schedule
-            </button>
-          )}
+          <button
+            style={primaryBtn()}
+            onClick={() => {
+              setScheduleAcademicYear(academicYearId || "");
+              setScheduleFeeGroup("");
+              setScheduleFeeType("");
+              setScheduleAmount("");
+              setScheduleFrequency("Term-wise"); // set default to Term-wise
+              setScheduleDueDate("");
+              setScheduleLateFee(false);
+              setScheduleGracePeriod(0);
+              setScheduleLateFeeRule("");
+              
+              // Fill initial term breakdown
+              const initialBreakdown = termSettings.map(term => ({
+                term_number: term.term_number,
+                term_name: term.term_name,
+                amount: "",
+                due_date: term.default_due_date || "",
+              }));
+              setScheduleTermBreakdown(initialBreakdown);
+
+              setScheduleStatus("active");
+              setScheduleErrors({});
+              setIsCreateScheduleOpen(true);
+            }}
+          >
+            + Create Schedule
+          </button>
         </div>
 
-        {/* ── Inline Add Fee Schedule Form ────────────────────────────── */}
-        {showAddForm && (
-          <div style={{
-            border: "1px solid #E8E8EE", borderRadius: 12,
-            padding: "20px 22px", marginBottom: 16,
-            background: "#fff",
-            animation: "expandIn 0.18s ease",
-          }}>
-            {/* Row 1: Fee Group | Fee Type | Collection Structure */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 18 }}>
-              <div>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>FEE GROUP</div>
-                <select
-                  value={formGroup}
-                  onChange={e => setFormGroup(e.target.value)}
-                  style={{ width: "100%", height: 40, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 12px", fontSize: 13.5, background: "#fff", cursor: "pointer" }}
-                >
-                  {FEE_GROUPS.map(g => <option key={g.id} value={g.name}>{g.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>FEE TYPE</div>
-                <select
-                  value={formFeeType}
-                  onChange={e => setFormFeeType(e.target.value)}
-                  style={{ width: "100%", height: 40, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 12px", fontSize: 13.5, background: "#fff", cursor: "pointer" }}
-                >
-                  {["Tuition Fee", "Admission Fee", "Caution Deposit", "Administrative Fee", "Lab Fee", "Building Fund", "Transport Fee", "Hostel Fee", "Lunch Fee", "Development Fund"].map(t => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>COLLECTION STRUCTURE</div>
-                <select
-                  value={formStructure}
-                  onChange={e => setFormStructure(e.target.value)}
-                  style={{ width: "100%", height: 40, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 12px", fontSize: 13.5, background: "#fff", cursor: "pointer" }}
-                >
-                  <option value="Term-wise">Term-wise ({numTerms} term{numTerms > 1 ? "s" : ""})</option>
-                  <option value="Monthly">Monthly</option>
-                  <option value="Custom">Custom</option>
-                </select>
-              </div>
-            </div>
+        {/* Search & Filters */}
+        <div style={{ display: "flex", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
+          <input
+            type="text"
+            placeholder="Search by fee group, fee type, or academic year..."
+            value={scheduleSearch}
+            onChange={e => setScheduleSearch(e.target.value)}
+            style={{
+              flex: 1, minWidth: 200, height: 36, border: "1px solid #E8E8EE",
+              borderRadius: 8, padding: "0 12px", fontSize: 13,
+            }}
+          />
+          <select
+            value={scheduleSortBy}
+            onChange={e => setScheduleSortBy(e.target.value)}
+            style={{
+              height: 36, border: "1px solid #E8E8EE", borderRadius: 8,
+              padding: "0 12px", fontSize: 13, background: "#fff", cursor: "pointer",
+            }}
+          >
+            <option value="created_at">Latest First</option>
+            <option value="fee_group">By Fee Group</option>
+            <option value="fee_type">By Fee Type</option>
+            <option value="amount">By Amount</option>
+          </select>
+          <select
+            value={scheduleStatusFilter}
+            onChange={e => setScheduleStatusFilter(e.target.value as "" | "active" | "inactive")}
+            style={{
+              height: 36, border: "1px solid #E8E8EE", borderRadius: 8,
+              padding: "0 12px", fontSize: 13, background: "#fff", cursor: "pointer",
+            }}
+          >
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+        </div>
 
-            {/* Row 2: Grace Period | Late Fee Rule */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
-              <div>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>GRACE PERIOD (DAYS)</div>
-                <input
-                  type="number"
-                  min="0"
-                  value={formGrace}
-                  onChange={e => setFormGrace(e.target.value)}
-                  style={{ width: "100%", height: 40, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 12px", fontSize: 13.5 }}
-                />
-              </div>
-              <div>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>LATE FEE RULE</div>
-                <input
-                  type="text"
-                  value={formLateRule}
-                  onChange={e => setFormLateRule(e.target.value)}
-                  placeholder="e.g. Rs. 50 daily, cap Rs. 1,500"
-                  style={{ width: "100%", height: 40, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 12px", fontSize: 13.5 }}
-                />
-              </div>
-            </div>
-
-            {/* Term / installment rows */}
-            {formStructure === "Term-wise" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 22 }}>
-                {Array.from({ length: numTerms }).map((_, i) => (
-                  <div key={i} style={{
-                    display: "flex", alignItems: "center", gap: 16,
-                    padding: "16px 0",
-                    borderTop: i > 0 ? "1px solid #E8E8EE" : "none",
-                  }}>
-                    <div style={{
-                      width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
-                      background: "#6D4AFF", color: "#fff",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 13, fontWeight: 700,
-                    }}>
-                      {i + 1}
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>
-                        {terms[i]?.name?.toUpperCase() ?? `TERM ${i + 1}`} — AMOUNT (RS.)
-                      </div>
-                      <input
-                        type="number"
-                        min="0"
-                        value={formAmounts[i] ?? ""}
-                        onChange={e => {
-                          const next = [...formAmounts];
-                          next[i] = e.target.value;
-                          setFormAmounts(next);
-                        }}
-                        style={{ width: "100%", height: 40, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 12px", fontSize: 13.5 }}
-                      />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>DUE DATE</div>
-                      <div style={{
-                        height: 40, border: "1px solid #E8E8EE", borderRadius: 8,
-                        padding: "0 12px", fontSize: 13.5, display: "flex", alignItems: "center",
-                        color: "#181B2A", background: "#F8F8FB",
-                      }}>
-                        {fmtDate(terms[i]?.dueDate ?? "")}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {formStructure === "Monthly" && (
-              <div style={{ marginBottom: 22 }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>AMOUNT PER MONTH (RS.)</div>
-                <input
-                  type="number"
-                  min="0"
-                  value={formAmounts[0] ?? ""}
-                  onChange={e => { const next = [...formAmounts]; next[0] = e.target.value; setFormAmounts(next); }}
-                  style={{ width: "50%", height: 40, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 12px", fontSize: 13.5 }}
-                />
-              </div>
-            )}
-
-            {formStructure === "Custom" && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 22 }}>
-                {[0, 1].map(i => (
-                  <div key={i} style={{
-                    display: "flex", alignItems: "center", gap: 16,
-                    padding: "16px 0",
-                    borderTop: i > 0 ? "1px solid #E8E8EE" : "none",
-                  }}>
-                    <div style={{
-                      width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
-                      background: "#6D4AFF", color: "#fff",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 13, fontWeight: 700,
-                    }}>
-                      I{i + 1}
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>
-                        INSTALMENT {i + 1} — AMOUNT (RS.)
-                      </div>
-                      <input
-                        type="number"
-                        min="0"
-                        value={formAmounts[i] ?? ""}
-                        onChange={e => { const next = [...formAmounts]; next[i] = e.target.value; setFormAmounts(next); }}
-                        style={{ width: "100%", height: 40, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 12px", fontSize: 13.5 }}
-                      />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>DUE DATE</div>
-                      <input
-                        type="date"
-                        style={{ width: "100%", height: 40, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 12px", fontSize: 13.5, background: "#fff" }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Action buttons */}
-            <div style={{ display: "flex", gap: 10 }}>
-              <button
-                style={primaryBtn()}
-                onClick={() => { showToast(`Fee schedule saved for ${formGroup} — ${formFeeType}.`); resetAddForm(); }}
-              >
-                Save Schedule
-              </button>
-              <button style={outlineBtn()} onClick={resetAddForm}>Cancel</button>
-            </div>
+        {/* Schedules Table */}
+        {isLoadingSchedules ? (
+          <div style={{ textAlign: "center", padding: "40px 20px", color: "#A0A3B8" }}>
+            <div style={{ fontSize: 14 }}>Loading fee schedules...</div>
           </div>
-        )}
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {FEE_GROUPS.map(group => {
-            const isExpanded = expandedGroups.has(group.id);
-            return (
-              <div key={group.id} style={{ border: "1px solid #E8E8EE", borderRadius: 12, overflow: "hidden" }}>
-
-                {/* Group header row — click anywhere to toggle */}
-                <div
-                  onClick={() => toggleGroup(group.id)}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 14,
-                    padding: "16px 20px",
-                    background: "#fff",
-                    cursor: "pointer",
-                    userSelect: "none",
-                  }}
-                >
-                  <div style={{
-                    width: 42, height: 42, borderRadius: 10, flexShrink: 0,
-                    background: group.bg, color: "#fff",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 13, fontWeight: 700,
-                  }}>
-                    {group.initials}
-                  </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>{group.name}</div>
-                    <div style={{ fontSize: 12.5, color: "#A0A3B8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {group.summary}
-                    </div>
-                  </div>
-                  {/* Stop propagation so "+ Add Fee Type" doesn't also toggle */}
-                  <div onClick={e => e.stopPropagation()}>
-                    <button
-                      style={{ ...outlineBtn(true), fontSize: 12.5 }}
-                      onClick={() => { setFormGroup(group.name); setShowAddForm(true); }}
-                    >
-                      + Add Fee Type
-                    </button>
-                  </div>
-                  {/* Chevron */}
-                  <svg
-                    width="16" height="16" viewBox="0 0 24 24" fill="none"
-                    stroke="#A0A3B8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
-                    style={{
-                      flexShrink: 0,
-                      transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
-                      transition: "transform 0.22s ease",
-                    }}
-                  >
-                    <polyline points="6 9 12 15 18 9" />
-                  </svg>
-                </div>
-
-                {/* Expanded fee type rows */}
-                {isExpanded && (
-                  <div style={{ borderTop: "1px solid #E8E8EE" }}>
-                    {/* Column headers */}
-                    <div style={{
-                      display: "grid",
-                      gridTemplateColumns: "1.4fr 1fr 2.4fr 0.8fr 1.6fr 0.7fr",
-                      padding: "10px 20px",
-                      background: "#F8F8FB",
+        ) : feeSchedules.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "40px 20px", color: "#A0A3B8" }}>
+            <div style={{ fontSize: 14 }}>No fee schedules found. Create one to get started.</div>
+          </div>
+        ) : (
+          <>
+            <div style={{ overflowX: "auto", marginBottom: 16 }}>
+              <table style={{
+                width: "100%", borderCollapse: "collapse",
+                fontSize: 13, color: "#181B2A",
+              }}>
+                <thead>
+                  <tr style={{ borderBottom: "2px solid #E8E8EE", background: "#F8F8FB" }}>
+                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Fee Group</th>
+                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Fee Type</th>
+                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Amount</th>
+                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Frequency</th>
+                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Status</th>
+                    <th style={{ padding: "12px", textAlign: "center", fontWeight: 700 }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {feeSchedules.map((schedule, idx) => (
+                    <tr key={schedule.id} style={{
                       borderBottom: "1px solid #E8E8EE",
+                      background: idx % 2 === 0 ? "#fff" : "#F8F8FB",
                     }}>
-                      {["FEE TYPE", "STRUCTURE", "AMOUNT / PLAN", "GRACE", "LATE FEE RULE", "ACTIONS"].map(h => (
-                        <div key={h} style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8" }}>
-                          {h}
-                        </div>
-                      ))}
-                    </div>
-
-                    {group.feeTypes.map((row, ri) => (
-                      <div
-                        key={row.id}
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "1.4fr 1fr 2.4fr 0.8fr 1.6fr 0.7fr",
-                          padding: "18px 20px",
-                          alignItems: "center",
-                          borderBottom: ri < group.feeTypes.length - 1 ? "1px solid #E8E8EE" : "none",
-                          background: "#fff",
-                          animation: "expandIn 0.18s ease",
-                        }}
-                      >
-                        <div style={{ fontSize: 13.5, fontWeight: 600, color: "#181B2A" }}>{row.name}</div>
-                        <div>
-                          <span style={{
-                            fontSize: 11.5, fontWeight: 600,
-                            padding: "3px 10px", borderRadius: 20,
-                            background: STRUCTURE_BADGE[row.structure].bg,
-                            color: STRUCTURE_BADGE[row.structure].color,
-                            border: `1px solid ${STRUCTURE_BADGE[row.structure].border}`,
-                          }}>
-                            {row.structure}
-                          </span>
-                        </div>
-                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                          {getDisplayAmounts(row).map(chip => (
-                            <span key={chip.label + chip.value} style={{
-                              fontSize: 12, fontWeight: 500, padding: "3px 9px", borderRadius: 6,
-                              background: "#F0F0F8", color: "#181B2A", border: "1px solid #E0E0F0",
-                            }}>
-                              {chip.label ? `${chip.label}: ${chip.value}` : chip.value}
-                            </span>
-                          ))}
-                        </div>
-                        <div style={{ fontSize: 13, color: "#5B5E72" }}>{row.grace}</div>
-                        <div style={{ fontSize: 12.5, color: row.lateRule === "None" ? "#A0A3B8" : "#5B5E72" }}>
-                          {row.lateRule}
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          <button style={outlineBtn(true)} onClick={() => showToast(`Edit ${row.name} — coming soon.`)}>
+                      <td style={{ padding: "12px" }}>{schedule.fee_group_name || schedule.fee_group}</td>
+                      <td style={{ padding: "12px" }}>{schedule.fee_type_name || schedule.fee_type}</td>
+                      <td style={{ padding: "12px", fontWeight: 600 }}>₹{Number(schedule.amount).toLocaleString('en-IN')}</td>
+                      <td style={{ padding: "12px" }}>{schedule.collection_frequency}</td>
+                      <td style={{ padding: "12px" }}>
+                        <span style={{
+                          padding: "4px 10px", borderRadius: 4, fontSize: 12, fontWeight: 600,
+                          background: schedule.status === "active" ? "#dcfce7" : "#fee2e2",
+                          color: schedule.status === "active" ? "#15803d" : "#991b1b",
+                        }}>
+                          {schedule.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: "12px", textAlign: "center" }}>
+                        <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+                          <button
+                            style={outlineBtn(true)}
+                            onClick={() => {
+                              setEditingSchedule(schedule);
+                              setEditScheduleAcademicYear(schedule.academic_year);
+                              setEditScheduleFeeGroup(schedule.fee_group);
+                              setEditScheduleFeeType(schedule.fee_type);
+                              setEditScheduleAmount(schedule.amount);
+                              setEditScheduleFrequency(schedule.collection_frequency);
+                              setEditScheduleDueDate(schedule.due_date);
+                              setEditScheduleLateFee(schedule.late_fee_applicable);
+                              setEditScheduleStatus(schedule.status);
+                              setEditScheduleGracePeriod(schedule.grace_period || 0);
+                              setEditScheduleLateFeeRule(schedule.late_fee_rule || "");
+                              
+                              if (schedule.term_breakdown && schedule.term_breakdown.length > 0) {
+                                setEditScheduleTermBreakdown(JSON.parse(JSON.stringify(schedule.term_breakdown)));
+                              } else {
+                                const initialBreakdown = termSettings.map(term => ({
+                                  term_number: term.term_number,
+                                  term_name: term.term_name,
+                                  amount: "",
+                                  due_date: term.default_due_date || "",
+                                }));
+                                setEditScheduleTermBreakdown(initialBreakdown);
+                              }
+                              
+                              setEditScheduleErrors({});
+                              setIsEditScheduleOpen(true);
+                            }}
+                          >
                             Edit
                           </button>
-                          <button style={dangerBtn(true)} onClick={() => showToast(`Delete ${row.name} — confirm in production.`)}>
+                          <button
+                            style={dangerBtn(true)}
+                            onClick={() => {
+                              setDeleteSchedule(schedule);
+                              setDeleteScheduleError("");
+                              setIsDeleteScheduleOpen(true);
+                            }}
+                          >
                             Delete
                           </button>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            {scheduleTotalPages > 1 && (
+              <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: "16px 0" }}>
+                <button
+                  disabled={schedulePage === 1}
+                  onClick={() => setSchedulePage(Math.max(1, schedulePage - 1))}
+                  style={{ padding: "6px 12px", border: "1px solid #E8E8EE", borderRadius: 6, cursor: schedulePage === 1 ? "default" : "pointer", opacity: schedulePage === 1 ? 0.5 : 1 }}
+                >
+                  ← Prev
+                </button>
+                <div style={{ padding: "6px 12px", color: "#A0A3B8" }}>
+                  Page {schedulePage} of {scheduleTotalPages}
+                </div>
+                <button
+                  disabled={schedulePage >= scheduleTotalPages}
+                  onClick={() => setSchedulePage(Math.min(scheduleTotalPages, schedulePage + 1))}
+                  style={{ padding: "6px 12px", border: "1px solid #E8E8EE", borderRadius: 6, cursor: schedulePage >= scheduleTotalPages ? "default" : "pointer", opacity: schedulePage >= scheduleTotalPages ? 0.5 : 1 }}
+                >
+                  Next →
+                </button>
               </div>
-            );
-          })}
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+
+  // ── Create/Edit Schedule Modal ───────────────────────────────────────
+
+  const createScheduleModal = isCreateScheduleOpen && (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
+      alignItems: "center", justifyContent: "center", zIndex: 9999,
+    }} onClick={() => setIsCreateScheduleOpen(false)}>
+      <div
+        style={{
+          background: "#fff", borderRadius: 12, padding: "28px", maxWidth: scheduleFrequency === "Term-wise" ? 950 : 540,
+          width: "95%", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 50px rgba(0,0,0,0.15)",
+          transition: "max-width 0.2s ease-in-out",
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, borderBottom: "1px solid #F1F1F4", paddingBottom: 12 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: "#181B2A", margin: 0 }}>Create Fee Schedule</h2>
+          <button 
+            onClick={() => setIsCreateScheduleOpen(false)}
+            style={{ border: "none", background: "none", fontSize: 20, color: "#A0A3B8", cursor: "pointer", fontWeight: "bold" }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ display: "flex", gap: "28px", flexDirection: scheduleFrequency === "Term-wise" ? "row" : "column", flexWrap: "wrap" }}>
+          
+          {/* Left / Main Section: General Configuration */}
+          <div style={{ flex: "1 1 420px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Academic Year</label>
+              <select
+                disabled
+                value={scheduleAcademicYear}
+                style={{
+                  width: "100%", height: 40, border: "1px solid #E8E8EE",
+                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#F8F8FB", color: "#5B5E72",
+                }}
+              >
+                {academicYears.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Group</label>
+              <select
+                value={scheduleFeeGroup}
+                onChange={e => {
+                  const val = Number(e.target.value) || "";
+                  setScheduleFeeGroup(val);
+                  setScheduleFeeType("");
+                }}
+                style={{
+                  width: "100%", height: 40, border: `1px solid ${scheduleErrors.fee_group ? "#dc2626" : "#E8E8EE"}`,
+                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
+                }}
+              >
+                <option value="">Select fee group</option>
+                {feeGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+              {scheduleErrors.fee_group && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.fee_group}</div>}
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Type</label>
+              <select
+                value={scheduleFeeType}
+                onChange={e => setScheduleFeeType(Number(e.target.value) || "")}
+                style={{
+                  width: "100%", height: 40, border: `1px solid ${scheduleErrors.fee_type ? "#dc2626" : "#E8E8EE"}`,
+                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
+                }}
+              >
+                <option value="">Select fee type</option>
+                {feeTypes.filter(t => !scheduleFeeGroup || t.fees_group === scheduleFeeGroup).map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+              {scheduleErrors.fee_type && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.fee_type}</div>}
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Collection Frequency / Structure</label>
+              <select
+                value={scheduleFrequency}
+                onChange={e => {
+                  const val = e.target.value;
+                  setScheduleFrequency(val);
+                  if (val === "Term-wise" && scheduleTermBreakdown.length === 0) {
+                    const initialBreakdown = termSettings.map(term => ({
+                      term_number: term.term_number,
+                      term_name: term.term_name,
+                      amount: "",
+                      due_date: term.default_due_date || "",
+                    }));
+                    setScheduleTermBreakdown(initialBreakdown);
+                  }
+                }}
+                style={{
+                  width: "100%", height: 40, border: "1px solid #E8E8EE",
+                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
+                }}
+              >
+                <option value="Term-wise">Term-wise</option>
+                <option value="Monthly">Monthly</option>
+                <option value="Quarterly">Quarterly</option>
+                <option value="Half-Yearly">Half-Yearly</option>
+                <option value="Yearly">Yearly</option>
+                <option value="One-Time">One-Time</option>
+                <option value="Custom">Custom</option>
+              </select>
+            </div>
+
+            {scheduleFrequency !== "Term-wise" && (
+              <>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Amount (₹)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={scheduleAmount}
+                    onChange={e => setScheduleAmount(e.target.value)}
+                    style={{
+                      width: "100%", height: 40, border: `1px solid ${scheduleErrors.amount ? "#dc2626" : "#E8E8EE"}`,
+                      borderRadius: 8, padding: "0 12px", fontSize: 13,
+                    }}
+                    placeholder="0.00"
+                  />
+                  {scheduleErrors.amount && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.amount}</div>}
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Due Date</label>
+                  <input
+                    type="date"
+                    value={scheduleDueDate}
+                    onChange={e => setScheduleDueDate(e.target.value)}
+                    style={{
+                      width: "100%", height: 40, border: `1px solid ${scheduleErrors.due_date ? "#dc2626" : "#E8E8EE"}`,
+                      borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
+                    }}
+                  />
+                  {scheduleErrors.due_date && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.due_date}</div>}
+                </div>
+              </>
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+              <input
+                type="checkbox"
+                id="scheduleLateFee"
+                checked={scheduleLateFee}
+                onChange={e => setScheduleLateFee(e.target.checked)}
+                style={{ width: 18, height: 18, cursor: "pointer" }}
+              />
+              <label htmlFor="scheduleLateFee" style={{ fontSize: 13, color: "#181B2A", fontWeight: 600, cursor: "pointer" }}>Late fee applicable</label>
+            </div>
+
+            {scheduleLateFee && (
+              <div style={{ display: "flex", gap: "12px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Grace Period (Days)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={scheduleGracePeriod}
+                    onChange={e => setScheduleGracePeriod(Number(e.target.value) || 0)}
+                    style={{
+                      width: "100%", height: 40, border: "1px solid #E8E8EE",
+                      borderRadius: 8, padding: "0 12px", fontSize: 13,
+                    }}
+                    placeholder="0"
+                  />
+                </div>
+                <div style={{ flex: 2 }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Late Fee Rule</label>
+                  <input
+                    type="text"
+                    value={scheduleLateFeeRule}
+                    onChange={e => setScheduleLateFeeRule(e.target.value)}
+                    style={{
+                      width: "100%", height: 40, border: "1px solid #E8E8EE",
+                      borderRadius: 8, padding: "0 12px", fontSize: 13,
+                    }}
+                    placeholder="e.g. ₹50 per day after grace period"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Status</label>
+              <select
+                value={scheduleStatus}
+                onChange={e => setScheduleStatus(e.target.value)}
+                style={{
+                  width: "100%", height: 40, border: "1px solid #E8E8EE",
+                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
+                }}
+              >
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Right Section: Term Settings breakdown slots */}
+          {scheduleFrequency === "Term-wise" && (
+            <div style={{ flex: "1 1 420px", display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ borderBottom: "1px solid #E8E8EE", paddingBottom: 6 }}>
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#181B2A", margin: 0 }}>Term-wise Breakdown Slots</h3>
+                <p style={{ fontSize: 11, color: "#A0A3B8", margin: "2px 0 0 0" }}>Specify amounts and due dates of each term. Total amount is calculated automatically.</p>
+              </div>
+
+              {scheduleTermBreakdown.length === 0 ? (
+                <div style={{ padding: "30px 10px", border: "1px dashed #E8E8EE", borderRadius: 8, textAlign: "center", color: "#A0A3B8" }}>
+                  <p style={{ fontSize: 13, margin: 0 }}>No terms configured for this Academic Year.</p>
+                  <p style={{ fontSize: 11, margin: "4px 0 0 0" }}>Please configure terms first in the 'School Term Settings' collapsible section above.</p>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: "55vh", overflowY: "auto", paddingRight: 6 }}>
+                  {scheduleTermBreakdown.map((tb, i) => (
+                    <div 
+                      key={i} 
+                      style={{ 
+                        display: "flex", 
+                        alignItems: "center", 
+                        gap: 12, 
+                        padding: "12px", 
+                        background: "#F8F8FB", 
+                        borderRadius: 10, 
+                        border: "1px solid #E5E7EB" 
+                      }}
+                    >
+                      <div style={{ 
+                        width: 34, 
+                        height: 34, 
+                        borderRadius: "50%", 
+                        background: "#EDE9FE", 
+                        color: "#6D28D9", 
+                        display: "flex", 
+                        alignItems: "center", 
+                        justifyContent: "center", 
+                        fontWeight: 700, 
+                        fontSize: 12, 
+                        flexShrink: 0,
+                        border: "1px solid #C4B5FD"
+                      }}>
+                        T{tb.term_number || (i + 1)}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 80 }}>
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Term Name</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#1F2937", marginTop: 2 }}>{tb.term_name}</div>
+                      </div>
+                      <div style={{ width: 110 }}>
+                        <label style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", marginBottom: 4 }}>AMOUNT (₹)</label>
+                        <input
+                          type="number"
+                          value={tb.amount}
+                          onChange={e => {
+                            const next = [...scheduleTermBreakdown];
+                            next[i] = { ...next[i], amount: e.target.value };
+                            setScheduleTermBreakdown(next);
+                            const total = next.reduce((sum, curr) => sum + (Number(curr.amount) || 0), 0);
+                            setScheduleAmount(total > 0 ? total.toString() : "");
+                          }}
+                          style={{
+                            width: "100%", height: 34, border: "1px solid #E8E8EE",
+                            borderRadius: 6, padding: "0 8px", fontSize: 12.5,
+                          }}
+                          placeholder="₹0.00"
+                        />
+                      </div>
+                      <div style={{ width: 140 }}>
+                        <label style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", marginBottom: 4 }}>DUE DATE</label>
+                        <input
+                          type="date"
+                          value={tb.due_date}
+                          onChange={e => {
+                            const next = [...scheduleTermBreakdown];
+                            next[i] = { ...next[i], due_date: e.target.value };
+                            setScheduleTermBreakdown(next);
+                          }}
+                          style={{
+                            width: "100%", height: 34, border: "1px solid #E8E8EE",
+                            borderRadius: 6, padding: "0 8px", fontSize: 12, background: "#fff", cursor: "pointer",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                  
+                  {/* Dynamic Total Amount breakdown summary */}
+                  <div style={{ 
+                    marginTop: 8, 
+                    padding: "12px", 
+                    background: "#EEF2F6", 
+                    borderRadius: 8, 
+                    display: "flex", 
+                    justifyContent: "space-between", 
+                    alignItems: "center",
+                    border: "1px solid #D2D6DC"
+                  }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#475569" }}>Total Fee Schedule Amount:</span>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: "#1E293B" }}>
+                      ₹{Number(scheduleAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginTop: 28, borderTop: "1px solid #F1F1F4", paddingTop: 18 }}>
+          <button
+            style={{...outlineBtn(), flex: 1}}
+            onClick={() => setIsCreateScheduleOpen(false)}
+          >
+            Cancel
+          </button>
+          <button
+            style={{...primaryBtn(), flex: 1}}
+            onClick={handleCreateSchedule}
+            disabled={isSavingSchedule}
+          >
+            {isSavingSchedule ? "Creating..." : "Create Schedule"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── Edit Schedule Modal ──────────────────────────────────────────────
+
+  const editScheduleModal = isEditScheduleOpen && editingSchedule && (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
+      alignItems: "center", justifyContent: "center", zIndex: 9999,
+    }} onClick={() => setIsEditScheduleOpen(false)}>
+      <div
+        style={{
+          background: "#fff", borderRadius: 12, padding: "28px", maxWidth: editScheduleFrequency === "Term-wise" ? 950 : 540,
+          width: "95%", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 50px rgba(0,0,0,0.15)",
+          transition: "max-width 0.2s ease-in-out",
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, borderBottom: "1px solid #F1F1F4", paddingBottom: 12 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: "#181B2A", margin: 0 }}>Edit Fee Schedule</h2>
+          <button 
+            onClick={() => setIsEditScheduleOpen(false)}
+            style={{ border: "none", background: "none", fontSize: 20, color: "#A0A3B8", cursor: "pointer", fontWeight: "bold" }}
+          >
+            ×
+          </button>
+        </div>
+
+        <div style={{ display: "flex", gap: "28px", flexDirection: editScheduleFrequency === "Term-wise" ? "row" : "column", flexWrap: "wrap" }}>
+          
+          {/* Left / Main Section: General Configuration */}
+          <div style={{ flex: "1 1 420px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Academic Year</label>
+              <select
+                disabled
+                value={editScheduleAcademicYear}
+                style={{
+                  width: "100%", height: 40, border: "1px solid #E8E8EE",
+                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#F8F8FB", color: "#5B5E72",
+                }}
+              >
+                {academicYears.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Group</label>
+              <select
+                value={editScheduleFeeGroup}
+                onChange={e => {
+                  const val = Number(e.target.value) || "";
+                  setEditScheduleFeeGroup(val);
+                  setEditScheduleFeeType("");
+                }}
+                style={{
+                  width: "100%", height: 40, border: `1px solid ${editScheduleErrors.fee_group ? "#dc2626" : "#E8E8EE"}`,
+                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
+                }}
+              >
+                <option value="">Select fee group</option>
+                {feeGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+              {editScheduleErrors.fee_group && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{editScheduleErrors.fee_group}</div>}
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Type</label>
+              <select
+                value={editScheduleFeeType}
+                onChange={e => setEditScheduleFeeType(Number(e.target.value) || "")}
+                style={{
+                  width: "100%", height: 40, border: `1px solid ${editScheduleErrors.fee_type ? "#dc2626" : "#E8E8EE"}`,
+                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
+                }}
+              >
+                <option value="">Select fee type</option>
+                {feeTypes.filter(t => !editScheduleFeeGroup || t.fees_group === editScheduleFeeGroup).map(t => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+              {editScheduleErrors.fee_type && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{editScheduleErrors.fee_type}</div>}
+            </div>
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Collection Frequency / Structure</label>
+              <select
+                value={editScheduleFrequency}
+                onChange={e => {
+                  const val = e.target.value;
+                  setEditScheduleFrequency(val);
+                  if (val === "Term-wise" && editScheduleTermBreakdown.length === 0) {
+                    const initialBreakdown = termSettings.map(term => ({
+                      term_number: term.term_number,
+                      term_name: term.term_name,
+                      amount: "",
+                      due_date: term.default_due_date || "",
+                    }));
+                    setEditScheduleTermBreakdown(initialBreakdown);
+                  }
+                }}
+                style={{
+                  width: "100%", height: 40, border: "1px solid #E8E8EE",
+                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
+                }}
+              >
+                <option value="Term-wise">Term-wise</option>
+                <option value="Monthly">Monthly</option>
+                <option value="Quarterly">Quarterly</option>
+                <option value="Half-Yearly">Half-Yearly</option>
+                <option value="Yearly">Yearly</option>
+                <option value="One-Time">One-Time</option>
+                <option value="Custom">Custom</option>
+              </select>
+            </div>
+
+            {editScheduleFrequency !== "Term-wise" && (
+              <>
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Amount (₹)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={editScheduleAmount}
+                    onChange={e => setEditScheduleAmount(e.target.value)}
+                    style={{
+                      width: "100%", height: 40, border: `1px solid ${editScheduleErrors.amount ? "#dc2626" : "#E8E8EE"}`,
+                      borderRadius: 8, padding: "0 12px", fontSize: 13,
+                    }}
+                    placeholder="0.00"
+                  />
+                  {editScheduleErrors.amount && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{editScheduleErrors.amount}</div>}
+                </div>
+
+                <div>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Due Date</label>
+                  <input
+                    type="date"
+                    value={editScheduleDueDate}
+                    onChange={e => setEditScheduleDueDate(e.target.value)}
+                    style={{
+                      width: "100%", height: 40, border: `1px solid ${editScheduleErrors.due_date ? "#dc2626" : "#E8E8EE"}`,
+                      borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
+                    }}
+                  />
+                  {editScheduleErrors.due_date && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{editScheduleErrors.due_date}</div>}
+                </div>
+              </>
+            )}
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
+              <input
+                type="checkbox"
+                id="editScheduleLateFee"
+                checked={editScheduleLateFee}
+                onChange={e => setEditScheduleLateFee(e.target.checked)}
+                style={{ width: 18, height: 18, cursor: "pointer" }}
+              />
+              <label htmlFor="editScheduleLateFee" style={{ fontSize: 13, color: "#181B2A", fontWeight: 600, cursor: "pointer" }}>Late fee applicable</label>
+            </div>
+
+            {editScheduleLateFee && (
+              <div style={{ display: "flex", gap: "12px" }}>
+                <div style={{ flex: 1 }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Grace Period (Days)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editScheduleGracePeriod}
+                    onChange={e => setEditScheduleGracePeriod(Number(e.target.value) || 0)}
+                    style={{
+                      width: "100%", height: 40, border: "1px solid #E8E8EE",
+                      borderRadius: 8, padding: "0 12px", fontSize: 13,
+                    }}
+                    placeholder="0"
+                  />
+                </div>
+                <div style={{ flex: 2 }}>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Late Fee Rule</label>
+                  <input
+                    type="text"
+                    value={editScheduleLateFeeRule}
+                    onChange={e => setEditScheduleLateFeeRule(e.target.value)}
+                    style={{
+                      width: "100%", height: 40, border: "1px solid #E8E8EE",
+                      borderRadius: 8, padding: "0 12px", fontSize: 13,
+                    }}
+                    placeholder="e.g. ₹50 per day after grace period"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Status</label>
+              <select
+                value={editScheduleStatus}
+                onChange={e => setEditScheduleStatus(e.target.value)}
+                style={{
+                  width: "100%", height: 40, border: "1px solid #E8E8EE",
+                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
+                }}
+              >
+                <option value="active">Active</option>
+                <option value="inactive">Inactive</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Right Section: Term Settings breakdown slots */}
+          {editScheduleFrequency === "Term-wise" && (
+            <div style={{ flex: "1 1 420px", display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ borderBottom: "1px solid #E8E8EE", paddingBottom: 6 }}>
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#181B2A", margin: 0 }}>Term-wise Breakdown Slots</h3>
+                <p style={{ fontSize: 11, color: "#A0A3B8", margin: "2px 0 0 0" }}>Specify amounts and due dates of each term. Total amount is calculated automatically.</p>
+              </div>
+
+              {editScheduleTermBreakdown.length === 0 ? (
+                <div style={{ padding: "30px 10px", border: "1px dashed #E8E8EE", borderRadius: 8, textAlign: "center", color: "#A0A3B8" }}>
+                  <p style={{ fontSize: 13, margin: 0 }}>No terms configured for this Academic Year.</p>
+                  <p style={{ fontSize: 11, margin: "4px 0 0 0" }}>Please configure terms first in the 'School Term Settings' collapsible section above.</p>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: "55vh", overflowY: "auto", paddingRight: 6 }}>
+                  {editScheduleTermBreakdown.map((tb, i) => (
+                    <div 
+                      key={i} 
+                      style={{ 
+                        display: "flex", 
+                        alignItems: "center", 
+                        gap: 12, 
+                        padding: "12px", 
+                        background: "#F8F8FB", 
+                        borderRadius: 10, 
+                        border: "1px solid #E5E7EB" 
+                      }}
+                    >
+                      <div style={{ 
+                        width: 34, 
+                        height: 34, 
+                        borderRadius: "50%", 
+                        background: "#EDE9FE", 
+                        color: "#6D28D9", 
+                        display: "flex", 
+                        alignItems: "center", 
+                        justifyContent: "center", 
+                        fontWeight: 700, 
+                        fontSize: 12, 
+                        flexShrink: 0,
+                        border: "1px solid #C4B5FD"
+                      }}>
+                        T{tb.term_number || (i + 1)}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 80 }}>
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Term Name</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#1F2937", marginTop: 2 }}>{tb.term_name}</div>
+                      </div>
+                      <div style={{ width: 110 }}>
+                        <label style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", marginBottom: 4 }}>AMOUNT (₹)</label>
+                        <input
+                          type="number"
+                          value={tb.amount}
+                          onChange={e => {
+                            const next = [...editScheduleTermBreakdown];
+                            next[i] = { ...next[i], amount: e.target.value };
+                            setEditScheduleTermBreakdown(next);
+                            const total = next.reduce((sum, curr) => sum + (Number(curr.amount) || 0), 0);
+                            setEditScheduleAmount(total > 0 ? total.toString() : "");
+                          }}
+                          style={{
+                            width: "100%", height: 34, border: "1px solid #E8E8EE",
+                            borderRadius: 6, padding: "0 8px", fontSize: 12.5,
+                          }}
+                          placeholder="₹0.00"
+                        />
+                      </div>
+                      <div style={{ width: 140 }}>
+                        <label style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", marginBottom: 4 }}>DUE DATE</label>
+                        <input
+                          type="date"
+                          value={tb.due_date}
+                          onChange={e => {
+                            const next = [...editScheduleTermBreakdown];
+                            next[i] = { ...next[i], due_date: e.target.value };
+                            setEditScheduleTermBreakdown(next);
+                          }}
+                          style={{
+                            width: "100%", height: 34, border: "1px solid #E8E8EE",
+                            borderRadius: 6, padding: "0 8px", fontSize: 12, background: "#fff", cursor: "pointer",
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                  
+                  {/* Dynamic Total Amount breakdown summary */}
+                  <div style={{ 
+                    marginTop: 8, 
+                    padding: "12px", 
+                    background: "#EEF2F6", 
+                    borderRadius: 8, 
+                    display: "flex", 
+                    justifyContent: "space-between", 
+                    alignItems: "center",
+                    border: "1px solid #D2D6DC"
+                  }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#475569" }}>Total Fee Schedule Amount:</span>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: "#1E293B" }}>
+                      ₹{Number(editScheduleAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+        </div>
+
+        <div style={{ display: "flex", gap: 10, marginTop: 28, borderTop: "1px solid #F1F1F4", paddingTop: 18 }}>
+          <button
+            style={{...outlineBtn(), flex: 1}}
+            onClick={() => setIsEditScheduleOpen(false)}
+          >
+            Cancel
+          </button>
+          <button
+            style={{...primaryBtn(), flex: 1}}
+            onClick={handleUpdateSchedule}
+            disabled={isSavingScheduleEdit}
+          >
+            {isSavingScheduleEdit ? "Updating..." : "Update Schedule"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── Delete Schedule Modal ────────────────────────────────────────────
+
+  const deleteScheduleModal = isDeleteScheduleOpen && deleteSchedule && (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
+      alignItems: "center", justifyContent: "center", zIndex: 9999,
+    }} onClick={() => setIsDeleteScheduleOpen(false)}>
+      <div
+        style={{
+          background: "#fff", borderRadius: 12, padding: "24px", maxWidth: 400,
+          width: "90%", boxShadow: "0 10px 40px rgba(0,0,0,0.1)",
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 12, color: "#181B2A" }}>Delete Fee Schedule?</h2>
+        <p style={{ fontSize: 14, color: "#5B5E72", marginBottom: 4 }}>
+          Are you sure you want to delete this fee schedule? This action cannot be undone.
+        </p>
+        {deleteScheduleError && (
+          <div style={{
+            padding: "10px 12px", borderRadius: 6, background: "#fee2e2",
+            color: "#991b1b", fontSize: 13, marginBottom: 16, borderLeft: "3px solid #dc2626",
+          }}>
+            {deleteScheduleError}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
+          <button
+            style={{...outlineBtn(), flex: 1}}
+            onClick={() => setIsDeleteScheduleOpen(false)}
+          >
+            Cancel
+          </button>
+          <button
+            style={{...dangerBtn(), flex: 1}}
+            onClick={handleDeleteSchedule}
+            disabled={isDeletingSchedule}
+          >
+            {isDeletingSchedule ? "Deleting..." : "Delete"}
+          </button>
         </div>
       </div>
     </div>
@@ -2013,6 +3531,153 @@ export default function FeeConfigurationPanel() {
             </div>
           );
         })()}
+
+        {isEditTypeOpen && editingType && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,40,.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 65, padding: 20 }}>
+            <div style={{ background: "#fff", borderRadius: 14, width: 560, maxWidth: "100%", boxShadow: "0 20px 50px rgba(20,24,40,.3)", overflow: "hidden" }}>
+              <div style={{ padding: "18px 20px", borderBottom: "1px solid #E8E8EE", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>Edit Fee Type</div>
+                <button onClick={closeEditTypeModal} style={{ width: 30, height: 30, border: "none", background: "transparent", fontSize: 22, color: "#8a90a2", cursor: "pointer", borderRadius: 7 }}>
+                  &times;
+                </button>
+              </div>
+              <div style={{ padding: 20, display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14 }}>
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>FEE GROUP</div>
+                  <select
+                    value={editTypeGroupId}
+                    onChange={event => setEditTypeGroupId(event.target.value === "" ? "" : Number(event.target.value))}
+                    style={inputField("Select Fee Group")}
+                  >
+                    <option value="">Select Fee Group</option>
+                    {feeGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  </select>
+                  {editTypeErrors.fees_group ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{editTypeErrors.fees_group}</div> : null}
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>FEE TYPE NAME</div>
+                  <input
+                    value={editTypeName}
+                    onChange={event => {
+                      const nextName = event.target.value;
+                      setEditTypeName(nextName);
+                      if (!editTypeGlCode.trim()) {
+                        const suggested = suggestedCodeForName(nextName);
+                        if (suggested) setEditTypeGlCode(suggested);
+                      }
+                    }}
+                    style={inputField("Fee Type Name")}
+                  />
+                  {editTypeErrors.name ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{editTypeErrors.name}</div> : null}
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>GL CODE</div>
+                  <input
+                    value={editTypeGlCode}
+                    onChange={event => {
+                      const value = event.target.value.toUpperCase();
+                      setEditTypeGlCode(value);
+                      if (editTypeErrors.gl_code && editingType) {
+                        const msg = validateGlCodeClient(value, editingType.id);
+                        setEditTypeErrors(prev => ({ ...prev, gl_code: msg }));
+                      }
+                    }}
+                    style={{ ...inputField("GL Code"), border: editTypeErrors.gl_code ? "1px solid #ef4444" : "1px solid #E8E8EE" }}
+                  />
+                  <div style={{ marginTop: 6, color: "#6b7280", fontSize: 11.5 }}>Format: 4001-TUITION</div>
+                  {editTypeErrors.gl_code ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{editTypeErrors.gl_code}</div> : null}
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>TAXABLE</div>
+                  <select value={editTypeTaxable} onChange={event => setEditTypeTaxable(event.target.value as "Yes" | "No")} style={inputField("Taxable")}>
+                    {FEE_TAXABLE_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                  {editTypeErrors.taxable ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{editTypeErrors.taxable}</div> : null}
+                </div>
+                <div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>DEFAULT STRUCTURE</div>
+                  <select value={editTypeStructure} onChange={event => setEditTypeStructure(event.target.value as "Monthly" | "Quarterly" | "Term-wise" | "Yearly" | "Custom")} style={inputField("Default Structure")}>
+                    {FEE_STRUCTURE_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
+                  </select>
+                  {editTypeErrors.default_structure ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{editTypeErrors.default_structure}</div> : null}
+                </div>
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 8 }}>STATUS</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    {statusPill(editTypeStatus)}
+                    <button
+                      type="button"
+                      onClick={() => setEditTypeStatus(prev => prev === "Active" ? "Inactive" : "Active")}
+                      style={{
+                        position: "relative",
+                        width: 32,
+                        height: 18,
+                        borderRadius: 999,
+                        border: "1px solid #E8E8EE",
+                        background: editTypeStatus === "Active" ? "#e6f6ee" : "#f3f4f6",
+                        cursor: "pointer",
+                      }}
+                      aria-label={editTypeStatus === "Active" ? "Deactivate fee type" : "Activate fee type"}
+                    >
+                      <span
+                        style={{
+                          position: "absolute",
+                          top: 2,
+                          left: editTypeStatus === "Active" ? 16 : 2,
+                          width: 12,
+                          height: 12,
+                          borderRadius: "50%",
+                          background: editTypeStatus === "Active" ? "#1d9e63" : "#8a90a2",
+                          transition: "left 0.2s ease",
+                        }}
+                      />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {editTypeErrors.general ? <div style={{ margin: "0 20px 14px", color: "#dc2626", fontSize: 12.5, fontWeight: 600 }}>{editTypeErrors.general}</div> : null}
+              <div style={{ padding: "16px 20px", borderTop: "1px solid #E8E8EE", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button onClick={closeEditTypeModal} style={{ height: 40, padding: "0 18px", fontSize: 13, fontWeight: 700, background: "#fff", border: "1px solid #d3d7e2", borderRadius: 8, color: "#3b4150", cursor: "pointer" }}>
+                  Cancel
+                </button>
+                <button onClick={handleUpdateType} disabled={isSavingTypeEdit} style={{ height: 40, padding: "0 18px", fontSize: 13, fontWeight: 700, background: "#5B4FCF", border: "none", borderRadius: 8, color: "#fff", cursor: "pointer" }}>
+                  {isSavingTypeEdit ? "Saving..." : "Save Changes"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isDeleteTypeOpen && deleteType && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(20,24,40,.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 66, padding: 20 }}>
+            <div style={{ background: "#fff", borderRadius: 14, width: 430, maxWidth: "100%", boxShadow: "0 20px 50px rgba(20,24,40,.3)", overflow: "hidden" }}>
+              <div style={{ padding: "22px 22px 8px" }}>
+                <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Delete Fee Type?</div>
+                <div style={{ fontSize: 13, color: "#3b4150", lineHeight: 1.5 }}>
+                  This action cannot be undone.
+                </div>
+              </div>
+              {deleteTypeError && (
+                <div style={{ margin: "0 22px 10px", padding: "11px 13px", background: "#fdecec", borderRadius: 8, fontSize: 12.5, color: "#a23631" }}>
+                  {deleteTypeError}
+                </div>
+              )}
+              <div style={{ padding: "16px 22px", borderTop: "1px solid #E8E8EE", display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button onClick={closeDeleteTypeModal} style={{ height: 40, padding: "0 18px", fontSize: 13, fontWeight: 700, background: "#fff", border: "1px solid #d3d7e2", borderRadius: 8, color: "#3b4150", cursor: "pointer" }}>
+                  Cancel
+                </button>
+                <button onClick={handleDeleteType} disabled={isDeletingType} style={{ height: 40, padding: "0 18px", fontSize: 13, fontWeight: 700, background: "#d8453f", border: "none", borderRadius: 8, color: "#fff", cursor: "pointer" }}>
+                  {isDeletingType ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Fee Schedule Modals ─────────────────────────────────────── */}
+        {createScheduleModal}
+        {editScheduleModal}
+        {deleteScheduleModal}
 
         {/* ── Tab bar ────────────────────────────────────────────────── */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 24 }}>

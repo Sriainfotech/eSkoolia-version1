@@ -115,15 +115,15 @@ export function usePermissions() {
   }, []);
 
   function can(code: string): boolean {
-    if (!me) return true; // optimistic while loading
-    if (me.is_superuser || me.is_school_admin) return true;
+    if (!me) return false; // deny while loading — show loading state, not content
+    if (me.is_superuser) return true;
     const codes = me.permission_codes;
     return codes.includes('*') || codes.includes(code);
   }
 
   function canAnyPrefix(prefix: string): boolean {
-    if (!me) return true;
-    if (me.is_superuser || me.is_school_admin) return true;
+    if (!me) return false;
+    if (me.is_superuser) return true;
     const codes = me.permission_codes;
     return codes.some((c) => c === '*' || c.startsWith(`${prefix}.`));
   }

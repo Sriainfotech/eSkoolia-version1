@@ -130,6 +130,45 @@ export default function AuthGate({ children }: AuthGateProps) {
       }
 
       setAuthTokens(data.access, refresh);
+
+      // Re-run status checks with the newly minted access token
+      if (pathname !== '/change-password') {
+        try {
+          const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me/`, {
+            headers: { Authorization: `Bearer ${data.access}` },
+          });
+          if (meRes.ok) {
+            const me = await meRes.json() as {
+              must_change_password?: boolean;
+              portal_type?: string;
+              is_superuser?: boolean;
+              is_school_admin?: boolean;
+              permission_codes?: string[];
+            };
+            if (me.must_change_password) {
+              router.replace('/change-password');
+              return;
+            }
+            // Block non-admin users from admin routes
+            const redirect = nonAdminHome(me.portal_type);
+            if (redirect && isAdminRoute(pathname)) {
+              router.replace(redirect);
+              return;
+            }
+            // No permissions assigned — show the no-access page
+            const hasNoPermissions =
+              !me.is_superuser &&
+              !me.is_school_admin &&
+              !redirect &&                            // not teacher/parent portal
+              !(me.permission_codes?.length);
+            if (hasNoPermissions && !pathname.startsWith('/no-access')) {
+              router.replace('/no-access');
+              return;
+            }
+          }
+        } catch { /* non-blocking */ }
+      }
+
       setReady(true);
     };
 

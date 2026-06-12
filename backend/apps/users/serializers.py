@@ -145,7 +145,7 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
             return (getattr(t, "status", "") or "").lower() not in ("active", "trial")
 
         request_tenant = None
-        if not user.is_superuser:
+        if not user.is_superuser and is_multi_tenancy_enabled():
             try:
                 request = self.context.get("request") if hasattr(self, "context") else None
                 if request is not None:
@@ -170,18 +170,13 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
                 from apps.tenancy.models import SchoolTenant, School
                 school = School.objects.filter(id=user.school_id).first()
                 if school:
-                    name = (school.name or "").strip()
-                    code = (school.code or "").strip()
                     subdomain = (school.subdomain or "").strip()
-                    q = Q()
-                    if name:
-                        q |= Q(name__iexact=name)
-                    if code:
-                        q |= Q(subdomain_url__iexact=code) | Q(short_code__iexact=code)
+                    # Use only subdomain for exact match — fuzzy name/code matching
+                    # can accidentally find a different school's blocked tenant.
                     if subdomain:
-                        q |= Q(subdomain_url__iexact=subdomain)
-                    if q:
-                        tenant = SchoolTenant.objects.filter(q).first()
+                        tenant = SchoolTenant.objects.filter(
+                            subdomain_url__iexact=subdomain
+                        ).first()
             except AuthenticationFailed:
                 raise
             except Exception:

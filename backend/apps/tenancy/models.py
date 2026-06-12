@@ -92,6 +92,9 @@ class SchoolTenant(TenantMixin, models.Model):
     # Board affiliation
     affiliation_number = models.CharField(max_length=64, null=True, blank=True)
 
+    # School identity metadata
+    school_type = models.CharField(max_length=64, blank=True)
+
     # Plan & capacity overrides (null = inherit subscription plan default)
     student_seat_limit = models.PositiveIntegerField(null=True, blank=True)
     staff_seat_limit = models.PositiveIntegerField(null=True, blank=True)

@@ -733,6 +733,15 @@ class SchoolTenantExportXlsxView(SchoolTenantListView):
         return response
 
 
+def _generate_unique_tenant_id(queryset, max_attempts: int = 5) -> str:
+    """Generate a unique TNT_XXXXXXXX id with retry on collision."""
+    for _ in range(max_attempts):
+        candidate = f"TNT_{uuid4().hex[:8].upper()}"
+        if not queryset.filter(tenant_id=candidate).exists():
+            return candidate
+    raise ValueError("Could not generate a unique tenant_id after multiple attempts.")
+
+
 class SchoolTenantProvisionView(SuperAdminBaseAPIView):
     def post(self, request):
         serializer = ProvisionSchoolRequestSerializer(data=request.data)
@@ -756,7 +765,7 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
             with transaction.atomic():
                 # 1. Create SchoolTenant (provisioning record)
                 tenant = self._public_queryset(SchoolTenant).create(
-                    tenant_id=f"TNT_{uuid4().hex[:8].upper()}",
+                    tenant_id=_generate_unique_tenant_id(self._public_queryset(SchoolTenant)),
                     name=data["name"],
                     short_code=data.get("short_code") or data["name"][:10].upper(),
                     subdomain_url=subdomain,
@@ -767,7 +776,7 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                     sso_method=data.get("sso_method") or "native",
                     api_access=False,
                     plan=data["plan"],
-                    status="onboarding",
+                    status="active",
                     provisioned_at=timezone.now(),
                     board=data["board"],
                     state=data["state"],
@@ -816,6 +825,27 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                 admin_user.school = erp_school
                 admin_user.is_school_admin = True
                 admin_user.save(update_fields=["school", "is_school_admin"])
+
+                # 4. Create a default School Admin role with wildcard permission so the
+                #    school admin can access all modules immediately after provisioning.
+                #    The wildcard Permission(code="*") is school-scoped to prevent any
+                #    cross-school confusion, and can be replaced with specific codes later.
+                from apps.access_control.models import Permission, Role, UserRole
+                wildcard_perm, _ = Permission.objects.get_or_create(
+                    code="*",
+                    defaults={"name": "Full Access (Wildcard)", "module": "all"},
+                )
+                admin_role, _ = Role.objects.get_or_create(
+                    school=erp_school,
+                    name="School Admin",
+                    defaults={
+                        "is_system": True,
+                        "is_active": True,
+                        "portal_type": "admin",
+                    },
+                )
+                admin_role.permissions.add(wildcard_perm)
+                UserRole.objects.get_or_create(user=admin_user, role=admin_role)
 
         except Exception as exc:
             return Response(
@@ -870,6 +900,11 @@ class SchoolTenantDetailView(SuperAdminBaseAPIView):
         serializer.is_valid(raise_exception=True)
         updated = serializer.save()
 
+        # Keep School.is_active in sync with the tenant status.
+        if "status" in serializer.validated_data:
+            is_active = updated.status in ("active", "trial")
+            School.objects.filter(subdomain__iexact=updated.subdomain_url).update(is_active=is_active)
+
         log_audit(
             action="school.update",
             tenant_id=updated.tenant_id,
@@ -917,24 +952,45 @@ class SchoolImpersonateView(SuperAdminBaseAPIView):
         target_username = request.data.get("username")
         target = None
 
-        # Look up user AND generate tokens inside the tenant schema so the JWT
-        # user-id resolves correctly when the token is later validated on the
-        # tenant's own domain (e.g. mastermind.eskoolia.local:8000).
-        with schema_context(tenant.schema_name):
+        from apps.tenancy.context import is_multi_tenancy_enabled
+
+        # Resolve the ERP school so we can scope the user query correctly.
+        erp_school = School.objects.filter(subdomain__iexact=tenant.subdomain_url).first()
+
+        def _find_target():
+            # In multi-tenancy enabled mode, Django Tenants handles data isolation so User.objects gets the tenant's users.
+            # But the user model might still run query within the context. Let's filter on the schema context correctly.
+            if is_multi_tenancy_enabled():
+                # django-tenants handles narrowing down User.objects to the active schema
+                qs = User.objects.filter(is_active=True)
+            else:
+                qs = User.objects.filter(is_active=True, school=erp_school) if erp_school else User.objects.none()
+            
             if target_username:
-                target = User.objects.filter(username=target_username, is_active=True).first()
-            if target is None:
-                target = (
-                    User.objects.filter(is_active=True)
-                    .order_by("-is_school_admin", "-is_superuser", "id")
-                    .first()
-                )
+                return qs.filter(username=target_username).first()
+            return qs.order_by("-is_school_admin", "id").first()
+
+        if is_multi_tenancy_enabled():
+            with schema_context(tenant.schema_name):
+                target = _find_target()
+                if target is None:
+                    return Response(
+                        {"detail": "No active staff user found for this tenant."},
+                        status=status.HTTP_404_NOT_FOUND,
+                    )
+                refresh = RefreshToken.for_user(target)
+                refresh["impersonated_by"] = request.user.username
+                refresh["tenant_id"] = tenant.tenant_id
+                access = refresh.access_token
+                access["impersonated_by"] = request.user.username
+                access["tenant_id"] = tenant.tenant_id
+        else:
+            target = _find_target()
             if target is None:
                 return Response(
                     {"detail": "No active staff user found for this tenant."},
                     status=status.HTTP_404_NOT_FOUND,
                 )
-
             refresh = RefreshToken.for_user(target)
             refresh["impersonated_by"] = request.user.username
             refresh["tenant_id"] = tenant.tenant_id
@@ -948,7 +1004,8 @@ class SchoolImpersonateView(SuperAdminBaseAPIView):
         port_part = (":" + raw_host.split(":")[1]) if ":" in raw_host else ""
         target_subdomain = tenant.subdomain_url or ""
         target_host = f"{target_subdomain}.{host}{port_part}" if target_subdomain else f"{host}{port_part}"
-        handoff_url = f"{scheme}://{target_host}/login?impersonate=1&token={str(access)}"
+        # Tokens are passed via sessionStorage on the frontend; do NOT embed in URL.
+        handoff_url = f"{scheme}://{target_host}/login?impersonate=1"
 
         log_audit(
             action="auth.impersonate",
@@ -988,7 +1045,7 @@ class SchoolResetAdminPasswordView(SuperAdminBaseAPIView):
         User = get_user_model()
 
         # Resolve the ERP School record linked to this tenant via subdomain
-        erp_school = School.objects.filter(subdomain=tenant.subdomain_url).first()
+        erp_school = School.objects.filter(subdomain__iexact=tenant.subdomain_url).first()
         if not erp_school:
             return Response(
                 {"detail": "No ERP school record found for this tenant."},
@@ -1993,6 +2050,42 @@ class ToggleSchoolLLMView(SuperAdminBaseAPIView):
                 "llm_enabled": school.llm_enabled,
                 "llm_enabled_at": school.llm_enabled_at,
                 "llm_enabled_by": request.user.username if enabled else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class SchoolFormChoicesView(SuperAdminBaseAPIView):
+    """GET /api/super-admin/schools/form-choices/
+    Returns the allowed values for school form dropdowns.
+    These are the canonical lists validated by the serializer.
+    """
+
+    _SCHOOL_TYPES = [
+        "K-12 \u00b7 Day school",
+        "K-12 \u00b7 Residential",
+        "Pre-primary only",
+        "Secondary only",
+        "Higher Secondary / Jr. College",
+    ]
+
+    _MEDIUMS = [
+        "English",
+        "English & Hindi",
+        "English & Telugu",
+        "Telugu",
+        "Hindi",
+        "Urdu",
+        "Kannada",
+        "Tamil",
+        "Marathi",
+    ]
+
+    def get(self, request):
+        return Response(
+            {
+                "school_types": self._SCHOOL_TYPES,
+                "mediums_of_instruction": self._MEDIUMS,
             },
             status=status.HTTP_200_OK,
         )

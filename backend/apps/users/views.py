@@ -84,7 +84,9 @@ class MeView(APIView):
         if school:
             try:
                 from apps.tenancy.models import SchoolTenant
-                tenant = SchoolTenant.objects.filter(name=school.name).first()
+                tenant = SchoolTenant.objects.filter(
+                    subdomain_url__iexact=school.subdomain
+                ).first() if school.subdomain else None
                 if tenant:
                     school_branding["brand_color"] = getattr(tenant, "brand_color", None)
                     school_branding["logo_url"] = getattr(tenant, "logo_url", None)
