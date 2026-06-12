@@ -30,6 +30,7 @@ class Department(models.Model):
 
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="departments")
     name = models.CharField(max_length=120)
+    short_code = models.CharField(max_length=10, blank=True, default="")
     dept_type = models.CharField(max_length=50, blank=True, default="")
     head = models.ForeignKey(
         "Staff", null=True, blank=True, on_delete=models.SET_NULL, related_name="headed_departments"
@@ -38,6 +39,7 @@ class Department(models.Model):
         "Staff", null=True, blank=True, on_delete=models.SET_NULL, related_name="deputy_headed_departments"
     )
     description = models.TextField(blank=True)
+    email = models.EmailField(max_length=255, blank=True, default="")
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -148,6 +150,23 @@ class Staff(models.Model):
     medical_leave = models.PositiveSmallIntegerField(default=0)
     maternity_leave = models.PositiveSmallIntegerField(default=0)
     show_public = models.BooleanField(default=False)
+    # Personal details
+    blood_group = models.CharField(max_length=5, blank=True, null=True)
+    nationality = models.CharField(max_length=100, blank=True, null=True)
+    mother_tongue = models.CharField(max_length=100, blank=True, null=True)
+    religion = models.CharField(max_length=100, blank=True, null=True)
+    preferred_communication = models.CharField(
+        max_length=20, 
+        blank=True, 
+        null=True,
+        choices=[
+            ("mobile", "Mobile"),
+            ("whatsapp", "WhatsApp"),
+            ("personal_email", "Personal Email"),
+            ("official_email", "Official Email"),
+        ]
+    )
+    num_children = models.PositiveSmallIntegerField(default=0, blank=True, null=True)
     custom_field = models.JSONField(
         default=dict, 
         blank=True,

@@ -356,8 +356,7 @@ export const MODULES: ModuleRoute[] = [
     permission: 'human_resource',
     sub: [
       { label: 'Setup',        path: '/hr/setup',        icon: Building2,    permission: 'human_resource' },
-      { label: 'Directory',    path: '/hr/directory',    icon: Users,        permission: 'human_resource' },
-      { label: 'Onboard',      path: '/hr/onboard',      icon: UserPlus,     permission: 'human_resource' },
+      { label: 'Staff list & Onboarding',    path: '/hr/directory',    icon: Users,        permission: 'human_resource' },
       { label: 'Leave',        path: '/hr/leave',        icon: Calendar,     permission: 'human_resource' },
       { label: 'Attendance',   path: '/hr/attendance',   icon: UserCheck,    permission: 'human_resource' },
       { label: 'Offboarding',  path: '/hr/offboarding',  icon: LogIn,        permission: 'human_resource' },

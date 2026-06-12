@@ -13,7 +13,20 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
         className={fullPage ? "min-h-full" : "min-h-screen"}
         style={{ background: "var(--page)", padding: "12px 20px 40px" }}
       >
-        {children}
+        {fullPage ? (
+          children
+        ) : (
+          <div
+            style={{
+              background: "#f8f8fc",
+              border: "1px solid #dfdfea",
+              borderRadius: "16px",
+              padding: "18px",
+            }}
+          >
+            {children}
+          </div>
+        )}
       </div>
     </HrToastProvider>
   );
