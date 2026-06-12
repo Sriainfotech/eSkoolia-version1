@@ -1,4 +1,13 @@
-﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
+# TEAM_CONTEXT — Eskoolia ERP (Combined)
+
+## Update — Rithwika (12/06/2026)
+
+**Branch:** `administration`
+
+### Admin Setup UI Standardization
+- **System Config (`AdminSetupPanel.tsx`)**: Matched the Admin Setup panel CSS and structure with the other administration sub-modules (like Visitor Book, Postal Receive). Removed the previous side-by-side vertical alignment and implemented the standard "Action Nav" tabbed layout. Restructured the form fields into a responsive horizontal grid layout (`s.roGrid`), while preserving the existing accordion drop-down functionality for the categorized list view.
+
+---
 
 ## Update — GitHub Copilot (11/06/2026)
 
