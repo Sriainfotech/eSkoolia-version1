@@ -3,7 +3,7 @@
 type AdministrationPlaceholderPanelProps = {
   title: string;
 };
-
+//
 export function AdministrationPlaceholderPanel({ title }: AdministrationPlaceholderPanelProps) {
   return (
     <div className="legacy-panel">
