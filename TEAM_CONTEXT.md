@@ -1,6 +1,51 @@
 # TEAM_CONTEXT — Eskoolia ERP (Combined)
 
-## Update — Antigravity (10/06/2026)
+## Update — SwethaD (11/06/2026)
+
+**Branch:** `Hr-11/06`
+
+### HR Module — Bug Fixes & Validation Improvements
+
+#### 1. Export CSV — Staff Directory (`frontend/app/(dashboard)/hr/directory/page.tsx`)
+- The "Export CSV" button (header), "↓ Export" button (search bar), and "Export view" button (table toolbar) were all non-functional (no `onClick` handler).
+- Added a new `downloadStaffCSV()` async function in `frontend/hooks/useHrApi.ts` that fetches all staff (up to 10,000) via `/api/v1/hr/staff/?page_size=10000`, builds a CSV with columns: Staff ID, First Name, Last Name, Department, Designation, Joining Date, Status, Mobile, Email — and triggers a browser file download named `staff_directory_YYYY-MM-DD.csv`.
+- Wired all three Export buttons to `downloadStaffCSV`.
+
+#### 2. Department Email Validation — Setup Page (`frontend/app/(dashboard)/hr/setup/page.tsx`)
+- The Department Email field accepted invalid formats like `admin`, `admin@`, `admin.com`, `@school.com`, `abc@@school.com` and saved without any validation error.
+- **Frontend:** Added email regex validation inside `validate()` in `InlineDeptForm`. Invalid emails now block save and show an inline error below the field via `error={errors.email}` on `HrField`.
+- **Backend:** Added `email = models.EmailField(max_length=255, blank=True, default="")` to the `Department` model (`backend/apps/hr/models.py`). Created and applied migration `0026_add_email_to_department`. Added `validate_email()` method to `DepartmentSerializer` (`backend/apps/hr/serializers.py`) with strict regex `^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$` — also added `"email"` to the serializer `fields` list.
+- The field is optional; blank values pass through without error.
+
+#### 3. Staff Onboarding Form — Multiple Field Validations (`frontend/app/(dashboard)/hr/onboard/page.tsx`)
+- **Biometric / RFID Code:** Now strips non-alphanumeric characters on input (`.replace(/[^A-Za-z0-9]/g, "")`); `maxLength={30}` added. Only letters and digits accepted.
+- **Official Email & Personal Email:** Added `maxLength={254}` (RFC 5321 limit); spaces are stripped on every keystroke (`.replace(/\s/g, "")`).
+- **Previous Employer name (`employerErr`):** Removed numbers (`0–9`) from the accepted character set — the regex was updated from `[A-Za-z0-9\s.&'\-]` to `[A-Za-z\s.&'\-]`. Numbers now show the error *"Employer name can only contain letters, spaces, dots, & or hyphens."*
+- **University / Board, Previous Employer From/To Dates, Medical Exam dates:** These were already correctly validated (no numbers in university regex; future dates already blocked via `max={todayIso}` and validator functions) — no change needed, confirmed working.
+
+#### 4. Designation Status Badges on Department Header — Setup Page (`frontend/app/(dashboard)/hr/setup/page.tsx`)
+- **Bug:** After setting all child designations to Inactive, the department header still showed `active` (it was reading `dept.status` — the department's own stored field).
+- **Fix (step 1):** Changed the single badge to derive its state from `deptDesigs` — if all children were inactive (or 0 children), show `inactive`; otherwise `active`.
+- **Enhancement (step 2 — user request):** Replaced the single badge with two separate count badges that dynamically show `{n} active` (green) and `{n} inactive` (grey) counts, e.g. `2 active · 1 inactive`. Only relevant badges are rendered (if all are active, only the green badge appears).
+
+#### 5. Short Code Not Fetching on Edit — Setup Page
+- **Root cause:** The `short_code` field was present in the Department TypeScript type and the serializer `fields` list but was never saved to the database in previous edit sessions because older serializer versions silently dropped it. Now that the serializer is correct, any edit+save will persist the short code correctly.
+- **Resolution:** The serializer was confirmed to include `"short_code"` in `fields`. Existing departments with blank short codes must be edited and re-saved to populate the value.
+
+---
+
+**Files changed in this session:**
+- `frontend/app/(dashboard)/hr/directory/page.tsx` — Export buttons wired to `downloadStaffCSV`
+- `frontend/hooks/useHrApi.ts` — Added `downloadStaffCSV()` function
+- `frontend/app/(dashboard)/hr/setup/page.tsx` — Department email validation + designation count badges
+- `frontend/app/(dashboard)/hr/onboard/page.tsx` — Biometric/RFID, email maxLength/space, employer name validation
+- `backend/apps/hr/models.py` — Added `email` field to `Department` model
+- `backend/apps/hr/serializers.py` — Added `email` to fields + `validate_email()` method
+- `backend/apps/hr/migrations/0026_add_email_to_department.py` — NEW migration (applied ✅)
+
+---
+
+
 
 **Branch:** `demo` (or current working branch)
 
