@@ -3346,7 +3346,7 @@ function StepReview({
               ["Gender",     f.gender || "—"],
               ["DOB",        f.date_of_birth || "—"],
               ["Mobile",     f.mobile || "—"],
-              ["Email",      f.official_email || "—"],
+              ["Email",      f.official_email || f.personal_email || "—"],
               ["Nationality",f.nationality || "—"],
             ].map(([k, v]) => (
               <div key={k as string} className="flex gap-2 text-[12px]">
@@ -4005,7 +4005,7 @@ export default function HrOnboardPage(props: any) {
         staff_no: staffNo,
         join_date: joining_date,
         // Field-name mapping (frontend → backend)
-        email: (official_email as string) || "",
+        email: (official_email as string) || (personal_email as string) || "",
         phone: mobile,
         contract_type: contractType,
         blood_group: blood_group_input ?? rest.blood_group,

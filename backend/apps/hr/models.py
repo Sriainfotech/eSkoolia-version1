@@ -28,10 +28,27 @@ class DepartmentType(models.Model):
 class Department(models.Model):
     PREDEFINED_TYPES = PREDEFINED_DEPARTMENT_TYPES
 
+    STATUS_ACTIVE = "active"
+    STATUS_INACTIVE = "inactive"
+    STATUS_ARCHIVED = "archived"
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_INACTIVE, "Inactive"),
+        (STATUS_ARCHIVED, "Archived"),
+    ]
+
+    WORKING_DAYS_CHOICES = [
+        ("Monday - Friday", "Monday - Friday"),
+        ("Monday - Saturday", "Monday - Saturday"),
+        ("All 7 days", "All 7 days"),
+    ]
+
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="departments")
     name = models.CharField(max_length=120)
     short_code = models.CharField(max_length=10, blank=True, default="")
     dept_type = models.CharField(max_length=50, blank=True, default="")
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    working_days = models.CharField(max_length=30, choices=WORKING_DAYS_CHOICES, default="Monday - Friday", blank=True)
     head = models.ForeignKey(
         "Staff", null=True, blank=True, on_delete=models.SET_NULL, related_name="headed_departments"
     )

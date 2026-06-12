@@ -1,4 +1,4 @@
-﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
+# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
 ## Update — GitHub Copilot (11/06/2026)
 
@@ -4494,3 +4494,11 @@ Login at localhost:3000
 1.Fixed issues student attendance marking module. 
 2.improved data filtering and updating logic for student attendance 
 3.Fixed bulk update of student attendance data
+
+12/06/2026 (Swetha D)
+1. Fixed scrolling behavior in HR Setup (Department/Designation) to target precise forms instead of excessive top scroll jumps.
+2. Resolved 'Email is required' backend validation error in HR Onboard module by correctly falling back to personal_email when official_email is not provided.
+3. Updated Profile Summary preview table in HR Onboard module to correctly render the submitted email.
+4. Harmonized UI layouts by applying the core HR wrapper border styling to Academic Foundation and Staff Assignment modules.
+5. Fixed discrepancy in Academics Staff Dashboard KPI calculation where Total Teachers was showing '0' by including the correct `dept_type` filter checks matching the staff list API.
+6. Resolved TypeScript type mismatch bugs in HR Setup frontend form (`working_days` and `status`).

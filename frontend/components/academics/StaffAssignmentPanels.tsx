@@ -1054,10 +1054,18 @@ export function StaffAssignmentPanels() {
       <ToastContainer toasts={toasts} onRemove={removeToast} />
 
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-2 mt-1">
         <div>
-          <h1 className="text-lg font-extrabold text-gray-900 tracking-tight">Staff Assignment</h1>
-          <p className="text-sm text-gray-400 mt-0.5">Assign class teachers and subject teachers to every section</p>
+          <div className="text-[11px] font-bold text-[#6F767E] tracking-[0.05em] uppercase mb-1">
+            STAFF RECORDS
+          </div>
+          <h1 className="m-0 flex items-baseline gap-2" style={{ fontSize: 36 }}>
+            <span style={{ fontFamily: 'Georgia, serif', fontWeight: 900, color: '#1A1D1F' }}>Staff</span>
+            <span style={{ fontFamily: '"Playfair Display", Georgia, serif', fontStyle: 'italic', fontWeight: 500, color: '#5B4FCF' }}>Assignment</span>
+          </h1>
+          <p className="mt-1.5 text-[13px] text-[#6F767E]">
+            Assign class teachers and subject teachers to every section
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {academicYears.length > 0 && (

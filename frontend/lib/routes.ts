@@ -188,7 +188,7 @@ export const MODULES: ModuleRoute[] = [
     sub: [
       // ── Workspace tabs (primary navigation) ─────────────────────────────
       { label: 'Foundation',      path: '/academics/core-setup',         icon: LayoutGrid,   permission: 'academics.core_setup.view' },
-      { label: 'Staff',           path: '/academics/staff-workspace',    icon: Users,        permission: 'academics' },
+      { label: 'Staff Assignment', path: '/academics/staff-workspace',    icon: Users,        permission: 'academics' },
       { label: 'Timetable',       path: '/academics/timetable',          icon: Calendar,     permission: 'academics' },
       { label: 'Planning Studio', path: '/academics/planning-studio',    icon: BookOpen,     permission: 'academics' },
       { label: 'Reports',         path: '/academics/academic-reports',   icon: FileBarChart, permission: 'academics' },

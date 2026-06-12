@@ -34,7 +34,20 @@ const EMPLOYMENT_TYPES = ["Full-time", "Part-time", "Contract", "Visiting Guest"
 const ROLE_TEMPLATES   = ["Teacher", "Admin", "Support", "Finance", "Transport", "Library"] as const;
 const REPORTS_TO       = ["None", "HOD", "Principal", "Vice Principal"] as const;
 
-const emptyDept  = (): Partial<Department>  => ({ name: "", short_code: "", dept_type: "Academic", status: "active", working_days: "Mon-Fri", email: "", description: "" });
+/** Maps backend shorthand values ("Mon-Fri", "Mon-Sat") to the UI select labels. */
+function normalizeWorkingDays(val: string | undefined): Department["working_days"] {
+  if (!val) return "Monday - Friday";
+  const map: Record<string, Department["working_days"]> = {
+    "Mon-Fri":  "Monday - Friday",
+    "Mon-Sat":  "Monday - Saturday",
+    "All 7":    "All 7 days",
+    "All7":     "All 7 days",
+    "7 days":   "All 7 days",
+  };
+  return map[val] ?? (val as Department["working_days"]);
+}
+
+const emptyDept  = (): Partial<Department>  => ({ name: "", short_code: "", dept_type: "Academic", status: "active", working_days: "Monday - Friday", email: "", description: "" });
 const emptyDesig = (): Partial<Designation> => ({ name: "", short_code: "", department: undefined, is_active: true, reports_to: "None", employment_type: "Full-time", role_template: "Teacher", grade_level: "" });
 
 // ─── Inline Department Form ───────────────────────────────────────────────────
@@ -45,7 +58,11 @@ function InlineDeptForm({ initial, onSaved, onCancel, stepLabel = "STEP 1 OF 2" 
   stepLabel?: string;
 }) {
   const { toast } = useHrToast();
-  const [form, setForm] = useState<Partial<Department>>(initial ?? emptyDept());
+  const [form, setForm] = useState<Partial<Department>>(
+    initial
+      ? { ...initial, status: (initial.status ?? "active").toLowerCase() as Department["status"], working_days: normalizeWorkingDays(initial.working_days) }
+      : emptyDept()
+  );
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const set = (k: keyof Department, v: string) => setForm((f) => ({ ...f, [k]: v }));
@@ -119,7 +136,7 @@ function InlineDeptForm({ initial, onSaved, onCancel, stepLabel = "STEP 1 OF 2" 
   };
   const isEdit = !!initial?.id;
   return (
-    <div className="bg-white border border-[#E8E8F0] rounded-[14px] overflow-hidden mb-5"
+    <div id="dept-form" className="bg-white border border-[#E8E8F0] rounded-[14px] overflow-hidden mb-5 scroll-mt-4"
       style={{ boxShadow: "0 2px 8px -2px rgba(15,18,34,0.07)" }}>
       <div className="flex items-center justify-between px-7 pt-6 pb-1">
         <span className="text-[11px] font-[800] tracking-[0.1em] text-[var(--brand)]">{stepLabel}</span>
@@ -296,7 +313,20 @@ function DeptCard({ dept, designationCount, onEdit, onDelete }: {
           <ChevronDown size={15} style={{ transform: expanded ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 250ms ease" }} />
         </span>
         <div className="flex-1 min-w-0">
-          <div className="font-[850] text-[14.5px] text-[#15172A]">{dept.name}</div>
+          <div className="flex items-center gap-2">
+            <span className="font-[850] text-[14.5px] text-[#15172A]">{dept.name}</span>
+            {dept.status && (
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10.5px] font-[700] ${
+                dept.status.toLowerCase() === "active"
+                  ? "bg-[#DCFCE7] text-[#15803D]"
+                  : dept.status.toLowerCase() === "inactive"
+                  ? "bg-[#F1F5F9] text-[#64748b]"
+                  : "bg-[#FEF3F2] text-[#B91C1C]"
+              }`}>
+                {dept.status.charAt(0).toUpperCase() + dept.status.slice(1).toLowerCase()}
+              </span>
+            )}
+          </div>
           <div className="flex gap-2 flex-wrap mt-1 items-center">
             <span className="text-[11.5px] text-[#64748b]">Department parent</span>
             <span className="text-[#CBD5E1] text-[10px]">|</span>
@@ -382,7 +412,7 @@ function InlineDesigForm({ initial, defaultDeptId, departments, onSaved, onCance
   };
 
   return (
-    <div className="mb-5 bg-white border border-[#E8E8F0] rounded-[14px] p-[28px]"
+    <div id="desig-form" className="mb-5 bg-white border border-[#E8E8F0] rounded-[14px] p-[28px] scroll-mt-4"
       style={{ boxShadow: "0 2px 8px -2px rgba(15,18,34,0.07)" }}>
       <div className="text-[10px] font-[800] tracking-[0.12em] text-[#94A3B8] uppercase mb-1">{stepLabel}</div>
       <h2 className="text-[22px] font-[900] text-[#15172A] m-0 leading-tight mb-1">
@@ -652,7 +682,11 @@ export default function HrSetupPage() {
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]">
             <Upload size={13} /> Import
           </button>
-          <button onClick={() => { setShowAddForm(true); setEditDept(null); }}
+          <button onClick={() => { 
+              setShowAddForm(true); 
+              setEditDept(null); 
+              setTimeout(() => document.getElementById('dept-form')?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+            }}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-[700] text-white"
             style={{ background: "var(--brand)" }}>
             <Plus size={13} /> Add Department
@@ -669,7 +703,7 @@ export default function HrSetupPage() {
       </div>
 
       {/* Step wizard */}
-      <div className="mb-5">
+      <div id="step-wizard" className="mb-5 scroll-mt-24">
         <HrStepWizard steps={WIZARD_STEPS} currentStep={step} onStepClick={setStep} />
       </div>
 
@@ -684,7 +718,7 @@ export default function HrSetupPage() {
                 if (!a) {
                   setShowAddForm(false);
                   setStep(2);
-                  document.getElementById('main-content')?.scrollTo({ top: 0, behavior: "smooth" });
+                  setTimeout(() => document.getElementById('desig-form')?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
                 }
               }}
               onCancel={() => setShowAddForm(false)}
@@ -712,7 +746,11 @@ export default function HrSetupPage() {
                   key={dept.id}
                   dept={dept}
                   designationCount={desigCountForDept(dept.id)}
-                  onEdit={() => { setEditDept(dept); setShowAddForm(false); document.getElementById('main-content')?.scrollTo({ top: 0, behavior: "smooth" }); }}
+                  onEdit={() => { 
+                    setEditDept(dept); 
+                    setShowAddForm(false); 
+                    setTimeout(() => document.getElementById('dept-form')?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+                  }}
                   onDelete={() => setDeleteDeptId(dept.id)}
                 />
               ))}
@@ -802,8 +840,16 @@ export default function HrSetupPage() {
                       key={dept.id}
                       dept={dept}
                       deptDesigs={deptDesigs}
-                      onAddChild={() => { setEditDesig(null); setDesigDefaultDept(dept.id); }}
-                      onEdit={(d) => { setEditDesig(d); setDesigDefaultDept(undefined); document.getElementById('main-content')?.scrollTo({ top: 0, behavior: "smooth" }); }}
+                      onAddChild={() => { 
+                        setEditDesig(null); 
+                        setDesigDefaultDept(dept.id); 
+                        setTimeout(() => document.getElementById('desig-form')?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+                      }}
+                      onEdit={(d) => { 
+                        setEditDesig(d); 
+                        setDesigDefaultDept(undefined); 
+                        setTimeout(() => document.getElementById('desig-form')?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+                      }}
                       onDelete={(id) => setDeleteDesigId(id)}
                       onReorder={handleReorderDesigs}
                     />
@@ -854,7 +900,7 @@ export default function HrSetupPage() {
             HR Structure <em className="not-italic" style={{ fontFamily: "var(--serif)", color: "var(--brand)" }}>Configured</em>
           </h2>
           <p className="text-[var(--muted)] mt-3 mb-6">
-            {departments.length} departments and {designations.length} designations set up.
+            {deptData?.count ?? 0} departments and {desigData?.count ?? 0} designations set up.
           </p>
           <div className="flex justify-center gap-3">
             <button onClick={() => setStep(1)}

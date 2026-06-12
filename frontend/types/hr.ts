@@ -13,7 +13,7 @@ export interface Department {
   short_code: string;
   dept_type: string;                       // predefined OR custom free-text
   status: "active" | "inactive" | "archived";
-  working_days: "Mon-Fri" | "Mon-Sat" | "All 7";
+  working_days: "Monday - Friday" | "Monday - Saturday" | "All 7 days";
   head_id: number | null;
   deputy_head_id: number | null;
   head_name?: string | null;

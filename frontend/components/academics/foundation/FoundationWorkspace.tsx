@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useState } from "react";
 import { useFoundationData } from "./hooks/useFoundationData";
 import AcademicYearPane from "./panes/AcademicYearPane";
@@ -52,8 +52,8 @@ export default function FoundationWorkspace({ initialTab = "foundation" }: Props
   const completedCount = [1, 2, 3, 4, 5].filter((n) => done.has(n as WizStep)).length;
 
   return (
-    <div className="min-h-screen bg-[#F0F2F5]">
-      <div className="px-7 py-[22px] pb-10">
+    <div className="min-h-screen" style={{ background: "var(--page)", padding: "12px 20px 40px" }}>
+      <div style={{ background: "#f8f8fc", border: "1px solid #dfdfea", borderRadius: "16px", padding: "24px" }}>
         {initialTab !== "foundation" ? (
           /* ── Coming Soon placeholder for non-Foundation tabs ── */
           <div className="flex flex-col items-center justify-center py-32 text-gray-400">
@@ -67,6 +67,20 @@ export default function FoundationWorkspace({ initialTab = "foundation" }: Props
         ) : (
           /* ── Foundation workspace ── */
           <>
+            {/* Page Heading */}
+            <div className="mb-5">
+              <div className="text-[11px] font-bold text-[#6F767E] tracking-[0.05em] uppercase mb-1">
+                ACADEMICS SETUP
+              </div>
+              <h1 className="m-0 flex items-baseline gap-2" style={{ fontSize: 36 }}>
+                <span style={{ fontFamily: 'Georgia, serif', fontWeight: 900, color: '#1A1D1F' }}>Foundation</span>
+                <span style={{ fontFamily: '"Playfair Display", Georgia, serif', fontStyle: 'italic', fontWeight: 500, color: '#5B4FCF' }}>& Core Settings</span>
+              </h1>
+              <p className="mt-1.5 text-[13px] text-[#6F767E]">
+                Define the core academic structure including academic years, classes, sections, subjects, and rooms.
+              </p>
+            </div>
+
             {/* Year archive + progress row */}
             <div className="flex items-center justify-between gap-3 mb-3.5 flex-wrap">
               <div className="flex items-center gap-1.5 flex-wrap">
