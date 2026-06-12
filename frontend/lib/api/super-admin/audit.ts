@@ -17,6 +17,7 @@ export async function getAuditEvents(filters?: AuditFilters): Promise<PaginatedR
 
     if (filters?.page) params.append('page', filters.page.toString());
     if (filters?.page_size) params.append('page_size', filters.page_size.toString());
+    if (filters?.search) params.append('search', filters.search);
     if (filters?.actor) params.append('actor', filters.actor);
     if (filters?.action) params.append('action', filters.action);
     if (filters?.tenant_id) params.append('tenant_id', filters.tenant_id);
@@ -40,6 +41,7 @@ export async function exportAuditCsv(filters?: AuditFilters): Promise<Blob> {
   try {
     const params = new URLSearchParams();
 
+    if (filters?.search) params.append('search', filters.search);
     if (filters?.actor) params.append('actor', filters.actor);
     if (filters?.action) params.append('action', filters.action);
     if (filters?.tenant_id) params.append('tenant_id', filters.tenant_id);

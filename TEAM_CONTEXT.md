@@ -1,5 +1,65 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Teerdaveni (12/06/2026)
+
+**Branch:** `demo`
+
+### School Tenancy — UI/UX Fixes & Audit Log Enhancement
+
+#### 1. State Dropdown — Backend Data + Custom Searchable Dropdown (Downward)
+
+**Problem:** State dropdowns in "Board Affiliation" and "Campus Address & Geography" sections were:
+- Hardcoded on the frontend with an incomplete list of states
+- Rendering escaped Unicode (`Select state\u2026`) as literal text
+- Opening upward (browser native `<select>` default when near bottom of page)
+
+**Backend fix (`backend/apps/super_admin/views.py`):**
+- `SchoolFormChoicesView` updated to return a complete, alphabetically sorted list of all **28 Indian States + 8 Union Territories** from the backend API (`GET /api/super-admin/schools/form-choices/`)
+
+**Frontend fix (`frontend/app/(dashboard)/super-admin/schools/page.tsx`):**
+- `SchoolFormChoices` interface updated in `frontend/lib/api/super-admin/schools.ts` to include `states: { code: string; name: string }[]`
+- `states` state array populated via `getSchoolFormChoices()` on mount
+- Custom `StateSelect` component built — always opens **downward**, with built-in search/filter input, auto-detects available space using `getBoundingClientRect()` and flips upward only if less than 260px of space remains below
+- Both dropdowns (Board Affiliation state + Campus Address state) now use `StateSelect`
+
+#### 2. Layout Consistency — School Tenancy matches Academics width
+
+**Problem:** School Management page had excessive left/right padding and a `max-w-[1280px]` card container, making it narrower and less dense than other modules like Academics → Foundation.
+
+**Fix (`frontend/app/(dashboard)/super-admin/schools/page.tsx`):**
+- Outer wrapper changed from `mx-auto max-w-[1280px] rounded-[18px] border ... p-[28px_30px]` → `px-7 py-[22px] pb-10`
+- Now matches the exact container pattern used by `FoundationWorkspace.tsx` in the Academics module
+- Full viewport width utilised; consistent spacing across School Tenancy, Academics, and other modules
+
+#### 3. Audit Log — Server-Side Filtering + Proper Pagination
+
+**Problem:** Audit Log was fetching all 200 records at once and doing client-side filtering with no pagination UI.
+
+**Backend fix (`backend/apps/super_admin/views.py` — `AuditLogListView`):**
+- `search` filter now also matches `details__message`, `details__detail`, `details__school_name`, and `actor_ip` (previously only searched actor/action/tenant/schema)
+
+**Frontend fixes:**
+- `frontend/types/super-admin/index.ts` — Added `search?: string` to `AuditFilters` interface
+- `frontend/lib/api/super-admin/audit.ts` — Both `getAuditEvents()` and `exportAuditCsv()` now pass `search` as a query param
+- `frontend/app/(dashboard)/super-admin/audit/page.tsx`:
+  - All filtering (search, action, severity, **date range**) is now **server-side** — debounced 400ms
+  - Added **From / To date pickers** directly in the toolbar
+  - Page size: **25 records per page** (was 200 all at once)
+  - Added proper **pagination bar** — First `«` / Prev `‹` / numbered page pills / Next `›` / Last `»`
+  - Result counter shows `"X–Y of N events"` (server total count)
+  - "Clear all filters" resets search + action + severity + date range
+  - Export CSV respects all active filters
+
+**Files changed this session:**
+- `backend/apps/super_admin/views.py`
+- `frontend/app/(dashboard)/super-admin/schools/page.tsx`
+- `frontend/app/(dashboard)/super-admin/audit/page.tsx`
+- `frontend/lib/api/super-admin/schools.ts`
+- `frontend/lib/api/super-admin/audit.ts`
+- `frontend/types/super-admin/index.ts`
+
+---
+
 ## Update — GitHub Copilot (11/06/2026)
 
 **Branch:** `demo`

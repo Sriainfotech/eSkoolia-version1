@@ -166,6 +166,7 @@ export interface LLMSchoolState {
 export interface SchoolFormChoices {
   school_types: string[];
   mediums_of_instruction: string[];
+  states: { code: string; name: string }[];
 }
 
 /** Fetch dropdown choices for the school form from the backend. */
