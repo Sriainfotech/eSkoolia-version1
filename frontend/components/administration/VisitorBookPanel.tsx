@@ -1,8 +1,25 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState, useRef } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { ToastContainer, toast } from "react-toastify";
+import s from "./VisitorBookPanel.module.css";
+
+type Tab = "add" | "filter" | "list";
+
+// --- Icons ---
+const ChevronIcon = ({open}:{open:boolean}) => (
+  <svg className={`${s.chevron} ${open?s.chevronOpen:""}`} width="14" height="14" viewBox="0 0 14 14" fill="none">
+    <path d="M3.5 5.25L7 8.75L10.5 5.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+  </svg>
+);
+const CheckIcon = () => (<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5L4.2 7.5L8 3" stroke="white" strokeWidth="1.6" strokeLinecap="round"/></svg>);
+const PencilIcon = ({size=13}:{size?:number}) => (<svg width={size} height={size} viewBox="0 0 14 14" fill="none"><path d="M9.5 2.5L11.5 4.5L5 11H3V9L9.5 2.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>);
+const FunnelIcon = () => (<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12l-4.5 5V14L6.5 13V8L2 3Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round"/></svg>);
+const DocIcon = () => (<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="1" width="8" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3"/><path d="M4.5 5H8M4.5 7.5H7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/><path d="M9 4l2 2-2 2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/></svg>);
+const PlusIcon = () => (<svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M6.5 2v9M2 6.5h9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>);
+const TrashIcon = () => (<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 3h8M5 3V2h2v1M4 3l.5 7h3L8 3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/></svg>);
+const LinkIcon = () => (<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6.5 3.5a2 2 0 112.83 2.83l-1.5 1.5a2 2 0 01-2.83 0m-2.83 2.83a2 2 0 11-2.83-2.83l1.5-1.5a2 2 0 012.83 0" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/></svg>);
 
 type ApiList<T> = T[] | { results?: T[]; count?: number; next?: string | null; previous?: string | null };
 
@@ -55,27 +72,6 @@ async function apiDelete(path: string): Promise<void> {
   await apiRequestWithRefresh<void>(path, { method: "DELETE", headers: { "Content-Type": "application/json" } });
 }
 
-function boxStyle() {
-  return { background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "var(--radius)", padding: 16 } as const;
-}
-
-function fieldStyle() {
-  return { width: "100%", height: 36, border: "1px solid var(--line)", borderRadius: 8, padding: "0 10px" } as const;
-}
-
-function buttonStyle(color = "var(--primary)") {
-  return {
-    height: 36,
-    border: `1px solid ${color}`,
-    background: color,
-    color: "#fff",
-    borderRadius: 8,
-    padding: "0 12px",
-    cursor: "pointer",
-    fontSize: 13,
-  } as const;
-}
-
 function displayValue(value: unknown) {
   const text = String(value ?? "").trim();
   if (!text || text === "-") return <span style={{ color: "#94a3b8", fontStyle: "italic" }}>N/A</span>;
@@ -104,6 +100,8 @@ export function VisitorBookPanel() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [formBanner, setFormBanner] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
+
+  // Form Fields
   const [purpose, setPurpose] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -113,13 +111,34 @@ export function VisitorBookPanel() {
   const [outTime, setOutTime] = useState("");
   const [fileUrl, setFileUrl] = useState("");
   const [fileUpload, setFileUpload] = useState<File | null>(null);
+
+  // Filters
   const [search, setSearch] = useState("");
+  const [filterPurpose, setFilterPurpose] = useState("");
+  const [filterDate, setFilterDate] = useState("");
+  const [filterChips, setFilterChips] = useState<string[]>([]);
+
+  // Table
   const [tableBusy, setTableBusy] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [deleteTarget, setDeleteTarget] = useState<VisitorRow | null>(null);
+
+  // Nav Tabs
+  const [activeTab, setActiveTab] = useState<Tab>("add");
+  const [filterOpen, setFilterOpen] = useState(false);
+  const addSecRef = useRef<HTMLDivElement | null>(null);
+  const filterSecRef = useRef<HTMLDivElement | null>(null);
+  const listSecRef = useRef<HTMLDivElement | null>(null);
+
+  const scrollToTab = (id: Tab) => {
+    const el = id === "add" ? addSecRef.current : id === "filter" ? filterSecRef.current : listSecRef.current;
+    if (el) {
+      setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    }
+  };
 
   const todayDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
@@ -173,7 +192,7 @@ export function VisitorBookPanel() {
     setTableBusy(true);
     const timer = window.setTimeout(() => setTableBusy(false), 250);
     return () => window.clearTimeout(timer);
-  }, [loading, search, items, sortKey, sortDir, page, pageSize]);
+  }, [loading, search, items, sortKey, sortDir, page, pageSize, filterPurpose, filterDate]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -203,6 +222,8 @@ export function VisitorBookPanel() {
     setFileUrl(row.file_url || "");
     setFieldErrors({});
     setFormBanner("");
+    setActiveTab("add");
+    scrollToTab("add");
   };
 
   const toggleSort = (key: SortKey) => {
@@ -267,6 +288,8 @@ export function VisitorBookPanel() {
       }
       resetForm();
       await load();
+      setActiveTab("list");
+      scrollToTab("list");
     } catch (err: unknown) {
       const message = getErrorMessage(err, editingId ? "Unable to update visitor." : "Unable to add visitor.");
       setError(message);
@@ -299,10 +322,38 @@ export function VisitorBookPanel() {
     }
   };
 
+  const applyFilters = () => {
+    const chips: string[] = [];
+    if (search.trim()) chips.push(`Search: ${search}`);
+    if (filterPurpose) {
+      const pLabel = purposeOptions.find(o => o.value === filterPurpose)?.label || filterPurpose;
+      chips.push(`Purpose: ${pLabel}`);
+    }
+    if (filterDate) chips.push(`Date: ${filterDate}`);
+    setFilterChips(chips);
+    setFilterOpen(false);
+  };
+
+  const clearFilters = () => {
+    setSearch("");
+    setFilterPurpose("");
+    setFilterDate("");
+    setFilterChips([]);
+  };
+
   const filteredSorted = useMemo(() => {
+    let next = [...items];
     const q = search.trim().toLowerCase();
-    const filtered = !q ? items : items.filter((row) => [row.name, row.purpose, row.phone || "", row.visitor_id].join(" ").toLowerCase().includes(q));
-    const next = [...filtered];
+    if (q) {
+      next = next.filter((row) => [row.name, row.purpose, row.phone || "", row.visitor_id].join(" ").toLowerCase().includes(q));
+    }
+    if (filterPurpose) {
+      next = next.filter(row => row.purpose === filterPurpose || purposeOptions.find(o => o.value === filterPurpose)?.label === row.purpose);
+    }
+    if (filterDate) {
+      next = next.filter(row => row.date === filterDate);
+    }
+
     next.sort((a, b) => {
       const mult = sortDir === "asc" ? 1 : -1;
       if (sortKey === "name") return a.name.localeCompare(b.name) * mult;
@@ -311,125 +362,238 @@ export function VisitorBookPanel() {
       return a.out_time.localeCompare(b.out_time) * mult;
     });
     return next;
-  }, [items, search, sortKey, sortDir]);
+  }, [items, search, sortKey, sortDir, filterPurpose, filterDate, purposeOptions]);
 
   return (
-    <div className="legacy-panel">
+    <div className={s.root} style={{ padding: "16px 24px" }}>
       <ToastContainer position="top-right" newestOnTop closeOnClick pauseOnHover />
-      <section className="admin-visitor-area up_admin_visitor">
-        <div className="container-fluid p-0">
-          <div className="visitor-grid-container" style={{ display: "grid", gridTemplateColumns: "minmax(280px, 1fr) minmax(400px, 2fr)", gap: 12, alignItems: "start", width: "100%", maxWidth: "100%" }}>
-            <div className="white-box" style={{ ...boxStyle(), height: "auto" }}>
-              <h3 style={{ marginTop: 0, marginBottom: 12 }}>{editingId ? "Edit Visitor" : "Add Visitor"}</h3>
-              <p style={{ marginTop: 0, marginBottom: 10, color: "#64748b", fontSize: 12 }}>Fields marked with * are mandatory.</p>
-              {formBanner ? <div style={{ background: "#fee2e2", border: "1px solid #fecaca", color: "#b91c1c", padding: "10px 12px", borderRadius: 8, marginBottom: 10, fontSize: 13 }}>{formBanner}</div> : null}
-              <form onSubmit={submit} style={{ display: "grid", gap: 8 }}>
-                <label htmlFor="vb-purpose" style={{ fontSize: 12, fontWeight: 600 }}>Purpose *</label>
-                <select id="vb-purpose" required value={purpose} onChange={(e) => setPurpose(e.target.value)} style={fieldStyle()}>
-                  <option value="" disabled hidden>Select Purpose *</option>
-                  {purposeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
-                <label htmlFor="vb-name" style={{ fontSize: 12, fontWeight: 600 }}>Name *</label>
-                <input id="vb-name" type="text" required value={name} onChange={(e) => setName(e.target.value)} style={fieldStyle()} />
-                <label htmlFor="vb-phone" style={{ fontSize: 12, fontWeight: 600 }}>Phone</label>
-                <input id="vb-phone" type="tel" inputMode="tel" maxLength={13} pattern="\+?\d{10,12}" value={phone} onChange={(e) => setPhone(e.target.value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "").slice(0, 13))} style={fieldStyle()} />
-                <label htmlFor="vb-no-of-person" style={{ fontSize: 12, fontWeight: 600 }}>Number of Persons *</label>
-                <input id="vb-no-of-person" type="number" min={1} max={99} value={noOfPerson} onChange={(e) => setNoOfPerson(e.target.value)} style={fieldStyle()} />
-                <label htmlFor="vb-date" style={{ fontSize: 12, fontWeight: 600 }}>Date *</label>
-                <input id="vb-date" type="date" max={todayDate} value={date} onChange={(e) => setDate(e.target.value)} style={fieldStyle()} />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  <div style={{ display: "grid", gap: 6 }}>
-                    <label htmlFor="vb-in-time" style={{ fontSize: 12, fontWeight: 600 }}>In Time *</label>
-                    <input id="vb-in-time" type="time" value={inTime} onChange={(e) => setInTime(e.target.value)} style={fieldStyle()} />
-                  </div>
-                  <div style={{ display: "grid", gap: 6 }}>
-                    <label htmlFor="vb-out-time" style={{ fontSize: 12, fontWeight: 600 }}>Out Time *</label>
-                    <input id="vb-out-time" type="time" value={outTime} onChange={(e) => setOutTime(e.target.value)} style={fieldStyle()} />
-                  </div>
-                </div>
-                <input id="vb-attachment" type="file" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx" onChange={(e) => setFileUpload(e.target.files?.[0] ?? null)} style={{ ...fieldStyle(), padding: 6 }} />
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button type="submit" disabled={saving} style={buttonStyle()}>{saving ? "Saving..." : editingId ? "Update" : "Save"}</button>
-                  {editingId ? <button type="button" onClick={resetForm} style={buttonStyle("#6b7280")}>Cancel</button> : null}
-                </div>
-              </form>
+      
+      <div className={s.pageCard}>
+        <div className={s.pageBody} style={{ padding: "20px" }}>
+          
+          {/* Action Nav */}
+          <div className={s.actionNav}>
+            {[
+              { id: "add" as Tab, step: "01", label: editingId ? "Edit Visitor" : "Add Visitor", icon: <PlusIcon /> },
+              { id: "filter" as Tab, step: "02", label: "Smart Filter", icon: <FunnelIcon /> },
+              { id: "list" as Tab, step: "03", label: "Visitor List", icon: <DocIcon /> }
+            ].map(t => (
+              <button key={t.id} type="button" className={`${s.navTab} ${activeTab === t.id ? s.navTabActive : ""}`}
+                onClick={() => { setActiveTab(t.id); if (t.id === "filter") setFilterOpen(true); scrollToTab(t.id); }}>
+                <span className={s.navTabStep}>{t.step}</span>{t.icon} {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Section 01: Add/Edit Visitor */}
+          <div className={s.assignCard} ref={addSecRef}>
+            <div className={s.assignCardTop}>
+              <div>
+                <div className={s.assignCardTitle}>{editingId ? "Edit Visitor Details" : "Register New Visitor"}</div>
+                <div className={s.assignCardSub}>Fields marked with * are mandatory. Please fill in the visitor information accurately.</div>
+              </div>
+              {editingId && <span className={s.enrollChip}><LinkIcon/> Editing Visitor: {name}</span>}
             </div>
-            <div className="white-box" style={boxStyle()}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                <h3 style={{ margin: 0 }}>Visitor List</h3>
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Quick search" style={{ ...fieldStyle(), width: 240 }} />
+            
+            {formBanner && (
+              <div style={{ background: "#fff5f5", border: "1px solid #ffd0cc", color: "var(--red)", padding: "10px 14px", borderRadius: 10, marginBottom: 16, fontSize: 13, fontWeight: 600 }}>
+                {formBanner}
               </div>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", minWidth: 800, borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      <th style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left" }}>SL</th>
-                      <th onClick={() => toggleSort("name")} style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left", cursor: "pointer" }}>Name</th>
-                      <th style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Phone</th>
-                      <th style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Purpose</th>
-                      <th style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Date</th>
-                      <th style={{ padding: 8, borderBottom: "1px solid var(--line)", textAlign: "left" }}>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {!loading && filteredSorted.length === 0 ? <tr><td colSpan={6} style={{ padding: 12, color: "var(--text-muted)" }}>No visitor records found.</td></tr> : null}
-                    {filteredSorted.map((row, index) => (
-                      <tr key={row.id}>
-                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{(page - 1) * pageSize + index + 1}</td>
-                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.name}</td>
-                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(row.phone)}</td>
-                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{displayValue(row.purpose)}</td>
-                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.date}</td>
-                        <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
-                          <button type="button" onClick={() => editRow(row)} style={buttonStyle("#0ea5e9")}>Edit</button>
-                          <button type="button" onClick={() => setDeleteTarget(row)} style={{ ...buttonStyle("#dc2626"), marginLeft: 6 }}>Delete</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              {tableBusy ? <p style={{ marginTop: 10, color: "var(--text-muted)" }}>Loading records...</p> : null}
-              <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ color: "#64748b", fontSize: 12 }}>Showing page {page} of {totalPages} ({totalRecords} total records)</span>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <label htmlFor="vb-page-size" style={{ fontSize: 12, color: "#475569" }}>Page size</label>
-                  <select
-                    id="vb-page-size"
-                    value={pageSize}
-                    onChange={(e) => {
-                      const next = Number(e.target.value);
-                      setPage(1);
-                      setPageSize(next);
-                    }}
-                    style={{ ...fieldStyle(), width: 96 }}
-                  >
-                    {[5, 10, 20, 30, 40, 50].map((size) => (
-                      <option key={size} value={size}>{size}</option>
-                    ))}
+            )}
+
+            <form onSubmit={submit}>
+              {/* Fields styled exactly like Multiple Subject Assignment read-only grid */}
+              <div className={s.roGrid} style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "12px 16px" }}>
+                <div className={s.roField}>
+                  <label>Purpose *</label>
+                  <select required value={purpose} onChange={(e) => setPurpose(e.target.value)} className={s.roInput}>
+                    <option value="" disabled hidden>Select Purpose *</option>
+                    {purposeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
-                  <button type="button" disabled={loading || page <= 1} onClick={() => setPage((prev) => Math.max(1, prev - 1))} style={buttonStyle("#64748b")}>Previous</button>
-                  <button type="button" disabled={loading || page >= totalPages} onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))} style={buttonStyle("#0f766e")}>Next</button>
+                </div>
+                
+                <div className={s.roField}>
+                  <label>Student / Visitor Name *</label>
+                  <input type="text" required value={name} onChange={(e) => setName(e.target.value)} className={s.roInput} placeholder="Enter name" />
+                </div>
+                
+                <div className={s.roField}>
+                  <label>Phone No.</label>
+                  <input type="tel" inputMode="tel" maxLength={13} pattern="\+?\d{10,12}" value={phone} onChange={(e) => setPhone(e.target.value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "").slice(0, 13))} className={s.roInput} placeholder="e.g. +919876543210" />
+                </div>
+                
+                <div className={s.roField}>
+                  <label>Number of Persons *</label>
+                  <input type="number" min={1} max={99} value={noOfPerson} onChange={(e) => setNoOfPerson(e.target.value)} className={s.roInput} />
+                </div>
+                
+                <div className={s.roField}>
+                  <label>Date *</label>
+                  <input type="date" max={todayDate} value={date} onChange={(e) => setDate(e.target.value)} className={s.roInput} />
+                </div>
+                
+                <div className={s.roField}>
+                  <label>In Time *</label>
+                  <input type="time" value={inTime} onChange={(e) => setInTime(e.target.value)} className={s.roInput} />
+                </div>
+                
+                <div className={s.roField}>
+                  <label>Out Time *</label>
+                  <input type="time" value={outTime} onChange={(e) => setOutTime(e.target.value)} className={s.roInput} />
+                </div>
+                
+                <div className={s.roField}>
+                  <label>Attachment</label>
+                  <input type="file" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx" onChange={(e) => setFileUpload(e.target.files?.[0] ?? null)} className={s.roInput} style={{ padding: "4px 8px" }} />
                 </div>
               </div>
-              {error ? <p style={{ marginTop: 10, color: "var(--warning)" }}>{error}</p> : null}
-              {!loading && success ? <p style={{ marginTop: 10, color: "#0f766e" }}>{success}</p> : null}
+
+              <hr className={s.previewDivider} style={{ marginTop: 20 }} />
+              <div className={s.saveRow}>
+                <div>
+                  <span style={{ fontSize: 11, color: "var(--ink-mute)" }}>All records are securely saved into the visitor log module.</span>
+                </div>
+                <div className={s.saveButtons}>
+                  <button type="button" className={s.btnReset} onClick={resetForm}>{editingId ? "Cancel" : "Reset"}</button>
+                  <button type="submit" disabled={saving} className={s.btnSave} style={{ minWidth: 140, justifyContent: "center" }}>
+                    <CheckIcon /> {saving ? "Saving..." : editingId ? "Update Visitor" : "Save Visitor"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+
+          {/* Section 02 Smart Filter */}
+          <div className={s.filterCard} ref={filterSecRef}>
+            <div className={`${s.filterTrigger} ${filterOpen ? s.filterTriggerOpen : ""}`} onClick={() => setFilterOpen(v => !v)}>
+              <span className={s.stepBadge}>02</span>
+              <span className={s.filterIconBox}><FunnelIcon /></span>
+              <div>
+                <div className={s.filterTitle}>Smart filters</div>
+                <div className={s.filterSub}>Find visitors easily by search, purpose, or date.</div>
+              </div>
+              <div className={s.triggerRight}>
+                {filterChips.map(c => (
+                  <span key={c} className={s.darkChip}>{c} <span className={s.darkChipX} onClick={(e) => { e.stopPropagation(); setFilterChips(fc => fc.filter(x => x !== c)); }}>&#215;</span></span>
+                ))}
+                {filterChips.length > 0 && (
+                  <button type="button" className={s.btnGhost} style={{ fontSize: 11, padding: "4px 8px" }} onClick={(e) => { e.stopPropagation(); clearFilters(); }}>Clear</button>
+                )}
+                <ChevronIcon open={filterOpen} />
+              </div>
+            </div>
+            {filterOpen && (
+              <div className={s.filterBody}>
+                <div className={s.filterGrid8} style={{ gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))" }}>
+                  <label className={s.fLbl}>
+                    <span>Search</span>
+                    <input className={s.filterInput} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Name, Phone, ID..." />
+                  </label>
+                  <label className={s.fLbl}>
+                    <span>Purpose</span>
+                    <select className={s.filterInput} value={filterPurpose} onChange={(e) => setFilterPurpose(e.target.value)}>
+                      <option value="">Any Purpose</option>
+                      {purposeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                    </select>
+                  </label>
+                  <label className={s.fLbl}>
+                    <span>Date</span>
+                    <input type="date" className={s.filterInput} value={filterDate} onChange={(e) => setFilterDate(e.target.value)} />
+                  </label>
+                </div>
+                <div className={s.filterBottom}>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {filterChips.map(c => <span key={c} className={s.darkChip}>{c} <span className={s.darkChipX} onClick={() => setFilterChips(fc => fc.filter(x => x !== c))}>&#215;</span></span>)}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button type="button" className={s.btnGhost} onClick={clearFilters}>Clear filters</button>
+                    <button type="button" className={s.btnPrimary} onClick={applyFilters}>Apply Filters</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Section 03 Browse */}
+          <div className={s.browseSection} ref={listSecRef}>
+            <div className={s.sectionHeading}>
+              <span className={s.stepBadge}>03</span>
+              <span className={s.sectionTitle}>Browse Visitor List</span>
+              <span className={s.sectionSub}>&mdash; view, edit, or delete existing records.</span>
+            </div>
+
+            <div style={{ background: "#fff", border: "1px solid var(--line)", borderRadius: "12px", overflow: "hidden" }}>
+              <div className={s.tblWrap}>
+                <div className={s.tblHead} style={{ gridTemplateColumns: "40px 2fr 1.5fr 1.5fr 1fr 100px", background: "#f8f8fc" }}>
+                  <span>SL</span>
+                  <span onClick={() => toggleSort("name")} style={{ cursor: "pointer" }}>Name {sortKey === "name" ? (sortDir === "asc" ? "↑" : "↓") : ""}</span>
+                  <span>Phone</span>
+                  <span>Purpose</span>
+                  <span onClick={() => toggleSort("date")} style={{ cursor: "pointer" }}>Date {sortKey === "date" ? (sortDir === "asc" ? "↑" : "↓") : ""}</span>
+                  <span style={{ textAlign: "right" }}>Actions</span>
+                </div>
+                
+                {!loading && filteredSorted.length === 0 && (
+                  <div style={{ padding: "32px", textAlign: "center", color: "var(--ink-mute)", fontSize: 13 }}>No visitor records found matching criteria.</div>
+                )}
+
+                {filteredSorted.map((row, index) => (
+                  <div key={row.id} className={s.tblRow} style={{ gridTemplateColumns: "40px 2fr 1.5fr 1.5fr 1fr 100px" }}>
+                    <span style={{ fontSize: 11, color: "var(--ink-mute)" }}>{(page - 1) * pageSize + index + 1}</span>
+                    <div className={s.studentCell}>
+                      <span className={s.studentName}>{row.name}</span>
+                    </div>
+                    <span className={s.admNo}>{displayValue(row.phone)}</span>
+                    <span className={s.admNo}>{displayValue(row.purpose)}</span>
+                    <span className={s.admNo}>{row.date}</span>
+                    <div className={s.tblLastCol}>
+                      <button type="button" className={s.editBtn} onClick={() => editRow(row)} title="Edit"><PencilIcon /></button>
+                      <button type="button" className={s.editBtn} onClick={() => setDeleteTarget(row)} title="Delete" style={{ color: "var(--red)", borderColor: "rgba(229, 83, 75, 0.2)" }}><TrashIcon /></button>
+                    </div>
+                  </div>
+                ))}
+                
+                <div className={s.tblFooter}>
+                  <span className={s.tblFooterTxt}>
+                    Showing page {page} of {totalPages} ({totalRecords} total records)
+                  </span>
+                  
+                  <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 11, color: "var(--ink-mute)" }}>Page size:</span>
+                      <select value={pageSize} onChange={(e) => { setPage(1); setPageSize(Number(e.target.value)); }} style={{ padding: "4px 8px", fontSize: 11, borderRadius: 6, border: "1px solid var(--line)", background: "#fff", outline: "none" }}>
+                        {[5, 10, 20, 30, 40, 50].map(sz => <option key={sz} value={sz}>{sz}</option>)}
+                      </select>
+                    </div>
+                    <div className={s.pager}>
+                      <button type="button" className={s.pagerBtn} disabled={loading || page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>‹</button>
+                      <button type="button" className={s.pagerBtn} disabled={loading || page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>›</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {tableBusy && <div style={{ height: 3, background: "var(--primary)", width: "100%", animation: "pulse 1s infinite" }} />}
+            </div>
+          </div>
+          
+        </div>
+      </div>
+      
+      {deleteTarget && (
+        <div className={s.backdrop} onClick={() => setDeleteTarget(null)}>
+          <div className={s.modal} style={{ maxWidth: 400, padding: 24, textAlign: "center" }} onClick={e => e.stopPropagation()}>
+            <div style={{ width: 48, height: 48, background: "#fff5f5", borderRadius: "50%", color: "var(--red)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+              <TrashIcon />
+            </div>
+            <h3 style={{ margin: "0 0 8px", fontSize: 18, color: "var(--ink)" }}>Confirm Delete</h3>
+            <p style={{ margin: "0 0 24px", color: "var(--ink-mute)", fontSize: 13 }}>Are you sure you want to delete this visitor record? This action cannot be undone.</p>
+            <div style={{ display: "flex", gap: 12 }}>
+              <button type="button" className={s.btnReset} style={{ flex: 1 }} onClick={() => setDeleteTarget(null)}>Cancel</button>
+              <button type="button" className={s.btnSave} style={{ flex: 1, background: "var(--red)", justifyContent: "center", boxShadow: "none" }} onClick={async () => { const id = deleteTarget.id; setDeleteTarget(null); await remove(id); }}>Delete</button>
             </div>
           </div>
         </div>
-      </section>
-      {deleteTarget ? (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.4)", zIndex: 60, display: "grid", placeItems: "center", padding: 16 }}>
-          <div style={{ width: "100%", maxWidth: 440, background: "#fff", borderRadius: 12, border: "1px solid #e2e8f0", padding: 16 }}>
-            <h3 style={{ margin: 0, marginBottom: 8 }}>Confirm Delete</h3>
-            <p style={{ marginTop: 0, marginBottom: 16, color: "#475569" }}>Are you sure you want to delete this visitor record? This action cannot be undone.</p>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button type="button" onClick={() => setDeleteTarget(null)} style={buttonStyle("#94a3b8")}>Cancel</button>
-              <button type="button" onClick={async () => { const id = deleteTarget.id; setDeleteTarget(null); await remove(id); }} style={buttonStyle("#dc2626")}>Delete</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      )}
     </div>
   );
 }
