@@ -109,7 +109,6 @@ pillow==12.2.0
 platformdirs==4.9.6
 pluggy==1.6.0
 prompt_toolkit==3.0.52
-psycopg2==2.9.11
 psycopg2-binary==2.9.11
 py-ubjson==0.16.1
 pyasn1==0.6.3
