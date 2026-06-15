@@ -133,14 +133,11 @@ function SectionBody({ classId, sectionId, sectionSummary, students, loading, se
   const toggleAll = (checked: boolean) => { if (readOnly) return; onSelectionChange(key, checked ? new Set(allIds) : new Set()); };
   const toggleOne = (id: number, checked: boolean) => { if (readOnly) return; const next = new Set(selectedRows); if (checked) next.add(id); else next.delete(id); onSelectionChange(key, next); };
   const signedInCount = students.filter((s) => s.sign_in_time && !s.sign_out_time).length;
-  const present = students.filter((s) => s.status === 'present').length;
+  const present = students.filter((s) => s.status === 'present' && !!s.sign_in_time).length;
   const absent = students.filter((s) => s.status === 'absent').length;
-  const late = students.filter((s) => s.status === 'late').length;
-  // Issue #5 + #6: only count students who actually arrived (sign-in present)
-  // toward the attendance percentage; clamp to 0–100.
-  const attendedPresent = students.filter((s) => s.status === 'present' && !!s.sign_in_time).length;
+  const late = students.filter((s) => s.status === 'late' && !!s.sign_in_time).length;
   const pct = students.length > 0
-    ? Math.max(0, Math.min(100, Math.round(((attendedPresent + late) / students.length) * 100)))
+    ? Math.max(0, Math.min(100, Math.round(((present + late) / students.length) * 100)))
     : 0;
   const handleSignOutAll = () => {
     if (readOnly) return;
@@ -222,11 +219,11 @@ function ClassCard({ cls, isOpen, onToggle, activeSectionId, onSectionChange, st
 
   // Count present students from the locally-loaded sections (used when all
   // sections are loaded for fully-accurate live counts).
-  const localPresentMarked = allLoaded.filter((s) => s.status === 'present').length;
+  const localPresentMarked = allLoaded.filter((s) => s.status === 'present' && !!s.sign_in_time).length;
   const localAbsent = allLoaded.filter((s) => s.status === 'absent').length;
-  const localLate = allLoaded.filter((s) => s.status === 'late').length;
+  const localLate = allLoaded.filter((s) => s.status === 'late' && !!s.sign_in_time).length;
 
-  const totalPresent = allSectionsLoaded ? localPresentMarked : (cls.total_present ?? 0);
+  const totalPresent = allSectionsLoaded ? localPresentMarked : (cls.total_signed_in ?? cls.total_present ?? 0);
   const totalAbsent = allSectionsLoaded ? localAbsent : (cls.total_absent ?? 0);
   const totalLate = allSectionsLoaded ? localLate : (cls.total_late ?? 0);
   const totalForPct = cls.total_students;

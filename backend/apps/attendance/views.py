@@ -80,6 +80,8 @@ class AttendanceTenantMixin:
             raise PermissionDenied("You do not have permission to perform this action.")
 
     def school_filter(self, request):
+        if getattr(request.user, "school_id", None):
+            return {"school_id": request.user.school_id}
         return {} if request.user.is_superuser else {"school_id": request.user.school_id}
 
 class StudentAttendanceListCreateAPIView(AttendanceTenantMixin, APIView):
@@ -311,16 +313,19 @@ class StudentSearchAPIView(AttendanceTenantMixin, APIView):
             "yes",
         }
 
+        first_section = Section.objects.filter(school_class_id=class_id).order_by("id").first()
+        if first_section and first_section.id == section_id:
+            section_filter = models.Q(current_section_id=section_id) | models.Q(current_section_id__isnull=True)
+        else:
+            section_filter = models.Q(current_section_id=section_id)
+
         students = list(
             Student.objects.filter(
             current_class_id=class_id,
             is_active=True,
             **self.school_filter(request),
             )
-            .filter(
-            # Include students assigned to this section OR students with the right class but no section
-            models.Q(current_section_id=section_id) | models.Q(current_section_id__isnull=True)
-            )
+            .filter(section_filter)
             .order_by("id")
             .values("id", "admission_no", "first_name", "last_name", "roll_no")
         )
@@ -479,9 +484,13 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
             if data.get("class_id"):
                 student_scope = student_scope.filter(current_class_id=data.get("class_id"))
             if data.get("section_id"):
-                student_scope = student_scope.filter(
-                    models.Q(current_section_id=data.get("section_id")) | models.Q(current_section_id__isnull=True)
-                )
+                first_section = Section.objects.filter(school_class_id=data.get("class_id")).order_by("id").first() if data.get("class_id") else None
+                if first_section and first_section.id == data.get("section_id"):
+                    student_scope = student_scope.filter(
+                        models.Q(current_section_id=data.get("section_id")) | models.Q(current_section_id__isnull=True)
+                    )
+                else:
+                    student_scope = student_scope.filter(current_section_id=data.get("section_id"))
 
             students = list(student_scope.select_related("guardian"))
             if not students:

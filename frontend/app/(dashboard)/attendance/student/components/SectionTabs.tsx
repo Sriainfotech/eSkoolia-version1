@@ -16,9 +16,10 @@ export default function SectionTabs({ sections, activeSection, onChange, student
       {sections.map((sec) => {
         const isActive = sec.id === activeSection;
         const key = classId != null ? `${classId}-${sec.id}` : '';
-        const sectionStudents = (students && key) ? (students[key] ?? []) : [];
+        const hasLoaded = students && students[key] !== undefined;
+        const sectionStudents = hasLoaded ? students[key] : [];
         const markedCount = sectionStudents.filter((s) => s.status !== 'unmarked' && s.status != null).length;
-        const totalCount = sectionStudents.length;
+        const totalCount = hasLoaded ? sectionStudents.length : (sec.student_count || 0);
         const isComplete = totalCount > 0 && markedCount === totalCount;
         const isPartial = totalCount > 0 && markedCount > 0 && markedCount < totalCount;
 
@@ -54,7 +55,7 @@ export default function SectionTabs({ sections, activeSection, onChange, student
             <span
               className={`ml-1.5 px-1.5 py-px rounded-full text-[9px] font-bold ${badgeClass}`}
             >
-              {sec.student_count}
+              {totalCount}
             </span>
           </button>
         );

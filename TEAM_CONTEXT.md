@@ -4571,3 +4571,9 @@ Login at localhost:3000
 4. Harmonized UI layouts by applying the core HR wrapper border styling to Academic Foundation and Staff Assignment modules.
 5. Fixed discrepancy in Academics Staff Dashboard KPI calculation where Total Teachers was showing '0' by including the correct `dept_type` filter checks matching the staff list API.
 6. Resolved TypeScript type mismatch bugs in HR Setup frontend form (`working_days` and `status`).
+
+12/06/2026
+1.Implemented a section-based filtering mechanism for student attendance.
+2.Ensured that only students belonging to the selected section are displayed when a specific section is chosen.
+3.Updated the backend logic to filter students based on the selected section.
+4. fixed issue with student attendance marking section based filtering

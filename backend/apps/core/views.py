@@ -128,6 +128,8 @@ class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
         ).order_by("numeric_order", "name", "id")
 
         if user.is_superuser:
+            if getattr(user, "school_id", None):
+                qs = qs.filter(school_id=user.school_id)
             return qs.annotate(_total_students=DbCount("students", filter=Q(students__is_active=True)))
         if user.school_id:
             qs = qs.filter(school_id=user.school_id)
