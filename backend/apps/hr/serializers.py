@@ -140,7 +140,8 @@ class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
         fields = [
-            "id", "school", "name", "short_code", "dept_type", "description", "email", "is_active",
+            "id", "school", "name", "short_code", "dept_type", "status", "working_days",
+            "description", "email", "is_active",
             "head_id", "deputy_head_id", "head_name", "deputy_head_name", "staff_count",
             "created_at", "updated_at",
         ]
@@ -226,6 +227,15 @@ class DepartmentSerializer(serializers.ModelSerializer):
                 "Enter a valid email address (e.g. science@school.edu)."
             )
         return cleaned.lower()
+
+    def validate(self, attrs):
+        # Keep is_active in sync with the status field
+        status = attrs.get("status", getattr(self.instance, "status", "active") if self.instance else "active")
+        if status in ("inactive", "archived"):
+            attrs["is_active"] = False
+        elif status == "active":
+            attrs["is_active"] = True
+        return attrs
 
 
 class DesignationSerializer(serializers.ModelSerializer):

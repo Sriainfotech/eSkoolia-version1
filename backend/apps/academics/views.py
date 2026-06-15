@@ -1989,6 +1989,7 @@ class StaffDashboardKPIView(viewsets.ViewSet):
         teaching_staff = staff_qs.filter(
             Q(designation__name__icontains="teacher")
             | Q(department__name__icontains="academic")
+            | Q(department__dept_type__icontains="academic")
         )
         total_teachers = teaching_staff.count()
 

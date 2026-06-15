@@ -1,4 +1,4 @@
-"use client";
+"use client"; // force reload 1
 import { useState } from "react";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import type { AcademicYear, Toast } from "../types";
@@ -13,6 +13,11 @@ interface Props {
   onNext: () => void;
 }
 
+interface TermDate {
+  start_date: string;
+  end_date: string;
+}
+
 interface YearForm {
   board: string;
   number_of_terms: string;
@@ -20,9 +25,46 @@ interface YearForm {
   end_date: string;
   is_current: boolean;
   is_active: boolean; // Fix #1E
+  terms: TermDate[];
 }
 
-const EMPTY: YearForm = { board: "", number_of_terms: "", start_date: "", end_date: "", is_current: false, is_active: true }; // Fix #1E
+const EMPTY: YearForm = { board: "", number_of_terms: "", start_date: "", end_date: "", is_current: false, is_active: true, terms: [] }; // Fix #1E
+
+/** Parse number of terms from the select value, e.g. "2 Terms (Semester)" → 2 */
+function parseTermCount(val: string): number {
+  const m = val.match(/^(\d+)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
+/** Term label based on count and index */
+const TERM_LABELS: Record<number, string[]> = {
+  2: ["Semester 1", "Semester 2"],
+  3: ["Trimester 1", "Trimester 2", "Trimester 3"],
+  4: ["Quarter 1", "Quarter 2", "Quarter 3", "Quarter 4"],
+};
+
+/** Split academic year date range evenly into `count` terms, or return empty dates if main dates missing */
+function splitTermDates(startStr: string, endStr: string, count: number): TermDate[] {
+  if (count <= 0) return [];
+  if (!startStr || !endStr) {
+    return Array.from({ length: count }, () => ({ start_date: "", end_date: "" }));
+  }
+  const start = new Date(startStr).getTime();
+  const end   = new Date(endStr).getTime();
+  if (isNaN(start) || isNaN(end) || end <= start) {
+    return Array.from({ length: count }, () => ({ start_date: "", end_date: "" }));
+  }
+  const total = end - start;
+  const chunk = total / count;
+  return Array.from({ length: count }, (_, i) => {
+    const s = new Date(start + chunk * i);
+    const e = new Date(i === count - 1 ? end : start + chunk * (i + 1) - 86400000);
+    return {
+      start_date: s.toISOString().slice(0, 10),
+      end_date:   e.toISOString().slice(0, 10),
+    };
+  });
+}
 
 function derivedName(s: string, e: string) {
   if (!s || !e) return "";
@@ -64,12 +106,36 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
   const name = derivedName(form.start_date, form.end_date);
 
   function openEdit(y: AcademicYear) {
-    setForm({ board: y.board || "", number_of_terms: y.number_of_terms || "", start_date: y.start_date, end_date: y.end_date, is_current: y.is_current, is_active: y.is_active ?? true }); // Fix #1E; ?? true Fix #W4
+    const tc = parseTermCount(y.number_of_terms || "");
+    const existingTerms = tc > 0 ? splitTermDates(y.start_date, y.end_date, tc) : [];
+    setForm({ board: y.board || "", number_of_terms: y.number_of_terms || "", start_date: y.start_date, end_date: y.end_date, is_current: y.is_current, is_active: y.is_active ?? true, terms: existingTerms }); // Fix #1E; ?? true Fix #W4
     setEditId(y.id);
     setError("");
     setDateWarning(""); // Fix #1D
   }
   function cancelEdit() { setForm(EMPTY); setEditId(null); setError(""); setDateWarning(""); } // Fix #1D
+
+  /** Re-split terms whenever main dates or term count changes */
+  function handleTermCountChange(val: string) {
+    const tc = parseTermCount(val);
+    setForm((f) => ({ ...f, number_of_terms: val, terms: splitTermDates(f.start_date, f.end_date, tc) }));
+  }
+
+  function handleMainDateChange(field: "start_date" | "end_date", val: string) {
+    setForm((f) => {
+      const next = { ...f, [field]: val };
+      const tc = parseTermCount(f.number_of_terms);
+      if (tc > 0) next.terms = splitTermDates(next.start_date, next.end_date, tc);
+      return next;
+    });
+  }
+
+  function handleTermDateChange(idx: number, field: "start_date" | "end_date", val: string) {
+    setForm((f) => {
+      const terms = f.terms.map((t, i) => i === idx ? { ...t, [field]: val } : t);
+      return { ...f, terms };
+    });
+  }
 
   // Fix #1D — compute inline date warnings (warnings only, not blockers — user can still submit)
   function computeDateWarning(start: string, end: string): string {
@@ -96,6 +162,19 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
       const m = "End date must be after the start date.";
       setError(m); showToast(m, "error"); return;
     }
+    
+    // Validate term dates if present
+    const tc = parseTermCount(form.number_of_terms);
+    if (tc > 0) {
+      for (let i = 0; i < tc; i++) {
+        const t = form.terms[i];
+        if (t && t.start_date && t.end_date && new Date(t.end_date) <= new Date(t.start_date)) {
+          const m = `Term ${i + 1} end date must be after its start date.`;
+          setError(m); showToast(m, "error"); return;
+        }
+      }
+    }
+
     setSaving(true); setError("");
     try {
       const url = editingId
@@ -104,7 +183,7 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
       await apiRequestWithRefresh(url, {
         method: editingId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ board: form.board, number_of_terms: form.number_of_terms, start_date: form.start_date, end_date: form.end_date, is_current: form.is_current, is_active: form.is_active }), // Fix #1E
+        body: JSON.stringify({ board: form.board, number_of_terms: form.number_of_terms, start_date: form.start_date, end_date: form.end_date, is_current: form.is_current, is_active: form.is_active, terms: form.terms }), // Fix #1E
       });
       showToast(editingId ? "Academic year updated." : `Year ${name} created.`);
       cancelEdit();
@@ -222,7 +301,7 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
           </label>
           <select
             value={form.number_of_terms}
-            onChange={(e) => setForm((f) => ({ ...f, number_of_terms: e.target.value }))}
+            onChange={(e) => handleTermCountChange(e.target.value)}
             className="w-full bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[10px] px-2.5 py-1.5 text-[13px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
           >
             <option value="">Select...</option>
@@ -232,30 +311,85 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
           </select>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-3">
-          <div>
-            <label className="text-[11px] font-semibold text-[#6F767E] block mb-1">
-              Start Date <span className="text-[#EF4444]">*</span>
-            </label>
-            <input
-              type="date"
-              value={form.start_date}
-              onChange={(e) => { setForm((f) => ({ ...f, start_date: e.target.value })); setDateWarning(computeDateWarning(e.target.value, form.end_date)); }} // Fix #1D
-              className="w-full bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[10px] px-2.5 py-1.5 text-[13px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
-            />
-          </div>
-          <div>
-            <label className="text-[11px] font-semibold text-[#6F767E] block mb-1">
-              End Date <span className="text-[#EF4444]">*</span>
-            </label>
-            <input
-              type="date"
-              value={form.end_date}
-              onChange={(e) => { setForm((f) => ({ ...f, end_date: e.target.value })); setDateWarning(computeDateWarning(form.start_date, e.target.value)); }} // Fix #1D
-              className="w-full bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[10px] px-2.5 py-1.5 text-[13px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
-            />
+        {/* ── Academic Year dates ── */}
+        <div className="mb-1">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] font-semibold text-[#6F767E] block mb-1">
+                Start Date <span className="text-[#EF4444]">*</span>
+              </label>
+              <input
+                type="date"
+                value={form.start_date}
+                max={form.end_date || undefined}
+                onChange={(e) => { handleMainDateChange("start_date", e.target.value); setDateWarning(computeDateWarning(e.target.value, form.end_date)); }}
+                className="w-full bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[10px] px-2.5 py-1.5 text-[13px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-[#6F767E] block mb-1">
+                End Date <span className="text-[#EF4444]">*</span>
+              </label>
+              <input
+                type="date"
+                value={form.end_date}
+                min={form.start_date || undefined}
+                onChange={(e) => { handleMainDateChange("end_date", e.target.value); setDateWarning(computeDateWarning(form.start_date, e.target.value)); }}
+                className="w-full bg-[#F0F2F5] border-[1.5px] border-[#E8ECEF] rounded-[10px] px-2.5 py-1.5 text-[13px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
+              />
+            </div>
           </div>
         </div>
+
+        {/* ── Term date rows ── */}
+        {parseTermCount(form.number_of_terms) > 0 && (
+          <div className="mt-3 mb-3 border border-[#E8ECEF] rounded-xl overflow-hidden">
+            {/* Section header */}
+            <div className="flex items-center gap-2 px-3 py-2 bg-[#F5F3FF] border-b border-[#E8ECEF]">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5B4FCF" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              <span className="text-[11px] font-bold text-[#5B4FCF] uppercase tracking-widest">FOUNDATION</span>
+              <span className="ml-auto text-[10px] text-[#9FA6AD] font-medium">Auto-populated · editable</span>
+            </div>
+            {Array.from({ length: parseTermCount(form.number_of_terms) }).map((_, idx) => {
+              const termCount = parseTermCount(form.number_of_terms);
+              const labels = TERM_LABELS[termCount] ?? Array.from({ length: termCount }, (_, i) => `Term ${i + 1}`);
+              const term = form.terms[idx] || { start_date: "", end_date: "" };
+              return (
+                <div key={idx} className={`px-3 py-2.5 ${idx < termCount - 1 ? "border-b border-[#E8ECEF]" : ""}`}>
+                  <p className="text-[11px] font-semibold text-[#1A1D1F] mb-1.5">
+                    Term {idx + 1}
+                    <span className="ml-1.5 text-[10px] font-normal text-[#9FA6AD]">— {labels[idx]}</span>
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-[#9FA6AD] block mb-0.5">Start Date</label>
+                      <input
+                        type="date"
+                        value={term.start_date}
+                        max={term.end_date || undefined}
+                        onChange={(e) => handleTermDateChange(idx, "start_date", e.target.value)}
+                        className="w-full bg-[#FAFBFC] border-[1.5px] border-[#E8ECEF] rounded-[8px] px-2 py-1 text-[12px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-[#9FA6AD] block mb-0.5">End Date</label>
+                      <input
+                        type="date"
+                        value={term.end_date}
+                        min={term.start_date || undefined}
+                        onChange={(e) => handleTermDateChange(idx, "end_date", e.target.value)}
+                        className="w-full bg-[#FAFBFC] border-[1.5px] border-[#E8ECEF] rounded-[8px] px-2 py-1 text-[12px] text-[#1A1D1F] outline-none focus:border-[#5B4FCF] focus:bg-white transition-colors"
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* spacer so warning / checkbox follows naturally */}
+        <div className="mb-3" />
 
         {/* Fix #1D — inline date warning (warning only, user can still submit) */}
         {dateWarning && (
