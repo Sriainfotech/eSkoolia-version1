@@ -8,12 +8,31 @@ import { buildPaginationQuery, extractListData, extractPaginationMeta, type List
 import { ConfirmationModal } from "@/components/common/ConfirmationModal";
 import { usePersistentPagination } from "@/hooks/usePersistentPagination";
 
+type PortalType = 'admin' | 'teacher' | 'parent' | 'student' | 'custom';
+
 type RoleItem = {
   id: number;
   name: string;
   is_system: boolean;
   is_active: boolean;
+  portal_type: PortalType;
   created_at: string;
+};
+
+const PORTAL_OPTIONS: { value: PortalType; label: string; description: string }[] = [
+  { value: 'admin',   label: 'Admin Console',   description: 'School admin / management staff' },
+  { value: 'teacher', label: 'Teacher Portal',  description: 'Teachers and class teachers' },
+  { value: 'parent',  label: 'Parent Portal',   description: 'Parents and guardians' },
+  { value: 'student', label: 'Student Portal',  description: 'Enrolled students' },
+  { value: 'custom',  label: 'Custom',          description: 'Configurable access via permissions' },
+];
+
+const PORTAL_BADGE: Record<PortalType, { label: string; bg: string; color: string }> = {
+  admin:   { label: 'Admin',   bg: '#EEF2FF', color: '#4338CA' },
+  teacher: { label: 'Teacher', bg: '#EEEAFF', color: '#6D4AFF' },
+  parent:  { label: 'Parent',  bg: '#FFF1F2', color: '#BE123C' },
+  student: { label: 'Student', bg: '#E0F2FE', color: '#0369A1' },
+  custom:  { label: 'Custom',  bg: '#F1F5F9', color: '#475569' },
 };
 
 /** Deterministic background colour per role name — no hardcoding */
@@ -46,6 +65,7 @@ export function RoleManagementPanel() {
   const [roleName, setRoleName] = useState("");
   const [editingRoleId, setEditingRoleId] = useState<number | null>(null);
   const [editingRoleIsActive, setEditingRoleIsActive] = useState(true);
+  const [editingPortalType, setEditingPortalType] = useState<PortalType>('admin');
   const [search, setSearch] = useState("");
 
   const [panelMode, setPanelMode] = useState<PanelMode>(null);
@@ -81,6 +101,7 @@ export function RoleManagementPanel() {
     setEditingRoleId(null);
     setRoleName("");
     setEditingRoleIsActive(true);
+    setEditingPortalType('admin');
     setFieldError("");
   };
 
@@ -101,6 +122,7 @@ export function RoleManagementPanel() {
     setEditingRoleId(row.id);
     setRoleName(row.name);
     setEditingRoleIsActive(row.is_active);
+    setEditingPortalType((row.portal_type as PortalType) || 'admin');
     setFieldError("");
     setSuccess("");
     setPanelMode("edit");
@@ -155,7 +177,11 @@ export function RoleManagementPanel() {
       await apiRequestWithRefresh(`/api/v1/access-control/roles/${isUpdate ? `${editingRoleId}/` : ""}`, {
         method: isUpdate ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(isUpdate ? { name: normalized, is_active: editingRoleIsActive } : { name: normalized }),
+        body: JSON.stringify(
+          isUpdate
+            ? { name: normalized, is_active: editingRoleIsActive, portal_type: editingPortalType }
+            : { name: normalized, portal_type: editingPortalType }
+        ),
       });
       setSuccess(isUpdate ? `"${normalized}" updated.` : `"${normalized}" created.`);
       closePanel();
@@ -323,8 +349,21 @@ export function RoleManagementPanel() {
                       <div style={{ fontSize: 12, fontWeight: 600, color: "var(--ink-1)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                         {role.name}
                       </div>
-                      <div style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 2 }}>
-                        {role.is_system ? "System" : "Custom"}
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 3 }}>
+                        {role.portal_type && PORTAL_BADGE[role.portal_type as PortalType] && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, letterSpacing: "0.06em",
+                            padding: "1px 5px", borderRadius: 4,
+                            background: PORTAL_BADGE[role.portal_type as PortalType].bg,
+                            color: PORTAL_BADGE[role.portal_type as PortalType].color,
+                            textTransform: "uppercase",
+                          }}>
+                            {PORTAL_BADGE[role.portal_type as PortalType].label}
+                          </span>
+                        )}
+                        <span style={{ fontSize: 10, color: "var(--ink-3)" }}>
+                          {role.is_system ? "System" : "Custom"}
+                        </span>
                       </div>
                     </div>
 
@@ -487,6 +526,34 @@ export function RoleManagementPanel() {
                   </div>
                 </div>
 
+                {/* Portal type — always shown so admins make a deliberate choice */}
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>
+                    Portal <span style={{ color: "var(--err)", fontWeight: 400, letterSpacing: 0, textTransform: "none" }}>*</span>
+                  </label>
+                  <select
+                    value={editingPortalType}
+                    onChange={(e) => setEditingPortalType(e.target.value as PortalType)}
+                    style={{
+                      width: "100%", padding: "8px 10px",
+                      border: "1px solid var(--bd)", borderRadius: 8,
+                      fontSize: 12, color: "var(--ink-1)", background: "var(--bg-1)",
+                      outline: "none", fontFamily: "inherit", cursor: "pointer",
+                    }}
+                    onFocus={(e) => (e.target.style.borderColor = "var(--pu)")}
+                    onBlur={(e) => (e.target.style.borderColor = "var(--bd)")}
+                  >
+                    {PORTAL_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label} — {opt.description}
+                      </option>
+                    ))}
+                  </select>
+                  <p style={{ fontSize: 10, color: "var(--ink-3)", marginTop: 4, lineHeight: 1.4 }}>
+                    Controls which portal users with this role are sent to after login.
+                  </p>
+                </div>
+
                 {panelMode === "edit" && (
                   <div style={{ marginBottom: 12 }}>
                     <label style={{ fontSize: 10, fontWeight: 700, color: "var(--ink-3)", textTransform: "uppercase", letterSpacing: "0.06em", display: "block", marginBottom: 5 }}>
@@ -510,8 +577,8 @@ export function RoleManagementPanel() {
                 )}
                 <div style={{ background: "var(--bg-2)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "var(--ink-2)" }}>
                   {panelMode === "add"
-                    ? "After creating, use the 🔑 button on the card to assign page permissions."
-                    : "Changing the name does not affect existing permissions."}
+                    ? <>Set the <strong style={{ color: "var(--ink-1)" }}>Portal</strong> above first — it cannot be inferred from the name. Then use 🔑 to assign permissions.</>
+                    : "Changing portal type affects where existing users with this role are redirected after login."}
                 </div>
               </div>
 

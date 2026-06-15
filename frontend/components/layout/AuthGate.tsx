@@ -9,29 +9,96 @@ type AuthGateProps = { children: ReactNode };
 
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
 
+/** Add new portals here as they are built. */
+const PORTAL_HOMES: Partial<Record<string, string>> = {
+  teacher: '/teacher/home',
+  parent:  '/parent/home',
+  // student: '/student/home',  ← add when student portal is built
+};
+
 /**
- * Maps a portal_type (or role_names[0] from mock) to the home route
- * for that portal. Returns null for admin — they stay on the current route.
+ * Returns the home route for a non-admin portal user, or null if this user
+ * belongs to the admin console (portal_type 'admin' / 'custom' / undefined).
  */
 function nonAdminHome(portalType: string | undefined): string | null {
-  if (portalType === 'teacher') return '/teacher/home';
-  if (portalType === 'parent')  return '/parent/home';
-  return null;
+  return (portalType && PORTAL_HOMES[portalType]) ?? null;
 }
 
 /**
- * Returns true if the current pathname is part of the admin console
- * (i.e. NOT a teacher-portal or parent-portal route).
- * Teachers and parents should never be able to land on these paths.
+ * Returns true when the user belongs to any non-admin portal — even one not
+ * yet built (e.g. 'student'). Used to prevent these users from reaching the
+ * admin console, and to skip the "no permissions" redirect for them.
+ */
+function isNonAdminPortalUser(portalType: string | undefined): boolean {
+  return !!portalType && portalType !== 'admin' && portalType !== 'custom';
+}
+
+/**
+ * Returns true if the current pathname is part of the admin console.
+ * Any non-admin portal user must never reach these paths.
  */
 function isAdminRoute(pathname: string): boolean {
   return (
     !pathname.startsWith('/teacher') &&
     !pathname.startsWith('/parent') &&
+    !pathname.startsWith('/student') &&
     !pathname.startsWith('/login') &&
     !pathname.startsWith('/change-password') &&
     !pathname.startsWith('/no-access')
   );
+}
+
+type MeShape = {
+  must_change_password?: boolean;
+  portal_type?: string;
+  is_superuser?: boolean;
+  is_school_admin?: boolean;
+  permission_codes?: string[];
+};
+
+/**
+ * Applies all portal-based redirect rules given a resolved /me response.
+ * Returns true if a redirect was issued (caller should return early).
+ */
+function applyPortalRedirects(
+  me: MeShape,
+  pathname: string,
+  router: ReturnType<typeof useRouter>,
+): boolean {
+  const redirect = nonAdminHome(me.portal_type);
+
+  if (redirect) {
+    // User has a built portal — block admin routes and cross-portal access.
+    const isWrongPortal =
+      isAdminRoute(pathname) ||
+      (me.portal_type === 'teacher' && pathname.startsWith('/parent')) ||
+      (me.portal_type === 'parent'  && pathname.startsWith('/teacher'));
+    if (isWrongPortal) {
+      router.replace(redirect);
+      return true;
+    }
+    return false;
+  }
+
+  // Non-admin portal user whose portal is not yet built (e.g. student) —
+  // block admin routes and show a "portal coming soon" message.
+  if (isNonAdminPortalUser(me.portal_type) && isAdminRoute(pathname)) {
+    router.replace('/no-access?reason=portal_pending');
+    return true;
+  }
+
+  // Admin-type user with no permissions assigned — show no-access page.
+  const hasNoPermissions =
+    !me.is_superuser &&
+    !me.is_school_admin &&
+    !isNonAdminPortalUser(me.portal_type) &&
+    !(me.permission_codes?.length);
+  if (hasNoPermissions && !pathname.startsWith('/no-access')) {
+    router.replace('/no-access');
+    return true;
+  }
+
+  return false;
 }
 
 export default function AuthGate({ children }: AuthGateProps) {
@@ -64,39 +131,18 @@ export default function AuthGate({ children }: AuthGateProps) {
             return;
           }
 
-          // ── Real mode: call /me and check portal_type ──────────────────
+          // ── Real mode: call /me and apply portal routing ───────────────
           try {
             const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me/`, {
               headers: { Authorization: `Bearer ${access}` },
             });
             if (meRes.ok) {
-              const me = await meRes.json() as {
-                must_change_password?: boolean;
-                portal_type?: string;
-                is_superuser?: boolean;
-                is_school_admin?: boolean;
-                permission_codes?: string[];
-              };
+              const me = await meRes.json() as MeShape;
               if (me.must_change_password) {
                 router.replace('/change-password');
                 return;
               }
-              // Block non-admin users from admin routes
-              const redirect = nonAdminHome(me.portal_type);
-              if (redirect && isAdminRoute(pathname)) {
-                router.replace(redirect);
-                return;
-              }
-              // No permissions assigned — show the no-access page
-              const hasNoPermissions =
-                !me.is_superuser &&
-                !me.is_school_admin &&
-                !redirect &&                            // not teacher/parent portal
-                !(me.permission_codes?.length);
-              if (hasNoPermissions && !pathname.startsWith('/no-access')) {
-                router.replace('/no-access');
-                return;
-              }
+              if (applyPortalRedirects(me, pathname, router)) return;
             }
           } catch { /* non-blocking */ }
         }
@@ -131,40 +177,19 @@ export default function AuthGate({ children }: AuthGateProps) {
 
       setAuthTokens(data.access, refresh);
 
-      // Re-run status checks with the newly minted access token
+      // Re-run all portal checks with the newly minted access token
       if (pathname !== '/change-password') {
         try {
           const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me/`, {
             headers: { Authorization: `Bearer ${data.access}` },
           });
           if (meRes.ok) {
-            const me = await meRes.json() as {
-              must_change_password?: boolean;
-              portal_type?: string;
-              is_superuser?: boolean;
-              is_school_admin?: boolean;
-              permission_codes?: string[];
-            };
+            const me = await meRes.json() as MeShape;
             if (me.must_change_password) {
               router.replace('/change-password');
               return;
             }
-            // Block non-admin users from admin routes
-            const redirect = nonAdminHome(me.portal_type);
-            if (redirect && isAdminRoute(pathname)) {
-              router.replace(redirect);
-              return;
-            }
-            // No permissions assigned — show the no-access page
-            const hasNoPermissions =
-              !me.is_superuser &&
-              !me.is_school_admin &&
-              !redirect &&                            // not teacher/parent portal
-              !(me.permission_codes?.length);
-            if (hasNoPermissions && !pathname.startsWith('/no-access')) {
-              router.replace('/no-access');
-              return;
-            }
+            if (applyPortalRedirects(me, pathname, router)) return;
           }
         } catch { /* non-blocking */ }
       }

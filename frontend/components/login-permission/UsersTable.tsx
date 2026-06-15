@@ -1,6 +1,6 @@
 'use client';
 
-import { KeyRound, Clock } from 'lucide-react';
+import { KeyRound, Clock, ShieldOff } from 'lucide-react';
 import { initials, formatDate } from '@/lib/login-permission/utils';
 import type { LPUser, PageResult } from '@/lib/login-permission/types';
 
@@ -62,16 +62,11 @@ export function UsersTable({
 }: Props) {
   if (!role) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 rounded-xl border border-dashed border-[var(--bd,#dbe4f0)] bg-[var(--bg-1,#fff)] text-center">
-        <div className="w-14 h-14 rounded-2xl bg-[var(--pu-soft,#e0eaff)] flex items-center justify-center mb-3">
-          <KeyRound size={24} className="text-[var(--pu,#3b5bdb)]" />
+      <div className="flex flex-col items-center justify-center py-16 rounded-xl border border-dashed border-[var(--bd,#dbe4f0)] bg-white text-center">
+        <div className="w-12 h-12 rounded-xl bg-[var(--pu-soft,#EEEAFF)] flex items-center justify-center mb-3">
+          <KeyRound size={20} className="text-[var(--pu,#6D4AFF)]" />
         </div>
-        <p className="font-semibold text-[var(--ink-1,#0f172a)]">
-          Select a role to get started
-        </p>
-        <p className="text-sm text-[var(--ink-3,#64748b)] mt-1">
-          Use the filter above to choose a user role.
-        </p>
+        <p className="font-semibold text-[var(--ink-1,#0f172a)] text-sm">Loading users…</p>
       </div>
     );
   }

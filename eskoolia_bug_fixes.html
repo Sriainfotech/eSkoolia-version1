@@ -1,0 +1,1751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>eSkoolia — School Tenancy Bug Fix Specification</title>
+<style>
+  /* ── Reset & base ─────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    line-height: 1.65;
+    color: #1a1a2e;
+    background: #fff;
+  }
+
+  /* ── Print layout ─────────────────────────────────────────────── */
+  @media print {
+    body { font-size: 11px; }
+    .page-break { page-break-before: always; }
+    .no-break { page-break-inside: avoid; }
+    header, .toc { page-break-after: always; }
+    pre { white-space: pre-wrap; }
+  }
+
+  /* ── Cover page ───────────────────────────────────────────────── */
+  header {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 80px 80px 60px;
+    background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+    color: #fff;
+  }
+
+  header .badge {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #a78bfa;
+    margin-bottom: 24px;
+  }
+
+  header h1 {
+    font-size: 48px;
+    font-weight: 800;
+    line-height: 1.1;
+    letter-spacing: -1.5px;
+    max-width: 700px;
+    margin-bottom: 16px;
+  }
+
+  header h1 span { color: #a78bfa; }
+
+  header .subtitle {
+    font-size: 16px;
+    color: #c4b5fd;
+    max-width: 560px;
+    margin-bottom: 48px;
+    line-height: 1.6;
+  }
+
+  header .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+    width: 100%;
+    max-width: 700px;
+    border-top: 1px solid rgba(167,139,250,0.3);
+    padding-top: 32px;
+  }
+
+  header .meta-grid .item label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #7c3aed;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  header .meta-grid .item span {
+    font-size: 14px;
+    font-weight: 700;
+    color: #ede9fe;
+  }
+
+  /* ── Table of contents ────────────────────────────────────────── */
+  .toc {
+    padding: 60px 80px;
+    min-height: 100vh;
+  }
+
+  .toc h2 {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    margin-bottom: 32px;
+    color: #1a1a2e;
+  }
+
+  .toc-section {
+    margin-bottom: 28px;
+  }
+
+  .toc-section h3 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 700;
+    color: #6d28d9;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid #ede9fe;
+  }
+
+  .toc-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px dotted #e5e7eb;
+  }
+
+  .toc-row .id {
+    font-weight: 700;
+    font-size: 11px;
+    font-family: 'Cascadia Code', 'Courier New', monospace;
+    color: #7c3aed;
+    flex-shrink: 0;
+    width: 36px;
+  }
+
+  .toc-row .title { flex: 1; color: #374151; }
+
+  .toc-row .sev {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 99px;
+    flex-shrink: 0;
+  }
+
+  .sev-critical { background: #fee2e2; color: #b91c1c; }
+  .sev-high     { background: #fed7aa; color: #c2410c; }
+  .sev-medium   { background: #fef9c3; color: #92400e; }
+  .sev-low      { background: #dcfce7; color: #15803d; }
+
+  /* ── Main content wrapper ─────────────────────────────────────── */
+  main { padding: 0 80px 80px; }
+
+  /* ── Section heading ──────────────────────────────────────────── */
+  .section-divider {
+    padding: 48px 0 20px;
+    border-bottom: 3px solid #6d28d9;
+    margin-bottom: 32px;
+  }
+
+  .section-divider .layer-tag {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #7c3aed;
+    margin-bottom: 6px;
+  }
+
+  .section-divider h2 {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -0.8px;
+    color: #1a1a2e;
+  }
+
+  /* ── Bug card ─────────────────────────────────────────────────── */
+  .bug-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 36px;
+  }
+
+  .bug-card:not(:first-child) { page-break-before: auto; }
+
+  /* card header */
+  .bug-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 20px 24px;
+    background: #f8f7ff;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .bug-header .id-badge {
+    font-family: 'Cascadia Code', 'Courier New', monospace;
+    font-size: 12px;
+    font-weight: 700;
+    color: #6d28d9;
+    background: #ede9fe;
+    border: 1px solid #c4b5fd;
+    border-radius: 6px;
+    padding: 4px 10px;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .bug-header .bug-meta { flex: 1; }
+
+  .bug-header .bug-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #1a1a2e;
+    line-height: 1.3;
+    margin-bottom: 6px;
+  }
+
+  .bug-header .bug-file {
+    font-family: 'Cascadia Code', 'Courier New', monospace;
+    font-size: 11px;
+    color: #6b7280;
+  }
+
+  .bug-header .sev { margin-top: 3px; align-self: flex-start; }
+
+  /* card body */
+  .bug-body { padding: 20px 24px; }
+
+  .bug-section { margin-bottom: 20px; }
+
+  .bug-section h4 {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #7c3aed;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .bug-section h4::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #ede9fe;
+  }
+
+  .bug-section p { color: #374151; margin-bottom: 6px; }
+
+  /* numbered steps */
+  ol.steps { padding-left: 20px; }
+  ol.steps li { color: #374151; margin-bottom: 5px; }
+  ol.steps li strong { color: #1a1a2e; }
+
+  /* code blocks */
+  .code-wrap {
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 10px 0;
+    border: 1px solid #e5e7eb;
+    font-size: 11.5px;
+  }
+
+  .code-label {
+    background: #f3f4f6;
+    padding: 5px 12px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #6b7280;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .code-label.before { background: #fff5f5; color: #b91c1c; border-bottom-color: #fecaca; }
+  .code-label.after  { background: #f0fdf4; color: #15803d; border-bottom-color: #bbf7d0; }
+
+  pre {
+    font-family: 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
+    font-size: 11.5px;
+    line-height: 1.6;
+    padding: 14px 16px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  pre.bad  { background: #fff5f5; }
+  pre.good { background: #f0fdf4; }
+  pre.neutral { background: #f9fafb; }
+
+  .del { color: #b91c1c; }
+  .ins { color: #15803d; }
+
+  /* inline code */
+  code {
+    font-family: 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
+    font-size: 11px;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: #6d28d9;
+  }
+
+  /* impact box */
+  .impact-box {
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-left: 4px solid #f59e0b;
+    border-radius: 6px;
+    padding: 10px 14px;
+    color: #78350f;
+    font-size: 12px;
+  }
+
+  /* file list */
+  .file-list { list-style: none; padding: 0; }
+  .file-list li {
+    font-family: 'Cascadia Code', 'Courier New', monospace;
+    font-size: 11px;
+    color: #6d28d9;
+    padding: 3px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .file-list li::before { content: '📄'; font-size: 11px; }
+
+  /* footer note */
+  .doc-footer {
+    margin-top: 60px;
+    padding: 24px 0;
+    border-top: 2px solid #ede9fe;
+    text-align: center;
+    font-size: 11px;
+    color: #9ca3af;
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════
+     COVER PAGE
+════════════════════════════════════════════════════════ -->
+<header>
+  <div class="badge">eSkoolia ERP · Internal Engineering Document</div>
+  <h1>School Tenancy<br /><span>Bug Fix Specification</span></h1>
+  <p class="subtitle">
+    Detailed root-cause analysis and exact code fixes for all 23 confirmed
+    bugs across the backend Django REST API and Next.js frontend of the
+    school tenancy provisioning and access-control system.
+  </p>
+  <div class="meta-grid">
+    <div class="item"><label>Total Bugs</label><span>23</span></div>
+    <div class="item"><label>Backend</label><span>13 bugs</span></div>
+    <div class="item"><label>Frontend</label><span>10 bugs</span></div>
+    <div class="item"><label>Date</label><span>June 2026</span></div>
+  </div>
+</header>
+
+<!-- ════════════════════════════════════════════════════════
+     TABLE OF CONTENTS
+════════════════════════════════════════════════════════ -->
+<div class="toc">
+  <h2>Table of Contents</h2>
+
+  <div class="toc-section">
+    <h3>Backend Bugs (B1 – B13)</h3>
+    <div class="toc-row"><span class="id">B1</span><span class="title">Provisioning hardcodes <code>status="onboarding"</code> — login permanently broken</span><span class="sev sev-critical">Critical</span></div>
+    <div class="toc-row"><span class="id">B2</span><span class="title">Tenant status check runs even when <code>MULTI_TENANCY_ENABLED=False</code></span><span class="sev sev-critical">Critical</span></div>
+    <div class="toc-row"><span class="id">B3</span><span class="title">Fuzzy school name match can block login from a different school's suspended status</span><span class="sev sev-high">High</span></div>
+    <div class="toc-row"><span class="id">B4</span><span class="title"><code>SchoolTenant.status</code> and <code>School.is_active</code> are never synced</span><span class="sev sev-high">High</span></div>
+    <div class="toc-row"><span class="id">B5</span><span class="title"><code>"trial"</code> missing from <code>_VALID_STATUSES</code> — cannot be set via PATCH</span><span class="sev sev-medium">Medium</span></div>
+    <div class="toc-row"><span class="id">B6</span><span class="title">Two incompatible provisioning systems — System 2 is dead code</span><span class="sev sev-medium">Medium</span></div>
+    <div class="toc-row"><span class="id">B7</span><span class="title"><code>get_tenant_from_request()</code> raises <code>Http404</code> inside login — school gets 404</span><span class="sev sev-high">High</span></div>
+    <div class="toc-row"><span class="id">B8</span><span class="title">Impersonate opens non-existent PostgreSQL schema</span><span class="sev sev-high">High</span></div>
+    <div class="toc-row"><span class="id">B9</span><span class="title">Password reset uses case-sensitive subdomain lookup — silently returns 404</span><span class="sev sev-medium">Medium</span></div>
+    <div class="toc-row"><span class="id">B10</span><span class="title"><code>has_object_permission()</code> compares int to string — always returns False</span><span class="sev sev-high">High</span></div>
+    <div class="toc-row"><span class="id">B11</span><span class="title"><code>IsSuperAdminOnly</code> defined twice — first definition silently overwritten</span><span class="sev sev-medium">Medium</span></div>
+    <div class="toc-row"><span class="id">B12</span><span class="title">MeView resolves branding by name-only match — returns wrong school's branding</span><span class="sev sev-medium">Medium</span></div>
+    <div class="toc-row"><span class="id">B13</span><span class="title"><code>tenant_id</code> collision has no retry — rare provisioning crash</span><span class="sev sev-low">Low</span></div>
+  </div>
+
+  <div class="toc-section">
+    <h3>Frontend Bugs (F1 – F10)</h3>
+    <div class="toc-row"><span class="id">F1</span><span class="title"><code>login()</code> never clears permissions cache — super admin identity leaks to next user</span><span class="sev sev-critical">Critical</span></div>
+    <div class="toc-row"><span class="id">F2</span><span class="title"><code>logout()</code> never clears permissions cache — only TopBar button does</span><span class="sev sev-critical">Critical</span></div>
+    <div class="toc-row"><span class="id">F3</span><span class="title"><code>is_school_admin</code> gets same wildcard bypass as <code>is_superuser</code></span><span class="sev sev-critical">Critical</span></div>
+    <div class="toc-row"><span class="id">F4</span><span class="title"><code>can()</code> returns <code>true</code> while loading — all guarded UI briefly visible</span><span class="sev sev-medium">Medium</span></div>
+    <div class="toc-row"><span class="id">F5</span><span class="title">AuthGate token refresh skips <code>must_change_password</code>, <code>portal_type</code>, <code>is_superuser</code></span><span class="sev sev-high">High</span></div>
+    <div class="toc-row"><span class="id">F6</span><span class="title">Super-admin layout guard race — school admin briefly sees super-admin page content</span><span class="sev sev-high">High</span></div>
+    <div class="toc-row"><span class="id">F7</span><span class="title">Login page shows "School not found" before Domain record is ready</span><span class="sev sev-medium">Medium</span></div>
+    <div class="toc-row"><span class="id">F8</span><span class="title">Edit School modal sends <code>"trial"</code> status which backend rejects silently</span><span class="sev sev-medium">Medium</span></div>
+    <div class="toc-row"><span class="id">F9</span><span class="title">UDISE code reads camelCase field — always blank, saved value overwritten</span><span class="sev sev-medium">Medium</span></div>
+    <div class="toc-row"><span class="id">F10</span><span class="title">JWT tokens exposed in URL during impersonation</span><span class="sev sev-high">High</span></div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════
+     BACKEND BUGS
+════════════════════════════════════════════════════════ -->
+<main>
+
+<div class="section-divider">
+  <div class="layer-tag">Layer 1</div>
+  <h2>Backend Bugs</h2>
+</div>
+
+<!-- ── B1 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B1</div>
+    <div class="bug-meta">
+      <div class="bug-title">Provisioning hardcodes <code>status="onboarding"</code> — school admin login is permanently broken on day one</div>
+      <div class="bug-file">backend/apps/super_admin/views.py · line 770</div>
+    </div>
+    <span class="sev sev-critical">Critical</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p><code>SchoolTenantProvisionView.post()</code> creates the <code>SchoolTenant</code> record with <code>status="onboarding"</code> hardcoded. The login serializer blocks all non-superusers whose tenant status is not <code>"active"</code> or <code>"trial"</code>. There is no automatic step that transitions the status after provisioning finishes, so every new school is permanently locked out at the login stage until a super admin manually patches the status.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Step-by-Step Reproduction</h4>
+      <ol class="steps">
+        <li>Super admin provisions a new school — <code>SchoolTenant(status="onboarding")</code> is written to DB.</li>
+        <li>School admin opens <code>https://springdale.eskoolia.com/login</code> and submits credentials.</li>
+        <li><code>LoginTokenObtainPairSerializer.validate()</code> calls <code>get_tenant_from_request(request)</code> → returns the <code>SchoolTenant</code>.</li>
+        <li><code>_is_blocked_status(request_tenant)</code> checks: <code>"onboarding" not in ("active","trial")</code> → <strong>True</strong>.</li>
+        <li><code>AuthenticationFailed("Login is disabled for this school.")</code> is raised.</li>
+        <li>School admin sees an error and cannot log in until status is manually patched.</li>
+      </ol>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/super_admin/views.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Change <code>status="onboarding"</code> to <code>status="active"</code> on line 770 of the provisioning view. Since the super admin is explicitly provisioning the school, it should immediately be active. If a multi-step onboarding workflow is required in future, add a separate explicit status transition endpoint.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — backend/apps/super_admin/views.py:770</div>
+        <pre class="bad"><span class="del">                    status="onboarding",</span></pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — backend/apps/super_admin/views.py:770</div>
+        <pre class="good"><span class="ins">                    status="active",</span></pre>
+      </div>
+    </div>
+
+    <div class="impact-box">
+      <strong>Impact of fix:</strong> New schools are immediately active. School admins can log in as soon as their credentials are provisioned. No other code paths need to change for this fix.
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B2 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B2</div>
+    <div class="bug-meta">
+      <div class="bug-title">Tenant status check runs even when <code>MULTI_TENANCY_ENABLED=False</code></div>
+      <div class="bug-file">backend/apps/users/serializers.py · lines 147–161</div>
+    </div>
+    <span class="sev sev-critical">Critical</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>The <code>is_multi_tenancy_enabled()</code> feature-flag guard is placed around the school-scope cross-match check (lines 101–133) but NOT around the tenant-status block at lines 147–161. So even in monolithic mode, if the login request's <code>Host</code> header matches any <code>SchoolTenant</code> with a blocked status, the login is denied.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Step-by-Step Reproduction</h4>
+      <ol class="steps">
+        <li><code>MULTI_TENANCY_ENABLED=False</code> is set in <code>.env</code>.</li>
+        <li>School admin logs in from <code>springdale.eskoolia.com</code>.</li>
+        <li>The school-scope check block is skipped (guarded by <code>is_multi_tenancy_enabled()</code>).</li>
+        <li>The status-check block at line 147 runs unconditionally — finds <code>SchoolTenant(status="onboarding")</code>.</li>
+        <li>Login is blocked despite multi-tenancy being disabled.</li>
+      </ol>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/users/serializers.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Wrap the entire request-tenant resolution and status-block check inside an <code>is_multi_tenancy_enabled()</code> guard so it only runs when the feature is active.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — backend/apps/users/serializers.py:147–161</div>
+        <pre class="bad">        request_tenant = None
+        if not user.is_superuser:
+            try:
+                request = self.context.get("request") if hasattr(self, "context") else None
+                if request is not None:
+                    from apps.tenancy.resolvers import get_tenant_from_request
+                    request_tenant = get_tenant_from_request(request)
+            except Exception:
+                request_tenant = None
+
+            if request_tenant is not None and _is_blocked_status(request_tenant):
+                raise AuthenticationFailed(
+                    "Login is disabled for this school. "
+                    "Please contact your administrator."
+                )</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — backend/apps/users/serializers.py:147–161</div>
+        <pre class="good">        request_tenant = None
+<span class="ins">        if not user.is_superuser and is_multi_tenancy_enabled():</span>
+            try:
+                request = self.context.get("request") if hasattr(self, "context") else None
+                if request is not None:
+                    from apps.tenancy.resolvers import get_tenant_from_request
+                    request_tenant = get_tenant_from_request(request)
+            except Exception:
+                request_tenant = None
+
+            if request_tenant is not None and _is_blocked_status(request_tenant):
+                raise AuthenticationFailed(
+                    "Login is disabled for this school. "
+                    "Please contact your administrator."
+                )</pre>
+      </div>
+    </div>
+
+    <div class="impact-box">
+      <strong>Impact of fix:</strong> In monolithic mode (the default), login is no longer affected by <code>SchoolTenant</code> status at all. When multi-tenancy is enabled, the check works as designed.
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B3 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B3</div>
+    <div class="bug-meta">
+      <div class="bug-title">Fuzzy school name match can block login from a different school's suspended status</div>
+      <div class="bug-file">backend/apps/users/serializers.py · lines 164–197</div>
+    </div>
+    <span class="sev sev-high">High</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>A second <code>SchoolTenant</code> lookup uses fuzzy matching (<code>Q(name__iexact=school.name)</code> ORed with subdomain/code matches). If the user's school name, subdomain, or code accidentally matches a different, blocked <code>SchoolTenant</code> record, login is denied for the wrong reason.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/users/serializers.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Replace the fuzzy multi-field OR query with a direct subdomain-only match. This ensures only the exact school the user belongs to is checked, not unrelated schools that happen to share a name.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — backend/apps/users/serializers.py:170–184</div>
+        <pre class="bad">                if school:
+                    name = (school.name or "").strip()
+                    code = (school.code or "").strip()
+                    subdomain = (school.subdomain or "").strip()
+                    q = Q()
+                    if name:
+                        q |= Q(name__iexact=name)
+                    if code:
+                        q |= Q(subdomain_url__iexact=code) | Q(short_code__iexact=code)
+                    if subdomain:
+                        q |= Q(subdomain_url__iexact=subdomain)
+                    if q:
+                        tenant = SchoolTenant.objects.filter(q).first()</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — backend/apps/users/serializers.py:170–184</div>
+        <pre class="good">                if school:
+                    subdomain = (school.subdomain or "").strip()
+<span class="ins">                    # Use only subdomain for exact match — fuzzy name/code matching
+</span><span class="ins">                    # can accidentally find a different school's blocked tenant.</span>
+                    if subdomain:
+                        tenant = SchoolTenant.objects.filter(
+                            subdomain_url__iexact=subdomain
+                        ).first()</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B4 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B4</div>
+    <div class="bug-meta">
+      <div class="bug-title"><code>SchoolTenant.status</code> and <code>School.is_active</code> are never synced</div>
+      <div class="bug-file">backend/apps/super_admin/views.py · lines 795–800 and 867–885</div>
+    </div>
+    <span class="sev sev-high">High</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>Provisioning creates <code>School(is_active=True)</code> and <code>SchoolTenant(status="onboarding")</code> simultaneously — contradictory from day one. The PATCH endpoint that updates <code>SchoolTenant.status</code> never touches <code>School.is_active</code>. Any ERP logic filtering by <code>School.is_active</code> disagrees with the tenant status.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/super_admin/views.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>In <code>SchoolTenantDetailView.patch()</code>, after saving the tenant, also update the linked <code>School.is_active</code> to match. A school is "active" when the tenant status is <code>"active"</code> or <code>"trial"</code>; it is inactive for all other statuses.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — backend/apps/super_admin/views.py:867–885 (SchoolTenantDetailView.patch)</div>
+        <pre class="bad">    def patch(self, request, tenant_id):
+        tenant = self.get_object(tenant_id)
+        serializer = SchoolTenantUpdateSerializer(
+            tenant, data=self._normalize_school_payload(request.data), partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        updated = serializer.save()
+
+        log_audit( ... )
+
+        return Response(SchoolTenantDetailSerializer(updated).data)</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — backend/apps/super_admin/views.py:867–885 (SchoolTenantDetailView.patch)</div>
+        <pre class="good">    def patch(self, request, tenant_id):
+        tenant = self.get_object(tenant_id)
+        serializer = SchoolTenantUpdateSerializer(
+            tenant, data=self._normalize_school_payload(request.data), partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        updated = serializer.save()
+
+<span class="ins">        # Keep School.is_active in sync with the tenant status.</span>
+<span class="ins">        if "status" in serializer.validated_data:</span>
+<span class="ins">            is_active = updated.status in ("active", "trial")</span>
+<span class="ins">            School.objects.filter(subdomain=updated.subdomain_url).update(is_active=is_active)</span>
+
+        log_audit( ... )
+
+        return Response(SchoolTenantDetailSerializer(updated).data)</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B5 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B5</div>
+    <div class="bug-meta">
+      <div class="bug-title"><code>"trial"</code> status missing from <code>_VALID_STATUSES</code> — cannot be set via PATCH API</div>
+      <div class="bug-file">backend/apps/super_admin/serializers.py · line 204</div>
+    </div>
+    <span class="sev sev-medium">Medium</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>The login serializer and middleware both allow <code>"trial"</code> as a valid status, and the frontend Edit modal includes it as a dropdown option. But <code>SchoolTenantUpdateSerializer._VALID_STATUSES</code> does not include <code>"trial"</code>, so the PATCH endpoint rejects it with a 400 error.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/super_admin/serializers.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — backend/apps/super_admin/serializers.py:204</div>
+        <pre class="bad">    _VALID_STATUSES = {"active", "suspended", "archived", "pending", "onboarding", "provisioning"}</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — backend/apps/super_admin/serializers.py:204</div>
+        <pre class="good">    _VALID_STATUSES = {<span class="ins">"trial", </span>"active", "suspended", "archived", "pending", "onboarding", "provisioning"}</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B6 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B6</div>
+    <div class="bug-meta">
+      <div class="bug-title">Two incompatible provisioning systems — System 2 (<code>tenancy/api.py</code>) is dead code</div>
+      <div class="bug-file">backend/apps/tenancy/api.py · entire file</div>
+    </div>
+    <span class="sev sev-medium">Medium</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p><code>tenancy/api.py</code>'s <code>provision_tenant_view</code> is an older provisioning path that requires <code>MULTI_TENANCY_ENABLED=True</code>, creates PostgreSQL schemas, and creates <code>Domain</code> records with bare subdomains. The frontend uses <code>SchoolTenantProvisionView</code> (System 1) exclusively. System 2 returns 403 in default configuration and has a different data shape (different Domain format). These two systems will conflict if both are ever used.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/tenancy/api.py</li>
+        <li>backend/config/urls.py (or whichever URL config registers tenancy routes)</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Remove the <code>provision_tenant_view</code> endpoint from the URL config so it cannot be called accidentally. Add a clear comment in <code>tenancy/api.py</code> stating it is superseded by <code>SchoolTenantProvisionView</code>. Do not delete the file yet — it contains the schema-creation logic that will be needed when multi-tenancy is enabled, but it must not be reachable as an API endpoint.</p>
+      <div class="code-wrap">
+        <div class="code-label">In backend URL config (urls_public.py or config/urls.py) — remove this line:</div>
+        <pre class="bad"><span class="del">    path("api/v1/tenancy/super-admin/schools/provision/", provision_tenant_view),</span></pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">Add warning comment at top of backend/apps/tenancy/api.py</div>
+        <pre class="good"><span class="ins"># NOTE: This file is NOT wired into URL routing. It is preserved for future use</span>
+<span class="ins"># when MULTI_TENANCY_ENABLED=True. The active provisioning endpoint is</span>
+<span class="ins"># SchoolTenantProvisionView in apps/super_admin/views.py.</span>
+<span class="ins"># Do NOT register provision_tenant_view in URL conf — its Domain record format</span>
+<span class="ins"># is incompatible with System 1 and will break subdomain resolution.</span></pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B7 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B7</div>
+    <div class="bug-meta">
+      <div class="bug-title"><code>get_tenant_from_request()</code> raises <code>Http404</code> inside login — school admin gets a 404 page instead of an auth error</div>
+      <div class="bug-file">backend/apps/tenancy/resolvers.py · lines 54, 65, 80</div>
+    </div>
+    <span class="sev sev-high">High</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>For unrecognised subdomains (no matching <code>Domain</code> record), <code>get_tenant_from_request()</code> raises <code>Http404</code>. When this is called from inside the login serializer, the exception propagates to Django's exception handler and returns a 404 HTML response — not a user-friendly auth error message.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/tenancy/resolvers.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Replace <code>raise Http404</code> with <code>return None</code> in all three places in the resolver. The caller (login serializer) treats <code>None</code> as "no tenant found" and proceeds without blocking. The middleware has its own <code>Http404</code> handling for the page-level tenant enforcement.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — resolvers.py (3 locations)</div>
+        <pre class="bad">        if domain is None:
+            logger.warning(f"Domain not found for local subdomain: {subdomain}")
+<span class="del">            raise Http404(f"Tenant {subdomain} not found")</span>
+        return domain.tenant
+
+        ...
+
+        except Domain.DoesNotExist:
+            logger.warning(f"Domain not found: {subdomain}")
+<span class="del">            raise Http404(f"Tenant {subdomain} not found")</span>
+
+        ...
+
+        except Domain.DoesNotExist:
+            logger.warning(f"Tenant not found for subdomain: {subdomain}")
+<span class="del">            raise Http404(f"School '{subdomain}' not found")</span></pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — resolvers.py (3 locations)</div>
+        <pre class="good">        if domain is None:
+            logger.warning(f"Domain not found for local subdomain: {subdomain}")
+<span class="ins">            return None</span>
+        return domain.tenant
+
+        ...
+
+        except Domain.DoesNotExist:
+            logger.warning(f"Domain not found: {subdomain}")
+<span class="ins">            return None</span>
+
+        ...
+
+        except Domain.DoesNotExist:
+            logger.warning(f"Tenant not found for subdomain: {subdomain}")
+<span class="ins">            return None</span></pre>
+      </div>
+      <p style="margin-top:8px;color:#6b7280;font-size:12px;">Also remove the <code>Http404</code> import from resolvers.py if it is no longer used elsewhere in that file.</p>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B8 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B8</div>
+    <div class="bug-meta">
+      <div class="bug-title">Impersonate view opens a non-existent PostgreSQL schema — wrong users returned or crash</div>
+      <div class="bug-file">backend/apps/super_admin/views.py · line 923</div>
+    </div>
+    <span class="sev sev-high">High</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>System 1 provisioning never creates PostgreSQL schemas. <code>SchoolImpersonateView</code> uses <code>schema_context(tenant.schema_name)</code> which either silently falls back to the public schema (returning public-schema users such as super admins) or raises a database error.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/super_admin/views.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>In monolithic mode (<code>MULTI_TENANCY_ENABLED=False</code>), do NOT use <code>schema_context</code>. Look up the admin user directly via the <code>School</code> model (same approach as <code>SchoolResetAdminPasswordView</code>). Only use <code>schema_context</code> when multi-tenancy is enabled and the schema is confirmed to exist.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — views.py:907–945 (SchoolImpersonateView.post)</div>
+        <pre class="bad">        with schema_context(tenant.schema_name):
+            if target_username:
+                target = User.objects.filter(username=target_username, is_active=True).first()
+            if target is None:
+                target = (
+                    User.objects.filter(is_active=True)
+                    .order_by("-is_school_admin", "-is_superuser", "id")
+                    .first()
+                )
+            ...
+            refresh = RefreshToken.for_user(target)</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — views.py:907–945 (SchoolImpersonateView.post)</div>
+        <pre class="good">        from apps.tenancy.context import is_multi_tenancy_enabled
+        from django_tenants.utils import schema_context as _schema_ctx
+
+<span class="ins">        # Resolve the ERP school so we can scope the user query correctly.</span>
+<span class="ins">        erp_school = School.objects.filter(subdomain__iexact=tenant.subdomain_url).first()</span>
+
+<span class="ins">        def _find_target():</span>
+<span class="ins">            qs = User.objects.filter(is_active=True, school=erp_school) if erp_school else User.objects.none()</span>
+<span class="ins">            if target_username:</span>
+<span class="ins">                return qs.filter(username=target_username).first()</span>
+<span class="ins">            return qs.order_by("-is_school_admin", "id").first()</span>
+
+<span class="ins">        if is_multi_tenancy_enabled():</span>
+<span class="ins">            with _schema_ctx(tenant.schema_name):</span>
+<span class="ins">                target = _find_target()</span>
+<span class="ins">                if target:</span>
+<span class="ins">                    refresh = RefreshToken.for_user(target)</span>
+<span class="ins">        else:</span>
+<span class="ins">            target = _find_target()</span>
+<span class="ins">            if target:</span>
+<span class="ins">                refresh = RefreshToken.for_user(target)</span>
+
+        if not target:
+            return Response({"detail": "No active staff user found."}, status=404)
+        ...</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B9 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B9</div>
+    <div class="bug-meta">
+      <div class="bug-title">Password reset uses case-sensitive subdomain match — silently returns 404</div>
+      <div class="bug-file">backend/apps/super_admin/views.py · line 991</div>
+    </div>
+    <span class="sev sev-medium">Medium</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p><code>School.objects.filter(subdomain=tenant.subdomain_url)</code> is case-sensitive. If <code>School.subdomain</code> and <code>SchoolTenant.subdomain_url</code> have any casing difference, the lookup returns nothing and a 404 is returned even though the school exists.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/super_admin/views.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — views.py:991</div>
+        <pre class="bad">        erp_school = School.objects.filter(<span class="del">subdomain=tenant.subdomain_url</span>).first()</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — views.py:991</div>
+        <pre class="good">        erp_school = School.objects.filter(<span class="ins">subdomain__iexact=tenant.subdomain_url</span>).first()</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B10 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B10</div>
+    <div class="bug-meta">
+      <div class="bug-title"><code>has_object_permission()</code> compares integer <code>school_id</code> to string <code>tenant_id</code> — always returns False</div>
+      <div class="bug-file">backend/apps/tenancy/permissions.py · line 296</div>
+    </div>
+    <span class="sev sev-high">High</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p><code>obj.school_id</code> is an integer foreign key (e.g. <code>42</code>). <code>tenant.tenant_id</code> is a string like <code>"TNT_AB1234CD"</code>. These will never be equal. All object-level permission checks silently deny access when this class is used with multi-tenancy enabled.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/tenancy/permissions.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>The correct check is whether the object's school matches the current tenant's linked school. Compare <code>obj.school_id</code> against the <code>School</code> record linked to the tenant, not the tenant ID string.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — permissions.py:293–297</div>
+        <pre class="bad">        if hasattr(obj, "school_id"):
+<span class="del">            if obj.school_id and obj.school_id != tenant.tenant_id:</span>
+<span class="del">                return False</span></pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — permissions.py:293–297</div>
+        <pre class="good">        if hasattr(obj, "school_id") and obj.school_id:
+<span class="ins">            # Resolve the School record linked to this tenant and compare PKs.</span>
+<span class="ins">            from apps.tenancy.models import School</span>
+<span class="ins">            tenant_school = School.objects.filter(</span>
+<span class="ins">                subdomain__iexact=tenant.subdomain_url</span>
+<span class="ins">            ).values_list("id", flat=True).first()</span>
+<span class="ins">            if tenant_school is not None and obj.school_id != tenant_school:</span>
+<span class="ins">                return False</span></pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B11 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B11</div>
+    <div class="bug-meta">
+      <div class="bug-title"><code>IsSuperAdminOnly</code> defined twice — first definition silently overwritten</div>
+      <div class="bug-file">backend/apps/tenancy/permissions.py · lines 146 and 214</div>
+    </div>
+    <span class="sev sev-medium">Medium</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>Python replaces the first class definition with the second when the same name is used twice in a module. The standalone implementation at line 146 is dead code — any import of <code>IsSuperAdminOnly</code> gets the alias at line 214 instead.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/tenancy/permissions.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Remove the first definition of <code>IsSuperAdminOnly</code> (lines 146–174). Keep only the alias at line 214 which properly extends <code>IsSuperAdmin</code>. The alias is the correct backward-compatible approach.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — permissions.py:146–174 (DELETE this entire block)</div>
+        <pre class="bad"><span class="del">class IsSuperAdminOnly(BasePermission):</span>
+<span class="del">    """Permission allowing only super-admins. ..."""</span>
+<span class="del">    message = "Only super-administrators can access this resource."</span>
+<span class="del">    def has_permission(self, request, view):</span>
+<span class="del">        if not request.user or not request.user.is_authenticated:</span>
+<span class="del">            return False</span>
+<span class="del">        if not request.user.is_superuser:</span>
+<span class="del">            raise PermissionDenied(self.message)</span>
+<span class="del">        if is_tenant_mode():</span>
+<span class="del">            tenant = get_current_tenant()</span>
+<span class="del">            if tenant:</span>
+<span class="del">                raise PermissionDenied("Cross-tenant APIs cannot be accessed from tenant context.")</span>
+<span class="del">        return True</span>
+
+# ... (IsSuperAdmin class stays) ...</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — keep only the alias at line 214</div>
+        <pre class="good"># ... IsSuperAdmin class stays unchanged ...
+
+class IsSuperAdminOnly(IsSuperAdmin):
+    """Backward-compatible alias for older imports."""</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B12 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B12</div>
+    <div class="bug-meta">
+      <div class="bug-title">MeView resolves school branding by name-only match — returns wrong school's branding</div>
+      <div class="bug-file">backend/apps/users/views.py · line 87</div>
+    </div>
+    <span class="sev sev-medium">Medium</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p><code>SchoolTenant.objects.filter(name=school.name).first()</code> uses name for lookup. School names are not unique in <code>SchoolTenant</code>. Two schools with the same name will return whichever tenant record has the lower PK — possibly the wrong school's logo and brand color.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/users/views.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — views.py:87</div>
+        <pre class="bad">                tenant = SchoolTenant.objects.<span class="del">filter(name=school.name).first()</span></pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — views.py:87</div>
+        <pre class="good">                tenant = SchoolTenant.objects.<span class="ins">filter(</span>
+<span class="ins">                    subdomain_url__iexact=school.subdomain</span>
+<span class="ins">                ).first() if school.subdomain else None</span></pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── B13 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">B13</div>
+    <div class="bug-meta">
+      <div class="bug-title"><code>tenant_id</code> collision has no retry — rare provisioning crash</div>
+      <div class="bug-file">backend/apps/super_admin/views.py · line 759</div>
+    </div>
+    <span class="sev sev-low">Low</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p><code>tenant_id=f"TNT_{uuid4().hex[:8].upper()}"</code> generates an 8-character suffix with no retry on collision. A duplicate raises <code>IntegrityError</code> and the provisioning request returns 500.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>backend/apps/super_admin/views.py</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Add a helper that generates a unique tenant ID with up to 5 retries.</p>
+      <div class="code-wrap">
+        <div class="code-label after">ADD near the top of views.py (helper function)</div>
+        <pre class="good"><span class="ins">def _generate_unique_tenant_id(queryset, max_attempts: int = 5) -> str:</span>
+<span class="ins">    """Generate a unique TNT_XXXXXXXX id with retry on collision."""</span>
+<span class="ins">    for _ in range(max_attempts):</span>
+<span class="ins">        candidate = f"TNT_{uuid4().hex[:8].upper()}"</span>
+<span class="ins">        if not queryset.filter(tenant_id=candidate).exists():</span>
+<span class="ins">            return candidate</span>
+<span class="ins">    raise ValueError("Could not generate a unique tenant_id after multiple attempts.")</span></pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — views.py:759</div>
+        <pre class="bad">                tenant_id=<span class="del">f"TNT_{uuid4().hex[:8].upper()}"</span>,</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — views.py:759</div>
+        <pre class="good">                tenant_id=<span class="ins">_generate_unique_tenant_id(self._public_queryset(SchoolTenant))</span>,</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════
+     FRONTEND BUGS
+════════════════════════════════════════════════════════ -->
+
+<div class="section-divider page-break">
+  <div class="layer-tag">Layer 2</div>
+  <h2>Frontend Bugs</h2>
+</div>
+
+<!-- ── F1 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">F1</div>
+    <div class="bug-meta">
+      <div class="bug-title"><code>login()</code> never calls <code>clearPermissionsCache()</code> — previous user's identity survives into next session</div>
+      <div class="bug-file">frontend/lib/auth-context.tsx · lines 204–251</div>
+    </div>
+    <span class="sev sev-critical">Critical</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p><code>usePermissions</code> maintains a module-level cache <code>_cache</code> with a 5-minute TTL. The <code>login()</code> function in <code>auth-context.tsx</code> stores new tokens and fetches the new user's <code>/me</code> data for the React context — but never calls <code>clearPermissionsCache()</code>. If a super admin (with <code>is_superuser: true</code>) was logged in, a school admin logging in within 5 minutes will inherit the stale cache and see the School Tenancy module.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Step-by-Step Reproduction</h4>
+      <ol class="steps">
+        <li>Super admin logs in — <code>_cache = &#123;is_superuser: true, ...&#125;</code>, TTL starts.</li>
+        <li>Super admin navigates directly to <code>/login</code> (bypassing TopBar logout button).</li>
+        <li>School admin enters their credentials and logs in on the same tab.</li>
+        <li><code>login()</code> runs: stores school admin tokens, fetches <code>/me</code> for React state.</li>
+        <li><code>clearPermissionsCache()</code> is NOT called — <code>_cache</code> still contains super admin data.</li>
+        <li><code>usePermissions</code> hook returns stale <code>is_superuser: true</code>.</li>
+        <li>School Tenancy module passes the <code>superuserOnly</code> guard → school admin sees it.</li>
+      </ol>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>frontend/lib/auth-context.tsx</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — auth-context.tsx (imports at top)</div>
+        <pre class="bad">import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from "@/lib/auth";</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — auth-context.tsx (imports at top)</div>
+        <pre class="good">import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from "@/lib/auth";
+<span class="ins">import { clearPermissionsCache } from "@/hooks/usePermissions";</span></pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — auth-context.tsx:238 (inside login())</div>
+        <pre class="bad">      const result = await apiLogin(username, password);
+      setAuthTokens(result.access, result.refresh);</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — auth-context.tsx:238 (inside login())</div>
+        <pre class="good">      const result = await apiLogin(username, password);
+<span class="ins">      clearPermissionsCache(); // Ensure no stale identity from previous user</span>
+      setAuthTokens(result.access, result.refresh);</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── F2 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">F2</div>
+    <div class="bug-meta">
+      <div class="bug-title"><code>logout()</code> never calls <code>clearPermissionsCache()</code> — only TopBar button does</div>
+      <div class="bug-file">frontend/lib/auth-context.tsx · lines 254–273</div>
+    </div>
+    <span class="sev sev-critical">Critical</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>The <code>logout()</code> function in <code>auth-context.tsx</code> clears tokens and React state but never calls <code>clearPermissionsCache()</code>. The cache is only cleared in <code>TopBar.handleLogout()</code>. Any programmatic logout, session expiry redirect, or logout from a non-TopBar component leaves the cache intact.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>frontend/lib/auth-context.tsx</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — auth-context.tsx:268 (inside logout())</div>
+        <pre class="bad">    clearAuthTokens();
+    localStorage.removeItem('mock_user');
+    sessionStorage.removeItem("school_code");
+    sessionStorage.removeItem("tenant_id");
+    setUser(null);</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — auth-context.tsx:268 (inside logout())</div>
+        <pre class="good">    clearAuthTokens();
+<span class="ins">    clearPermissionsCache();</span>
+    localStorage.removeItem('mock_user');
+    sessionStorage.removeItem("school_code");
+    sessionStorage.removeItem("tenant_id");
+    setUser(null);</pre>
+      </div>
+    </div>
+
+    <div class="impact-box">
+      <strong>Note:</strong> The <code>clearPermissionsCache()</code> call in <code>TopBar.handleLogout()</code> can be left in place — calling it twice is safe (idempotent).
+    </div>
+
+  </div>
+</div>
+
+<!-- ── F3 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">F3</div>
+    <div class="bug-meta">
+      <div class="bug-title"><code>is_school_admin</code> gets same wildcard bypass as <code>is_superuser</code> in permission checks</div>
+      <div class="bug-file">frontend/lib/portal-modules.ts · line 39 &nbsp;|&nbsp; frontend/hooks/usePermissions.ts · lines 119, 126</div>
+    </div>
+    <span class="sev sev-critical">Critical</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p><code>hasPermission()</code> and <code>can()</code>/<code>canAnyPrefix()</code> all have <code>if (me.is_superuser || me.is_school_admin) return true</code>. This gives school admins the same implicit full access as superusers for every permission-guarded module — bypassing role assignments entirely. The <code>superuserOnly</code> check (which hides School Tenancy) is correctly scoped to <code>is_superuser</code> only, but the per-permission bypass means school admins can see every other module regardless of their assigned roles.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>frontend/lib/portal-modules.ts</li>
+        <li>frontend/hooks/usePermissions.ts</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Remove <code>is_school_admin</code> from the wildcard bypass. School admins should only see modules they have <code>permission_codes</code> for (assigned via Roles &amp; Permissions), exactly like regular staff. The only difference between a school admin and regular staff is that school admin can access admin-configuration pages — that is already controlled by the <code>is_school_admin</code> flag in AuthGate and other guards.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — portal-modules.ts:39</div>
+        <pre class="bad">  if (me.is_superuser || <span class="del">me.is_school_admin || </span>!permission) return true;
+  if (<span class="del">me.is_superuser || me.is_school_admin</span>) return true;</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — portal-modules.ts:37–43</div>
+        <pre class="good">function hasPermission(permission: string | undefined, me: MeData): boolean {
+  if (!permission) return true;
+<span class="ins">  if (me.is_superuser) return true;           // superusers bypass all checks</span>
+<span class="ins">  // school admins respect permission_codes — do NOT add is_school_admin bypass here</span>
+  if (!me.permission_codes?.length) return false;
+  return me.permission_codes.some(
+    (c) => c === '*' || c === permission || c.startsWith(`${permission}.`),
+  );
+}</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — usePermissions.ts:119 and :126</div>
+        <pre class="bad">  function can(code: string): boolean {
+    if (!me) return true;
+    if (me.is_superuser || <span class="del">me.is_school_admin</span>) return true;
+    ...
+  }
+  function canAnyPrefix(prefix: string): boolean {
+    if (!me) return true;
+    if (me.is_superuser || <span class="del">me.is_school_admin</span>) return true;
+    ...
+  }</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — usePermissions.ts:119 and :126</div>
+        <pre class="good">  function can(code: string): boolean {
+    if (!me) return true;
+    if (me.is_superuser) return true;
+    ...
+  }
+  function canAnyPrefix(prefix: string): boolean {
+    if (!me) return true;
+    if (me.is_superuser) return true;
+    ...
+  }</pre>
+      </div>
+    </div>
+
+    <div class="impact-box">
+      <strong>After this fix:</strong> School admins must have roles assigned (via Roles &amp; Permissions) to see modules. An unassigned school admin will land on the no-access page. Make sure the default school admin role in the seed data includes necessary permission codes for the modules they should see.
+    </div>
+
+  </div>
+</div>
+
+<!-- ── F4 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">F4</div>
+    <div class="bug-meta">
+      <div class="bug-title"><code>can()</code> returns <code>true</code> while <code>me</code> is still loading — all guarded UI briefly visible</div>
+      <div class="bug-file">frontend/hooks/usePermissions.ts · line 118</div>
+    </div>
+    <span class="sev sev-medium">Medium</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p><code>if (!me) return true</code> — while the <code>/me</code> request is in-flight, every permission check returns <code>true</code>. Buttons like "Delete", "Approve", "Modify" briefly render as enabled for all users before auth resolves.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>frontend/hooks/usePermissions.ts</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Return <code>false</code> while loading so guarded UI is hidden until identity is confirmed. Components that need to show a loading skeleton while auth resolves should check <code>me === null</code> directly.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — usePermissions.ts:117–128</div>
+        <pre class="bad">  function can(code: string): boolean {
+    if (!me) return <span class="del">true</span>; // optimistic while loading
+    ...
+  }
+  function canAnyPrefix(prefix: string): boolean {
+    if (!me) return <span class="del">true</span>;
+    ...
+  }</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — usePermissions.ts:117–128</div>
+        <pre class="good">  function can(code: string): boolean {
+    if (!me) return <span class="ins">false</span>; // deny while loading — show loading state, not content
+    ...
+  }
+  function canAnyPrefix(prefix: string): boolean {
+    if (!me) return <span class="ins">false</span>;
+    ...
+  }</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── F5 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">F5</div>
+    <div class="bug-meta">
+      <div class="bug-title">AuthGate token refresh path skips <code>must_change_password</code>, <code>portal_type</code>, and <code>is_superuser</code> checks</div>
+      <div class="bug-file">frontend/components/layout/AuthGate.tsx · lines 112–133</div>
+    </div>
+    <span class="sev sev-high">High</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>When the access token is missing but the refresh token is valid, AuthGate calls the refresh endpoint and then calls <code>setReady(true)</code> immediately — without calling <code>/me</code>. All security checks (<code>must_change_password</code>, <code>portal_type</code> redirect, <code>is_superuser</code>) are skipped for the entire lifetime of the refresh token.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>frontend/components/layout/AuthGate.tsx</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>After a successful token refresh, call <code>/me</code> and run the same checks as the normal access-token path.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — AuthGate.tsx:125–133 (after successful refresh)</div>
+        <pre class="bad">      const data = (await response.json()) as { access?: string };
+      if (!data.access) {
+        clearAuthTokens();
+        router.replace(`/login?next=...`);
+        return;
+      }
+      setAuthTokens(data.access, refresh);
+<span class="del">      setReady(true);</span>  // ← skips all security checks</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — AuthGate.tsx:125–133</div>
+        <pre class="good">      const data = (await response.json()) as { access?: string };
+      if (!data.access) {
+        clearAuthTokens();
+        router.replace(`/login?next=...`);
+        return;
+      }
+      setAuthTokens(data.access, refresh);
+
+<span class="ins">      // Re-run /me checks with the new access token, identical to the normal path.</span>
+<span class="ins">      try {</span>
+<span class="ins">        const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me/`, {</span>
+<span class="ins">          headers: { Authorization: `Bearer ${data.access}` },</span>
+<span class="ins">        });</span>
+<span class="ins">        if (meRes.ok) {</span>
+<span class="ins">          const me = await meRes.json() as { must_change_password?: boolean; portal_type?: string; is_superuser?: boolean; is_school_admin?: boolean; permission_codes?: string[] };</span>
+<span class="ins">          if (me.must_change_password) { router.replace('/change-password'); return; }</span>
+<span class="ins">          const redirect = nonAdminHome(me.portal_type);</span>
+<span class="ins">          if (redirect && isAdminRoute(pathname)) { router.replace(redirect); return; }</span>
+<span class="ins">        }</span>
+<span class="ins">      } catch { /* non-blocking */ }</span>
+
+      setReady(true);</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── F6 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">F6</div>
+    <div class="bug-meta">
+      <div class="bug-title">Super-admin layout guard race — school admin briefly sees super-admin page content before redirect fires</div>
+      <div class="bug-file">frontend/app/(dashboard)/super-admin/layout.tsx · entire file</div>
+    </div>
+    <span class="sev sev-high">High</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p><code>AuthGate</code> calls <code>setReady(true)</code> and renders children before <code>SuperAdminAuthLayout</code>'s own <code>useEffect</code> fires its <code>/me</code> check. There is a render window where a school admin sees the super-admin page shell and any data that loads on mount. The fix is to show nothing (or a loading spinner) until the guard confirms access.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>frontend/app/(dashboard)/super-admin/layout.tsx</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>The layout already returns a spinner while <code>ok === false</code>. The bug is that <code>ok</code> starts as <code>false</code> but children can still flash momentarily because React renders synchronously before the first effect. Ensure the initial <code>ok = false</code> state shows a full opaque loading screen (already implemented), and verify no child component starts fetching before the guard resolves. The current implementation is structurally correct — but to harden it, add a brief explicit <code>null</code> return before the API call completes:</p>
+      <div class="code-wrap">
+        <div class="code-label after">CONFIRM this pattern is in place — layout.tsx:40–56</div>
+        <pre class="good">  if (!ok) {
+    return (
+      <span class="ins">// This must cover the FULL viewport with an opaque background</span>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'center',
+                    padding: 80, <span class="ins">position:'fixed', inset:0, background:'var(--bg-1)', zIndex:9999</span> }}>
+        ...loading spinner...
+      </div>
+    );
+  }
+  return &lt;&gt;{children}&lt;/&gt;;</pre>
+      </div>
+      <p style="margin-top:8px">The key addition is <code>position:'fixed', inset:0, background:'var(--bg-1)', zIndex:9999</code> so the loading overlay covers any briefly-rendered page content underneath.</p>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── F7 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">F7</div>
+    <div class="bug-meta">
+      <div class="bug-title">Login page shows "School not found" before the Domain record is ready after provisioning</div>
+      <div class="bug-file">frontend/app/login/page.tsx · lines 85–94 and 167–176</div>
+    </div>
+    <span class="sev sev-medium">Medium</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>When <code>/api/v1/tenancy/school-info/?subdomain=X</code> returns 404, the login page immediately replaces the entire form with a "School not found" full-screen error. This happens right after provisioning if the school-info endpoint has not yet indexed the new <code>Domain</code> record, or if the branding API is temporarily unavailable.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>frontend/app/login/page.tsx</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Don't block the login form on branding failure. Show the form with a generic fallback name instead. Only show the "School not found" error if the user explicitly cannot proceed (e.g. no domain at all).</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — login/page.tsx:86–93</div>
+        <pre class="bad">    fetch(`${API_BASE_URL}/api/v1/tenancy/school-info/?subdomain=${encodeURIComponent(subdomain)}`)
+      .then((r) => {
+<span class="del">        if (r.status === 404) { setSchoolNotFound(true); return null; }</span>
+        return r.ok ? r.json() : null;
+      })
+      .then((data) => { if (data) setSchoolInfo(data); })
+      .catch(() => { /* silently ignore */ });</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — login/page.tsx:86–93</div>
+        <pre class="good">    fetch(`${API_BASE_URL}/api/v1/tenancy/school-info/?subdomain=${encodeURIComponent(subdomain)}`)
+      .then((r) => {
+<span class="ins">        // 404 means branding not found — fall back to generic name, do NOT block login.</span>
+<span class="ins">        // Only block login if the subdomain itself is not a valid eSkoolia domain.</span>
+        return r.ok ? r.json() : null;
+      })
+      .then((data) => { if (data) setSchoolInfo(data); })
+      .catch(() => { /* silently ignore — generic branding shown */ });</pre>
+      </div>
+      <p style="margin-top:8px">Also remove or repurpose the <code>schoolNotFound</code> state — it should only block login if you have a separate, reliable signal that the subdomain is completely unregistered (e.g. a dedicated <code>/api/v1/tenancy/validate-subdomain/</code> endpoint).</p>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── F8 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">F8</div>
+    <div class="bug-meta">
+      <div class="bug-title">Edit School modal sends <code>"trial"</code> status which backend rejects — silent 400 error</div>
+      <div class="bug-file">frontend/app/(dashboard)/super-admin/schools/page.tsx · lines 440–447</div>
+    </div>
+    <span class="sev sev-medium">Medium</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>The status dropdown in the Edit School modal includes <code>&lt;option value="trial"&gt;</code>. The backend's <code>SchoolTenantUpdateSerializer._VALID_STATUSES</code> does not include <code>"trial"</code> (fixed in B5). This fix must be applied alongside B5.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>frontend/app/(dashboard)/super-admin/schools/page.tsx</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>After fixing B5 (adding <code>"trial"</code> to backend <code>_VALID_STATUSES</code>), this frontend option will work. No frontend change needed <em>if B5 is fixed</em>. If B5 is NOT fixed yet, remove the trial option from the dropdown as a temporary guard:</p>
+      <div class="code-wrap">
+        <div class="code-label">schools/page.tsx:440–447 — Status dropdown options (keep as-is once B5 is fixed)</div>
+        <pre class="neutral">            &lt;select value={form.status} onChange={e =&gt; set('status', e.target.value)}&gt;
+              &lt;option value="active"&gt;Active&lt;/option&gt;
+              &lt;option value="trial"&gt;Trial&lt;/option&gt;      {/* works after B5 fix */}
+              &lt;option value="onboarding"&gt;Onboarding&lt;/option&gt;
+              &lt;option value="pending"&gt;Pending&lt;/option&gt;
+              &lt;option value="suspended"&gt;Suspended&lt;/option&gt;
+              &lt;option value="archived"&gt;Archived&lt;/option&gt;
+            &lt;/select&gt;</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── F9 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">F9</div>
+    <div class="bug-meta">
+      <div class="bug-title">UDISE code field reads <code>school.udiseCode</code> (camelCase) but API returns <code>udise_code</code> (snake_case) — always blank on edit, saved value overwritten</div>
+      <div class="bug-file">frontend/app/(dashboard)/super-admin/schools/page.tsx · line 1019</div>
+    </div>
+    <span class="sev sev-medium">Medium</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>The backend API returns <code>udise_code</code> (snake_case). The TypeScript type has both <code>udiseCode</code> and <code>udise_code</code> defined (lines 79–80 of the types file). The API populates <code>udise_code</code> only. But <code>handleEditInForm</code> reads <code>school.udiseCode</code> which is always <code>undefined</code>. Every time a school is edited and saved, the UDISE code is overwritten with an empty string.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>frontend/app/(dashboard)/super-admin/schools/page.tsx</li>
+        <li>frontend/types/super-admin/index.ts</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — schools/page.tsx:1019</div>
+        <pre class="bad">      udise_code: <span class="del">school.udiseCode</span> ?? '',</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — schools/page.tsx:1019</div>
+        <pre class="good">      udise_code: <span class="ins">school.udise_code ?? school.udiseCode</span> ?? '',</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">ALSO — types/super-admin/index.ts:79–80 — remove the duplicate camelCase field</div>
+        <pre class="good">  udise_code?: string;  // keep only this (matches API response)
+<span class="del">  udiseCode?: string;   // remove — this was a duplicate, API never sends this</span></pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── F10 ─────────────────────────────────────────────────────── -->
+<div class="bug-card no-break">
+  <div class="bug-header">
+    <div class="id-badge">F10</div>
+    <div class="bug-meta">
+      <div class="bug-title">JWT tokens exposed in URL during impersonation — visible in proxy logs and browser history</div>
+      <div class="bug-file">frontend/app/(dashboard)/super-admin/schools/page.tsx · line 935 &nbsp;|&nbsp; frontend/app/login/page.tsx · line 101</div>
+    </div>
+    <span class="sev sev-high">High</span>
+  </div>
+  <div class="bug-body">
+
+    <div class="bug-section">
+      <h4>Root Cause</h4>
+      <p>The impersonation handoff URL is built as <code>/login?impersonate=1&amp;token=ACCESS&amp;refresh=REFRESH</code>. Full JWT tokens in query strings are logged by every proxy, CDN, and load balancer. <code>window.history.replaceState</code> removes them from the visible URL but they are already written to logs at that point.</p>
+    </div>
+
+    <div class="bug-section">
+      <h4>Files to Change</h4>
+      <ul class="file-list">
+        <li>frontend/app/(dashboard)/super-admin/schools/page.tsx</li>
+        <li>frontend/app/login/page.tsx</li>
+        <li>backend/apps/super_admin/views.py (optional: remove handoff_url from response)</li>
+      </ul>
+    </div>
+
+    <div class="bug-section">
+      <h4>Exact Fix</h4>
+      <p>Use <code>sessionStorage</code> to pass the tokens between tabs instead of putting them in the URL. The impersonation page opens a new tab to <code>/login?impersonate=1</code> (no tokens), then the login page reads tokens from <code>sessionStorage</code>.</p>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — schools/page.tsx:931–936 (handleImpersonate)</div>
+        <pre class="bad">      const { protocol, port } = window.location;
+      const baseDomain = process.env.NEXT_PUBLIC_BASE_DOMAIN || window.location.hostname;
+      const portSuffix = port ? `:${port}` : '';
+      const subdomain = school.subdomain_url || data.tenant_id;
+<span class="del">      const handoffUrl = `${protocol}//${subdomain}.${baseDomain}${portSuffix}/login?impersonate=1&token=${data.access}&refresh=${data.refresh}`;</span>
+      window.open(handoffUrl, '_blank', 'noopener,noreferrer');</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — schools/page.tsx:931–936</div>
+        <pre class="good">      const { protocol, port } = window.location;
+      const baseDomain = process.env.NEXT_PUBLIC_BASE_DOMAIN || window.location.hostname;
+      const portSuffix = port ? `:${port}` : '';
+      const subdomain = school.subdomain_url || data.tenant_id;
+<span class="ins">      // Store tokens in sessionStorage keyed by subdomain so the target tab</span>
+<span class="ins">      // can read them. Tokens never appear in the URL or proxy logs.</span>
+<span class="ins">      const storageKey = `impersonate_${subdomain}`;</span>
+<span class="ins">      try {</span>
+<span class="ins">        sessionStorage.setItem(storageKey, JSON.stringify({ access: data.access, refresh: data.refresh }));</span>
+<span class="ins">      } catch { /* sessionStorage unavailable — fall back to URL method */ }</span>
+<span class="ins">      const handoffUrl = `${protocol}//${subdomain}.${baseDomain}${portSuffix}/login?impersonate=1`;</span>
+      window.open(handoffUrl, '_blank', 'noopener,noreferrer');</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label before">BEFORE — login/page.tsx:101–116 (impersonation reader)</div>
+        <pre class="bad">    const params = new URLSearchParams(window.location.search);
+    if (params.get('impersonate') !== '1') return;
+    const access = params.<span class="del">get('token')</span>;
+    const refresh = params.<span class="del">get('refresh')</span>;
+    if (!access || !refresh) return;</pre>
+      </div>
+      <div class="code-wrap">
+        <div class="code-label after">AFTER — login/page.tsx:101–116</div>
+        <pre class="good">    const params = new URLSearchParams(window.location.search);
+    if (params.get('impersonate') !== '1') return;
+<span class="ins">    // Tokens are passed via sessionStorage, not URL params.</span>
+<span class="ins">    const subdomain = getSubdomainFromHost() || 'unknown';</span>
+<span class="ins">    const storageKey = `impersonate_${subdomain}`;</span>
+<span class="ins">    let access: string | null = null, refresh: string | null = null;</span>
+<span class="ins">    try {</span>
+<span class="ins">      const stored = sessionStorage.getItem(storageKey);</span>
+<span class="ins">      if (stored) {</span>
+<span class="ins">        const parsed = JSON.parse(stored) as { access: string; refresh: string };</span>
+<span class="ins">        access = parsed.access; refresh = parsed.refresh;</span>
+<span class="ins">        sessionStorage.removeItem(storageKey); // consume once</span>
+<span class="ins">      }</span>
+<span class="ins">    } catch { /* ignore */ }</span>
+    if (!access || !refresh) return;</pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Footer ─────────────────────────────────────────────────── -->
+<div class="doc-footer">
+  eSkoolia ERP · School Tenancy Bug Fix Specification · 23 bugs · 13 backend · 10 frontend · June 2026<br />
+  Apply fixes in order: B1 → B2 → B3 → B4 → B5 → B6 → B7 → B8 → B9 → B10 → B11 → B12 → B13 → F1 → F2 → F3 → F4 → F5 → F6 → F7 → F8 → F9 → F10
+</div>
+
+</main>
+</body>
+</html>

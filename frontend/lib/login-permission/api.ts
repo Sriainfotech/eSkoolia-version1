@@ -10,6 +10,7 @@ import type {
 } from './types';
 import { genTempPassword } from './utils';
 import { MOCK_STUDENTS, MOCK_TEACHERS, MOCK_PARENTS, MOCK_META } from './mock-data';
+import { API_BASE_URL } from '@/lib/api';
 
 // ── Mock mode ─────────────────────────────────────────────────────────────────
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
@@ -93,9 +94,7 @@ function getAuthHeaders(): Record<string, string> {
   }
 }
 
-const API_BASE =
-  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_API_BASE) ||
-  '/api';
+const API_BASE = `${API_BASE_URL}/api/v1/access-control`;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 export const loginPermissionApi = {

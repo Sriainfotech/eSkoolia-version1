@@ -23,7 +23,6 @@ import { clearAuthTokens, getAccessToken, getRefreshToken } from "@/lib/auth";
 import { clearPermissionsCache } from "@/hooks/usePermissions";
 import { useVisibleModules } from "@/hooks/useVisibleModules";
 import { API_BASE_URL } from "@/lib/api";
-import { PARENT_MODULES } from "@/lib/parent-routes";
 import { PageNotesPanel } from "@/components/notes/PageNotesPanel";
 import { ParentChildProvider, useParentChild } from "@/contexts/ParentChildContext";
 import type { ChildSummary } from "@/lib/api/parent";

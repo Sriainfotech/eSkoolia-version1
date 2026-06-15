@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { API_BASE_URL } from "@/lib/api";
 import { clearAuthTokens, getAccessToken } from "@/lib/auth";
+import { clearPermissionsCache } from "@/hooks/usePermissions";
 
-export default function NoAccessPage() {
+function NoAccessContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const reason = searchParams.get("reason");
+  const isPortalPending = reason === "portal_pending";
+
   const [name, setName] = useState<string | null>(null);
+  const [portalType, setPortalType] = useState<string | null>(null);
 
   useEffect(() => {
     const access = getAccessToken();
@@ -20,12 +26,14 @@ export default function NoAccessPage() {
         if (!me) { router.replace("/login"); return; }
         const full = [me.first_name, me.last_name].filter(Boolean).join(" ");
         setName(full || me.username || "there");
+        setPortalType(me.portal_type ?? null);
       })
       .catch(() => router.replace("/login"));
   }, [router]);
 
   function handleLogout() {
     clearAuthTokens();
+    clearPermissionsCache();
     router.replace("/login");
   }
 
@@ -95,22 +103,25 @@ export default function NoAccessPage() {
         <div style={{ width: 40, height: 2, background: "var(--pu-soft)", borderRadius: 2, margin: "20px auto" }} />
 
         {/* Message */}
-        <p style={{
-          fontSize: 15,
-          color: "var(--ink-2)",
-          lineHeight: 1.65,
-          margin: "0 0 8px",
-        }}>
-          Your account has been set up, but no permissions have been assigned to your role yet.
-        </p>
-        <p style={{
-          fontSize: 14,
-          color: "var(--ink-3)",
-          lineHeight: 1.6,
-          margin: "0 0 36px",
-        }}>
-          Please contact your school administrator to get access.
-        </p>
+        {isPortalPending ? (
+          <>
+            <p style={{ fontSize: 15, color: "var(--ink-2)", lineHeight: 1.65, margin: "0 0 8px" }}>
+              Your {portalType ? `${portalType.charAt(0).toUpperCase()}${portalType.slice(1)} ` : ""}portal is coming soon.
+            </p>
+            <p style={{ fontSize: 14, color: "var(--ink-3)", lineHeight: 1.6, margin: "0 0 36px" }}>
+              This section of the platform is being set up. Please check back later or contact your school administrator.
+            </p>
+          </>
+        ) : (
+          <>
+            <p style={{ fontSize: 15, color: "var(--ink-2)", lineHeight: 1.65, margin: "0 0 8px" }}>
+              Your account has been set up, but no permissions have been assigned to your role yet.
+            </p>
+            <p style={{ fontSize: 14, color: "var(--ink-3)", lineHeight: 1.6, margin: "0 0 36px" }}>
+              Please contact your school administrator to get access.
+            </p>
+          </>
+        )}
 
         {/* Logout */}
         <button
@@ -133,5 +144,13 @@ export default function NoAccessPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+export default function NoAccessPage() {
+  return (
+    <Suspense>
+      <NoAccessContent />
+    </Suspense>
   );
 }
