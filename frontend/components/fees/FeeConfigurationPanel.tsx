@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { feesApi, listData, type AcademicYear, type FeeTypeListParams, type FeesGroup, type FeesType, type SchoolClass, type TermSettings, type FeeSchedule, type SearchParams } from "@/lib/fees-api";
+import { feesApi, listData, type AcademicYear, type FeeTypeListParams, type FeesGroup, type FeesType, type SchoolClass, type TermSettings, type FeeSchedule, type SearchParams, type ConcessionRule, type LateFeeRule } from "@/lib/fees-api";
 import { sortAcademicsClasses } from "@/lib/classOrdering";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -54,12 +54,16 @@ const DEFAULT_TERMS: TermConfig[] = [
   { name: "Term 4", startDate: "2027-04-01", endDate: "2027-05-31", dueDate: "2027-04-10" },
 ];
 
-const ACADEMIC_TERMS = [
-  { label: "Term 1", range: "01 Jun 2025 → 09 Sept 2025" },
-  { label: "Term 2", range: "10 Sept 2025 → 19 Dec 2025" },
-  { label: "Term 3", range: "20 Dec 2025 → 30 Mar 2026" },
-  { label: "Term 4", range: "01 Apr 2026 → 31 May 2026" },
-];
+function formatDisplayDate(value?: string): string {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "-";
+  return parsed.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
 
 const FEE_GROUPS: FeeGroup[] = [
   {
@@ -403,6 +407,34 @@ export default function FeeConfigurationPanel() {
   const [isDeletingSchedule, setIsDeletingSchedule] = useState(false);
   const [deleteScheduleError, setDeleteScheduleError] = useState("");
 
+  // ── Concession Rules state ──
+  const [concessionRules, setConcessionRules] = useState<ConcessionRule[]>([]);
+  const [isLoadingConcessionRules, setIsLoadingConcessionRules] = useState(false);
+  const [concessionPage, setConcessionPage] = useState(1);
+  const [concessionPageSize] = useState(10);
+  const [concessionTotalCount, setConcessionTotalCount] = useState(0);
+  const [concessionTotalPages, setConcessionTotalPages] = useState(1);
+  const [concessionName, setConcessionName] = useState("");
+  const [concessionAppliesTo, setConcessionAppliesTo] = useState("");
+  const [concessionDiscount, setConcessionDiscount] = useState("");
+  const [concessionStatus, setConcessionStatus] = useState<"active" | "inactive">("active");
+  const [isSavingConcessionRule, setIsSavingConcessionRule] = useState(false);
+  const [editingConcessionRuleId, setEditingConcessionRuleId] = useState<number | null>(null);
+
+  // ── Late Fee Rules state ──
+  const [lateFeeRules, setLateFeeRules] = useState<LateFeeRule[]>([]);
+  const [isLoadingLateFeeRules, setIsLoadingLateFeeRules] = useState(false);
+  const [lateFeePage, setLateFeePage] = useState(1);
+  const [lateFeePageSize] = useState(10);
+  const [lateFeeTotalCount, setLateFeeTotalCount] = useState(0);
+  const [lateFeeTotalPages, setLateFeeTotalPages] = useState(1);
+  const [lateRuleName, setLateRuleName] = useState("");
+  const [lateRuleGrace, setLateRuleGrace] = useState("");
+  const [lateRulePenalty, setLateRulePenalty] = useState("");
+  const [lateRuleCap, setLateRuleCap] = useState("");
+  const [isSavingLateFeeRule, setIsSavingLateFeeRule] = useState(false);
+  const [editingLateFeeRuleId, setEditingLateFeeRuleId] = useState<number | null>(null);
+
   // ── Add Fee Schedule inline form ──
   const [showAddForm, setShowAddForm] = useState(false);
   const [formGroup, setFormGroup] = useState(FEE_GROUPS[0].name);
@@ -425,6 +457,24 @@ export default function FeeConfigurationPanel() {
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(""), 3200);
+  };
+
+  const getAcademicYearBounds = (yearValue?: number | null | "") => {
+    const normalizedYearId = typeof yearValue === "number" ? yearValue : null;
+    const year = academicYears.find(y => y.id === normalizedYearId) || null;
+    return {
+      start: year?.start_date || "",
+      end: year?.end_date || "",
+    };
+  };
+
+  const clampDateToAcademicYear = (dateValue?: string, yearValue?: number | null | "", fallback?: string): string => {
+    const { start, end } = getAcademicYearBounds(yearValue);
+    let candidate = (dateValue || fallback || start || "").slice(0, 10);
+    if (!candidate) return "";
+    if (start && candidate < start) candidate = start;
+    if (end && candidate > end) candidate = end;
+    return candidate;
   };
 
   useEffect(() => {
@@ -625,6 +675,17 @@ export default function FeeConfigurationPanel() {
     return anyGroup.student_count ?? anyGroup.studentCount ?? 0;
   };
 
+  const getApplicableClassCount = (group: FeesGroup) => {
+    const classes = group.applicable_classes || [];
+    return classes.length;
+  };
+
+  const getApplicableClassNames = (group: FeesGroup) => {
+    const classes = group.applicable_classes || [];
+    if (classes.length === 0) return [];
+    return classes.map(classId => availableClasses.find(item => item.id === classId)?.name || `Class ${classId}`);
+  };
+
   const totalFeeGroupPages = Math.max(1, Math.ceil(feeGroups.length / feeGroupPageSize));
   const feeGroupPageSafe = Math.min(feeGroupPage, totalFeeGroupPages);
   const feeGroupStart = (feeGroupPageSafe - 1) * feeGroupPageSize;
@@ -641,7 +702,10 @@ export default function FeeConfigurationPanel() {
       closeDeleteDialog();
       showToast("Fee group deleted.");
     } catch (error) {
-      setDeleteError("This fee group could not be deleted. Please try again.");
+      const message = error instanceof Error && error.message
+        ? error.message
+        : "This fee group could not be deleted. Please try again.";
+      setDeleteError(message);
     } finally {
       setIsDeleting(false);
     }
@@ -724,7 +788,7 @@ export default function FeeConfigurationPanel() {
     background: "#fff",
     border: "1px solid #E8E8EE",
     borderRadius: 12,
-    padding: "18px 20px",
+    padding: "0",
     boxShadow: "0 1px 2px rgba(20,24,40,.04)",
     position: "relative",
   };
@@ -738,6 +802,8 @@ export default function FeeConfigurationPanel() {
     background: "#5B4FCF",
     borderRadius: "0 4px 4px 0",
   };
+
+  const feeGroupGridColumns = "minmax(180px, 1.4fr) minmax(240px, 1.6fr) minmax(150px, .9fr) minmax(120px, .8fr) auto";
 
   // ── Term Settings functions ──────────────────────────────────────────────────
 
@@ -802,9 +868,9 @@ export default function FeeConfigurationPanel() {
         const mapped = filtered.map(item => ({
           id: item.id,
           name: item.term_name,
-          startDate: item.start_date,
-          endDate: item.end_date,
-          dueDate: item.default_due_date,
+          startDate: clampDateToAcademicYear(item.start_date, yearId, item.start_date),
+          endDate: clampDateToAcademicYear(item.end_date, yearId, item.end_date),
+          dueDate: clampDateToAcademicYear(item.default_due_date, yearId, item.start_date),
         }));
         setTerms(mapped);
         setInitialTerms(JSON.parse(JSON.stringify(mapped)));
@@ -939,14 +1005,15 @@ export default function FeeConfigurationPanel() {
     if (!scheduleFeeGroup) nextErrors.fee_group = "Fee Group is required.";
     if (!scheduleFeeType) nextErrors.fee_type = "Fee Type is required.";
     
-    if (scheduleFrequency === "Term-wise") {
+    const isBreakdownFrequency = ["Term-wise", "Monthly", "Quarterly", "Half-Yearly"].includes(scheduleFrequency);
+    if (isBreakdownFrequency) {
       if (!scheduleTermBreakdown || scheduleTermBreakdown.length === 0) {
-        showToast("Please configure school terms under 'School Term Settings' first.");
+        showToast(scheduleFrequency === "Term-wise" ? "Please configure school terms under 'School Term Settings' first." : "Frequency breakdown not initialized.");
         return;
       }
       const hasInvalidTerm = scheduleTermBreakdown.some(tb => !tb.amount || isNaN(Number(tb.amount)) || Number(tb.amount) < 0 || !tb.due_date);
       if (hasInvalidTerm) {
-        showToast("Please provide a valid amount and due date for all terms.");
+        showToast("Please provide a valid amount and due date for all installments.");
         return;
       }
     } else {
@@ -962,7 +1029,8 @@ export default function FeeConfigurationPanel() {
 
     let finalAmount = scheduleAmount;
     let finalDueDate = scheduleDueDate;
-    if (scheduleFrequency === "Term-wise") {
+    const isBreakdownFreq = ["Term-wise", "Monthly", "Quarterly", "Half-Yearly"].includes(scheduleFrequency);
+    if (isBreakdownFreq) {
       const sum = scheduleTermBreakdown.reduce((acc, current) => acc + (Number(current.amount) || 0), 0);
       finalAmount = sum.toString();
       if (scheduleTermBreakdown.length > 0) {
@@ -982,7 +1050,7 @@ export default function FeeConfigurationPanel() {
         late_fee_applicable: scheduleLateFee,
         grace_period: Number(scheduleGracePeriod) || 0,
         late_fee_rule: scheduleLateFeeRule,
-        term_breakdown: scheduleFrequency === "Term-wise" ? scheduleTermBreakdown : [],
+        term_breakdown: ["Term-wise", "Monthly", "Quarterly", "Half-Yearly"].includes(scheduleFrequency) ? scheduleTermBreakdown : [],
         status: scheduleStatus as "active" | "inactive",
       });
       showToast("Fee schedule created successfully.");
@@ -1016,14 +1084,15 @@ export default function FeeConfigurationPanel() {
     if (!editScheduleFeeGroup) nextErrors.fee_group = "Fee Group is required.";
     if (!editScheduleFeeType) nextErrors.fee_type = "Fee Type is required.";
     
-    if (editScheduleFrequency === "Term-wise") {
+    const isBreakdownFrequency = ["Term-wise", "Monthly", "Quarterly", "Half-Yearly"].includes(editScheduleFrequency);
+    if (isBreakdownFrequency) {
       if (!editScheduleTermBreakdown || editScheduleTermBreakdown.length === 0) {
-        showToast("No terms configured for this academic year.");
+        showToast("No installment slots configured.");
         return;
       }
       const hasInvalidTerm = editScheduleTermBreakdown.some(tb => !tb.amount || isNaN(Number(tb.amount)) || Number(tb.amount) < 0 || !tb.due_date);
       if (hasInvalidTerm) {
-        showToast("Please provide a valid amount and due date for all terms.");
+        showToast("Please provide a valid amount and due date for all installments.");
         return;
       }
     } else {
@@ -1039,7 +1108,8 @@ export default function FeeConfigurationPanel() {
 
     let finalAmount = editScheduleAmount;
     let finalDueDate = editScheduleDueDate;
-    if (editScheduleFrequency === "Term-wise") {
+    const isBreakdownFreq = ["Term-wise", "Monthly", "Quarterly", "Half-Yearly"].includes(editScheduleFrequency);
+    if (isBreakdownFreq) {
       const sum = editScheduleTermBreakdown.reduce((acc, current) => acc + (Number(current.amount) || 0), 0);
       finalAmount = sum.toString();
       if (editScheduleTermBreakdown.length > 0) {
@@ -1058,7 +1128,7 @@ export default function FeeConfigurationPanel() {
         late_fee_applicable: editScheduleLateFee,
         grace_period: Number(editScheduleGracePeriod) || 0,
         late_fee_rule: editScheduleLateFeeRule,
-        term_breakdown: editScheduleFrequency === "Term-wise" ? editScheduleTermBreakdown : [],
+        term_breakdown: ["Term-wise", "Monthly", "Quarterly", "Half-Yearly"].includes(editScheduleFrequency) ? editScheduleTermBreakdown : [],
         status: editScheduleStatus as "active" | "inactive",
       });
       showToast("Fee schedule updated successfully.");
@@ -1112,6 +1182,211 @@ export default function FeeConfigurationPanel() {
     }, 300);
     return () => clearTimeout(timer);
   }, [scheduleSearch]);
+
+  const fetchConcessionRules = async () => {
+    setIsLoadingConcessionRules(true);
+    try {
+      const payload = await feesApi.listConcessionRules({
+        page: concessionPage,
+        page_size: concessionPageSize,
+      });
+
+      if (Array.isArray(payload)) {
+        setConcessionRules(payload);
+        setConcessionTotalCount(payload.length);
+        setConcessionTotalPages(1);
+      } else if ("results" in payload) {
+        const rows = payload.results || [];
+        const count = (payload as { count?: number }).count || rows.length;
+        setConcessionRules(rows);
+        setConcessionTotalCount(count);
+        setConcessionTotalPages(Math.max(1, Math.ceil(count / concessionPageSize)));
+      } else {
+        const rows = listData(payload);
+        setConcessionRules(rows);
+        setConcessionTotalCount(rows.length);
+        setConcessionTotalPages(1);
+      }
+    } catch {
+      showToast("Unable to load concession rules.");
+    } finally {
+      setIsLoadingConcessionRules(false);
+    }
+  };
+
+  const fetchLateFeeRules = async () => {
+    setIsLoadingLateFeeRules(true);
+    try {
+      const payload = await feesApi.listLateFeeRules({
+        page: lateFeePage,
+        page_size: lateFeePageSize,
+      });
+
+      if (Array.isArray(payload)) {
+        setLateFeeRules(payload);
+        setLateFeeTotalCount(payload.length);
+        setLateFeeTotalPages(1);
+      } else if ("results" in payload) {
+        const rows = payload.results || [];
+        const count = (payload as { count?: number }).count || rows.length;
+        setLateFeeRules(rows);
+        setLateFeeTotalCount(count);
+        setLateFeeTotalPages(Math.max(1, Math.ceil(count / lateFeePageSize)));
+      } else {
+        const rows = listData(payload);
+        setLateFeeRules(rows);
+        setLateFeeTotalCount(rows.length);
+        setLateFeeTotalPages(1);
+      }
+    } catch {
+      showToast("Unable to load late fee rules.");
+    } finally {
+      setIsLoadingLateFeeRules(false);
+    }
+  };
+
+  const handleCreateConcessionRule = async () => {
+    if (!academicYearId) {
+      showToast("Select an academic year first.");
+      return;
+    }
+    if (!concessionName.trim() || !concessionAppliesTo.trim()) {
+      showToast("Rule name and applies-to are required.");
+      return;
+    }
+    const discountValue = Number(concessionDiscount);
+    if (isNaN(discountValue) || discountValue < 0 || discountValue > 100) {
+      showToast("Discount % must be between 0 and 100.");
+      return;
+    }
+
+    setIsSavingConcessionRule(true);
+    try {
+      if (editingConcessionRuleId) {
+        await feesApi.updateConcessionRule(editingConcessionRuleId, {
+          name: concessionName.trim(),
+          applies_to: concessionAppliesTo.trim(),
+          discount_percentage: discountValue.toString(),
+          status: concessionStatus,
+        });
+      } else {
+        await feesApi.createConcessionRule({
+          academic_year: academicYearId,
+          name: concessionName.trim(),
+          applies_to: concessionAppliesTo.trim(),
+          discount_percentage: discountValue.toString(),
+          status: concessionStatus,
+        });
+      }
+      setConcessionName("");
+      setConcessionAppliesTo("");
+      setConcessionDiscount("");
+      setConcessionStatus("active");
+      setEditingConcessionRuleId(null);
+      showToast(editingConcessionRuleId ? "Concession rule updated." : "Concession rule created.");
+      fetchConcessionRules();
+    } catch {
+      showToast(editingConcessionRuleId ? "Failed to update concession rule." : "Failed to create concession rule.");
+    } finally {
+      setIsSavingConcessionRule(false);
+    }
+  };
+
+  const handleDeleteConcessionRule = async (id: number) => {
+    try {
+      await feesApi.deleteConcessionRule(id);
+      showToast("Concession rule deleted.");
+      fetchConcessionRules();
+    } catch {
+      showToast("Failed to delete concession rule.");
+    }
+  };
+
+  const handleEditConcessionRule = (rule: ConcessionRule) => {
+    setEditingConcessionRuleId(rule.id);
+    setConcessionName(rule.name || "");
+    setConcessionAppliesTo(rule.applies_to || "");
+    setConcessionDiscount(rule.discount_percentage ? String(rule.discount_percentage) : "");
+    setConcessionStatus((rule.status || "").toLowerCase() === "inactive" ? "inactive" : "active");
+  };
+
+  const handleCreateLateFeeRule = async () => {
+    if (!academicYearId) {
+      showToast("Select an academic year first.");
+      return;
+    }
+    if (!lateRuleName.trim() || !lateRulePenalty.trim()) {
+      showToast("Rule name and penalty are required.");
+      return;
+    }
+    const graceDays = Number(lateRuleGrace || 0);
+    if (isNaN(graceDays) || graceDays < 0) {
+      showToast("Grace period must be zero or greater.");
+      return;
+    }
+    if (lateRuleCap && (isNaN(Number(lateRuleCap)) || Number(lateRuleCap) < 0)) {
+      showToast("Cap amount must be zero or greater.");
+      return;
+    }
+
+    setIsSavingLateFeeRule(true);
+    try {
+      if (editingLateFeeRuleId) {
+        await feesApi.updateLateFeeRule(editingLateFeeRuleId, {
+          name: lateRuleName.trim(),
+          grace_period_days: graceDays,
+          penalty_rule: lateRulePenalty.trim(),
+          cap_amount: lateRuleCap ? Number(lateRuleCap).toString() : null,
+        });
+      } else {
+        await feesApi.createLateFeeRule({
+          academic_year: academicYearId,
+          name: lateRuleName.trim(),
+          grace_period_days: graceDays,
+          penalty_rule: lateRulePenalty.trim(),
+          cap_amount: lateRuleCap ? Number(lateRuleCap).toString() : null,
+          status: "active",
+        });
+      }
+      setLateRuleName("");
+      setLateRuleGrace("");
+      setLateRulePenalty("");
+      setLateRuleCap("");
+      setEditingLateFeeRuleId(null);
+      showToast(editingLateFeeRuleId ? "Late fee rule updated." : "Late fee rule created.");
+      fetchLateFeeRules();
+    } catch {
+      showToast(editingLateFeeRuleId ? "Failed to update late fee rule." : "Failed to create late fee rule.");
+    } finally {
+      setIsSavingLateFeeRule(false);
+    }
+  };
+
+  const handleEditLateFeeRule = (rule: LateFeeRule) => {
+    setEditingLateFeeRuleId(rule.id);
+    setLateRuleName(rule.name || "");
+    setLateRuleGrace(String(rule.grace_period_days ?? ""));
+    setLateRulePenalty(rule.penalty_rule || "");
+    setLateRuleCap(rule.cap_amount != null ? String(rule.cap_amount) : "");
+  };
+
+  const handleDeleteLateFeeRule = async (id: number) => {
+    try {
+      await feesApi.deleteLateFeeRule(id);
+      showToast("Late fee rule deleted.");
+      fetchLateFeeRules();
+    } catch {
+      showToast("Failed to delete late fee rule.");
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "concession-rules") fetchConcessionRules();
+  }, [activeTab, concessionPage]);
+
+  useEffect(() => {
+    if (activeTab === "late-fee-rules") fetchLateFeeRules();
+  }, [activeTab, lateFeePage]);
 
   // ── Fee Groups tab ──────────────────────────────────────────────────────────
 
@@ -1361,59 +1636,77 @@ export default function FeeConfigurationPanel() {
       </div>
 
       {/* Fee group cards */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ ...card, padding: 0, overflow: "hidden" }}>
         {isLoadingGroups ? (
           <div style={{ ...card, color: "#5B5E72" }}>Loading fee groups...</div>
         ) : feeGroups.length === 0 ? (
           <div style={{ ...card, color: "#5B5E72" }}>No fee groups yet.</div>
         ) : (
-          visibleFeeGroups.map(group => {
-            const studentCount = getStudentCount(group);
-            const studentLabel = studentCount > 0 ? `${studentCount} students` : "—";
-            return (
-              <div key={group.id} style={groupCardStyle}>
-                <div style={groupAccentStyle} />
-                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.6fr .7fr .8fr auto", gap: 16, alignItems: "center" }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "#1d2230" }}>{group.name}</div>
-                  <div style={{ fontSize: 12.5, color: "#3b4150" }}>{group.description || "—"}</div>
-                  <div style={{ fontSize: 12.5, color: "#3b4150" }}>{studentLabel}</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {statusPill(group.is_active ? "Active" : "Inactive")}
-                    <button
-                      type="button"
-                      onClick={() => handleToggleGroup(group)}
-                      disabled={togglingGroupId === group.id}
-                      style={{
-                        position: "relative",
-                        width: 32,
-                        height: 18,
-                        borderRadius: 999,
-                        border: "1px solid #E8E8EE",
-                        background: group.is_active ? "#e6f6ee" : "#f3f4f6",
-                        cursor: togglingGroupId === group.id ? "not-allowed" : "pointer",
-                        opacity: togglingGroupId === group.id ? 0.6 : 1,
-                      }}
-                      aria-label={group.is_active ? "Deactivate group" : "Activate group"}
-                    >
-                      <span
-                        style={{
-                          position: "absolute",
-                          top: 2,
-                          left: group.is_active ? 16 : 2,
-                          width: 12,
-                          height: 12,
-                          borderRadius: "50%",
-                          background: group.is_active ? "#1d9e63" : "#8a90a2",
-                          transition: "left 0.2s ease",
-                        }}
-                      />
-                    </button>
-                  </div>
-                  <div>{rowActions(group)}</div>
-                </div>
-              </div>
-            );
-          })
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#F8F8FB" }}>
+                <th style={thStyle}>GROUP NAME</th>
+                <th style={thStyle}>DESCRIPTION</th>
+                <th style={thStyle}>APPLICABLE CLASSES</th>
+                <th style={thStyle}>STATUS</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleFeeGroups.map((group, index) => {
+                const classNames = getApplicableClassNames(group);
+                const classLabel = classNames.length > 0 ? classNames.join(", ") : "—";
+                return (
+                  <tr
+                    key={group.id}
+                    style={{
+                      borderBottom: index < visibleFeeGroups.length - 1 ? "1px solid #E8E8EE" : "none",
+                      background: index % 2 === 0 ? "#fff" : "#F8F8FB",
+                    }}
+                  >
+                    <td style={{ ...tdStyle, paddingLeft: 16, fontWeight: 700 }}>{group.name}</td>
+                    <td style={tdMuted}>{group.description || "—"}</td>
+                    <td style={{ ...tdMuted, maxWidth: 280 }} title={classLabel}>{classLabel}</td>
+                    <td style={{ ...tdStyle, minWidth: 120 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {statusPill(group.is_active ? "Active" : "Inactive")}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleGroup(group)}
+                          disabled={togglingGroupId === group.id}
+                          style={{
+                            position: "relative",
+                            width: 32,
+                            height: 18,
+                            borderRadius: 999,
+                            border: "1px solid #E8E8EE",
+                            background: group.is_active ? "#e6f6ee" : "#f3f4f6",
+                            cursor: togglingGroupId === group.id ? "not-allowed" : "pointer",
+                            opacity: togglingGroupId === group.id ? 0.6 : 1,
+                          }}
+                          aria-label={group.is_active ? "Deactivate group" : "Activate group"}
+                        >
+                          <span
+                            style={{
+                              position: "absolute",
+                              top: 2,
+                              left: group.is_active ? 16 : 2,
+                              width: 12,
+                              height: 12,
+                              borderRadius: "50%",
+                              background: group.is_active ? "#1d9e63" : "#8a90a2",
+                              transition: "left 0.2s ease",
+                            }}
+                          />
+                        </button>
+                      </div>
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: "center" }}>{rowActions(group)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
       {!isLoadingGroups && feeGroups.length > 0 && (
@@ -1545,6 +1838,25 @@ export default function FeeConfigurationPanel() {
     const rest = GL_CODE_SUGGESTIONS.filter(option => option.code !== preferred);
     return first ? [first, ...rest] : GL_CODE_SUGGESTIONS;
   };
+
+  const fetchAllFeeTypesForModal = async () => {
+    try {
+      const payload = await feesApi.listTypes({ page_size: 1000 });
+      if (Array.isArray(payload)) {
+        setFeeTypes(payload);
+      } else if ("results" in payload) {
+        setFeeTypes((payload as { results?: FeesType[] }).results || []);
+      } else {
+        setFeeTypes(listData(payload as { results?: FeesType[] }));
+      }
+    } catch {
+      showToast("Unable to load fee types.");
+    }
+  };
+
+  useEffect(() => {
+    if (isCreateScheduleOpen) fetchAllFeeTypesForModal();
+  }, [isCreateScheduleOpen]);
 
   const fetchFeeTypes = async () => {
     setIsLoadingTypes(true);
@@ -1891,7 +2203,111 @@ export default function FeeConfigurationPanel() {
 
   // ── Fee Schedules tab ────────────────────────────────────────────────────────
 
-  const renderFeeSchedules = () => (
+  const renderFeeSchedules = () => {
+    const selectedAcademicYear = academicYears.find(y => y.id === academicYearId) || null;
+    const calendarTerms = terms.slice(0, numTerms).map((term, index) => ({
+      label: term.name?.trim() || `Term ${index + 1}`,
+      range: `${formatDisplayDate(term.startDate)} -> ${formatDisplayDate(term.endDate)}`,
+    }));
+    const yearBadge = selectedAcademicYear?.name || "N/A";
+    const yearStart = formatDisplayDate(selectedAcademicYear?.start_date || terms[0]?.startDate);
+    const yearEnd = formatDisplayDate(selectedAcademicYear?.end_date || terms[Math.max(0, numTerms - 1)]?.endDate);
+    const groupPalette = ["#6D4AFF", "#0E7490", "#16a34a", "#d97706", "#2563eb", "#7C3AED"];
+
+    const formatShortDate = (iso?: string) => {
+      if (!iso) return "";
+      const [y, m, d] = iso.split("-").map(Number);
+      if (!y || !m || !d) return "";
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      return `${String(d).padStart(2, "0")} ${months[m - 1]}`;
+    };
+
+    const formatMoney = (value: any) => `₹${Number(value || 0).toLocaleString("en-IN")}`;
+    const rowGridTemplate = "minmax(190px,1.5fr) minmax(120px,1fr) minmax(260px,2.6fr) minmax(100px,.9fr) minmax(180px,1.8fr) minmax(110px,.9fr)";
+
+    const structurePill = (frequency: string): React.CSSProperties => {
+      const normalized = (frequency || "").toLowerCase();
+      if (normalized === "term-wise") {
+        return { background: "#dcfce7", color: "#15803d", border: "1px solid #86efac" };
+      }
+      if (normalized === "monthly") {
+        return { background: "#dbeafe", color: "#1d4ed8", border: "1px solid #93c5fd" };
+      }
+      if (normalized === "quarterly" || normalized === "half-yearly") {
+        return { background: "#fef3c7", color: "#b45309", border: "1px solid #fcd34d" };
+      }
+      return { background: "#fee2e2", color: "#dc2626", border: "1px solid #fecaca" };
+    };
+
+    const buildAmountPlanTokens = (schedule: FeeSchedule) => {
+      const breakdown = Array.isArray(schedule.term_breakdown) ? schedule.term_breakdown : [];
+      if (breakdown.length > 0) {
+        const prefix = (schedule.collection_frequency || "").toLowerCase() === "term-wise" ? "T" : "I";
+        return breakdown.map((tb: any, idx: number) => {
+          const due = tb?.due_date ? ` (${formatShortDate(tb.due_date)})` : "";
+          return `${prefix}${idx + 1}: ${formatMoney(tb?.amount)}${due}`;
+        });
+      }
+      const due = schedule.due_date ? ` (${formatShortDate(schedule.due_date)})` : "";
+      return [`I1: ${formatMoney(schedule.amount)}${due}`];
+    };
+
+    const groupedSchedules = Object.entries(
+      feeSchedules.reduce((acc: Record<string, FeeSchedule[]>, schedule) => {
+        const key = String(schedule.fee_group);
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(schedule);
+        return acc;
+      }, {})
+    ).map(([groupId, rows]) => ({
+      groupId: Number(groupId),
+      groupName: rows[0]?.fee_group_name || `Group ${groupId}`,
+      rows,
+    })).sort((a, b) => a.groupName.localeCompare(b.groupName));
+
+    const getGroupSummary = (rows: FeeSchedule[]) => rows.map(row => {
+      const freq = (row.collection_frequency || "").toLowerCase();
+      if (freq === "term-wise" || freq === "yearly") return `${formatMoney(row.amount)} / yr`;
+      if (freq === "monthly") return `${formatMoney(row.amount)} / mo`;
+      if (freq === "quarterly") return `${formatMoney(row.amount)} / qtr`;
+      if (freq === "half-yearly") return `${formatMoney(row.amount)} / 6 mo`;
+      return `${formatMoney(row.amount)} custom`;
+    }).join(" + ");
+
+    const openEditSchedule = (schedule: FeeSchedule) => {
+      setEditingSchedule(schedule);
+      setEditScheduleAcademicYear(schedule.academic_year);
+      setEditScheduleFeeGroup(schedule.fee_group);
+      setEditScheduleFeeType(schedule.fee_type);
+      setEditScheduleAmount(schedule.amount);
+      setEditScheduleFrequency(schedule.collection_frequency);
+      setEditScheduleDueDate(clampDateToAcademicYear(schedule.due_date, schedule.academic_year, schedule.due_date));
+      setEditScheduleLateFee(schedule.late_fee_applicable);
+      setEditScheduleStatus((schedule.status || "active").toLowerCase() as "active" | "inactive");
+      setEditScheduleGracePeriod(schedule.grace_period || 0);
+      setEditScheduleLateFeeRule(schedule.late_fee_rule || "");
+
+      if (schedule.term_breakdown && schedule.term_breakdown.length > 0) {
+        const normalized = JSON.parse(JSON.stringify(schedule.term_breakdown)).map((tb: any) => ({
+          ...tb,
+          due_date: clampDateToAcademicYear(tb?.due_date, schedule.academic_year, tb?.due_date),
+        }));
+        setEditScheduleTermBreakdown(normalized);
+      } else {
+        const initialBreakdown = termSettings.map(term => ({
+          term_number: term.term_number,
+          term_name: term.term_name,
+          amount: "",
+          due_date: clampDateToAcademicYear(term.default_due_date, schedule.academic_year, term.start_date),
+        }));
+        setEditScheduleTermBreakdown(initialBreakdown);
+      }
+
+      setEditScheduleErrors({});
+      setIsEditScheduleOpen(true);
+    };
+
+    return (
     <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
 
       {/* Academic Calendar card */}
@@ -1902,7 +2318,7 @@ export default function FeeConfigurationPanel() {
               📅 ACADEMIC CALENDAR
             </span>
             <span style={{ fontSize: 12, fontWeight: 700, background: "#6D4AFF", color: "#fff", padding: "2px 10px", borderRadius: 20 }}>
-              2025-26
+              {yearBadge}
             </span>
             <span style={{ fontSize: 12, fontWeight: 600, background: "#E8E8EE", color: "#5B5E72", padding: "2px 10px", borderRadius: 20 }}>
               CBSE
@@ -1913,7 +2329,11 @@ export default function FeeConfigurationPanel() {
           </div>
           <button
             style={{ ...outlineBtn(true), fontSize: 12, height: 30 }}
-            onClick={() => showToast("Academic calendar dates applied to term settings.")}
+            onClick={() => {
+              const nextTerms = generateDefaultTerms(selectedAcademicYear || undefined, numTerms);
+              setTerms(nextTerms);
+              showToast("Academic calendar dates applied to term settings.");
+            }}
           >
             Use These Dates →
           </button>
@@ -1922,20 +2342,20 @@ export default function FeeConfigurationPanel() {
         <div style={{ display: "flex", gap: 40, marginTop: 14, marginBottom: 14 }}>
           <div>
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 4 }}>YEAR START</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#181B2A" }}>01 Jun 2025</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#181B2A" }}>{yearStart}</div>
           </div>
           <div>
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 4 }}>YEAR END</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#181B2A" }}>31 Mar 2026</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#181B2A" }}>{yearEnd}</div>
           </div>
           <div>
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 4 }}>BASED ON</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#181B2A" }}>{numTerms} Fee Term{numTerms > 1 ? "s" : ""}</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#181B2A" }}>{calendarTerms.length} Fee Term{calendarTerms.length > 1 ? "s" : ""}</div>
           </div>
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {ACADEMIC_TERMS.slice(0, numTerms).map(t => (
+          {calendarTerms.map(t => (
             <div key={t.label} style={{
               background: "#fff", border: "1px solid #c7c2f8", borderRadius: 10,
               padding: "10px 16px", flex: "1 1 160px", minWidth: 160,
@@ -2093,10 +2513,12 @@ export default function FeeConfigurationPanel() {
                   </div>
                   <input
                     type="date"
+                    min={getAcademicYearBounds(academicYearId).start || undefined}
+                    max={getAcademicYearBounds(academicYearId).end || undefined}
                     value={terms[i]?.startDate ?? ""}
                     onChange={e => {
                       const next = [...terms];
-                      next[i] = { ...next[i], startDate: e.target.value };
+                      next[i] = { ...next[i], startDate: clampDateToAcademicYear(e.target.value, academicYearId, terms[i]?.startDate) };
                       setTerms(next);
                     }}
                     style={{
@@ -2112,10 +2534,12 @@ export default function FeeConfigurationPanel() {
                   </div>
                   <input
                     type="date"
+                    min={getAcademicYearBounds(academicYearId).start || undefined}
+                    max={getAcademicYearBounds(academicYearId).end || undefined}
                     value={terms[i]?.endDate ?? ""}
                     onChange={e => {
                       const next = [...terms];
-                      next[i] = { ...next[i], endDate: e.target.value };
+                      next[i] = { ...next[i], endDate: clampDateToAcademicYear(e.target.value, academicYearId, terms[i]?.endDate) };
                       setTerms(next);
                     }}
                     style={{
@@ -2131,10 +2555,12 @@ export default function FeeConfigurationPanel() {
                   </div>
                   <input
                     type="date"
+                    min={getAcademicYearBounds(academicYearId).start || undefined}
+                    max={getAcademicYearBounds(academicYearId).end || undefined}
                     value={terms[i]?.dueDate ?? "2026-04-10"}
                     onChange={e => {
                       const next = [...terms];
-                      next[i] = { ...next[i], dueDate: e.target.value };
+                      next[i] = { ...next[i], dueDate: clampDateToAcademicYear(e.target.value, academicYearId, terms[i]?.startDate) };
                       setTerms(next);
                     }}
                     style={{
@@ -2154,8 +2580,8 @@ export default function FeeConfigurationPanel() {
       <div style={card}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 4 }}>Fee Schedules</div>
-            <div style={{ fontSize: 13, color: "#A0A3B8" }}>Manage fee collection schedules for each fee type per group.</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: "#181B2A", marginBottom: 4 }}>Fee Schedule per Group</div>
+            <div style={{ fontSize: 13, color: "#A0A3B8" }}>Each group contains multiple fee types — configure amounts and collection structures independently for each type.</div>
           </div>
           <button
             style={primaryBtn()}
@@ -2175,7 +2601,7 @@ export default function FeeConfigurationPanel() {
                 term_number: term.term_number,
                 term_name: term.term_name,
                 amount: "",
-                due_date: term.default_due_date || "",
+                due_date: clampDateToAcademicYear(term.default_due_date, academicYearId, term.start_date),
               }));
               setScheduleTermBreakdown(initialBreakdown);
 
@@ -2184,28 +2610,37 @@ export default function FeeConfigurationPanel() {
               setIsCreateScheduleOpen(true);
             }}
           >
-            + Create Schedule
+            + Add Fee Schedule
           </button>
         </div>
 
-        {/* Search & Filters */}
-        <div style={{ display: "flex", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
           <input
             type="text"
             placeholder="Search by fee group, fee type, or academic year..."
             value={scheduleSearch}
             onChange={e => setScheduleSearch(e.target.value)}
             style={{
-              flex: 1, minWidth: 200, height: 36, border: "1px solid #E8E8EE",
-              borderRadius: 8, padding: "0 12px", fontSize: 13,
+              flex: 1,
+              minWidth: 220,
+              height: 36,
+              border: "1px solid #E8E8EE",
+              borderRadius: 8,
+              padding: "0 12px",
+              fontSize: 13,
             }}
           />
           <select
             value={scheduleSortBy}
             onChange={e => setScheduleSortBy(e.target.value)}
             style={{
-              height: 36, border: "1px solid #E8E8EE", borderRadius: 8,
-              padding: "0 12px", fontSize: 13, background: "#fff", cursor: "pointer",
+              height: 36,
+              border: "1px solid #E8E8EE",
+              borderRadius: 8,
+              padding: "0 12px",
+              fontSize: 13,
+              background: "#fff",
+              cursor: "pointer",
             }}
           >
             <option value="created_at">Latest First</option>
@@ -2217,8 +2652,13 @@ export default function FeeConfigurationPanel() {
             value={scheduleStatusFilter}
             onChange={e => setScheduleStatusFilter(e.target.value as "" | "active" | "inactive")}
             style={{
-              height: 36, border: "1px solid #E8E8EE", borderRadius: 8,
-              padding: "0 12px", fontSize: 13, background: "#fff", cursor: "pointer",
+              height: 36,
+              border: "1px solid #E8E8EE",
+              borderRadius: 8,
+              padding: "0 12px",
+              fontSize: 13,
+              background: "#fff",
+              cursor: "pointer",
             }}
           >
             <option value="">All Status</option>
@@ -2227,7 +2667,7 @@ export default function FeeConfigurationPanel() {
           </select>
         </div>
 
-        {/* Schedules Table */}
+        {/* Schedules by Group */}
         {isLoadingSchedules ? (
           <div style={{ textAlign: "center", padding: "40px 20px", color: "#A0A3B8" }}>
             <div style={{ fontSize: 14 }}>Loading fee schedules...</div>
@@ -2237,121 +2677,171 @@ export default function FeeConfigurationPanel() {
             <div style={{ fontSize: 14 }}>No fee schedules found. Create one to get started.</div>
           </div>
         ) : (
-          <>
-            <div style={{ overflowX: "auto", marginBottom: 16 }}>
-              <table style={{
-                width: "100%", borderCollapse: "collapse",
-                fontSize: 13, color: "#181B2A",
-              }}>
-                <thead>
-                  <tr style={{ borderBottom: "2px solid #E8E8EE", background: "#F8F8FB" }}>
-                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Fee Group</th>
-                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Fee Type</th>
-                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Amount</th>
-                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Frequency</th>
-                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Status</th>
-                    <th style={{ padding: "12px", textAlign: "center", fontWeight: 700 }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {feeSchedules.map((schedule, idx) => (
-                    <tr key={schedule.id} style={{
-                      borderBottom: "1px solid #E8E8EE",
-                      background: idx % 2 === 0 ? "#fff" : "#F8F8FB",
-                    }}>
-                      <td style={{ padding: "12px" }}>{schedule.fee_group_name || schedule.fee_group}</td>
-                      <td style={{ padding: "12px" }}>{schedule.fee_type_name || schedule.fee_type}</td>
-                      <td style={{ padding: "12px", fontWeight: 600 }}>₹{Number(schedule.amount).toLocaleString('en-IN')}</td>
-                      <td style={{ padding: "12px" }}>{schedule.collection_frequency}</td>
-                      <td style={{ padding: "12px" }}>
-                        <span style={{
-                          padding: "4px 10px", borderRadius: 4, fontSize: 12, fontWeight: 600,
-                          background: schedule.status === "active" ? "#dcfce7" : "#fee2e2",
-                          color: schedule.status === "active" ? "#15803d" : "#991b1b",
-                        }}>
-                          {schedule.status}
-                        </span>
-                      </td>
-                      <td style={{ padding: "12px", textAlign: "center" }}>
-                        <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                          <button
-                            style={outlineBtn(true)}
-                            onClick={() => {
-                              setEditingSchedule(schedule);
-                              setEditScheduleAcademicYear(schedule.academic_year);
-                              setEditScheduleFeeGroup(schedule.fee_group);
-                              setEditScheduleFeeType(schedule.fee_type);
-                              setEditScheduleAmount(schedule.amount);
-                              setEditScheduleFrequency(schedule.collection_frequency);
-                              setEditScheduleDueDate(schedule.due_date);
-                              setEditScheduleLateFee(schedule.late_fee_applicable);
-                              setEditScheduleStatus(schedule.status);
-                              setEditScheduleGracePeriod(schedule.grace_period || 0);
-                              setEditScheduleLateFeeRule(schedule.late_fee_rule || "");
-                              
-                              if (schedule.term_breakdown && schedule.term_breakdown.length > 0) {
-                                setEditScheduleTermBreakdown(JSON.parse(JSON.stringify(schedule.term_breakdown)));
-                              } else {
-                                const initialBreakdown = termSettings.map(term => ({
-                                  term_number: term.term_number,
-                                  term_name: term.term_name,
-                                  amount: "",
-                                  due_date: term.default_due_date || "",
-                                }));
-                                setEditScheduleTermBreakdown(initialBreakdown);
-                              }
-                              
-                              setEditScheduleErrors({});
-                              setIsEditScheduleOpen(true);
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            style={dangerBtn(true)}
-                            onClick={() => {
-                              setDeleteSchedule(schedule);
-                              setDeleteScheduleError("");
-                              setIsDeleteScheduleOpen(true);
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {groupedSchedules.map((group, groupIndex) => {
+              const accent = groupPalette[groupIndex % groupPalette.length];
+              const initials = group.groupName.split(" ").filter(Boolean).slice(0, 2).map(w => w[0]?.toUpperCase() || "").join("") || "FG";
 
-            {/* Pagination */}
-            {scheduleTotalPages > 1 && (
-              <div style={{ display: "flex", justifyContent: "center", gap: 8, padding: "16px 0" }}>
+              return (
+                <div key={group.groupId} style={{ border: "1px solid #E8E8EE", borderRadius: 14, overflow: "hidden", background: "#fff" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid #EFEFF4" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                      <div style={{ width: 44, height: 44, borderRadius: 12, background: accent, color: "#fff", fontWeight: 800, fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        {initials}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: "clamp(17px, 1.7vw, 24px)", fontWeight: 700, color: "#181B2A", lineHeight: 1.15 }}>{group.groupName}</div>
+                        <div style={{ fontSize: 11.5, color: "#A0A3B8", marginTop: 4 }}>
+                          {group.rows.length} fee type{group.rows.length > 1 ? "s" : ""} configured · {getGroupSummary(group.rows)}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <button
+                        style={outlineBtn()}
+                        onClick={() => {
+                          setScheduleAcademicYear(academicYearId || "");
+                          setScheduleFeeGroup(group.groupId);
+                          setScheduleFeeType("");
+                          setScheduleAmount("");
+                          setScheduleFrequency("Term-wise");
+                          setScheduleDueDate("");
+                          setScheduleLateFee(false);
+                          setScheduleGracePeriod(0);
+                          setScheduleLateFeeRule("");
+                          setScheduleTermBreakdown(termSettings.map(term => ({
+                            term_number: term.term_number,
+                            term_name: term.term_name,
+                            amount: "",
+                            due_date: clampDateToAcademicYear(term.default_due_date, academicYearId, term.start_date),
+                          })));
+                          setScheduleStatus("active");
+                          setScheduleErrors({});
+                          setIsCreateScheduleOpen(true);
+                        }}
+                      >
+                        + Add Fee Type
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ overflowX: "auto" }}>
+                    <div style={{ minWidth: 980 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: rowGridTemplate, gap: 12, padding: "10px 20px", background: "#F8F8FB", borderBottom: "1px solid #E8E8EE" }}>
+                        {[
+                          "FEE TYPE",
+                          "STRUCTURE",
+                          "AMOUNT / PLAN",
+                          "GRACE",
+                          "LATE FEE RULE",
+                          "ACTIONS",
+                        ].map(h => (
+                          <div key={h} style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: "0.06em", color: "#A0A3B8" }}>{h}</div>
+                        ))}
+                      </div>
+
+                      {group.rows.map((schedule, rowIndex) => (
+                        <div key={schedule.id} style={{ display: "grid", gridTemplateColumns: rowGridTemplate, gap: 12, padding: "18px 20px", borderBottom: rowIndex < group.rows.length - 1 ? "1px solid #E8E8EE" : "none", alignItems: "center" }}>
+                          <div style={{ fontSize: "clamp(16px, 1.4vw, 22px)", fontWeight: 700, color: "#181B2A" }}>{schedule.fee_type_name || schedule.fee_type}</div>
+                          <div>
+                            <span style={{ ...structurePill(schedule.collection_frequency), fontSize: 12, fontWeight: 700, padding: "4px 10px", borderRadius: 999 }}>
+                              {schedule.collection_frequency}
+                            </span>
+                          </div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                            {buildAmountPlanTokens(schedule).map(token => (
+                              <span key={token} style={{ fontSize: 12.5, color: "#334155", background: "#E6E9F1", border: "1px solid #D8DCE7", borderRadius: 8, padding: "5px 9px", fontWeight: 600 }}>
+                                {token}
+                              </span>
+                            ))}
+                          </div>
+                          <div style={{ fontSize: 15, color: "#5B5E72", fontWeight: 500 }}>{schedule.grace_period || 0} days</div>
+                          <div style={{ fontSize: 15, color: schedule.late_fee_rule ? "#5B5E72" : "#A0A3B8", lineHeight: 1.35 }}>
+                            {schedule.late_fee_rule || "None"}
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            <button style={outlineBtn(true)} onClick={() => openEditSchedule(schedule)}>Edit</button>
+                            <button
+                              style={dangerBtn(true)}
+                              onClick={() => {
+                                setDeleteSchedule(schedule);
+                                setDeleteScheduleError("");
+                                setIsDeleteScheduleOpen(true);
+                              }}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, padding: "8px 0 2px", alignItems: "center" }}>
                 <button
                   disabled={schedulePage === 1}
                   onClick={() => setSchedulePage(Math.max(1, schedulePage - 1))}
-                  style={{ padding: "6px 12px", border: "1px solid #E8E8EE", borderRadius: 6, cursor: schedulePage === 1 ? "default" : "pointer", opacity: schedulePage === 1 ? 0.5 : 1 }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    border: "1px solid #E8E8EE",
+                    borderRadius: 10,
+                    cursor: schedulePage === 1 ? "default" : "pointer",
+                    opacity: schedulePage === 1 ? 0.5 : 1,
+                    background: "#fff",
+                    color: "#9aa0b5",
+                    fontSize: 16,
+                    fontWeight: 700,
+                    lineHeight: 1,
+                  }}
                 >
-                  ← Prev
+                  ‹
                 </button>
-                <div style={{ padding: "6px 12px", color: "#A0A3B8" }}>
-                  Page {schedulePage} of {scheduleTotalPages}
+                <div style={{
+                  minWidth: 34,
+                  height: 30,
+                  padding: "0 10px",
+                  borderRadius: 10,
+                  background: "#6D4AFF",
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 14,
+                  fontWeight: 700,
+                }}>
+                  {schedulePage}
                 </div>
                 <button
                   disabled={schedulePage >= scheduleTotalPages}
                   onClick={() => setSchedulePage(Math.min(scheduleTotalPages, schedulePage + 1))}
-                  style={{ padding: "6px 12px", border: "1px solid #E8E8EE", borderRadius: 6, cursor: schedulePage >= scheduleTotalPages ? "default" : "pointer", opacity: schedulePage >= scheduleTotalPages ? 0.5 : 1 }}
+                  style={{
+                    width: 34,
+                    height: 30,
+                    border: "1px solid #E8E8EE",
+                    borderRadius: 10,
+                    cursor: schedulePage >= scheduleTotalPages ? "default" : "pointer",
+                    opacity: schedulePage >= scheduleTotalPages ? 0.5 : 1,
+                    background: "#fff",
+                    color: "#9aa0b5",
+                    fontSize: 16,
+                    fontWeight: 700,
+                    lineHeight: 1,
+                  }}
                 >
-                  Next →
+                  ›
                 </button>
-              </div>
-            )}
-          </>
+            </div>
+
+          </div>
         )}
       </div>
     </div>
   );
+  };
 
   // ── Create/Edit Schedule Modal ───────────────────────────────────────
 
@@ -2362,7 +2852,7 @@ export default function FeeConfigurationPanel() {
     }} onClick={() => setIsCreateScheduleOpen(false)}>
       <div
         style={{
-          background: "#fff", borderRadius: 12, padding: "28px", maxWidth: scheduleFrequency === "Term-wise" ? 950 : 540,
+          background: "#fff", borderRadius: 12, padding: "28px", maxWidth: ["Term-wise", "Monthly", "Quarterly", "Half-Yearly"].includes(scheduleFrequency) ? 950 : 540,
           width: "95%", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 50px rgba(0,0,0,0.15)",
           transition: "max-width 0.2s ease-in-out",
         }}
@@ -2397,7 +2887,7 @@ export default function FeeConfigurationPanel() {
             </div>
 
             <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Group</label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Group <span style={{ color: "#dc2626" }}>*</span></label>
               <select
                 value={scheduleFeeGroup}
                 onChange={e => {
@@ -2417,7 +2907,7 @@ export default function FeeConfigurationPanel() {
             </div>
 
             <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Type</label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Type <span style={{ color: "#dc2626" }}>*</span></label>
               <select
                 value={scheduleFeeType}
                 onChange={e => setScheduleFeeType(Number(e.target.value) || "")}
@@ -2441,14 +2931,25 @@ export default function FeeConfigurationPanel() {
                 onChange={e => {
                   const val = e.target.value;
                   setScheduleFrequency(val);
-                  if (val === "Term-wise" && scheduleTermBreakdown.length === 0) {
+                  if (val === "Term-wise") {
                     const initialBreakdown = termSettings.map(term => ({
                       term_number: term.term_number,
                       term_name: term.term_name,
                       amount: "",
-                      due_date: term.default_due_date || "",
+                      due_date: clampDateToAcademicYear(term.default_due_date, scheduleAcademicYear || academicYearId, term.start_date),
                     }));
                     setScheduleTermBreakdown(initialBreakdown);
+                  } else if (val === "Monthly") {
+                    const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+                    setScheduleTermBreakdown(months.map((m, idx) => ({ term_number: idx + 1, term_name: m, amount: "", due_date: "" })));
+                  } else if (val === "Quarterly") {
+                    const quarters = ["Quarter 1 (Jan–Mar)","Quarter 2 (Apr–Jun)","Quarter 3 (Jul–Sep)","Quarter 4 (Oct–Dec)"];
+                    setScheduleTermBreakdown(quarters.map((q, idx) => ({ term_number: idx + 1, term_name: q, amount: "", due_date: "" })));
+                  } else if (val === "Half-Yearly") {
+                    const halves = ["Half 1 (Apr–Sep)","Half 2 (Oct–Mar)"];
+                    setScheduleTermBreakdown(halves.map((h, idx) => ({ term_number: idx + 1, term_name: h, amount: "", due_date: "" })));
+                  } else {
+                    setScheduleTermBreakdown([]);
                   }
                 }}
                 style={{
@@ -2466,10 +2967,10 @@ export default function FeeConfigurationPanel() {
               </select>
             </div>
 
-            {scheduleFrequency !== "Term-wise" && (
+            {["Yearly", "One-Time", "Custom"].includes(scheduleFrequency) && (
               <>
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Amount (₹)</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Amount (₹) <span style={{ color: "#dc2626" }}>*</span></label>
                   <input
                     type="number"
                     step="0.01"
@@ -2486,11 +2987,13 @@ export default function FeeConfigurationPanel() {
                 </div>
 
                 <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Due Date</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Due Date <span style={{ color: "#dc2626" }}>*</span></label>
                   <input
                     type="date"
+                    min={getAcademicYearBounds(scheduleAcademicYear || academicYearId).start || undefined}
+                    max={getAcademicYearBounds(scheduleAcademicYear || academicYearId).end || undefined}
                     value={scheduleDueDate}
-                    onChange={e => setScheduleDueDate(e.target.value)}
+                    onChange={e => setScheduleDueDate(clampDateToAcademicYear(e.target.value, scheduleAcademicYear || academicYearId, scheduleDueDate))}
                     style={{
                       width: "100%", height: 40, border: `1px solid ${scheduleErrors.due_date ? "#dc2626" : "#E8E8EE"}`,
                       borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
@@ -2560,12 +3063,17 @@ export default function FeeConfigurationPanel() {
             </div>
           </div>
 
-          {/* Right Section: Term Settings breakdown slots */}
-          {scheduleFrequency === "Term-wise" && (
+          {/* Right Section: Breakdown slots for Term-wise / Monthly / Quarterly / Half-Yearly */}
+          {["Term-wise", "Monthly", "Quarterly", "Half-Yearly"].includes(scheduleFrequency) && (
             <div style={{ flex: "1 1 420px", display: "flex", flexDirection: "column", gap: 14 }}>
               <div style={{ borderBottom: "1px solid #E8E8EE", paddingBottom: 6 }}>
-                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#181B2A", margin: 0 }}>Term-wise Breakdown Slots</h3>
-                <p style={{ fontSize: 11, color: "#A0A3B8", margin: "2px 0 0 0" }}>Specify amounts and due dates of each term. Total amount is calculated automatically.</p>
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#181B2A", margin: 0 }}>
+                  {scheduleFrequency === "Monthly" ? "Monthly Installment Slots" :
+                   scheduleFrequency === "Quarterly" ? "Quarterly Installment Slots" :
+                   scheduleFrequency === "Half-Yearly" ? "Half-Yearly Installment Slots" :
+                   "Term-wise Breakdown Slots"}
+                </h3>
+                <p style={{ fontSize: 11, color: "#A0A3B8", margin: "2px 0 0 0" }}>Specify amount and due date for each installment. Total is calculated automatically.</p>
               </div>
 
               {scheduleTermBreakdown.length === 0 ? (
@@ -2592,17 +3100,17 @@ export default function FeeConfigurationPanel() {
                         width: 34, 
                         height: 34, 
                         borderRadius: "50%", 
-                        background: "#EDE9FE", 
-                        color: "#6D28D9", 
+                        background: scheduleFrequency === "Monthly" ? "#DBEAFE" : scheduleFrequency === "Quarterly" ? "#D1FAE5" : scheduleFrequency === "Half-Yearly" ? "#FEF3C7" : "#EDE9FE",
+                        color: scheduleFrequency === "Monthly" ? "#1D4ED8" : scheduleFrequency === "Quarterly" ? "#065F46" : scheduleFrequency === "Half-Yearly" ? "#92400E" : "#6D28D9",
                         display: "flex", 
                         alignItems: "center", 
                         justifyContent: "center", 
                         fontWeight: 700, 
-                        fontSize: 12, 
+                        fontSize: 11, 
                         flexShrink: 0,
                         border: "1px solid #C4B5FD"
                       }}>
-                        T{tb.term_number || (i + 1)}
+                        {scheduleFrequency === "Monthly" ? `M${tb.term_number || (i+1)}` : scheduleFrequency === "Quarterly" ? `Q${tb.term_number || (i+1)}` : scheduleFrequency === "Half-Yearly" ? `H${tb.term_number || (i+1)}` : `T${tb.term_number || (i + 1)}`}
                       </div>
                       <div style={{ flex: 1, minWidth: 80 }}>
                         <div style={{ fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Term Name</div>
@@ -2631,10 +3139,12 @@ export default function FeeConfigurationPanel() {
                         <label style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", marginBottom: 4 }}>DUE DATE</label>
                         <input
                           type="date"
+                          min={getAcademicYearBounds(scheduleAcademicYear || academicYearId).start || undefined}
+                          max={getAcademicYearBounds(scheduleAcademicYear || academicYearId).end || undefined}
                           value={tb.due_date}
                           onChange={e => {
                             const next = [...scheduleTermBreakdown];
-                            next[i] = { ...next[i], due_date: e.target.value };
+                            next[i] = { ...next[i], due_date: clampDateToAcademicYear(e.target.value, scheduleAcademicYear || academicYearId, tb?.due_date) };
                             setScheduleTermBreakdown(next);
                           }}
                           style={{
@@ -2781,7 +3291,7 @@ export default function FeeConfigurationPanel() {
                       term_number: term.term_number,
                       term_name: term.term_name,
                       amount: "",
-                      due_date: term.default_due_date || "",
+                      due_date: clampDateToAcademicYear(term.default_due_date, editScheduleAcademicYear || academicYearId, term.start_date),
                     }));
                     setEditScheduleTermBreakdown(initialBreakdown);
                   }
@@ -2824,8 +3334,10 @@ export default function FeeConfigurationPanel() {
                   <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Due Date</label>
                   <input
                     type="date"
+                    min={getAcademicYearBounds(editScheduleAcademicYear || academicYearId).start || undefined}
+                    max={getAcademicYearBounds(editScheduleAcademicYear || academicYearId).end || undefined}
                     value={editScheduleDueDate}
-                    onChange={e => setEditScheduleDueDate(e.target.value)}
+                    onChange={e => setEditScheduleDueDate(clampDateToAcademicYear(e.target.value, editScheduleAcademicYear || academicYearId, editScheduleDueDate))}
                     style={{
                       width: "100%", height: 40, border: `1px solid ${editScheduleErrors.due_date ? "#dc2626" : "#E8E8EE"}`,
                       borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
@@ -2966,10 +3478,12 @@ export default function FeeConfigurationPanel() {
                         <label style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", marginBottom: 4 }}>DUE DATE</label>
                         <input
                           type="date"
+                          min={getAcademicYearBounds(editScheduleAcademicYear || academicYearId).start || undefined}
+                          max={getAcademicYearBounds(editScheduleAcademicYear || academicYearId).end || undefined}
                           value={tb.due_date}
                           onChange={e => {
                             const next = [...editScheduleTermBreakdown];
-                            next[i] = { ...next[i], due_date: e.target.value };
+                            next[i] = { ...next[i], due_date: clampDateToAcademicYear(e.target.value, editScheduleAcademicYear || academicYearId, tb?.due_date) };
                             setEditScheduleTermBreakdown(next);
                           }}
                           style={{
@@ -3076,27 +3590,50 @@ export default function FeeConfigurationPanel() {
       <div style={card}>
         <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>Create Concession Rule</div>
         <div style={{ fontSize: 12.5, color: "#A0A3B8", marginBottom: 18 }}>
-          Rows update immediately — each action maps to a feesApi call in production.
+          Rules are persisted to backend and listed live.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
-          {[
-            { label: "RULE NAME",   ph: "Staff Ward 50%" },
-            { label: "APPLIES TO", ph: "Tuition Fee" },
-            { label: "DISCOUNT %", ph: "50%" },
-            { label: "STATUS",     ph: "Active" },
-          ].map(f => (
-            <div key={f.label}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>{f.label}</div>
-              <input placeholder={f.ph} style={inputField(f.ph)} />
-            </div>
-          ))}
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>RULE NAME</div>
+            <input placeholder="Staff Ward 50%" style={inputField("")} value={concessionName} onChange={e => setConcessionName(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>APPLIES TO</div>
+            <input placeholder="Tuition Fee" style={inputField("")} value={concessionAppliesTo} onChange={e => setConcessionAppliesTo(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>DISCOUNT %</div>
+            <input placeholder="50" style={inputField("")} value={concessionDiscount} onChange={e => setConcessionDiscount(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>STATUS</div>
+            <select style={{ ...inputField(""), width: "100%" }} value={concessionStatus} onChange={e => setConcessionStatus(e.target.value as "active" | "inactive")}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </div>
         </div>
         <button
           style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
-          onClick={() => showToast("Concession rule added — would save to feesApi in production.")}
+          onClick={handleCreateConcessionRule}
+          disabled={isSavingConcessionRule}
         >
-          Add
+          {isSavingConcessionRule ? "Saving..." : editingConcessionRuleId ? "Update" : "Add"}
         </button>
+        {editingConcessionRuleId && (
+          <button
+            style={{ ...outlineBtn(), minWidth: 140, marginLeft: 10 }}
+            onClick={() => {
+              setEditingConcessionRuleId(null);
+              setConcessionName("");
+              setConcessionAppliesTo("");
+              setConcessionDiscount("");
+              setConcessionStatus("active");
+            }}
+          >
+            Cancel Edit
+          </button>
+        )}
       </div>
 
       {/* Table */}
@@ -3110,17 +3647,85 @@ export default function FeeConfigurationPanel() {
             </tr>
           </thead>
           <tbody>
-            {CONCESSION_RULES.map((r, i) => (
-              <tr key={r.id} style={{ borderBottom: i < CONCESSION_RULES.length - 1 ? "1px solid #E8E8EE" : "none" }}>
-                <td style={{ ...tdStyle, fontWeight: 600 }}>{r.name}</td>
-                <td style={tdMuted}>{r.scope}</td>
-                <td style={{ ...tdStyle, fontWeight: 600 }}>{r.discount}</td>
-                <td style={tdStyle}>{statusPill(r.status)}</td>
-                <td style={tdStyle}>{rowActionsLite(r.name)}</td>
-              </tr>
-            ))}
+            {isLoadingConcessionRules ? (
+              <tr><td style={tdMuted} colSpan={5}>Loading concession rules...</td></tr>
+            ) : concessionRules.length === 0 ? (
+              <tr><td style={tdMuted} colSpan={5}>No concession rules found.</td></tr>
+            ) : concessionRules.map((r, i) => {
+              const displayStatus = (r.status || "").toLowerCase() === "inactive" ? "Inactive" : "Active";
+              return (
+                <tr key={r.id} style={{ borderBottom: i < concessionRules.length - 1 ? "1px solid #E8E8EE" : "none" }}>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>{r.name}</td>
+                  <td style={tdMuted}>{r.applies_to}</td>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>{r.discount_percentage}%</td>
+                  <td style={tdStyle}>{statusPill(displayStatus)}</td>
+                  <td style={tdStyle}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button style={outlineBtn(true)} onClick={() => handleEditConcessionRule(r)}>Edit</button>
+                      <button style={dangerBtn(true)} onClick={() => handleDeleteConcessionRule(r.id)}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, padding: "10px 14px 12px", alignItems: "center", borderTop: "1px solid #F1F2F7" }}>
+          <button
+            disabled={concessionPage === 1}
+            onClick={() => setConcessionPage(Math.max(1, concessionPage - 1))}
+            style={{
+              width: 34,
+              height: 30,
+              border: "1px solid #E8E8EE",
+              borderRadius: 10,
+              cursor: concessionPage === 1 ? "default" : "pointer",
+              opacity: concessionPage === 1 ? 0.5 : 1,
+              background: "#fff",
+              color: "#9aa0b5",
+              fontSize: 16,
+              fontWeight: 700,
+              lineHeight: 1,
+            }}
+          >
+            ‹
+          </button>
+          <div style={{
+            minWidth: 34,
+            height: 30,
+            padding: "0 10px",
+            borderRadius: 10,
+            background: "#6D4AFF",
+            color: "#fff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 14,
+            fontWeight: 700,
+          }}>
+            {concessionPage}
+          </div>
+          <button
+            disabled={concessionPage >= concessionTotalPages}
+            onClick={() => setConcessionPage(Math.min(concessionTotalPages, concessionPage + 1))}
+            style={{
+              width: 34,
+              height: 30,
+              border: "1px solid #E8E8EE",
+              borderRadius: 10,
+              cursor: concessionPage >= concessionTotalPages ? "default" : "pointer",
+              opacity: concessionPage >= concessionTotalPages ? 0.5 : 1,
+              background: "#fff",
+              color: "#9aa0b5",
+              fontSize: 16,
+              fontWeight: 700,
+              lineHeight: 1,
+            }}
+          >
+            ›
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -3131,29 +3736,52 @@ export default function FeeConfigurationPanel() {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Create form */}
       <div style={card}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>Create Late Fee Rule</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>{editingLateFeeRuleId ? "Edit Late Fee Rule" : "Create Late Fee Rule"}</div>
         <div style={{ fontSize: 12.5, color: "#A0A3B8", marginBottom: 18 }}>
-          Rows update immediately — each action maps to a feesApi call in production.
+          Rules are persisted to backend and listed live.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
-          {[
-            { label: "RULE NAME",     ph: "Tuition late rule" },
-            { label: "GRACE PERIOD", ph: "7 days" },
-            { label: "PENALTY",      ph: "Rs. 50 daily" },
-            { label: "CAP AMOUNT",   ph: "Rs. 1,500" },
-          ].map(f => (
-            <div key={f.label}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>{f.label}</div>
-              <input placeholder={f.ph} style={inputField(f.ph)} />
-            </div>
-          ))}
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>RULE NAME</div>
+            <input placeholder="Tuition late rule" style={inputField("")} value={lateRuleName} onChange={e => setLateRuleName(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>GRACE PERIOD (DAYS)</div>
+            <input placeholder="7" style={inputField("")} value={lateRuleGrace} onChange={e => setLateRuleGrace(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>PENALTY</div>
+            <input placeholder="Rs. 50 daily" style={inputField("")} value={lateRulePenalty} onChange={e => setLateRulePenalty(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>CAP AMOUNT</div>
+            <input placeholder="1500" style={inputField("")} value={lateRuleCap} onChange={e => setLateRuleCap(e.target.value)} />
+          </div>
         </div>
-        <button
-          style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
-          onClick={() => showToast("Late fee rule added — would save to feesApi in production.")}
-        >
-          Add
-        </button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button
+            style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
+            onClick={handleCreateLateFeeRule}
+            disabled={isSavingLateFeeRule}
+          >
+            {isSavingLateFeeRule ? "Saving..." : editingLateFeeRuleId ? "Update" : "Add"}
+          </button>
+          {editingLateFeeRuleId && (
+            <button
+              style={outlineBtn()}
+              type="button"
+              onClick={() => {
+                setEditingLateFeeRuleId(null);
+                setLateRuleName("");
+                setLateRuleGrace("");
+                setLateRulePenalty("");
+                setLateRuleCap("");
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -3167,17 +3795,82 @@ export default function FeeConfigurationPanel() {
             </tr>
           </thead>
           <tbody>
-            {LATE_FEE_RULES.map((r, i) => (
-              <tr key={r.id} style={{ borderBottom: i < LATE_FEE_RULES.length - 1 ? "1px solid #E8E8EE" : "none" }}>
+            {isLoadingLateFeeRules ? (
+              <tr><td style={tdMuted} colSpan={5}>Loading late fee rules...</td></tr>
+            ) : lateFeeRules.length === 0 ? (
+              <tr><td style={tdMuted} colSpan={5}>No late fee rules found.</td></tr>
+            ) : lateFeeRules.map((r, i) => (
+              <tr key={r.id} style={{ borderBottom: i < lateFeeRules.length - 1 ? "1px solid #E8E8EE" : "none" }}>
                 <td style={{ ...tdStyle, fontWeight: 600 }}>{r.name}</td>
-                <td style={tdMuted}>{r.grace}</td>
-                <td style={tdMuted}>{r.penalty}</td>
-                <td style={tdMuted}>{r.cap}</td>
-                <td style={tdStyle}>{rowActionsLite(r.name)}</td>
+                <td style={tdMuted}>{r.grace_period_days} days</td>
+                <td style={tdMuted}>{r.penalty_rule}</td>
+                <td style={tdMuted}>{r.cap_amount ? `₹${r.cap_amount}` : "None"}</td>
+                <td style={tdStyle}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button style={outlineBtn(true)} onClick={() => handleEditLateFeeRule(r)}>Edit</button>
+                    <button style={dangerBtn(true)} onClick={() => handleDeleteLateFeeRule(r.id)}>Delete</button>
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, padding: "10px 14px 12px", alignItems: "center", borderTop: "1px solid #F1F2F7" }}>
+          <button
+            disabled={lateFeePage === 1}
+            onClick={() => setLateFeePage(Math.max(1, lateFeePage - 1))}
+            style={{
+              width: 34,
+              height: 30,
+              border: "1px solid #E8E8EE",
+              borderRadius: 10,
+              cursor: lateFeePage === 1 ? "default" : "pointer",
+              opacity: lateFeePage === 1 ? 0.5 : 1,
+              background: "#fff",
+              color: "#9aa0b5",
+              fontSize: 16,
+              fontWeight: 700,
+              lineHeight: 1,
+            }}
+          >
+            ‹
+          </button>
+          <div style={{
+            minWidth: 34,
+            height: 30,
+            padding: "0 10px",
+            borderRadius: 10,
+            background: "#6D4AFF",
+            color: "#fff",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 14,
+            fontWeight: 700,
+          }}>
+            {lateFeePage}
+          </div>
+          <button
+            disabled={lateFeePage >= lateFeeTotalPages}
+            onClick={() => setLateFeePage(Math.min(lateFeeTotalPages, lateFeePage + 1))}
+            style={{
+              width: 34,
+              height: 30,
+              border: "1px solid #E8E8EE",
+              borderRadius: 10,
+              cursor: lateFeePage >= lateFeeTotalPages ? "default" : "pointer",
+              opacity: lateFeePage >= lateFeeTotalPages ? 0.5 : 1,
+              background: "#fff",
+              color: "#9aa0b5",
+              fontSize: 16,
+              fontWeight: 700,
+              lineHeight: 1,
+            }}
+          >
+            ›
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -3278,6 +3971,9 @@ export default function FeeConfigurationPanel() {
                         gap: 6,
                         padding: "8px 10px",
                         minHeight: 40,
+                        maxHeight: 108,
+                        overflowY: "auto",
+                        alignContent: "flex-start",
                         alignItems: "center",
                       }}
                     >

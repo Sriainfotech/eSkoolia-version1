@@ -418,6 +418,59 @@ i am Safura Samreen today 03/06/2024 i have worked on the following UI improveme
 - Redesigned the Live Payment Feed items in `FeesPaymentsPanel.tsx` from simple list rows into individual bordered, rounded cards with gaps, matching the provided UI design.
 - Modified `ModuleSubNav.tsx` by removing the `maxWidth` and `margin auto` constraints and adjusting the left padding. This ensures the topbar items start exactly from the left corner, aligning with the main page content.
 - Updated all topbar items in `ModuleSubNav.tsx` to be uniformly bold (`fontWeight: 600`).
+
+---
+
+## Update — Swetha D (15/06/2026)
+
+**Branch:** `Hr-11/06`
+
+### Fees Module — Backend Integration, Deletion Rules, Schedule Redesign, and Pagination
+
+#### 1. Fee Schedule section redesign and UX alignment
+- Rebuilt the Fee Schedule list view in `frontend/components/fees/FeeConfigurationPanel.tsx` from a flat table into grouped cards under **Fee Schedule per Group**.
+- Added per-group layout with header summary, structure badges, amount-plan chips, grace and late-fee columns, and row-level Edit/Delete actions.
+- Added group-level `+ Add Fee Type` action that opens schedule creation prefilled with selected fee group.
+- Preserved existing create/edit/delete modal flows and backend API wiring while changing only presentation.
+- Reduced oversized typography in the redesigned section for better readability.
+
+#### 2. Fee Assignment backend stabilization (full backend wiring)
+- Completed backend-connected data flow on Fee Assignment page (academic year, students, groups, schedules, concessions, assignments).
+- Fixed assignment POST crash chain in backend fees APIs:
+- Removed invalid `concession_amount` argument before service call.
+- Fixed serializer status field misconfiguration.
+- Made `concession_amount` optional in assignment serializer.
+- Returned serialized created model instance (instead of validated dict) to avoid runtime attribute errors.
+- Updated frontend assignment payloads to match backend service signature.
+
+#### 3. Deletion behavior fixes with clear error messaging
+- Fee Group delete now returns explicit dependency messages instead of generic failure text.
+- Fee Type delete now returns explicit dependency messages and was aligned to safe soft-delete behavior when financial records are absent.
+- Updated frontend delete modals to display backend `detail` message directly for actionable feedback.
+- Added guardrails to block deletion when real financial dependencies exist (assignments/payments), with counts in error messages.
+
+#### 4. Fee Schedule pagination (backend + frontend)
+- Added dedicated fee schedule pagination handling in backend list view.
+- Wired frontend schedule fetch with page/page_size, total count, and page total handling.
+- Applied compact bottom-right pagination style requested by design (small arrows + purple current page pill).
+- Removed page-size dropdown per latest UI request and kept compact pager only.
+- Kept pager visible even when only one page exists.
+
+#### 5. Concession Rules and Late Fee Rules pagination
+- Added backend-driven pagination consumption for Concession Rules and Late Fee Rules using page/page_size/count/results.
+- Added the same compact bottom-right pager UI to both sections for visual consistency with Fee Schedule.
+
+#### 6. Additional alignment updates
+- Academic year date-bound enforcement in Term Settings was retained and validated in both frontend and backend flows.
+- Late Fee Rule edit flow (including edit button behavior) maintained during refactor and connected to backend updates.
+
+**Files updated in this phase (major):**
+- `frontend/components/fees/FeeConfigurationPanel.tsx`
+- `frontend/components/fees/FeesAssignmentPanel.tsx`
+- `frontend/lib/fees-api.ts`
+- `backend/apps/fees/views.py`
+- `backend/apps/fees/serializers.py`
+
 - Handled git operations to bypass a branch collision by creating and pushing a new branch `Fees-ui-updates`.
 
 **Bug fix:**

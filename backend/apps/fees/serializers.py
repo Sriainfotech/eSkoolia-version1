@@ -2,7 +2,7 @@ import re
 from rest_framework import serializers
 from django.db import models
 from decimal import Decimal
-from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule
+from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule
 from apps.core.models import Class, AcademicYear
 
 class FeesGroupSerializer(serializers.ModelSerializer):
@@ -178,8 +178,8 @@ class FeesTypeSerializer(serializers.ModelSerializer):
 class FeeAssignmentSerializer(serializers.ModelSerializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
     discount_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
-    concession_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
-    status = serializers.CharField(source='status', read_only=True)
+    concession_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True, required=False)
+    status = serializers.CharField(read_only=True)
     total_paid = serializers.SerializerMethodField()
     net_due = serializers.SerializerMethodField()
 
@@ -249,9 +249,9 @@ class TermSettingsSerializer(serializers.ModelSerializer):
         return cleaned
 
     def validate(self, attrs):
-        start_date = attrs.get('start_date')
-        end_date = attrs.get('end_date')
-        default_due_date = attrs.get('default_due_date')
+        start_date = attrs.get('start_date') or getattr(self.instance, 'start_date', None)
+        end_date = attrs.get('end_date') or getattr(self.instance, 'end_date', None)
+        default_due_date = attrs.get('default_due_date') or getattr(self.instance, 'default_due_date', None)
         academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
 
         if start_date and end_date and start_date > end_date:
@@ -261,6 +261,18 @@ class TermSettingsSerializer(serializers.ModelSerializer):
             if not (academic_year.start_date <= default_due_date <= academic_year.end_date):
                 raise serializers.ValidationError({
                     'default_due_date': 'Due date must fall within the academic year range.'
+                })
+
+        if academic_year and start_date:
+            if not (academic_year.start_date <= start_date <= academic_year.end_date):
+                raise serializers.ValidationError({
+                    'start_date': 'Start date must fall within the academic year range.'
+                })
+
+        if academic_year and end_date:
+            if not (academic_year.start_date <= end_date <= academic_year.end_date):
+                raise serializers.ValidationError({
+                    'end_date': 'End date must fall within the academic year range.'
                 })
 
         return attrs
@@ -344,9 +356,9 @@ class FeeScheduleSerializer(serializers.ModelSerializer):
         user = getattr(request, 'user', None)
         school_id = getattr(user, 'school_id', None)
 
-        fee_group = attrs.get('fee_group')
-        fee_type = attrs.get('fee_type')
-        academic_year = attrs.get('academic_year')
+        fee_group = attrs.get('fee_group', getattr(self.instance, 'fee_group', None))
+        fee_type = attrs.get('fee_type', getattr(self.instance, 'fee_type', None))
+        academic_year = attrs.get('academic_year', getattr(self.instance, 'academic_year', None))
 
         if not fee_group:
             raise serializers.ValidationError({'fee_group': 'Fee group is required.'})
@@ -373,4 +385,82 @@ class FeeScheduleSerializer(serializers.ModelSerializer):
         data['collection_frequency'] = self.FREQUENCY_OUTPUT_MAP.get(instance.collection_frequency, instance.collection_frequency)
         data['status'] = 'Active' if instance.status == 'active' else 'Inactive'
         data['amount'] = str(instance.amount)
+        return data
+
+
+class ConcessionRuleSerializer(serializers.ModelSerializer):
+    status = serializers.CharField(required=False)
+    discount_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, coerce_to_string=True)
+
+    class Meta:
+        model = ConcessionRule
+        fields = [
+            'id',
+            'academic_year',
+            'name',
+            'applies_to',
+            'discount_percentage',
+            'status',
+            'created_at',
+            'updated_at',
+            'created_by',
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'created_by']
+
+    def validate_status(self, value):
+        normalized = (value or '').strip().lower()
+        if normalized not in {'active', 'inactive'}:
+            raise serializers.ValidationError('Status must be Active or Inactive.')
+        return normalized
+
+    def validate_discount_percentage(self, value):
+        if value < 0 or value > 100:
+            raise serializers.ValidationError('Discount percentage must be between 0 and 100.')
+        return value
+
+    def validate(self, attrs):
+        if 'status' in attrs:
+            attrs['status'] = attrs['status'].lower()
+        return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['status'] = 'Active' if instance.status == 'active' else 'Inactive'
+        return data
+
+
+class LateFeeRuleSerializer(serializers.ModelSerializer):
+    status = serializers.CharField(required=False)
+    cap_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True, required=False, allow_null=True)
+
+    class Meta:
+        model = LateFeeRule
+        fields = [
+            'id',
+            'academic_year',
+            'name',
+            'grace_period_days',
+            'penalty_rule',
+            'cap_amount',
+            'status',
+            'created_at',
+            'updated_at',
+            'created_by',
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'created_by']
+
+    def validate_status(self, value):
+        normalized = (value or '').strip().lower()
+        if normalized not in {'active', 'inactive'}:
+            raise serializers.ValidationError('Status must be Active or Inactive.')
+        return normalized
+
+    def validate(self, attrs):
+        if 'status' in attrs:
+            attrs['status'] = attrs['status'].lower()
+        return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['status'] = 'Active' if instance.status == 'active' else 'Inactive'
         return data

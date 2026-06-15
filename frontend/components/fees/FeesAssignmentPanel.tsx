@@ -1,300 +1,587 @@
 "use client";
-import { useState, useMemo } from "react";
 
-// ── Types ──────────────────────────────────────────────────────────────────────
-type Category  = "Day Scholar" | "Transport Users" | "Full Boarder" | "Unassigned";
+import { useEffect, useMemo, useState } from "react";
+import { feesApi, listData, type AcademicYear, type FeeSchedule, type FeesAssignment, type FeesGroup, type StudentRow, type ConcessionRule } from "@/lib/fees-api";
+
 type FilterTab = "all" | "unassigned" | "assigned";
-type Schedule  = "Term-wise" | "Monthly" | "Custom";
+type PlanId = "2-term" | "3-term" | "4-term" | "monthly" | "custom";
 
-interface Student { id: string; name: string; admNo: string; category: Category; planAgreed: boolean; }
-interface ClassSection { id: string; name: string; students: Student[]; }
-interface FeeRow { type: string; schedule: Schedule; howPaid: string; annual: number; }
-interface Override { group: string; annual: number; }
-
-// ── Fee data ───────────────────────────────────────────────────────────────────
-const ANNUAL_FEE: Record<Category, number | null> = {
-  "Day Scholar": 52900, "Transport Users": 44500, "Full Boarder": 78000, Unassigned: null,
+type UiStudent = {
+  id: number;
+  name: string;
+  admissionNo: string;
+  className: string;
+  sectionName: string;
+  classLabel: string;
+  classId: number | null;
+  groupName: string;
+  annualTotal: number;
+  assigned: boolean;
+  planAgreed: boolean;
 };
 
-const FEE_SCHEDULES: Record<string, FeeRow[]> = {
-  "Day Scholar": [
-    { type: "Tuition Fee",        schedule: "Term-wise", howPaid: "3 terms · ₹12,000/term", annual: 36000 },
-    { type: "Admission Fee",      schedule: "Custom",    howPaid: "1 installment",           annual: 5000  },
-    { type: "Caution Deposit",    schedule: "Custom",    howPaid: "1 installment",           annual: 2000  },
-    { type: "Administrative Fee", schedule: "Term-wise", howPaid: "3 terms · ₹1,500/term",  annual: 4500  },
-    { type: "Lab Fee",            schedule: "Term-wise", howPaid: "3 terms · ₹800/term",    annual: 2400  },
-    { type: "Building Fund",      schedule: "Custom",    howPaid: "2 installments",          annual: 3000  },
-  ],
-  "Transport Users": [
-    { type: "Tuition Fee",     schedule: "Term-wise", howPaid: "3 terms · ₹12,000/term", annual: 36000 },
-    { type: "Transport Fee",   schedule: "Monthly",   howPaid: "₹700/month × 12",         annual: 8400  },
-    { type: "Caution Deposit", schedule: "Custom",    howPaid: "1 installment",            annual: 100   },
-  ],
-  "Full Boarder": [
-    { type: "Tuition Fee", schedule: "Term-wise", howPaid: "3 terms · ₹14,000/term", annual: 42000 },
-    { type: "Hostel Fee",  schedule: "Term-wise", howPaid: "3 terms · ₹12,000/term", annual: 36000 },
-  ],
+type UiClassSection = {
+  id: string;
+  name: string;
+  students: UiStudent[];
 };
 
-const CONCESSIONS    = ["None", "Staff Ward 50%", "Merit 25%", "Need-Based Full", "Sibling 10%"];
-const PAYMENT_PLANS  = [
-  { id: "2-term",   label: "2-Term Plan",   desc: "Two equal instalments per year"     },
-  { id: "3-term",   label: "3-Term Plan",   desc: "Three equal instalments per year"   },
-  { id: "4-term",   label: "4-Term Plan",   desc: "Four equal instalments per year"    },
-  { id: "monthly",  label: "Monthly Plan",  desc: "12 equal monthly payments"          },
-  { id: "custom",   label: "Custom Plan",   desc: "Admin-defined irregular schedule"   },
-];
-const INFO_STEPS = [
-  { n: 1, title: "Select a fee group",    body: "e.g. Day Scholar, Full Boarder. This determines which fee types apply." },
-  { n: 2, title: "Choose an instalment plan", body: "term-wise, monthly, or a custom split. This controls when payments are due." },
-  { n: 3, title: "Apply a concession",    body: "if eligible — Merit, Staff Ward, Sibling, etc. Discounts are computed automatically." },
-  { n: 4, title: "Save the assignment",   body: "the student moves from Unassigned → Assigned and appears in the Collection tab." },
-  { n: 5, title: "Use Bulk Assign",       body: "to process a whole class at once when group and plan are the same for all students." },
+type StudentAssignmentsMap = Record<number, FeesAssignment[]>;
+
+const CONCESSION_NONE = "none";
+
+const PAYMENT_PLANS: { id: PlanId; label: string; desc: string; installments: number | null }[] = [
+  { id: "2-term", label: "2-Term Plan", desc: "Two due dates in the academic year.", installments: 2 },
+  { id: "3-term", label: "3-Term Plan", desc: "Three due dates in the academic year.", installments: 3 },
+  { id: "4-term", label: "4-Term Plan", desc: "Four due dates in the academic year.", installments: 4 },
+  { id: "monthly", label: "Monthly Plan", desc: "Twelve monthly due dates.", installments: 12 },
+  { id: "custom", label: "Custom Plan", desc: "Keep existing due dates.", installments: null },
 ];
 
-const SCHEDULE_BADGE: Record<Schedule, { bg: string; color: string; border: string }> = {
-  "Term-wise": { bg: "#dcfce7", color: "#15803d", border: "#86efac" },
-  "Monthly":   { bg: "#fef3c7", color: "#d97706", border: "#fde68a" },
-  "Custom":    { bg: "#fee2e2", color: "#dc2626", border: "#fca5a5" },
+function primaryBtn(small = false): React.CSSProperties {
+  return {
+    height: small ? 32 : 38,
+    padding: small ? "0 14px" : "0 20px",
+    background: "#6D4AFF",
+    color: "#fff",
+    border: "none",
+    borderRadius: small ? 7 : 9,
+    fontSize: small ? 12.5 : 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    boxShadow: "0 2px 8px rgba(109,74,255,0.20)",
+  };
+}
+
+function outlineBtn(small = false): React.CSSProperties {
+  return {
+    height: small ? 32 : 38,
+    padding: small ? "0 14px" : "0 16px",
+    background: "#fff",
+    color: "#181B2A",
+    border: "1px solid #E8E8EE",
+    borderRadius: small ? 7 : 9,
+    fontSize: small ? 12.5 : 13,
+    fontWeight: 500,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  };
+}
+
+const TH: React.CSSProperties = {
+  padding: "11px 16px",
+  fontSize: 10.5,
+  fontWeight: 700,
+  letterSpacing: "0.07em",
+  color: "#A0A3B8",
+  textAlign: "left",
+  borderBottom: "1px solid #E8E8EE",
 };
 
-// ── Mock students ──────────────────────────────────────────────────────────────
-const AVATAR_COLORS = ["#6D4AFF","#0E7490","#16a34a","#d97706","#dc2626","#7C3AED","#0284c7","#9333ea","#ca8a04","#059669"];
-function avatarBg(name: string) { let h=0; for(const c of name) h=(h*31+c.charCodeAt(0))>>>0; return AVATAR_COLORS[h%AVATAR_COLORS.length]; }
-function initials(name: string) { const p=name.trim().split(" "); return (p[0][0]+(p[1]?.[0]??"")).toUpperCase(); }
-function fmtRs(n: number)  { return "Rs. "+n.toLocaleString("en-IN"); }
-function fmtInr(n: number) { return "₹"+n.toLocaleString("en-IN"); }
-
-function mkStudents(firstNames: string[], lastName: string, admPrefix: string, unassignedIdx: number[], planAgreedIdx: number[]): Student[] {
-  const uSet=new Set(unassignedIdx), pSet=new Set(planAgreedIdx);
-  const cats: Category[]=["Day Scholar","Transport Users","Full Boarder"]; let ci=0;
-  return firstNames.map((fn,i)=>({
-    id:`${admPrefix}${String(i+1).padStart(3,"0")}`,
-    name:`${fn} ${lastName}`,
-    admNo:`ADM-${admPrefix}${String(i+1).padStart(2,"0")}`,
-    category: uSet.has(i)?"Unassigned":cats[ci++%3],
-    planAgreed: pSet.has(i),
-  }));
+function fmtRs(n: number) {
+  return "Rs. " + n.toLocaleString("en-IN");
 }
 
-const CLASS_DATA: ClassSection[] = [
-  { id:"6a",  name:"Class 6A",  students: mkStudents(["Aarav","Aditi","Vivaan","Ananya","Kabir","Ishaan","Meera","Diya","Riya","Arjun","Saanvi","Neel","Tara","Vihaan","Avni","Reyansh","Mira","Aryan","Nisha","Devika","Ira","Om","Sara","Yash","Ayaan","Anika","Kavya","Rohan"],"Sharma","01",[0,7,14,21],[0,1]) },
-  { id:"7b",  name:"Class 7B",  students: mkStudents(["Priya","Rahul","Aditya","Pooja","Sanya","Raj","Suresh","Lakshmi","Vikram","Neha","Divya","Karan","Anjali","Nikhil","Mohit","Shilpa","Sanjay","Deepa","Akash","Sweta","Gaurav","Kavitha","Rajesh","Meena","Sunil","Geeta","Ramesh","Savita","Harish","Padma","Vinay"],"Verma","02",[2,8,16,22,28],[3,5,10]) },
-  { id:"8a",  name:"Class 8A",  students: mkStudents(["Aman","Bhavna","Chetan","Devika","Esha","Faiz","Geetika","Hari","Indira","Jatin","Komal","Laxman","Manya","Nakul","Ojas","Pari","Rajan","Smita","Tanvi","Ujjwal","Vansh","Wasim","Yuvraj","Zara","Arpit","Bhanu"],"Patel","03",[1,8,15,22],[0,4,11]) },
-  { id:"9a",  name:"Class 9A",  students: mkStudents(["Chirag","Disha","Elan","Fatima","Gaurav","Hina","Ishan","Jyoti","Krishna","Leela","Mukesh","Nandini","Omkar","Pallavi","Rohini","Shruti","Tushar","Uma","Vedant","Waqar","Yamini","Zaid","Aashi","Bhavin","Charu","Dhanush","Ekta","Fahad","Harini"],"Kumar","04",[3,9,18,25],[2,7,14]) },
-  { id:"10b", name:"Class 10B", students: mkStudents(["Ila","Jai","Kohinoor","Lavanya","Madhav","Nalini","Onkar","Preeti","Rishabh","Santosh","Tanuj","Usha","Varun","Waseem","Yash","Zubin","Abhi","Bhumi","Chandan","Devyani","Nishant","Pranav","Sanjana","Tejal"],"Singh","05",[4,12,20],[1,6,13]) },
-];
-const TOTAL_STUDENTS = CLASS_DATA.reduce((s,c)=>s+c.students.length,0);
-
-// ── Style helpers ──────────────────────────────────────────────────────────────
-function primaryBtn(small=false): React.CSSProperties {
-  return { height:small?32:38, padding:small?"0 14px":"0 20px", background:"#6D4AFF", color:"#fff", border:"none", borderRadius:small?7:9, fontSize:small?12.5:13, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap", boxShadow:"0 2px 8px rgba(109,74,255,0.20)" };
-}
-function outlineBtn(small=false): React.CSSProperties {
-  return { height:small?32:38, padding:small?"0 14px":"0 16px", background:"#fff", color:"#181B2A", border:"1px solid #E8E8EE", borderRadius:small?7:9, fontSize:small?12.5:13, fontWeight:500, cursor:"pointer", whiteSpace:"nowrap" };
-}
-const TH: React.CSSProperties = { padding:"11px 16px", fontSize:10.5, fontWeight:700, letterSpacing:"0.07em", color:"#A0A3B8", textAlign:"left", borderBottom:"1px solid #E8E8EE" };
-function InfoDot() {
-  return <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:15, height:15, borderRadius:"50%", background:"#E8E8EE", color:"#A0A3B8", fontSize:9.5, fontWeight:700, verticalAlign:"middle", marginLeft:5, flexShrink:0 }}>i</span>;
+function parseMoney(value?: string | number | null): number {
+  if (value === null || value === undefined || value === "") return 0;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
-// ── Shared modal shell ─────────────────────────────────────────────────────────
-function ModalShell({ onClose, children, maxWidth=640 }: { onClose:()=>void; children:React.ReactNode; maxWidth?:number }) {
+function fullName(first?: string, last?: string): string {
+  return `${first || ""} ${last || ""}`.trim() || "Student";
+}
+
+function initials(name: string): string {
+  const p = name.trim().split(" ").filter(Boolean);
+  return ((p[0]?.[0] || "S") + (p[1]?.[0] || "")).toUpperCase();
+}
+
+function avatarBg(name: string): string {
+  const colors = ["#6D4AFF", "#0E7490", "#16a34a", "#d97706", "#dc2626", "#7C3AED", "#0284c7", "#9333ea", "#ca8a04", "#059669"];
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return colors[h % colors.length];
+}
+
+function getPlanDates(year: AcademicYear | null, installments: number): string[] {
+  if (!year?.start_date || !year?.end_date || installments <= 0) return [];
+  const start = new Date(year.start_date);
+  const end = new Date(year.end_date);
+  const span = end.getTime() - start.getTime();
+  const result: string[] = [];
+  for (let i = 1; i <= installments; i++) {
+    const t = new Date(start.getTime() + Math.floor((span * i) / (installments + 1)));
+    result.push(t.toISOString().split("T")[0]);
+  }
+  return result;
+}
+
+async function fetchAllAssignmentsForYear(yearId: number): Promise<FeesAssignment[]> {
+  const data = await feesApi.listAssignments({ page_size: 500, academic_year: yearId });
+  return listData(data);
+}
+
+function mapSchedulesByGroup(schedules: FeeSchedule[]): Record<number, FeeSchedule[]> {
+  const m: Record<number, FeeSchedule[]> = {};
+  for (const s of schedules) {
+    if ((s.status || "").toLowerCase() !== "active") continue;
+    if (!m[s.fee_group]) m[s.fee_group] = [];
+    m[s.fee_group].push(s);
+  }
+  return m;
+}
+
+function discountFactor(rule: ConcessionRule | null): number {
+  if (!rule) return 0;
+  const pct = parseMoney(rule.discount_percentage);
+  if (pct <= 0) return 0;
+  return Math.max(0, Math.min(100, pct)) / 100;
+}
+
+function ModalShell({ onClose, children, maxWidth = 680 }: { onClose: () => void; children: React.ReactNode; maxWidth?: number }) {
   return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(14,16,32,0.40)", zIndex:1000, display:"flex", alignItems:"center", justifyContent:"center", padding:24 }} onClick={onClose}>
-      <div style={{ background:"#fff", borderRadius:16, width:"100%", maxWidth, boxShadow:"0 24px 64px rgba(0,0,0,0.22)", animation:"modalIn 0.18s ease", maxHeight:"90vh", overflowY:"auto" }} onClick={e=>e.stopPropagation()}>
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(14,16,32,0.40)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: "#fff", borderRadius: 16, width: "100%", maxWidth, boxShadow: "0 24px 64px rgba(0,0,0,0.22)", animation: "modalIn 0.18s ease", maxHeight: "90vh", overflowY: "auto" }}
+        onClick={e => e.stopPropagation()}
+      >
         {children}
       </div>
     </div>
   );
 }
-function ModalHeader({ title, subtitle, onClose }: { title:string; subtitle:string; onClose:()=>void }) {
+
+function ModalHeader({ title, subtitle, onClose }: { title: string; subtitle: string; onClose: () => void }) {
   return (
     <>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", padding:"18px 20px 14px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "18px 20px 14px" }}>
         <div>
-          <div style={{ fontSize:16, fontWeight:700, color:"#181B2A", marginBottom:3 }}>{title}</div>
-          <div style={{ fontSize:12, color:"#A0A3B8" }}>{subtitle}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>{title}</div>
+          <div style={{ fontSize: 12, color: "#A0A3B8" }}>{subtitle}</div>
         </div>
-        <button onClick={onClose} style={{ width:28, height:28, borderRadius:"50%", border:"1px solid #E8E8EE", background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", fontSize:15, color:"#A0A3B8", lineHeight:1 }}>×</button>
+        <button onClick={onClose} style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid #E8E8EE", background: "#fff", cursor: "pointer", fontSize: 15, color: "#A0A3B8", lineHeight: 1 }}>×</button>
       </div>
-      <div style={{ height:1, background:"#E8E8EE", margin:"0 20px" }} />
+      <div style={{ height: 1, background: "#E8E8EE", margin: "0 20px" }} />
     </>
   );
 }
-function ModalFooter({ children }: { children:React.ReactNode }) {
-  return <div style={{ display:"flex", justifyContent:"flex-end", gap:10, padding:"12px 20px", borderTop:"1px solid #E8E8EE" }}>{children}</div>;
+
+function ModalFooter({ children }: { children: React.ReactNode }) {
+  return <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, padding: "12px 20px", borderTop: "1px solid #E8E8EE" }}>{children}</div>;
 }
 
-// ── Fee schedule table (shared by Assign + Edit modals) ────────────────────────
-function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange }: {
-  group:string; concession:string;
-  onGroupChange:(g:string)=>void; onConcessionChange:(c:string)=>void;
-}) {
-  const rows  = FEE_SCHEDULES[group] ?? [];
-  const total = rows.reduce((s,r)=>s+r.annual,0);
-  return (
-    <div style={{ padding:"14px 20px" }}>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:18 }}>
-        <div>
-          <div style={{ fontSize:10, fontWeight:700, letterSpacing:"0.07em", color:"#A0A3B8", marginBottom:6 }}>FEE GROUP</div>
-          <select value={group} onChange={e=>onGroupChange(e.target.value)} style={{ width:"100%", height:36, border:"1px solid #E8E8EE", borderRadius:8, padding:"0 10px", fontSize:12.5, background:"#fff", cursor:"pointer" }}>
-            <option>Day Scholar</option><option>Transport Users</option><option>Full Boarder</option>
-          </select>
-        </div>
-        <div>
-          <div style={{ fontSize:10, fontWeight:700, letterSpacing:"0.07em", color:"#A0A3B8", marginBottom:6 }}>CONCESSION</div>
-          <select value={concession} onChange={e=>onConcessionChange(e.target.value)} style={{ width:"100%", height:36, border:"1px solid #E8E8EE", borderRadius:8, padding:"0 10px", fontSize:12.5, background:"#fff", cursor:"pointer" }}>
-            {CONCESSIONS.map(c=><option key={c}>{c}</option>)}
-          </select>
-        </div>
-      </div>
-      <div style={{ border:"1px solid #E8E8EE", borderRadius:10, overflow:"hidden" }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 14px", background:"#F8F8FB", borderBottom:"1px solid #E8E8EE" }}>
-          <div style={{ fontSize:11, fontWeight:700, color:"#181B2A", letterSpacing:"0.04em" }}>FEE SCHEDULE — {group.toUpperCase()}</div>
-          <div style={{ fontSize:10.5, color:"#A0A3B8" }}>Defined in Fee Configuration · read-only</div>
-        </div>
-        <div style={{ display:"grid", gridTemplateColumns:"1.6fr 1fr 1.4fr auto", padding:"8px 14px", background:"#FAFAFA", borderBottom:"1px solid #E8E8EE" }}>
-          {["Fee Type","Payment Schedule","How it's paid","Annual Total"].map(h=>(
-            <div key={h} style={{ fontSize:10, fontWeight:600, color:"#A0A3B8" }}>{h}</div>
-          ))}
-        </div>
-        {rows.map((row,i)=>{
-          const b=SCHEDULE_BADGE[row.schedule];
-          return (
-            <div key={row.type} style={{ display:"grid", gridTemplateColumns:"1.6fr 1fr 1.4fr auto", padding:"10px 14px", alignItems:"center", borderBottom:i<rows.length-1?"1px solid #F0F0F0":"none", background:"#fff" }}>
-              <div style={{ fontSize:12.5, color:"#181B2A" }}>{row.type}</div>
-              <div><span style={{ fontSize:10.5, fontWeight:600, padding:"2px 9px", borderRadius:20, background:b.bg, color:b.color, border:`1px solid ${b.border}` }}>{row.schedule}</span></div>
-              <div style={{ fontSize:12, color:"#5B5E72" }}>{row.howPaid}</div>
-              <div style={{ fontSize:12.5, fontWeight:600, color:"#181B2A", textAlign:"right", minWidth:66 }}>{fmtInr(row.annual)}</div>
-            </div>
-          );
-        })}
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"11px 14px", borderTop:"2px solid #E8E8EE", background:"#F8F8FB" }}>
-          <div style={{ fontSize:12.5, fontWeight:700, color:"#181B2A" }}>Annual fees for this group</div>
-          <div style={{ fontSize:13.5, fontWeight:700, color:"#181B2A" }}>{fmtInr(total)}</div>
-        </div>
-      </div>
-      <p style={{ margin:"12px 0 0", fontSize:11.5, color:"#A0A3B8", lineHeight:1.6, fontStyle:"italic" }}>
-        Each fee type's payment schedule is set in Fee Configuration. To customise a schedule for this student, use the Enroll Student tab → Step 11.
-      </p>
-    </div>
-  );
-}
-
-// ── Component ─────────────────────────────────────────────────────────────────
 export default function FeesAssignmentPanel() {
-  // Filters
-  const [search, setSearch]           = useState("");
-  const [yearFilter, setYearFilter]   = useState("2025-26");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isMutating, setIsMutating] = useState(false);
+  const [toast, setToast] = useState("");
+
+  const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
+  const [academicYearId, setAcademicYearId] = useState<number | null>(null);
+
+  const [students, setStudents] = useState<StudentRow[]>([]);
+  const [feeGroups, setFeeGroups] = useState<FeesGroup[]>([]);
+  const [feeSchedules, setFeeSchedules] = useState<FeeSchedule[]>([]);
+  const [concessionRules, setConcessionRules] = useState<ConcessionRule[]>([]);
+  const [assignments, setAssignments] = useState<FeesAssignment[]>([]);
+
+  const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState("all");
-  const [tab, setTab]                 = useState<FilterTab>("all");
-  const [expanded, setExpanded]       = useState<Set<string>>(new Set(["6a"]));
-  const [selected, setSelected]       = useState<Set<string>>(new Set());
-  const [toast, setToast]             = useState("");
+  const [tab, setTab] = useState<FilterTab>("all");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<number>>(new Set());
 
-  // Session assignments (tracks UI-level changes)
-  const [overrides, setOverrides] = useState<Record<string, Override>>({});
+  const [assignModal, setAssignModal] = useState<{ student: UiStudent; isEdit: boolean } | null>(null);
+  const [bulkModal, setBulkModal] = useState<{ classId: string; className: string } | null>(null);
+  const [changePlanModal, setChangePlanModal] = useState<{ student: UiStudent } | null>(null);
 
-  // Assign / Edit modal
-  const [assignModal, setAssignModal] = useState<{ student: Student; clsName: string; isEdit: boolean } | null>(null);
-  const [modalGroup, setModalGroup]           = useState("Day Scholar");
-  const [modalConcession, setModalConcession] = useState("None");
-
-  // Change Plan modal
-  const [changePlanModal, setChangePlanModal] = useState<{ student: Student } | null>(null);
-  const [selectedPlan, setSelectedPlan] = useState("3-term");
-  const [planReason, setPlanReason]     = useState("");
-
-  // Bulk Assign modal
-  const [bulkModal, setBulkModal] = useState<{ clsId: string; clsName: string } | null>(null);
+  const [modalGroupId, setModalGroupId] = useState<number | null>(null);
+  const [modalConcessionId, setModalConcessionId] = useState<string>(CONCESSION_NONE);
   const [bulkClass, setBulkClass] = useState("all");
-  const [bulkGroup, setBulkGroup] = useState("Day Scholar");
+  const [bulkGroupId, setBulkGroupId] = useState<number | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<PlanId>("3-term");
 
-  // Info modal
-  const [showInfoModal, setShowInfoModal] = useState(false);
+  const activeYear = useMemo(
+    () => academicYears.find(y => y.id === academicYearId) || null,
+    [academicYears, academicYearId],
+  );
 
-  const showToast = (msg: string) => { setToast(msg); setTimeout(()=>setToast(""),3000); };
+  const scheduleByGroup = useMemo(() => mapSchedulesByGroup(feeSchedules), [feeSchedules]);
 
-  // Helper — effective category for a student (accounts for session overrides)
-  const effectiveCat = (st: Student): string => overrides[st.id]?.group ?? (st.category === "Unassigned" ? "Unassigned" : st.category);
-  const isAssigned   = (st: Student): boolean => overrides[st.id] !== undefined || st.category !== "Unassigned";
-
-  // Dynamic stats
-  const stats = useMemo(()=>{
-    let asgn=0;
-    for(const cls of CLASS_DATA) for(const st of cls.students) if(isAssigned(st)) asgn++;
-    return { assigned:asgn, unassigned:TOTAL_STUDENTS-asgn, total:TOTAL_STUDENTS };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[overrides]);
-
-  // Filtered class list
-  const filteredClasses = useMemo(()=>{
-    const q=search.toLowerCase();
-    return CLASS_DATA
-      .filter(cls=>classFilter==="all"||cls.id===classFilter)
-      .map(cls=>({
-        ...cls,
-        students: cls.students.filter(st=>{
-          const eCat   = effectiveCat(st);
-          const asgnd  = isAssigned(st);
-          const mSearch= !q||st.name.toLowerCase().includes(q)||st.admNo.toLowerCase().includes(q);
-          const mTab   = tab==="all"||(tab==="unassigned"?!asgnd:asgnd);
-          const mGroup = groupFilter==="all"||eCat===groupFilter;
-          return mSearch&&mTab&&mGroup;
-        }),
-      }))
-      .filter(cls=>cls.students.length>0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[search,classFilter,groupFilter,tab,overrides]);
-
-  // Actions
-  const openAssignModal = (st: Student, clsName: string) => { setAssignModal({student:st,clsName,isEdit:false}); setModalGroup("Day Scholar"); setModalConcession("None"); };
-  const openEditModal   = (st: Student, clsName: string) => { setAssignModal({student:st,clsName,isEdit:true}); setModalGroup((overrides[st.id]?.group??st.category) as string); setModalConcession("None"); };
-  const openChangePlan  = (st: Student)                   => { setChangePlanModal({student:st}); setSelectedPlan("3-term"); setPlanReason(""); };
-  const openBulkModal   = (clsId: string, clsName: string) => { setBulkModal({clsId,clsName}); setBulkClass(clsId); setBulkGroup("Day Scholar"); };
-
-  const confirmAssign = () => {
-    if(!assignModal) return;
-    const rows  = FEE_SCHEDULES[modalGroup]??[];
-    const total = rows.reduce((s,r)=>s+r.annual,0);
-    setOverrides(prev=>({...prev,[assignModal.student.id]:{group:modalGroup,annual:total}}));
-    setAssignModal(null);
-    showToast(`${assignModal.isEdit?"Assignment updated":"Fees assigned"} for ${assignModal.student.name} — ${modalGroup}.`);
-  };
-
-  const confirmPlanSwitch = () => {
-    if(!changePlanModal) return;
-    const plan = PAYMENT_PLANS.find(p=>p.id===selectedPlan);
-    setChangePlanModal(null);
-    showToast(`Payment plan switched to ${plan?.label} for ${changePlanModal.student.name}.`);
-  };
-
-  const confirmBulkAssign = () => {
-    const targetIds = bulkClass==="all" ? CLASS_DATA.map(c=>c.id) : [bulkClass];
-    const rows = FEE_SCHEDULES[bulkGroup]??[];
-    const total= rows.reduce((s,r)=>s+r.annual,0);
-    const newOv: Record<string,Override>={};
-    for(const cls of CLASS_DATA){
-      if(!targetIds.includes(cls.id)) continue;
-      for(const st of cls.students) if(!isAssigned(st)) newOv[st.id]={group:bulkGroup,annual:total};
+  const assignmentsByStudent = useMemo<StudentAssignmentsMap>(() => {
+    const m: StudentAssignmentsMap = {};
+    for (const a of assignments) {
+      if (!m[a.student]) m[a.student] = [];
+      m[a.student].push(a);
     }
-    setOverrides(prev=>({...prev,...newOv}));
-    setBulkModal(null);
-    showToast(`Bulk assigned ${Object.keys(newOv).length} students to ${bulkGroup}.`);
+    return m;
+  }, [assignments]);
+
+  const groupsById = useMemo(() => {
+    const m: Record<number, FeesGroup> = {};
+    for (const g of feeGroups) m[g.id] = g;
+    return m;
+  }, [feeGroups]);
+
+  const groupNameForStudent = (studentId: number): string => {
+    const first = assignmentsByStudent[studentId]?.[0];
+    if (!first) return "Unassigned";
+    // Map via schedule fee_type -> fee_group when possible.
+    const schedule = feeSchedules.find(s => s.fee_type === first.fees_type);
+    if (schedule?.fee_group_name) return schedule.fee_group_name;
+    if (schedule?.fee_group && groupsById[schedule.fee_group]) return groupsById[schedule.fee_group].name;
+    return "Assigned";
   };
 
-  const toggleExpand = (id:string)=>setExpanded(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
-  const toggleSelect = (id:string)=>setSelected(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
-  const toggleSelectAll=(students:Student[],all:boolean)=>setSelected(prev=>{const n=new Set(prev);students.forEach(s=>all?n.delete(s.id):n.add(s.id));return n;});
+  const classOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const st of students) {
+      const className = (st as any).current_class_name || "";
+      const sectionName = (st as any).current_section_name || "";
+      if (className) {
+        set.add(sectionName ? `${className} ${sectionName}` : className);
+      }
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [students]);
 
-  const TABS = [
-    {key:"all"        as FilterTab, label:`All ${stats.total}`},
-    {key:"unassigned" as FilterTab, label:`Unassigned ${stats.unassigned}`},
-    {key:"assigned"   as FilterTab, label:`Assigned ${stats.assigned}`},
-  ];
+  const groupOptions = useMemo(() => {
+    const names = feeGroups.map(g => g.name);
+    return Array.from(new Set(names)).sort((a, b) => a.localeCompare(b));
+  }, [feeGroups]);
 
+  const visibleConcessionRules = useMemo(() => {
+    const activeRules = concessionRules.filter(c => (c.status || "").toLowerCase() !== "inactive");
+    if (!academicYearId) return activeRules;
+
+    // Keep all active concessions visible so admins can apply cross-year rules when needed,
+    // while still prioritizing rules from the selected academic year.
+    return [...activeRules].sort((a, b) => {
+      const aMatch = Number(a.academic_year) === Number(academicYearId) ? 1 : 0;
+      const bMatch = Number(b.academic_year) === Number(academicYearId) ? 1 : 0;
+      if (aMatch !== bMatch) return bMatch - aMatch;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+  }, [concessionRules, academicYearId]);
+
+  const uiStudents = useMemo<UiStudent[]>(() => {
+    return students.map(st => {
+      const stAssignments = assignmentsByStudent[st.id] || [];
+      const assigned = stAssignments.length > 0;
+      const annualTotal = stAssignments.reduce((sum, a) => sum + parseMoney(a.amount) - parseMoney(a.discount_amount) - parseMoney((a as any).concession_amount), 0);
+      const className = (st as any).current_class_name || "";
+      const sectionName = (st as any).current_section_name || "";
+      const classLabel = className ? (sectionName ? `${className} ${sectionName}` : className) : "Unassigned";
+      return {
+        id: st.id,
+        name: fullName(st.first_name, st.last_name),
+        admissionNo: st.admission_no || "-",
+        className,
+        sectionName,
+        classLabel,
+        classId: (st as any).current_class || null,
+        groupName: groupNameForStudent(st.id),
+        annualTotal,
+        assigned,
+        planAgreed: assigned,
+      };
+    });
+  }, [students, assignmentsByStudent, feeSchedules]);
+
+  const stats = useMemo(() => {
+    const assigned = uiStudents.filter(s => s.assigned).length;
+    const total = uiStudents.length;
+    return { assigned, unassigned: total - assigned, total };
+  }, [uiStudents]);
+
+  const filteredClassSections = useMemo<UiClassSection[]>(() => {
+    const q = search.trim().toLowerCase();
+    const base = uiStudents.filter(s => {
+      const matchesSearch = !q || s.name.toLowerCase().includes(q) || s.admissionNo.toLowerCase().includes(q);
+      const matchesClass = classFilter === "all" || s.classLabel === classFilter;
+      const matchesGroup = groupFilter === "all" || s.groupName === groupFilter;
+      const matchesTab = tab === "all" || (tab === "assigned" ? s.assigned : !s.assigned);
+      return matchesSearch && matchesClass && matchesGroup && matchesTab;
+    });
+
+    const map = new Map<string, UiStudent[]>();
+    for (const s of base) {
+      const key = s.classLabel || "Unassigned";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(s);
+    }
+
+    return Array.from(map.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, rows]) => ({
+        id: name.toLowerCase().replace(/\s+/g, "-"),
+        name,
+        students: rows.sort((x, y) => x.name.localeCompare(y.name)),
+      }));
+  }, [uiStudents, search, classFilter, groupFilter, tab]);
+
+  const refreshAssignments = async (yearId: number) => {
+    const list = await fetchAllAssignmentsForYear(yearId);
+    setAssignments(list);
+  };
+
+  const loadInitial = async () => {
+    setIsLoading(true);
+    try {
+      const [yearsPayload, studentsPayload, groupsPayload, schedulesPayload, concessionsPayload] = await Promise.all([
+        feesApi.listAcademicYears(),
+        feesApi.listStudents({ page_size: 500, is_active: true }),
+        feesApi.listGroups({ page_size: 500 }),
+        feesApi.listSchedules({ page_size: 500 }),
+        feesApi.listConcessionRules({ page_size: 500 }),
+      ]);
+
+      const years = listData(yearsPayload);
+      const selectedYear = years.find(y => y.is_current) || years[0] || null;
+      setAcademicYears(years);
+      setAcademicYearId(selectedYear?.id || null);
+
+      setStudents(listData(studentsPayload));
+      setFeeGroups(listData(groupsPayload));
+      setFeeSchedules(listData(schedulesPayload));
+      setConcessionRules(listData(concessionsPayload));
+
+      if (selectedYear?.id) {
+        const list = await fetchAllAssignmentsForYear(selectedYear.id);
+        setAssignments(list);
+      } else {
+        setAssignments([]);
+      }
+    } catch (e) {
+      console.error("Failed to load Fee Assignment page", e);
+      setToast("Failed to load fee assignment data.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadInitial();
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 3200);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  useEffect(() => {
+    if (!filteredClassSections.length) return;
+    setExpanded(prev => {
+      if (prev.size) return prev;
+      return new Set([filteredClassSections[0].id]);
+    });
+  }, [filteredClassSections]);
+
+  const onYearChange = async (id: number) => {
+    setAcademicYearId(id);
+    setSelected(new Set());
+    setAssignModal(null);
+    setBulkModal(null);
+    try {
+      setIsLoading(true);
+      await refreshAssignments(id);
+    } catch (e) {
+      console.error(e);
+      setToast("Failed to load assignments for selected year.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const openAssignModal = (student: UiStudent, isEdit: boolean) => {
+    setAssignModal({ student, isEdit });
+    const matchingGroup = feeGroups.find(g => g.name === student.groupName) || feeGroups[0] || null;
+    setModalGroupId(matchingGroup?.id || null);
+    setModalConcessionId(CONCESSION_NONE);
+  };
+
+  const getConcessionRule = (): ConcessionRule | null => {
+    if (modalConcessionId === CONCESSION_NONE) return null;
+    const id = Number(modalConcessionId);
+    if (!id) return null;
+    return concessionRules.find(r => r.id === id) || null;
+  };
+
+  const createAssignmentsForStudent = async (studentId: number, groupId: number, concession: ConcessionRule | null) => {
+    if (!academicYearId) throw new Error("Select academic year first");
+    const rows = (scheduleByGroup[groupId] || []).filter(s => s.academic_year === academicYearId);
+    if (!rows.length) throw new Error("No active fee schedules found for this fee group in selected year.");
+    const disc = discountFactor(concession);
+
+    for (const row of rows) {
+      const amount = parseMoney(row.amount);
+      const discountAmount = amount * disc;
+      await feesApi.createAssignment({
+        academic_year: academicYearId,
+        student: studentId,
+        fees_type: row.fee_type,
+        due_date: row.due_date,
+        amount: amount.toFixed(2),
+        discount_amount: discountAmount.toFixed(2),
+      });
+    }
+  };
+
+  const clearAssignmentsForStudent = async (studentId: number) => {
+    const rows = assignmentsByStudent[studentId] || [];
+    for (const a of rows) {
+      const totalPaid = parseMoney((a as any).total_paid);
+      if (totalPaid > 0) {
+        throw new Error("Cannot edit assignments with posted payments.");
+      }
+    }
+    for (const a of rows) {
+      await feesApi.deleteAssignment(a.id);
+    }
+  };
+
+  const confirmAssign = async () => {
+    if (!assignModal || !modalGroupId) {
+      setToast("Select a fee group first.");
+      return;
+    }
+    setIsMutating(true);
+    try {
+      const concession = getConcessionRule();
+      if (assignModal.isEdit) {
+        await clearAssignmentsForStudent(assignModal.student.id);
+      }
+      await createAssignmentsForStudent(assignModal.student.id, modalGroupId, concession);
+      await refreshAssignments(academicYearId!);
+      setAssignModal(null);
+      setToast(assignModal.isEdit ? "Assignment updated successfully." : "Fees assigned successfully.");
+    } catch (e: any) {
+      console.error(e);
+      setToast(e?.message || "Failed to save assignment.");
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  const confirmBulkAssign = async () => {
+    if (!academicYearId || !bulkGroupId) {
+      setToast("Select academic year and fee group.");
+      return;
+    }
+
+    const targetClass = bulkClass;
+    const targetStudents = uiStudents.filter(s => {
+      if (s.assigned) return false;
+      if (targetClass === "all") return true;
+      return s.classLabel === targetClass;
+    });
+
+    if (!targetStudents.length) {
+      setToast("No unassigned students found for selected class.");
+      return;
+    }
+
+    setIsMutating(true);
+    try {
+      for (const st of targetStudents) {
+        await createAssignmentsForStudent(st.id, bulkGroupId, null);
+      }
+      await refreshAssignments(academicYearId);
+      setBulkModal(null);
+      setToast(`Bulk assigned ${targetStudents.length} students.`);
+    } catch (e: any) {
+      console.error(e);
+      setToast(e?.message || "Bulk assignment failed.");
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  const confirmPlanSwitch = async () => {
+    if (!changePlanModal || !activeYear) return;
+    const rows = assignmentsByStudent[changePlanModal.student.id] || [];
+    if (!rows.length) {
+      setToast("No assignments found for this student.");
+      return;
+    }
+
+    const plan = PAYMENT_PLANS.find(p => p.id === selectedPlan)!;
+    if (plan.id === "custom") {
+      setChangePlanModal(null);
+      setToast("Custom plan selected. Existing due dates retained.");
+      return;
+    }
+
+    const dueDates = getPlanDates(activeYear, plan.installments || 3);
+    if (!dueDates.length) {
+      setToast("Academic year dates are required to apply plan.");
+      return;
+    }
+
+    setIsMutating(true);
+    try {
+      const sorted = [...rows].sort((a, b) => a.id - b.id);
+      for (let i = 0; i < sorted.length; i++) {
+        const due = dueDates[i % dueDates.length];
+        await feesApi.updateAssignment(sorted[i].id, { due_date: due });
+      }
+      await refreshAssignments(academicYearId!);
+      setChangePlanModal(null);
+      setToast(`Payment plan switched to ${plan.label}.`);
+    } catch (e) {
+      console.error(e);
+      setToast("Failed to switch payment plan.");
+    } finally {
+      setIsMutating(false);
+    }
+  };
+
+  const toggleExpand = (id: string) => {
+    setExpanded(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  };
+
+  const toggleSelect = (id: number) => {
+    setSelected(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  };
+
+  const toggleSelectAll = (rows: UiStudent[], allSelected: boolean) => {
+    setSelected(prev => {
+      const n = new Set(prev);
+      for (const r of rows) {
+        if (allSelected) n.delete(r.id);
+        else n.add(r.id);
+      }
+      return n;
+    });
+  };
+
+  const currentSchedules = useMemo(() => {
+    if (!modalGroupId || !academicYearId) return [] as FeeSchedule[];
+    return (scheduleByGroup[modalGroupId] || []).filter(s => s.academic_year === academicYearId);
+  }, [modalGroupId, scheduleByGroup, academicYearId]);
+
+  const currentModalTotal = useMemo(
+    () => currentSchedules.reduce((sum, s) => sum + parseMoney(s.amount), 0),
+    [currentSchedules],
+  );
+
+  const yearName = activeYear?.name || "";
 
   return (
     <>
@@ -305,302 +592,300 @@ export default function FeesAssignmentPanel() {
         .fa-row:hover { background:#FAFAFF !important; }
       `}</style>
 
-      {/* ── Page header ─────────────────────────────────────────────── */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20}}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
         <div>
-          <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.09em",color:"#6D4AFF",marginBottom:6,textTransform:"uppercase"}}>Student Fee Mapping</div>
-          <h1 style={{margin:"0 0 8px",fontSize:32,fontWeight:700,color:"#181B2A",lineHeight:1.1}}>Fee Assignment</h1>
-          <p style={{margin:0,fontSize:14,color:"#A0A3B8"}}>Assign fee structures to students class by class, with concession and override support.</p>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.09em", color: "#6D4AFF", marginBottom: 6, textTransform: "uppercase" }}>Student Fee Mapping</div>
+          <h1 style={{ margin: "0 0 8px", fontSize: 32, fontWeight: 700, color: "#181B2A", lineHeight: 1.1 }}>Fee Assignment</h1>
+          <p style={{ margin: 0, fontSize: 14, color: "#A0A3B8" }}>Assign fee structures to students class by class, with concession and override support.</p>
         </div>
-        <div style={{display:"flex",gap:10,alignItems:"center",marginTop:8}}>
-          <button
-            onClick={()=>setShowInfoModal(true)}
-            style={{width:34,height:34,borderRadius:"50%",border:"1.5px solid #E8E8EE",background:"#fff",color:"#6D4AFF",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:14,fontWeight:700}}
-          >i</button>
-          <button style={primaryBtn()} onClick={()=>openBulkModal("all","All Classes")}>+ Bulk Assign</button>
-        </div>
+        <button
+          style={primaryBtn()}
+          onClick={() => {
+            setBulkModal({ classId: "all", className: "All Classes" });
+            setBulkClass("all");
+            setBulkGroupId(feeGroups[0]?.id || null);
+          }}
+        >
+          + Bulk Assign
+        </button>
       </div>
 
-      {/* ── Stats bar ────────────────────────────────────────────────── */}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 20px",background:"#fff",border:"1px solid #E8E8EE",borderRadius:"10px 10px 0 0",borderBottom:"none"}}>
-        <div style={{fontSize:13.5,color:"#5B5E72"}}>
-          <span style={{fontWeight:700,color:"#181B2A"}}>{stats.assigned}</span>{" assigned · "}
-          <span style={{fontWeight:700,color:"#F59E0B"}}>{stats.unassigned}</span>{" unassigned · "}
-          <span style={{fontWeight:700,color:"#181B2A"}}>{stats.total}</span>{" total students"}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", background: "#fff", border: "1px solid #E8E8EE", borderRadius: "10px 10px 0 0", borderBottom: "none" }}>
+        <div style={{ fontSize: 13.5, color: "#5B5E72" }}>
+          <span style={{ fontWeight: 700, color: "#181B2A" }}>{stats.assigned}</span> assigned · <span style={{ fontWeight: 700, color: "#F59E0B" }}>{stats.unassigned}</span> unassigned · <span style={{ fontWeight: 700, color: "#181B2A" }}>{stats.total}</span> total students
         </div>
-        <button style={{...outlineBtn(true),fontSize:13,color:"#6D4AFF",borderColor:"#c4b5fd"}} onClick={()=>openBulkModal("all","All Classes")}>
+        <button
+          style={{ ...outlineBtn(true), fontSize: 13, color: "#6D4AFF", borderColor: "#c4b5fd" }}
+          onClick={() => {
+            setBulkModal({ classId: "all", className: "All Classes" });
+            setBulkClass("all");
+            setBulkGroupId(feeGroups[0]?.id || null);
+          }}
+        >
           Assign all unassigned →
         </button>
       </div>
-      <div style={{height:3,background:"linear-gradient(90deg,#F59E0B,#FCD34D 50%,#FEF3C7)"}}/>
+      <div style={{ height: 3, background: "linear-gradient(90deg,#F59E0B,#FCD34D 50%,#FEF3C7)" }} />
 
-      {/* ── Filters ──────────────────────────────────────────────────── */}
-      <div style={{background:"#fff",border:"1px solid #E8E8EE",borderTop:"none",borderRadius:"0 0 10px 10px",padding:"16px 20px",display:"flex",gap:16,alignItems:"flex-end"}}>
-        <div style={{flex:1}}>
-          <div style={{fontSize:10.5,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:7}}>SEARCH</div>
-          <div style={{position:"relative"}}>
-            <span style={{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",fontSize:15,pointerEvents:"none"}}>🔍</span>
-            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Name or admission number..."
-              style={{width:"100%",height:40,border:"1px solid #E8E8EE",borderRadius:9,paddingLeft:38,paddingRight:12,fontSize:13.5,boxSizing:"border-box"}}/>
-          </div>
+      <div style={{ background: "#fff", border: "1px solid #E8E8EE", borderTop: "none", borderRadius: "0 0 10px 10px", padding: "16px 20px", display: "flex", gap: 16, alignItems: "flex-end" }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 7 }}>SEARCH</div>
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Name or admission number..."
+            style={{ width: "100%", height: 40, border: "1px solid #E8E8EE", borderRadius: 9, padding: "0 12px", fontSize: 13.5, boxSizing: "border-box" }}
+          />
         </div>
-        {[
-          {label:"YEAR",      value:yearFilter,  set:setYearFilter,  w:120, opts:<><option>2025-26</option><option>2024-25</option></>},
-          {label:"CLASS",     value:classFilter, set:setClassFilter, w:150, opts:<><option value="all">All Classes</option>{CLASS_DATA.map(c=><option key={c.id} value={c.id}>{c.name.replace("Class ","")}</option>)}</>},
-          {label:"FEE GROUP", value:groupFilter, set:setGroupFilter, w:160, opts:<><option value="all">All Groups</option><option value="Day Scholar">Day Scholar</option><option value="Transport Users">Transport Users</option><option value="Full Boarder">Full Boarder</option></>},
-        ].map(f=>(
-          <div key={f.label} style={{minWidth:f.w}}>
-            <div style={{fontSize:10.5,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:7}}>{f.label}</div>
-            <select value={f.value} onChange={e=>f.set(e.target.value)} style={{height:40,border:"1px solid #E8E8EE",borderRadius:9,padding:"0 12px",fontSize:13.5,background:"#fff",cursor:"pointer",width:"100%"}}>
-              {f.opts}
-            </select>
-          </div>
-        ))}
+
+        <div style={{ minWidth: 130 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 7 }}>YEAR</div>
+          <select value={academicYearId || ""} onChange={e => onYearChange(Number(e.target.value))} style={{ height: 40, border: "1px solid #E8E8EE", borderRadius: 9, padding: "0 12px", fontSize: 13.5, background: "#fff", width: "100%" }}>
+            {academicYears.map(y => (
+              <option key={y.id} value={y.id}>{y.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ minWidth: 170 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 7 }}>CLASS</div>
+          <select value={classFilter} onChange={e => setClassFilter(e.target.value)} style={{ height: 40, border: "1px solid #E8E8EE", borderRadius: 9, padding: "0 12px", fontSize: 13.5, background: "#fff", width: "100%" }}>
+            <option value="all">All Classes</option>
+            {classOptions.map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ minWidth: 170 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 7 }}>FEE GROUP</div>
+          <select value={groupFilter} onChange={e => setGroupFilter(e.target.value)} style={{ height: 40, border: "1px solid #E8E8EE", borderRadius: 9, padding: "0 12px", fontSize: 13.5, background: "#fff", width: "100%" }}>
+            <option value="all">All Groups</option>
+            {groupOptions.map(g => (
+              <option key={g} value={g}>{g}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      {/* ── Tabs ─────────────────────────────────────────────────────── */}
-      <div style={{display:"flex",gap:8,margin:"16px 0"}}>
-        {TABS.map(t=>(
-          <button key={t.key} onClick={()=>setTab(t.key)} style={{height:36,padding:"0 18px",border:tab===t.key?"none":"1px solid #E8E8EE",borderRadius:20,background:tab===t.key?"#6D4AFF":"#fff",color:tab===t.key?"#fff":"#5B5E72",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:tab===t.key?"0 2px 8px rgba(109,74,255,0.22)":"none",transition:"all 0.15s"}}>
+      <div style={{ display: "flex", gap: 8, margin: "16px 0" }}>
+        {([
+          { key: "all", label: `All ${stats.total}` },
+          { key: "unassigned", label: `Unassigned ${stats.unassigned}` },
+          { key: "assigned", label: `Assigned ${stats.assigned}` },
+        ] as { key: FilterTab; label: string }[]).map(t => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            style={{ height: 36, padding: "0 18px", border: tab === t.key ? "none" : "1px solid #E8E8EE", borderRadius: 20, background: tab === t.key ? "#6D4AFF" : "#fff", color: tab === t.key ? "#fff" : "#5B5E72", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+          >
             {t.label}
           </button>
         ))}
       </div>
 
-      {/* ── Class sections ───────────────────────────────────────────── */}
-      <div style={{display:"flex",flexDirection:"column",gap:12}}>
-        {filteredClasses.map(cls=>{
-          const origCls    = CLASS_DATA.find(c=>c.id===cls.id)!;
-          const totalCls   = origCls.students.length;
-          const asgndCls   = origCls.students.filter(s=>isAssigned(s)).length;
-          const isExpanded = expanded.has(cls.id);
-          const allSel     = cls.students.length>0&&cls.students.every(s=>selected.has(s.id));
+      {isLoading ? (
+        <div style={{ textAlign: "center", color: "#A0A3B8", padding: "48px 0" }}>Loading fee assignment data...</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {filteredClassSections.map(cls => {
+            const isExpanded = expanded.has(cls.id);
+            const allSelected = cls.students.length > 0 && cls.students.every(s => selected.has(s.id));
+            const assignedCount = cls.students.filter(s => s.assigned).length;
 
-          return (
-            <div key={cls.id} style={{background:"#fff",border:"1px solid #E8E8EE",borderRadius:12,overflow:"hidden"}}>
-              <div style={{display:"flex",alignItems:"center",padding:"16px 20px",gap:14}}>
-                <div style={{width:4,height:44,borderRadius:2,background:"#6D4AFF",flexShrink:0}}/>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:15,fontWeight:700,color:"#181B2A",marginBottom:3}}>{cls.name}</div>
-                  <div style={{fontSize:12.5,color:"#A0A3B8"}}>{totalCls} students · {asgndCls} assigned · {totalCls-asgndCls} unassigned</div>
-                </div>
-                <button style={outlineBtn(true)} onClick={()=>openBulkModal(cls.id,cls.name)}>Bulk Assign</button>
-                <button onClick={()=>toggleExpand(cls.id)} style={{height:32,padding:"0 14px",border:"1px solid #E8E8EE",borderRadius:7,background:"#fff",color:"#5B5E72",fontSize:12.5,fontWeight:500,cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
-                  {cls.students.length} shown
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{transform:isExpanded?"rotate(180deg)":"rotate(0deg)",transition:"transform 0.2s"}}><polyline points="6 9 12 15 18 9"/></svg>
-                </button>
-              </div>
-
-              {isExpanded&&(
-                <div style={{borderTop:"1px solid #E8E8EE",animation:"fadeIn 0.15s ease"}}>
-                  <table style={{width:"100%",borderCollapse:"collapse"}}>
-                    <thead>
-                      <tr style={{background:"#F8F8FB"}}>
-                        <th style={{...TH,width:44}}><input type="checkbox" checked={allSel} onChange={()=>toggleSelectAll(cls.students,allSel)}/></th>
-                        <th style={TH}>STUDENT</th>
-                        <th style={TH}><span style={{display:"inline-flex",alignItems:"center"}}>PAYMENT SCHEDULES<InfoDot/></span></th>
-                        <th style={TH}><span style={{display:"inline-flex",alignItems:"center"}}>ANNUAL TOTAL<InfoDot/></span></th>
-                        <th style={TH}><span style={{display:"inline-flex",alignItems:"center"}}>AGREED PLAN<InfoDot/></span></th>
-                        <th style={TH}>ACTIONS</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {cls.students.map((st,ri)=>{
-                        const ov      = overrides[st.id];
-                        const asgnd   = isAssigned(st);
-                        const eCat    = effectiveCat(st);
-                        const annual  = ov ? ov.annual : ANNUAL_FEE[st.category as Category];
-                        const isSel   = selected.has(st.id);
-                        return (
-                          <tr key={st.id} className="fa-row" style={{borderBottom:ri<cls.students.length-1?"1px solid #E8E8EE":"none",background:isSel?"#F5F3FF":"#fff"}}>
-                            <td style={{padding:"14px 16px",width:44}}><input type="checkbox" checked={isSel} onChange={()=>toggleSelect(st.id)}/></td>
-                            <td style={{padding:"14px 16px"}}>
-                              <div style={{display:"flex",alignItems:"center",gap:12}}>
-                                <div style={{width:36,height:36,borderRadius:"50%",flexShrink:0,background:avatarBg(st.name),color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12.5,fontWeight:700}}>{initials(st.name)}</div>
-                                <div>
-                                  <div style={{fontSize:13.5,fontWeight:600,color:"#181B2A"}}>{st.name}</div>
-                                  <div style={{fontSize:12,color:"#A0A3B8",marginTop:2}}>{st.admNo} · <span style={{color:!asgnd?"#F59E0B":"#5B5E72"}}>{eCat}</span></div>
-                                </div>
-                              </div>
-                            </td>
-                            <td style={{padding:"14px 16px"}}>
-                              {!asgnd ? <span style={{color:"#A0A3B8",fontSize:15}}>—</span>
-                                : <span style={{fontSize:12.5,fontWeight:500,padding:"4px 12px",borderRadius:20,background:"#F0F0F8",color:"#181B2A",border:"1px solid #E0E0F0"}}>Group schedule</span>}
-                            </td>
-                            <td style={{padding:"14px 16px",fontSize:13.5,fontWeight:annual?600:400,color:annual?"#181B2A":"#A0A3B8"}}>
-                              {annual ? fmtRs(annual) : "—"}
-                            </td>
-                            <td style={{padding:"14px 16px"}}>
-                              {st.planAgreed||ov ? (
-                                <span style={{fontSize:12.5,fontWeight:600,padding:"4px 12px",borderRadius:20,background:"#dcfce7",color:"#15803d",border:"1px solid #86efac"}}>✓ Plan Agreed</span>
-                              ) : (
-                                <span style={{fontSize:12.5,fontWeight:500,padding:"4px 12px",borderRadius:20,background:"#F3F4F6",color:"#6B7280"}}>No plan yet</span>
-                              )}
-                            </td>
-                            <td style={{padding:"14px 16px"}}>
-                              {!asgnd ? (
-                                <button style={primaryBtn(true)} onClick={()=>openAssignModal(st,cls.name)}>Assign →</button>
-                              ) : (
-                                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                                  <button style={outlineBtn(true)} onClick={()=>openEditModal(st,cls.name)}>Edit Assignment</button>
-                                  <button style={outlineBtn(true)} onClick={()=>openChangePlan(st)}>Change Plan</button>
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {filteredClasses.length===0&&(
-          <div style={{textAlign:"center",padding:"60px 0",color:"#A0A3B8",fontSize:14}}>No students match the current filters.</div>
-        )}
-      </div>
-
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* MODAL 1 — Assign Fees / Edit Assignment                        */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {assignModal&&(
-        <ModalShell onClose={()=>setAssignModal(null)}>
-          <ModalHeader
-            title={assignModal.isEdit ? "Edit Assignment" : "Assign Fees"}
-            subtitle={`${assignModal.student.name} · ${assignModal.student.admNo} · ${assignModal.clsName}`}
-            onClose={()=>setAssignModal(null)}
-          />
-          <FeeScheduleTable
-            group={modalGroup} concession={modalConcession}
-            onGroupChange={setModalGroup} onConcessionChange={setModalConcession}
-          />
-          <ModalFooter>
-            <button style={{...outlineBtn(),minWidth:90}} onClick={()=>setAssignModal(null)}>Cancel</button>
-            <button style={{...primaryBtn(),minWidth:130}} onClick={confirmAssign}>
-              {assignModal.isEdit ? "Save Changes" : "Assign Fees"}
-            </button>
-          </ModalFooter>
-        </ModalShell>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* MODAL 2 — Change Payment Plan                                   */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {changePlanModal&&(
-        <ModalShell onClose={()=>setChangePlanModal(null)}>
-          <ModalHeader
-            title="Change Payment Plan"
-            subtitle={`${changePlanModal.student.name} · current: 3-Term Plan`}
-            onClose={()=>setChangePlanModal(null)}
-          />
-          <div style={{padding:"14px 20px"}}>
-            <p style={{margin:"0 0 16px",fontSize:12.5,color:"#5B5E72",lineHeight:1.6}}>
-              Switching plans takes effect from the next due date. A plan-change record is logged automatically.
-            </p>
-            <div style={{display:"flex",flexDirection:"column",gap:2,marginBottom:18}}>
-              {PAYMENT_PLANS.map((plan,i)=>{
-                const isChosen  = selectedPlan===plan.id;
-                const isCurrent = plan.id==="3-term";
-                return (
-                  <label key={plan.id} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",border:"1px solid",borderColor:isChosen?"#6D4AFF":"#E8E8EE",borderRadius:9,cursor:"pointer",background:isChosen?"#F5F3FF":"#fff",marginBottom:i<PAYMENT_PLANS.length-1?6:0}}>
-                    <input type="radio" name="plan" checked={isChosen} onChange={()=>setSelectedPlan(plan.id)} style={{accentColor:"#6D4AFF",width:15,height:15,flexShrink:0}}/>
-                    <div style={{flex:1}}>
-                      <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2}}>
-                        <span style={{fontSize:13,fontWeight:600,color:"#181B2A"}}>{plan.label}</span>
-                        {isCurrent&&<span style={{fontSize:11,fontWeight:600,padding:"2px 8px",borderRadius:20,background:"#dcfce7",color:"#15803d",border:"1px solid #86efac"}}>Current</span>}
-                      </div>
-                      <div style={{fontSize:12,color:"#A0A3B8"}}>{plan.desc}</div>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
-            <div>
-              <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:"#A0A3B8",marginBottom:6}}>REASON FOR CHANGE</div>
-              <textarea
-                value={planReason} onChange={e=>setPlanReason(e.target.value)}
-                placeholder="e.g. Parent requested monthly billing from June 2026"
-                style={{width:"100%",minHeight:70,border:"1px solid #E8E8EE",borderRadius:8,padding:"10px 12px",fontSize:12.5,resize:"vertical",boxSizing:"border-box",fontFamily:"inherit"}}
-              />
-            </div>
-          </div>
-          <ModalFooter>
-            <button style={{...outlineBtn(),minWidth:90}} onClick={()=>setChangePlanModal(null)}>Cancel</button>
-            <button style={{...primaryBtn(),minWidth:160}} onClick={confirmPlanSwitch}>Confirm Plan Switch</button>
-          </ModalFooter>
-        </ModalShell>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* MODAL 3 & 4 — Bulk Assign Fees                                  */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {bulkModal&&(
-        <ModalShell onClose={()=>setBulkModal(null)} maxWidth={600}>
-          <ModalHeader
-            title="Bulk Assign Fees"
-            subtitle={`Assign a fee group to all unassigned students in ${bulkClass==="all"?"All Classes":CLASS_DATA.find(c=>c.id===bulkClass)?.name??bulkClass}.`}
-            onClose={()=>setBulkModal(null)}
-          />
-          <div style={{padding:"14px 20px"}}>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
-              <div>
-                <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:6}}>CLASS</div>
-                <select value={bulkClass} onChange={e=>setBulkClass(e.target.value)} style={{width:"100%",height:36,border:"1px solid #E8E8EE",borderRadius:8,padding:"0 10px",fontSize:12.5,background:"#fff",cursor:"pointer"}}>
-                  <option value="all">All Classes</option>
-                  {CLASS_DATA.map(c=><option key={c.id} value={c.id}>{c.name.replace("Class ","")}</option>)}
-                </select>
-              </div>
-              <div>
-                <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:6}}>FEE GROUP</div>
-                <select value={bulkGroup} onChange={e=>setBulkGroup(e.target.value)} style={{width:"100%",height:36,border:"1px solid #E8E8EE",borderRadius:8,padding:"0 10px",fontSize:12.5,background:"#fff",cursor:"pointer"}}>
-                  <option>Day Scholar</option><option>Transport Users</option><option>Full Boarder</option>
-                </select>
-              </div>
-            </div>
-            <p style={{margin:0,fontSize:12,color:"#5B5E72"}}>Applies to unassigned rows only. A plan-history entry is created for each student assigned.</p>
-          </div>
-          <ModalFooter>
-            <button style={{...outlineBtn(),minWidth:90}} onClick={()=>setBulkModal(null)}>Cancel</button>
-            <button style={{...primaryBtn(),minWidth:160}} onClick={confirmBulkAssign}>Assign to Unassigned</button>
-          </ModalFooter>
-        </ModalShell>
-      )}
-
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* MODAL 5 — How Fee Assignment works (Info)                       */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {showInfoModal&&(
-        <ModalShell onClose={()=>setShowInfoModal(false)} maxWidth={620}>
-          <ModalHeader title="How Fee Assignment works" subtitle="A quick guide to assigning fees to students" onClose={()=>setShowInfoModal(false)}/>
-          <div style={{padding:"14px 20px"}}>
-            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
-              {INFO_STEPS.map(step=>(
-                <div key={step.n} style={{display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",border:"1px solid #E8E8EE",borderRadius:9}}>
-                  <div style={{width:26,height:26,borderRadius:"50%",background:"#6D4AFF",color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0}}>{step.n}</div>
-                  <div style={{paddingTop:2}}>
-                    <span style={{fontSize:13,fontWeight:700,color:"#181B2A"}}>{step.title}</span>
-                    <span style={{fontSize:13,color:"#5B5E72"}}> — {step.body}</span>
+            return (
+              <div key={cls.id} style={{ background: "#fff", border: "1px solid #E8E8EE", borderRadius: 12, overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", padding: "16px 20px", gap: 14 }}>
+                  <div style={{ width: 4, height: 44, borderRadius: 2, background: "#6D4AFF", flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>{cls.name}</div>
+                    <div style={{ fontSize: 12.5, color: "#A0A3B8" }}>{cls.students.length} students · {assignedCount} assigned · {cls.students.length - assignedCount} unassigned</div>
                   </div>
+                  <button
+                    style={outlineBtn(true)}
+                    onClick={() => {
+                      setBulkModal({ classId: cls.id, className: cls.name });
+                      setBulkClass(cls.name);
+                      setBulkGroupId(feeGroups[0]?.id || null);
+                    }}
+                  >
+                    Bulk Assign
+                  </button>
+                  <button style={{ ...outlineBtn(true), display: "flex", alignItems: "center", gap: 8 }} onClick={() => toggleExpand(cls.id)}>
+                    {cls.students.length} shown
+                  </button>
+                </div>
+
+                {isExpanded && (
+                  <div style={{ borderTop: "1px solid #E8E8EE", animation: "fadeIn .15s ease" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr style={{ background: "#F8F8FB" }}>
+                          <th style={{ ...TH, width: 44 }}>
+                            <input type="checkbox" checked={allSelected} onChange={() => toggleSelectAll(cls.students, allSelected)} />
+                          </th>
+                          <th style={TH}>STUDENT</th>
+                          <th style={TH}>PAYMENT SCHEDULES</th>
+                          <th style={TH}>ANNUAL TOTAL</th>
+                          <th style={TH}>AGREED PLAN</th>
+                          <th style={TH}>ACTIONS</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cls.students.map((st, idx) => {
+                          const checked = selected.has(st.id);
+                          return (
+                            <tr key={st.id} className="fa-row" style={{ borderBottom: idx < cls.students.length - 1 ? "1px solid #E8E8EE" : "none", background: checked ? "#F5F3FF" : "#fff" }}>
+                              <td style={{ padding: "14px 16px", width: 44 }}>
+                                <input type="checkbox" checked={checked} onChange={() => toggleSelect(st.id)} />
+                              </td>
+                              <td style={{ padding: "14px 16px" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                                  <div style={{ width: 36, height: 36, borderRadius: "50%", background: avatarBg(st.name), color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12.5, fontWeight: 700 }}>{initials(st.name)}</div>
+                                  <div>
+                                    <div style={{ fontSize: 13.5, fontWeight: 600, color: "#181B2A" }}>{st.name}</div>
+                                    <div style={{ fontSize: 12, color: "#A0A3B8" }}>{st.admissionNo} · {st.groupName}</div>
+                                  </div>
+                                </div>
+                              </td>
+                              <td style={{ padding: "14px 16px", color: st.assigned ? "#181B2A" : "#A0A3B8", fontSize: 12.5 }}>{st.assigned ? "Group schedule" : "—"}</td>
+                              <td style={{ padding: "14px 16px", fontSize: 13.5, fontWeight: st.annualTotal ? 600 : 400, color: st.annualTotal ? "#181B2A" : "#A0A3B8" }}>{st.annualTotal ? fmtRs(st.annualTotal) : "—"}</td>
+                              <td style={{ padding: "14px 16px" }}>
+                                {st.planAgreed ? (
+                                  <span style={{ fontSize: 12.5, fontWeight: 600, padding: "4px 12px", borderRadius: 20, background: "#dcfce7", color: "#15803d", border: "1px solid #86efac" }}>✓ Plan Agreed</span>
+                                ) : (
+                                  <span style={{ fontSize: 12.5, fontWeight: 500, padding: "4px 12px", borderRadius: 20, background: "#F3F4F6", color: "#6B7280" }}>No plan yet</span>
+                                )}
+                              </td>
+                              <td style={{ padding: "14px 16px" }}>
+                                {!st.assigned ? (
+                                  <button style={primaryBtn(true)} onClick={() => openAssignModal(st, false)}>Assign →</button>
+                                ) : (
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    <button style={outlineBtn(true)} onClick={() => openAssignModal(st, true)}>Edit Assignment</button>
+                                    <button style={outlineBtn(true)} onClick={() => { setChangePlanModal({ student: st }); setSelectedPlan("3-term"); }}>Change Plan</button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {!filteredClassSections.length && <div style={{ textAlign: "center", padding: "60px 0", color: "#A0A3B8", fontSize: 14 }}>No students match the current filters.</div>}
+        </div>
+      )}
+
+      {assignModal && (
+        <ModalShell onClose={() => setAssignModal(null)}>
+          <ModalHeader title={assignModal.isEdit ? "Edit Assignment" : "Assign Fees"} subtitle={`${assignModal.student.name} · ${assignModal.student.admissionNo} · ${yearName}`} onClose={() => setAssignModal(null)} />
+          <div style={{ padding: "14px 20px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>FEE GROUP</div>
+                <select value={modalGroupId || ""} onChange={e => setModalGroupId(Number(e.target.value) || null)} style={{ width: "100%", height: 36, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 10px", fontSize: 12.5 }}>
+                  {feeGroups.filter(g => g.academic_year === academicYearId).map(g => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>CONCESSION</div>
+                <select value={modalConcessionId} onChange={e => setModalConcessionId(e.target.value)} style={{ width: "100%", height: 36, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 10px", fontSize: 12.5 }}>
+                  <option value={CONCESSION_NONE}>None</option>
+                  {visibleConcessionRules.map(c => (
+                    <option key={c.id} value={String(c.id)}>{c.name} ({c.discount_percentage}%)</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div style={{ border: "1px solid #E8E8EE", borderRadius: 10, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.8fr 1fr 1fr", padding: "8px 14px", background: "#FAFAFA", borderBottom: "1px solid #E8E8EE" }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#A0A3B8" }}>Fee Type</div>
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#A0A3B8" }}>Structure</div>
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#A0A3B8", textAlign: "right" }}>Amount</div>
+              </div>
+              {currentSchedules.map((row, i) => (
+                <div key={row.id || `${row.fee_type}-${i}`} style={{ display: "grid", gridTemplateColumns: "1.8fr 1fr 1fr", padding: "10px 14px", borderBottom: i < currentSchedules.length - 1 ? "1px solid #F0F0F0" : "none" }}>
+                  <div style={{ fontSize: 12.5, color: "#181B2A" }}>{row.fee_type_name || `Fee Type #${row.fee_type}`}</div>
+                  <div style={{ fontSize: 12, color: "#5B5E72" }}>{row.collection_frequency}</div>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: "#181B2A", textAlign: "right" }}>₹{parseMoney(row.amount).toLocaleString("en-IN")}</div>
                 </div>
               ))}
-            </div>
-            <div style={{padding:"12px 14px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:9}}>
-              <span style={{fontSize:12.5,color:"#92400E",lineHeight:1.6}}>
-                💡 <strong>Tip:</strong> For custom fee arrangements agreed with parents, use the <em>Enroll Student</em> tab (Step 11) to build a documented fee plan first, then assign here.
-              </span>
+              {!currentSchedules.length && <div style={{ padding: "12px 14px", fontSize: 12.5, color: "#A0A3B8" }}>No active schedules found for this fee group in selected year.</div>}
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "11px 14px", borderTop: "2px solid #E8E8EE", background: "#F8F8FB" }}>
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: "#181B2A" }}>Annual fees for this group</div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: "#181B2A" }}>₹{currentModalTotal.toLocaleString("en-IN")}</div>
+              </div>
             </div>
           </div>
           <ModalFooter>
-            <button style={{...primaryBtn(),minWidth:90}} onClick={()=>setShowInfoModal(false)}>Got it</button>
+            <button style={{ ...outlineBtn(), minWidth: 90 }} onClick={() => setAssignModal(null)}>Cancel</button>
+            <button style={{ ...primaryBtn(), minWidth: 130 }} onClick={confirmAssign} disabled={isMutating}>{isMutating ? "Saving..." : assignModal.isEdit ? "Save Changes" : "Assign Fees"}</button>
           </ModalFooter>
         </ModalShell>
       )}
 
-      {/* Toast */}
-      {toast&&(
-        <div style={{position:"fixed",bottom:24,right:24,background:"#1e293b",color:"#fff",padding:"12px 20px",borderRadius:10,fontSize:13.5,fontWeight:500,lineHeight:1.4,boxShadow:"0 8px 28px rgba(0,0,0,0.22)",zIndex:9999,maxWidth:420,animation:"toastUp 0.2s ease"}}>
+      {changePlanModal && (
+        <ModalShell onClose={() => setChangePlanModal(null)}>
+          <ModalHeader title="Change Payment Plan" subtitle={`${changePlanModal.student.name} · ${changePlanModal.student.admissionNo}`} onClose={() => setChangePlanModal(null)} />
+          <div style={{ padding: "14px 20px", display: "flex", flexDirection: "column", gap: 8 }}>
+            {PAYMENT_PLANS.map(plan => (
+              <label key={plan.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", border: "1px solid", borderColor: selectedPlan === plan.id ? "#6D4AFF" : "#E8E8EE", borderRadius: 9, background: selectedPlan === plan.id ? "#F5F3FF" : "#fff" }}>
+                <input type="radio" name="plan" checked={selectedPlan === plan.id} onChange={() => setSelectedPlan(plan.id)} style={{ accentColor: "#6D4AFF", width: 15, height: 15 }} />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#181B2A" }}>{plan.label}</div>
+                  <div style={{ fontSize: 12, color: "#A0A3B8" }}>{plan.desc}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+          <ModalFooter>
+            <button style={{ ...outlineBtn(), minWidth: 90 }} onClick={() => setChangePlanModal(null)}>Cancel</button>
+            <button style={{ ...primaryBtn(), minWidth: 160 }} onClick={confirmPlanSwitch} disabled={isMutating}>{isMutating ? "Updating..." : "Confirm Plan Switch"}</button>
+          </ModalFooter>
+        </ModalShell>
+      )}
+
+      {bulkModal && (
+        <ModalShell onClose={() => setBulkModal(null)} maxWidth={600}>
+          <ModalHeader title="Bulk Assign Fees" subtitle={`Assign a fee group to all unassigned students in ${bulkClass === "all" ? "All Classes" : bulkClass}.`} onClose={() => setBulkModal(null)} />
+          <div style={{ padding: "14px 20px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>CLASS</div>
+                <select value={bulkClass} onChange={e => setBulkClass(e.target.value)} style={{ width: "100%", height: 36, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 10px", fontSize: 12.5 }}>
+                  <option value="all">All Classes</option>
+                  {classOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>FEE GROUP</div>
+                <select value={bulkGroupId || ""} onChange={e => setBulkGroupId(Number(e.target.value) || null)} style={{ width: "100%", height: 36, border: "1px solid #E8E8EE", borderRadius: 8, padding: "0 10px", fontSize: 12.5 }}>
+                  {feeGroups.filter(g => g.academic_year === academicYearId).map(g => (
+                    <option key={g.id} value={g.id}>{g.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <p style={{ margin: 0, fontSize: 12, color: "#5B5E72" }}>Applies to unassigned rows only and persists directly to backend assignments.</p>
+          </div>
+          <ModalFooter>
+            <button style={{ ...outlineBtn(), minWidth: 90 }} onClick={() => setBulkModal(null)}>Cancel</button>
+            <button style={{ ...primaryBtn(), minWidth: 160 }} onClick={confirmBulkAssign} disabled={isMutating}>{isMutating ? "Assigning..." : "Assign to Unassigned"}</button>
+          </ModalFooter>
+        </ModalShell>
+      )}
+
+      {toast && (
+        <div style={{ position: "fixed", bottom: 24, right: 24, background: "#1e293b", color: "#fff", padding: "12px 20px", borderRadius: 10, fontSize: 13.5, boxShadow: "0 8px 28px rgba(0,0,0,0.22)", zIndex: 9999, maxWidth: 420, animation: "toastUp 0.2s ease" }}>
           {toast}
         </div>
       )}

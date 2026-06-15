@@ -17,6 +17,10 @@ from .views import (
     TermSettingsDetailAPIView,
     FeeScheduleListCreateAPIView,
     FeeScheduleDetailAPIView,
+    ConcessionRuleListCreateAPIView,
+    ConcessionRuleDetailAPIView,
+    LateFeeRuleListCreateAPIView,
+    LateFeeRuleDetailAPIView,
 )
 
 app_name = 'fees'
@@ -37,6 +41,14 @@ urlpatterns = [
     # Fee Schedules
     path('schedules/', FeeScheduleListCreateAPIView.as_view(), name='fee-schedule-list-create'),
     path('schedules/<int:pk>/', FeeScheduleDetailAPIView.as_view(), name='fee-schedule-detail'),
+
+    # Concession Rules
+    path('concession-rules/', ConcessionRuleListCreateAPIView.as_view(), name='concession-rule-list-create'),
+    path('concession-rules/<int:pk>/', ConcessionRuleDetailAPIView.as_view(), name='concession-rule-detail'),
+
+    # Late Fee Rules
+    path('late-fee-rules/', LateFeeRuleListCreateAPIView.as_view(), name='late-fee-rule-list-create'),
+    path('late-fee-rules/<int:pk>/', LateFeeRuleDetailAPIView.as_view(), name='late-fee-rule-detail'),
 
     # Fee Assignments
     path('assignments/', FeeAssignmentListCreateAPIView.as_view(), name='fee-assignment-list-create'),

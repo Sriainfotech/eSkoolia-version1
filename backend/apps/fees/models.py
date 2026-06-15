@@ -220,6 +220,107 @@ class FeeSchedule(models.Model):
     def __str__(self):
         return f"{self.fee_group} - {self.fee_type} ({self.collection_frequency})"
 
+
+class ConcessionRule(models.Model):
+    """Concession/discount rule configuration for a school academic year."""
+
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+    ]
+
+    academic_year = models.ForeignKey('core.AcademicYear', on_delete=models.PROTECT, related_name='concession_rules')
+    name = models.CharField(max_length=120)
+    applies_to = models.CharField(max_length=150, help_text='Scope of concession (e.g., Tuition Fee)')
+    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active')
+
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_concession_rules',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='created_concession_rules')
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_concession_rules')
+
+    class Meta:
+        unique_together = ('academic_year', 'name')
+        ordering = ['name']
+
+    def clean(self):
+        super().clean()
+        if not self.name or not self.name.strip():
+            raise ValidationError({'name': 'Rule name is required.'})
+        if self.discount_percentage is None:
+            raise ValidationError({'discount_percentage': 'Discount percentage is required.'})
+        if self.discount_percentage < 0 or self.discount_percentage > 100:
+            raise ValidationError({'discount_percentage': 'Discount percentage must be between 0 and 100.'})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.name} ({self.discount_percentage}%)"
+
+
+class LateFeeRule(models.Model):
+    """Late fee policy configuration for a school academic year."""
+
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+    ]
+
+    academic_year = models.ForeignKey('core.AcademicYear', on_delete=models.PROTECT, related_name='late_fee_rules')
+    name = models.CharField(max_length=120)
+    grace_period_days = models.PositiveIntegerField(default=0)
+    penalty_rule = models.CharField(max_length=255)
+    cap_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active')
+
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='deleted_late_fee_rules',
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='created_late_fee_rules')
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_late_fee_rules')
+
+    class Meta:
+        unique_together = ('academic_year', 'name')
+        ordering = ['name']
+
+    def clean(self):
+        super().clean()
+        if not self.name or not self.name.strip():
+            raise ValidationError({'name': 'Rule name is required.'})
+        if not self.penalty_rule or not self.penalty_rule.strip():
+            raise ValidationError({'penalty_rule': 'Penalty rule is required.'})
+        if self.cap_amount is not None and self.cap_amount < 0:
+            raise ValidationError({'cap_amount': 'Cap amount cannot be negative.'})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
 class FeeAssignment(models.Model):
     """
     Assigns a fee type to a student. This is the core "charge" record.

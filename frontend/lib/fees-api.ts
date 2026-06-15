@@ -151,6 +151,31 @@ export type FeeSchedule = {
   updated_by?: number;
 };
 
+export type ConcessionRule = {
+  id: number;
+  academic_year: number;
+  name: string;
+  applies_to: string;
+  discount_percentage: string;
+  status: "Active" | "Inactive" | "active" | "inactive";
+  created_at?: string;
+  updated_at?: string;
+  created_by?: number;
+};
+
+export type LateFeeRule = {
+  id: number;
+  academic_year: number;
+  name: string;
+  grace_period_days: number;
+  penalty_rule: string;
+  cap_amount?: string | null;
+  status: "Active" | "Inactive" | "active" | "inactive";
+  created_at?: string;
+  updated_at?: string;
+  created_by?: number;
+};
+
 export type SearchParams = {
   page?: number;
   page_size?: number;
@@ -164,7 +189,8 @@ export function listData<T>(payload: ApiList<T>): T[] {
 }
 
 export const feesApi = {
-  listGroups: () => apiRequestWithRefresh<ApiList<FeesGroup>>("/api/v1/fees/groups/"),
+  listGroups: (params?: SearchParams) =>
+    apiRequestWithRefresh<PaginatedApiList<FeesGroup> | ApiList<FeesGroup>>(`/api/v1/fees/groups/${buildSearchQuery(params)}`),
   createGroup: (payload: Partial<FeesGroup>) =>
     apiRequestWithRefresh<FeesGroup>("/api/v1/fees/groups/", {
       method: "POST",
@@ -204,7 +230,17 @@ export const feesApi = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  listAssignments: () => apiRequestWithRefresh<ApiList<FeesAssignment>>("/api/v1/fees/assignments/"),
+  listAssignments: (params?: SearchParams & { academic_year?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.page) qs.set("page", String(params.page));
+    if (params?.page_size) qs.set("page_size", String(params.page_size));
+    if (params?.search) qs.set("search", params.search);
+    if (params?.status) qs.set("status", params.status);
+    if (params?.sort_by) qs.set("sort_by", params.sort_by);
+    if (params?.academic_year) qs.set("academic_year", String(params.academic_year));
+    const query = qs.toString();
+    return apiRequestWithRefresh<PaginatedApiList<FeesAssignment> | ApiList<FeesAssignment>>(`/api/v1/fees/assignments/${query ? `?${query}` : ""}`);
+  },
   createAssignment: (payload: Partial<FeesAssignment>) =>
     apiRequestWithRefresh<FeesAssignment>("/api/v1/fees/assignments/", {
       method: "POST",
@@ -290,7 +326,56 @@ export const feesApi = {
       headers: { "Content-Type": "application/json" },
     }),
 
+  listConcessionRules: (params?: SearchParams) =>
+    apiRequestWithRefresh<PaginatedApiList<ConcessionRule> | ApiList<ConcessionRule>>(`/api/v1/fees/concession-rules/${buildSearchQuery(params)}`),
+  createConcessionRule: (payload: Partial<ConcessionRule>) =>
+    apiRequestWithRefresh<ConcessionRule>("/api/v1/fees/concession-rules/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  updateConcessionRule: (id: number, payload: Partial<ConcessionRule>) =>
+    apiRequestWithRefresh<ConcessionRule>(`/api/v1/fees/concession-rules/${id}/`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  deleteConcessionRule: (id: number) =>
+    apiRequestWithRefresh<void>(`/api/v1/fees/concession-rules/${id}/`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+    }),
+
+  listLateFeeRules: (params?: SearchParams) =>
+    apiRequestWithRefresh<PaginatedApiList<LateFeeRule> | ApiList<LateFeeRule>>(`/api/v1/fees/late-fee-rules/${buildSearchQuery(params)}`),
+  createLateFeeRule: (payload: Partial<LateFeeRule>) =>
+    apiRequestWithRefresh<LateFeeRule>("/api/v1/fees/late-fee-rules/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  updateLateFeeRule: (id: number, payload: Partial<LateFeeRule>) =>
+    apiRequestWithRefresh<LateFeeRule>(`/api/v1/fees/late-fee-rules/${id}/`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  deleteLateFeeRule: (id: number) =>
+    apiRequestWithRefresh<void>(`/api/v1/fees/late-fee-rules/${id}/`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+    }),
+
   listAcademicYears: () => apiRequestWithRefresh<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
   listClasses: () => apiRequestWithRefresh<ApiList<SchoolClass>>("/api/v1/core/classes/?page_size=100"),
-  listStudents: () => apiRequestWithRefresh<ApiList<StudentRow>>("/api/v1/students/students/"),
+  listStudents: (params?: SearchParams & { is_active?: boolean; class?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.page) qs.set("page", String(params.page));
+    if (params?.page_size) qs.set("page_size", String(params.page_size));
+    if (params?.search) qs.set("search", params.search);
+    if (params?.is_active !== undefined) qs.set("is_active", params.is_active ? "true" : "false");
+    if (params?.class) qs.set("class", String(params.class));
+    const query = qs.toString();
+    return apiRequestWithRefresh<PaginatedApiList<StudentRow> | ApiList<StudentRow>>(`/api/v1/students/students/${query ? `?${query}` : ""}`);
+  },
 };
