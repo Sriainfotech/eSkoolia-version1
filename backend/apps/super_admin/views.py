@@ -380,9 +380,16 @@ class DashboardKPIView(SuperAdminBaseAPIView):
             )
 
         _STATE_NAMES = {
-            '36': 'Telangana', '37': 'Andhra Pradesh', '29': 'Karnataka',
-            '33': 'Tamil Nadu', '27': 'Maharashtra', '07': 'Delhi',
-            '24': 'Gujarat', '32': 'Kerala', '19': 'West Bengal', '09': 'Uttar Pradesh',
+            '35': 'Andaman and Nicobar Islands', '37': 'Andhra Pradesh', '12': 'Arunachal Pradesh',
+            '18': 'Assam', '10': 'Bihar', '04': 'Chandigarh', '22': 'Chhattisgarh',
+            '26': 'Dadra and Nagar Haveli and Daman and Diu', '07': 'Delhi', '30': 'Goa',
+            '24': 'Gujarat', '06': 'Haryana', '02': 'Himachal Pradesh', '01': 'Jammu and Kashmir',
+            '20': 'Jharkhand', '29': 'Karnataka', '32': 'Kerala', '38': 'Ladakh',
+            '31': 'Lakshadweep', '23': 'Madhya Pradesh', '27': 'Maharashtra', '14': 'Manipur',
+            '17': 'Meghalaya', '15': 'Mizoram', '13': 'Nagaland', '21': 'Odisha',
+            '34': 'Puducherry', '03': 'Punjab', '08': 'Rajasthan', '11': 'Sikkim',
+            '33': 'Tamil Nadu', '36': 'Telangana', '16': 'Tripura', '09': 'Uttar Pradesh',
+            '05': 'Uttarakhand', '19': 'West Bengal',
         }
         _PLAN_PRICING = {
             'starter': 4500, 'standard': 9000, 'premium': 19500,
@@ -1183,6 +1190,10 @@ class AuditLogListView(SuperAdminBaseAPIView):
                 | Q(action__icontains=search)
                 | Q(tenant_id__icontains=search)
                 | Q(schema_name__icontains=search)
+                | Q(details__message__icontains=search)
+                | Q(details__detail__icontains=search)
+                | Q(details__school_name__icontains=search)
+                | Q(actor_ip__icontains=search)
             )
 
         return queryset
@@ -2081,11 +2092,51 @@ class SchoolFormChoicesView(SuperAdminBaseAPIView):
         "Marathi",
     ]
 
+    _STATES = sorted([
+        {"code": "35", "name": "Andaman and Nicobar Islands"},
+        {"code": "37", "name": "Andhra Pradesh"},
+        {"code": "12", "name": "Arunachal Pradesh"},
+        {"code": "18", "name": "Assam"},
+        {"code": "10", "name": "Bihar"},
+        {"code": "04", "name": "Chandigarh"},
+        {"code": "22", "name": "Chhattisgarh"},
+        {"code": "26", "name": "Dadra and Nagar Haveli and Daman and Diu"},
+        {"code": "07", "name": "Delhi"},
+        {"code": "30", "name": "Goa"},
+        {"code": "24", "name": "Gujarat"},
+        {"code": "06", "name": "Haryana"},
+        {"code": "02", "name": "Himachal Pradesh"},
+        {"code": "01", "name": "Jammu and Kashmir"},
+        {"code": "20", "name": "Jharkhand"},
+        {"code": "29", "name": "Karnataka"},
+        {"code": "32", "name": "Kerala"},
+        {"code": "38", "name": "Ladakh"},
+        {"code": "31", "name": "Lakshadweep"},
+        {"code": "23", "name": "Madhya Pradesh"},
+        {"code": "27", "name": "Maharashtra"},
+        {"code": "14", "name": "Manipur"},
+        {"code": "17", "name": "Meghalaya"},
+        {"code": "15", "name": "Mizoram"},
+        {"code": "13", "name": "Nagaland"},
+        {"code": "21", "name": "Odisha"},
+        {"code": "34", "name": "Puducherry"},
+        {"code": "03", "name": "Punjab"},
+        {"code": "08", "name": "Rajasthan"},
+        {"code": "11", "name": "Sikkim"},
+        {"code": "33", "name": "Tamil Nadu"},
+        {"code": "36", "name": "Telangana"},
+        {"code": "16", "name": "Tripura"},
+        {"code": "09", "name": "Uttar Pradesh"},
+        {"code": "05", "name": "Uttarakhand"},
+        {"code": "19", "name": "West Bengal"},
+    ], key=lambda s: s["name"])
+
     def get(self, request):
         return Response(
             {
                 "school_types": self._SCHOOL_TYPES,
                 "mediums_of_instruction": self._MEDIUMS,
+                "states": self._STATES,
             },
             status=status.HTTP_200_OK,
         )

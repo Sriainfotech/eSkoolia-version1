@@ -456,6 +456,7 @@ export interface SchoolFilters {
 }
 
 export interface AuditFilters {
+  search?: string;
   actor?: string;
   action?: AuditAction;
   tenant_id?: string;

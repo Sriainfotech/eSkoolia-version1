@@ -165,74 +165,88 @@ export default function SuperAdminAuditPage() {
   const [loading,       setLoading]       = useState(true);
   const [useLiveData,   setUseLiveData]   = useState(false);
   const [search,        setSearch]        = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [actionFilter,  setActionFilter]  = useState<AuditAction | '__all__'>('__all__');
   const [sevFilter,     setSevFilter]     = useState<AuditSeverity | '__all__'>('__all__');
+  const [dateFrom,      setDateFrom]      = useState('');
+  const [dateTo,        setDateTo]        = useState('');
   const [showActions,   setShowActions]   = useState(false);
   const [exporting,     setExporting]     = useState(false);
   const [selected,      setSelected]      = useState<AuditEvent | null>(null);
+  const [page,          setPage]          = useState(1);
+  const [totalCount,    setTotalCount]    = useState(0);
+  const PAGE_SIZE = 25;
 
-  const load = useCallback(async () => {
+  // Debounce search input
+  useEffect(() => {
+    const t = setTimeout(() => { setDebouncedSearch(search); setPage(1); }, 400);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Reset page when filters change
+  useEffect(() => { setPage(1); }, [actionFilter, sevFilter, dateFrom, dateTo]);
+
+  const load = useCallback(async (p = page) => {
     setLoading(true);
+    const filters: AuditFilters = {
+      page: p,
+      page_size: PAGE_SIZE,
+    };
+    if (debouncedSearch.trim()) filters.search = debouncedSearch.trim();
+    if (actionFilter !== '__all__') filters.action = actionFilter as AuditAction;
+    if (sevFilter    !== '__all__') filters.severity = sevFilter as AuditSeverity;
+    if (dateFrom) filters.date_from = dateFrom;
+    if (dateTo)   filters.date_to   = dateTo;
+
     try {
-      const res = await getAuditEvents({ page: 1, page_size: 200 });
+      const res = await getAuditEvents(filters);
       setEvents(res.results);
+      setTotalCount(res.count);
       setUseLiveData(true);
     } catch {
       setEvents(DEMO);
+      setTotalCount(DEMO.length);
       setUseLiveData(false);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [page, debouncedSearch, actionFilter, sevFilter, dateFrom, dateTo]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(page); }, [page, debouncedSearch, actionFilter, sevFilter, dateFrom, dateTo]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // KPIs
-  const kpis = useMemo(() => {
-    const h24 = 24 * 3600000;
-    return {
-      total:       events.length,
-      critical:    events.filter(e => normalizeSev(e.severity) === 'error').length,
-      actors:      new Set(events.map(e => e.actor)).size,
-      last24h:     events.filter(e => Date.now() - new Date(e.timestamp).getTime() < h24).length,
-    };
-  }, [events]);
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const pageStart  = (page - 1) * PAGE_SIZE + 1;
+  const pageEnd    = Math.min(page * PAGE_SIZE, totalCount);
 
-  // Filtered rows
-  const filtered = useMemo(() => {
-    let r = events;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      r = r.filter(e =>
-        e.actor.toLowerCase().includes(q) ||
-        e.action.toLowerCase().includes(q) ||
-        e.detail.toLowerCase().includes(q) ||
-        (e.school_name?.toLowerCase().includes(q) ?? false) ||
-        (e.actor_ip?.toLowerCase().includes(q) ?? false)
-      );
-    }
-    if (actionFilter !== '__all__') r = r.filter(e => e.action === actionFilter);
-    if (sevFilter !== '__all__') {
-      r = r.filter(e => {
-        const k = normalizeSev(e.severity);
-        if (sevFilter === 'critical') return k === 'error';
-        if (sevFilter === 'warning')  return k === 'warning';
-        return k === 'info';
-      });
-    }
-    return r;
-  }, [events, search, actionFilter, sevFilter]);
+  // KPIs — based on current page data (live) or full demo set
+  const kpis = useMemo(() => ({
+    total:    totalCount,
+    critical: events.filter(e => normalizeSev(e.severity) === 'error').length,
+    actors:   new Set(events.map(e => e.actor)).size,
+    last24h:  events.filter(e => Date.now() - new Date(e.timestamp).getTime() < 86400000).length,
+  }), [events, totalCount]);
 
   const handleExport = async () => {
     setExporting(true);
     try {
-      const blob = await exportAuditCsv();
+      const exportFilters: AuditFilters = {};
+      if (debouncedSearch.trim()) exportFilters.search = debouncedSearch.trim();
+      if (actionFilter !== '__all__') exportFilters.action = actionFilter as AuditAction;
+      if (sevFilter    !== '__all__') exportFilters.severity = sevFilter as AuditSeverity;
+      if (dateFrom) exportFilters.date_from = dateFrom;
+      if (dateTo)   exportFilters.date_to   = dateTo;
+      const blob = await exportAuditCsv(exportFilters);
       downloadAuditCsv(blob);
     } catch {
       toast.error('Export failed — try again.');
     } finally {
       setExporting(false);
     }
+  };
+
+  const clearFilters = () => {
+    setSearch(''); setActionFilter('__all__'); setSevFilter('__all__');
+    setDateFrom(''); setDateTo(''); setPage(1);
   };
 
   return (
@@ -254,7 +268,7 @@ export default function SuperAdminAuditPage() {
             </span>
           )}
           <button
-            onClick={load} disabled={loading}
+            onClick={() => load(page)} disabled={loading}
             className="flex items-center gap-1.5 rounded-lg border border-[var(--bd)] bg-[var(--bg-2)] px-3 py-2 text-xs font-[550] text-[var(--ink-2)] hover:bg-[var(--bg-3)] disabled:opacity-50 transition-colors"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -318,8 +332,30 @@ export default function SuperAdminAuditPage() {
                 {actionFilter !== '__all__' ? actionFilter : 'Action'}
               </button>
 
+              {/* Date range */}
+              <div className="flex items-center gap-1">
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={e => setDateFrom(e.target.value)}
+                  title="From date"
+                  className="rounded-lg border border-[var(--bd)] bg-[var(--bg-2)] px-2 py-1.5 text-xs text-[var(--ink-1)] focus:outline-none focus:ring-2 focus:ring-[var(--pu-tint)]"
+                />
+                <span className="text-xs text-[var(--ink-3)]">–</span>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={e => setDateTo(e.target.value)}
+                  title="To date"
+                  className="rounded-lg border border-[var(--bd)] bg-[var(--bg-2)] px-2 py-1.5 text-xs text-[var(--ink-1)] focus:outline-none focus:ring-2 focus:ring-[var(--pu-tint)]"
+                />
+                {(dateFrom || dateTo) && (
+                  <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="text-xs text-[var(--ink-3)] hover:text-[var(--danger)]" title="Clear dates">✕</button>
+                )}
+              </div>
+
               <span className="ml-auto text-xs text-[var(--ink-3)]">
-                {filtered.length} event{filtered.length !== 1 ? 's' : ''}
+                {loading ? 'Loading…' : totalCount > 0 ? `${pageStart}–${pageEnd} of ${totalCount.toLocaleString()} events` : '0 events'}
               </span>
             </div>
 
@@ -366,12 +402,12 @@ export default function SuperAdminAuditPage() {
                   </div>
                 ))}
               </div>
-            ) : filtered.length === 0 ? (
+            ) : events.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-16">
                 <Shield className="h-8 w-8 text-[var(--ink-3)]" />
                 <p className="text-sm font-[550] text-[var(--ink-2)]">No events match the current filter</p>
                 <button
-                  onClick={() => { setSearch(''); setActionFilter('__all__'); setSevFilter('__all__'); }}
+                  onClick={clearFilters}
                   className="text-xs text-[var(--pu-deep)] hover:underline"
                 >
                   Clear all filters
@@ -379,7 +415,7 @@ export default function SuperAdminAuditPage() {
               </div>
             ) : (
               <div className="divide-y divide-[var(--bd)]">
-                {filtered.map(ev => {
+                {events.map(ev => {
                   const { date, time } = fmtTs(ev.timestamp);
                   const sevKey = normalizeSev(ev.severity);
                   const isSelected = selected?.id === ev.id;
@@ -404,6 +440,56 @@ export default function SuperAdminAuditPage() {
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Pagination */}
+            {!loading && totalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-[var(--bd)] px-4 py-3">
+                <span className="text-xs text-[var(--ink-3)]">
+                  Page {page} of {totalPages}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setPage(1)}
+                    disabled={page === 1}
+                    className="rounded-lg border border-[var(--bd)] bg-[var(--bg-2)] px-2.5 py-1 text-xs font-[550] text-[var(--ink-2)] hover:bg-[var(--bg-3)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >«</button>
+                  <button
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="rounded-lg border border-[var(--bd)] bg-[var(--bg-2)] px-2.5 py-1 text-xs font-[550] text-[var(--ink-2)] hover:bg-[var(--bg-3)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >‹ Prev</button>
+                  {/* Page number pills */}
+                  {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                    const mid = Math.min(Math.max(page, 4), totalPages - 3);
+                    const p = totalPages <= 7 ? i + 1 : i === 0 ? 1 : i === 6 ? totalPages : mid - 3 + i;
+                    const isEllipsis = totalPages > 7 && (i === 1 && p > 2 || i === 5 && p < totalPages - 1);
+                    return isEllipsis ? (
+                      <span key={i} className="px-1 text-xs text-[var(--ink-3)]">…</span>
+                    ) : (
+                      <button
+                        key={i}
+                        onClick={() => setPage(p)}
+                        className={`min-w-[30px] rounded-lg border px-2.5 py-1 text-xs font-[550] transition-colors ${
+                          p === page
+                            ? 'border-[var(--pu)] bg-[var(--pu)] text-white'
+                            : 'border-[var(--bd)] bg-[var(--bg-2)] text-[var(--ink-2)] hover:bg-[var(--bg-3)]'
+                        }`}
+                      >{p}</button>
+                    );
+                  })}
+                  <button
+                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="rounded-lg border border-[var(--bd)] bg-[var(--bg-2)] px-2.5 py-1 text-xs font-[550] text-[var(--ink-2)] hover:bg-[var(--bg-3)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >Next ›</button>
+                  <button
+                    onClick={() => setPage(totalPages)}
+                    disabled={page === totalPages}
+                    className="rounded-lg border border-[var(--bd)] bg-[var(--bg-2)] px-2.5 py-1 text-xs font-[550] text-[var(--ink-2)] hover:bg-[var(--bg-3)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >»</button>
+                </div>
               </div>
             )}
           </div>

@@ -45,7 +45,7 @@ const EMPTY_EDIT_FIELDS = {
   principal_name: '', principal_designation: 'Principal',
   principal_email: '', principal_phone: '',
   alternate_contact: '', owner_role: 'Principal',
-  campus_address: '', city: '', pin_code: '', affiliation_number: '',
+  campus_address: '', city: '', campus_state: '', pin_code: '', affiliation_number: '',
   student_seat_limit: '', staff_seat_limit: '', storage_cap_gb: '',
   trial_days: '30', go_live_date: '', billing_cycle: 'annual',
   school_type: '',
@@ -392,16 +392,122 @@ function Fld({
 
 const inputCls = 'h-[38px] w-full rounded-lg border border-[var(--bd-2)] bg-[var(--bg-1)] px-3 text-[13px] text-[var(--ink-1)] outline-none transition focus:border-[var(--pu)] focus:shadow-[0_0_0_3px_rgba(109,74,255,.12)]';
 const selectCls = inputCls;
+
+// Custom state dropdown — always opens downward with built-in search
+function StateSelect({
+  value, onChange, states, placeholder = 'Select State', hasError,
+}: {
+  value: string;
+  onChange: (code: string) => void;
+  states: { code: string; name: string }[];
+  placeholder?: string;
+  hasError?: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState('');
+  const [dropUp, setDropUp] = React.useState(false);
+  const wrapRef = React.useRef<HTMLDivElement>(null);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const selected = states.find(s => s.code === value);
+  const filtered = query.trim()
+    ? states.filter(s => s.name.toLowerCase().includes(query.toLowerCase()))
+    : states;
+
+  React.useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false); setQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  React.useEffect(() => {
+    if (open) {
+      // Determine if there's enough space below; if not, open upward
+      if (wrapRef.current) {
+        const rect = wrapRef.current.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - rect.bottom;
+        setDropUp(spaceBelow < 260);
+      }
+      setTimeout(() => inputRef.current?.focus(), 30);
+    }
+  }, [open]);
+
+  return (
+    <div className="relative w-full" ref={wrapRef}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className={`flex h-[38px] w-full items-center justify-between rounded-lg border bg-[var(--bg-1)] px-3 text-[13px] text-left outline-none transition ${
+          hasError
+            ? 'border-[var(--danger)]'
+            : open
+            ? 'border-[var(--pu)] shadow-[0_0_0_3px_rgba(109,74,255,.12)]'
+            : 'border-[var(--bd-2)] hover:border-[var(--bd-3)]'
+        }`}
+      >
+        <span className={selected ? 'text-[var(--ink-1)]' : 'text-[var(--ink-3)]'}>
+          {selected ? selected.name : placeholder}
+        </span>
+        <ChevronDown size={13} className={`shrink-0 text-[var(--ink-3)] transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className={`absolute left-0 z-[200] w-full rounded-xl border border-[var(--bd-2)] bg-[var(--bg-0)] shadow-xl ${dropUp ? 'bottom-[calc(100%+4px)]' : 'top-[calc(100%+4px)]'}`}>
+          <div className="border-b border-[var(--bd)] px-2 py-1.5">
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder="Search state…"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              className="h-[30px] w-full rounded-lg border border-[var(--bd-2)] bg-[var(--bg-1)] px-2.5 text-[12px] outline-none focus:border-[var(--pu)]"
+            />
+          </div>
+          <ul className="max-h-[220px] overflow-y-auto py-1">
+            <li>
+              <button type="button" onMouseDown={() => { onChange(''); setOpen(false); setQuery(''); }}
+                className={`w-full px-3 py-[7px] text-left text-[12.5px] text-[var(--ink-3)] hover:bg-[var(--bg-2)] ${
+                  !value ? 'bg-[var(--pu-soft)] font-[550] text-[var(--pu-deep)]' : ''
+                }`}>
+                {placeholder}
+              </button>
+            </li>
+            {filtered.length === 0 && (
+              <li className="px-3 py-2 text-[12px] text-[var(--ink-3)]">No results</li>
+            )}
+            {filtered.map(s => (
+              <li key={s.code}>
+                <button type="button"
+                  onMouseDown={() => { onChange(s.code); setOpen(false); setQuery(''); }}
+                  className={`w-full px-3 py-[7px] text-left text-[12.5px] hover:bg-[var(--bg-2)] ${
+                    s.code === value ? 'bg-[var(--pu-soft)] font-[550] text-[var(--pu-deep)]' : 'text-[var(--ink-1)]'
+                  }`}>
+                  {s.name}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const monoInputCls = `${inputCls} font-mono text-[12px]`;
 const lockedInputCls = `${inputCls} cursor-not-allowed bg-[var(--bg-2)] font-mono text-[12px] font-semibold text-[var(--pu-deep)]`;
 
 // ── Edit school modal ─────────────────────────────────────────────────────────
 function EditSchoolModal({
-  school, busy, plans, onSave, onCancel,
+  school, busy, plans, states, onSave, onCancel,
 }: {
   school: SchoolTenant;
   busy: boolean;
   plans: SubscriptionPlan[];
+  states: { code: string; name: string }[];
   onSave: (patch: Partial<SchoolTenant>) => void;
   onCancel: () => void;
 }) {
@@ -475,13 +581,10 @@ function EditSchoolModal({
           <div>
             <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">State</label>
             <select className={selectCls} value={form.state} onChange={e => set('state', e.target.value)} title="State">
-              <option value="">— Select —</option>
-              <option value="36">Telangana (36)</option>
-              <option value="37">Andhra Pradesh (37)</option>
-              <option value="29">Karnataka (29)</option>
-              <option value="33">Tamil Nadu (33)</option>
-              <option value="27">Maharashtra (27)</option>
-              <option value="07">Delhi (07)</option>
+              <option value="">Select State</option>
+              {states.map(({ code, name }) => (
+                <option key={code} value={code}>{name}</option>
+              ))}
             </select>
           </div>
           <div>
@@ -695,6 +798,7 @@ export default function SuperAdminSchoolsPage() {
   const [llmStates, setLlmStates] = useState<Map<string, LLMSchoolState>>(new Map());
   const [llmToggling, setLlmToggling] = useState<Set<string>>(new Set());
   const [schoolTypes, setSchoolTypes] = useState<string[]>(FALLBACK_SCHOOL_TYPES);
+  const [states, setStates] = useState<{ code: string; name: string }[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<{ type: 'suspend' | 'archive' | 'restore' | 'reactivate' | 'permanent_delete'; school: SchoolTenant } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [editSchool, setEditSchool] = useState<SchoolTenant | null>(null);
@@ -766,7 +870,12 @@ export default function SuperAdminSchoolsPage() {
 
   useEffect(() => { void loadSchools(); }, [loadSchools]);
   useEffect(() => { getLLMStates().then(setLlmStates).catch(() => {}); }, []);
-  useEffect(() => { getSchoolFormChoices().then(c => setSchoolTypes(c.school_types)).catch(() => {}); }, []);
+  useEffect(() => {
+    getSchoolFormChoices().then(c => {
+      setSchoolTypes(c.school_types);
+      if (c.states?.length) setStates(c.states);
+    }).catch(() => {});
+  }, []);
   useEffect(() => { setPage(1); }, [debouncedSearch, statusFilter, planFilter, boardFilter, stateFilter, healthFlagFilter]);
 
   // Fetch global stats — extracted so it can be re-called after any status change
@@ -1167,7 +1276,7 @@ export default function SuperAdminSchoolsPage() {
 
   return (
     <>
-    <div className="mx-auto max-w-[1280px] rounded-[18px] border border-[var(--bd)] bg-[var(--bg-1)] p-[28px_30px]">
+    <div className="px-7 py-[22px] pb-10">
 
       {/* TITLE ROW */}
       <div className="mb-7 flex flex-wrap items-end justify-between gap-6">
@@ -1179,7 +1288,7 @@ export default function SuperAdminSchoolsPage() {
           <p className="mt-2.5 max-w-[680px] text-[13px] leading-[1.55] text-[var(--ink-2)]">
             Provision, monitor &amp; manage every school tenant.
             <span className="mx-1.5 text-[var(--ink-4)]">&middot;</span>
-            Each school has its own{' '}
+            Each school has its own
             <strong className="font-[550] text-[var(--ink-1)]">tenant ID</strong>, GSTIN, dedicated DB shard &amp; zero cross-tenant visibility.
           </p>
         </div>
@@ -1300,9 +1409,9 @@ export default function SuperAdminSchoolsPage() {
             <div>
               <h4 className="mb-1 text-[13px] font-semibold">How tenant isolation works</h4>
               <p className="text-[11.5px] leading-[1.55] text-[var(--ink-2)]">
-                On submit, Eskoolia provisions a new tenant with an immutable{' '}
+                On submit, Eskoolia provisions a new tenant with an immutable
                 <code className="rounded border border-[var(--bd)] bg-white px-[5px] py-px font-mono text-[10.5px] text-[var(--pu-deep)]">tenant_id</code>,
-                a dedicated DB schema in the chosen region, and a sandboxed S3 bucket. All ERP queries run with{' '}
+                a dedicated DB schema in the chosen region, and a sandboxed S3 bucket. All ERP queries run with
                 <code className="rounded border border-[var(--bd)] bg-white px-[5px] py-px font-mono text-[10.5px] text-[var(--pu-deep)]">WHERE tenant_id = :school</code>.
                 Zero cross-tenant visibility \u2014 only Super Admin can read across.
               </p>
@@ -1344,7 +1453,7 @@ export default function SuperAdminSchoolsPage() {
               </Fld>
               <Fld label="School type" required error={fieldErrors.school_type}>
                 <select
-                  className={`${selectCls}${fieldErrors.school_type ? ' !border-[var(--danger)] focus:!border-[var(--danger)]' : ''}`}
+                  className={`${selectCls}${fieldErrors.school_type ? ' !border-[var(--danger)]' : ''}`}
                   data-field-error={fieldErrors.school_type ? 'true' : undefined}
                   title="School type"
                   value={editFields.school_type}
@@ -1440,9 +1549,13 @@ export default function SuperAdminSchoolsPage() {
             <SectionHead num="02">Board affiliation</SectionHead>
             <div className="grid grid-cols-3 gap-3.5 max-md:grid-cols-2">
               <Fld label="Board" required>
-                <select className={selectCls} title="Board" value={provisionForm.board}
-                  onChange={e => setProvisionForm(f => ({ ...f, board: e.target.value as BoardType }))}>
-                  <option value="">Select board…</option>
+                <select
+                  className={selectCls}
+                  value={provisionForm.board}
+                  onChange={e => setProvisionForm(f => ({ ...f, board: e.target.value as BoardType }))
+                    }
+                  disabled={!!editSchool}
+                >
                   {BOARDS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
                 </select>
               </Fld>
@@ -1459,21 +1572,15 @@ export default function SuperAdminSchoolsPage() {
                   onChange={e => setEditFields(f => ({ ...f, udise_code: e.target.value.replace(/\D/g, '') }))} />
               </Fld>
               <Fld label="State" required error={fieldErrors.state}>
-                <select
-                  className={`${selectCls}${fieldErrors.state ? ' !border-[var(--danger)] focus:!border-[var(--danger)]' : ''}`}
-                  data-field-error={fieldErrors.state ? 'true' : undefined}
-                  title="State"
-                  value={provisionForm.state}
-                  onChange={e => {
-                    setProvisionForm(f => ({ ...f, state: e.target.value }));
-                    if (fieldErrors.state) setFieldErrors(f => ({ ...f, state: '' }));
-                  }}
-                >
-                  <option value="">Select state\u2026</option>
-                  {[['36','Telangana'],['37','Andhra Pradesh'],['29','Karnataka'],['33','Tamil Nadu'],['27','Maharashtra'],['07','Delhi']].map(([code, name]) => (
-                    <option key={code} value={code}>{name} ({code})</option>
-                  ))}
-                </select>
+                <div data-field-error={fieldErrors.state ? 'true' : undefined}>
+                  <StateSelect
+                    value={provisionForm.state}
+                    onChange={code => { setProvisionForm(f => ({ ...f, state: code })); if (fieldErrors.state) setFieldErrors(f => ({ ...f, state: '' })); }}
+                    states={states}
+                    placeholder="Select State..."
+                    hasError={!!fieldErrors.state}
+                  />
+                </div>
               </Fld>
               <Fld label="Affiliation valid till">
                 <input type="date" className={inputCls} defaultValue="2030-03-31" min={new Date().toISOString().slice(0, 10)} title="Affiliation valid till" />
@@ -1657,17 +1764,31 @@ export default function SuperAdminSchoolsPage() {
                   value={editFields.campus_address}
                   onChange={e => setEditFields(f => ({ ...f, campus_address: e.target.value }))} />
               </Fld>
-              <Fld label="City"><input className={inputCls} placeholder="Hyderabad" value={editFields.city} onChange={e => setEditFields(f => ({ ...f, city: e.target.value }))} /></Fld>
-              <Fld label="State">
-                <select className={selectCls} title="State">
-                  {[['36','Telangana'],['37','Andhra Pradesh'],['29','Karnataka'],['33','Tamil Nadu'],['27','Maharashtra'],['07','Delhi']].map(([code, name]) => (
-                    <option key={code}>{name} ({code})</option>
-                  ))}
-                </select>
+              <Fld label="City">
+                <input
+                  className={inputCls}
+                  value={editFields.city}
+                  onChange={e => setEditFields(f => ({ ...f, city: e.target.value }))}
+                  placeholder="e.g. Hyderabad"
+                />
               </Fld>
-              <Fld label="PIN code"><input className={monoInputCls} placeholder="500034" maxLength={6} inputMode="numeric"
-                value={editFields.pin_code}
-                onChange={e => setEditFields(f => ({ ...f, pin_code: e.target.value.replace(/\D/g, '') }))} /></Fld>
+              <Fld label="State">
+                <StateSelect
+                  value={editFields.campus_state}
+                  onChange={code => setEditFields(f => ({ ...f, campus_state: code }))}
+                  states={states}
+                  placeholder="Select State..."
+                />
+              </Fld>
+              <Fld label="PIN Code">
+                <input
+                  className={monoInputCls}
+                  value={editFields.pin_code}
+                  onChange={e => setEditFields(f => ({ ...f, pin_code: e.target.value }))}
+                  placeholder="500034"
+                  inputMode="numeric"
+                />
+              </Fld>
             </div>
           </div>
 
@@ -1918,7 +2039,8 @@ export default function SuperAdminSchoolsPage() {
               <Fld label="API access">
                 <select className={selectCls} title="API access"
                   value={editFields.api_access}
-                  onChange={e => setEditFields(f => ({ ...f, api_access: e.target.value }))}>
+                  onChange={e => setEditFields(f => ({ ...f, api_access: e.target.value }))}
+                >
                   <option value="disabled">Disabled (default)</option>
                   <option value="enabled">Enabled (read + write)</option>
                 </select>
@@ -1973,7 +2095,10 @@ export default function SuperAdminSchoolsPage() {
                     }}
                     className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border border-[var(--bd-2)] bg-[var(--bg-2)] px-3 text-[12px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-1)] flex-shrink-0"
                   >
-                    <RefreshCw size={12} /> Generate
+                    <Check className="h-3.5 w-3.5" />
+                    {provisioning
+                      ? (editSchool ? 'Saving\u2026' : 'Provisioning\u2026')
+                      : (editSchool ? 'Save changes' : 'Provision school')}
                   </button>
                 </div>
               </Fld>
@@ -2078,8 +2203,9 @@ export default function SuperAdminSchoolsPage() {
               <label className="mb-1.5 block text-[11.5px] font-[550] text-[var(--ink-2)]">State</label>
               <select className={selectCls} title="State" value={stateFilter} onChange={e => { setStateFilter(e.target.value); setPage(1); }}>
                 <option value="">All states</option>
-                <option value="36">Telangana (36)</option>
-                <option value="37">Andhra Pradesh (37)</option>
+                {states.map(s => (
+                  <option key={s.code} value={s.code}>{s.name}</option>
+                ))}
               </select>
             </div>
             {/* Region */}
@@ -2190,7 +2316,7 @@ export default function SuperAdminSchoolsPage() {
               <table className="w-full border-separate border-spacing-0">
                 <thead>
                   <tr>
-                    {['School','Tenant \u00b7 State','Board','GSTIN','Plan \u00b7 Students','Status','Actions'].map((h, i) => (
+                    {['School','Tenant \u00b7 State','Board','GSTIN','Plan \u00b7 Students','Status','LLM','Actions'].map((h, i) => (
                       <th key={h} className={`border-y border-[var(--bd)] bg-[var(--bg-2)] px-3.5 py-[9px] text-[10.5px] font-semibold uppercase tracking-[0.07em] text-[var(--ink-3)] first:rounded-l-lg first:border-l first:pl-[18px] last:rounded-r-lg last:border-r last:pr-[18px] whitespace-nowrap ${i === 0 ? 'w-[24%]' : ''}`}>{h}</th>
                     ))}
                   </tr>
