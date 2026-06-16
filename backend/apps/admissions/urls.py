@@ -11,6 +11,9 @@ from .views import (
 	CertificateTemplateViewSet,
 	CertificateReadOnlyViewSet,
 	ComplaintEntryViewSet,
+	ComplaintTypeListView,
+	ComplaintSourceListView,
+	StaffLookupListView,
 	ConsentLogView,
 	IdCardTemplateViewSet,
 	IdCardReadOnlyViewSet,
@@ -43,6 +46,9 @@ urlpatterns = [
 	path("ai/generate/", AIGenerateView.as_view(), name="ai-generate"),
 	path("consent/", ConsentLogView.as_view(), name="consent-log"),
 	path("analytics/overview/", AnalyticsOverviewView.as_view(), name="analytics-overview"),
+	path("complaint-types/", ComplaintTypeListView.as_view(), name="complaint-type-list"),
+	path("complaint-sources/", ComplaintSourceListView.as_view(), name="complaint-source-list"),
+	path("staff-lookup/", StaffLookupListView.as_view(), name="staff-lookup-list"),
 	*router.urls,
 ]
 

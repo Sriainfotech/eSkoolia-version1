@@ -30,12 +30,12 @@ type SelectOption = { value: string; label: string };
 type ComplaintRow = {
   id: number;
   complaint_by: string;
-  complaint_type: string;
-  complaint_source: string;
+  complaint_type: number;
+  complaint_source: number;
   phone?: string;
   date?: string;
   action_taken?: string;
-  assigned?: string;
+  assigned_to?: number | null;
   description?: string;
   file_url?: string;
 };
@@ -136,10 +136,44 @@ export function ComplaintPanel() {
   const filterSecRef = useRef<HTMLDivElement | null>(null);
   const listSecRef = useRef<HTMLDivElement | null>(null);
 
+  // Field Refs for scrollToFirstError
+  const complaintByRef = useRef<HTMLInputElement | null>(null);
+  const complaintTypeRef = useRef<HTMLSelectElement | null>(null);
+  const complaintSourceRef = useRef<HTMLSelectElement | null>(null);
+  const phoneRef = useRef<HTMLInputElement | null>(null);
+  const dateRef = useRef<HTMLInputElement | null>(null);
+  const actionTakenRef = useRef<HTMLInputElement | null>(null);
+  const assignedRef = useRef<HTMLInputElement | null>(null);
+  const descriptionRef = useRef<HTMLInputElement | null>(null);
+  const attachmentRef = useRef<HTMLInputElement | null>(null);
+
   const scrollToTab = (id: Tab) => {
     const el = id === "add" ? addSecRef.current : id === "filter" ? filterSecRef.current : listSecRef.current;
     if (el) {
       setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+    }
+  };
+
+  const scrollToFirstError = (errors: Record<string, string>) => {
+    const fieldRefMap: Record<string, React.RefObject<any>> = {
+      complaintBy: complaintByRef,
+      complaintType: complaintTypeRef,
+      complaintSource: complaintSourceRef,
+      phone: phoneRef,
+      date: dateRef,
+      actionTaken: actionTakenRef,
+      description: descriptionRef,
+      attachment: attachmentRef,
+    };
+
+    const fieldOrder = ["complaintBy", "complaintType", "complaintSource", "phone", "date", "actionTaken", "description", "attachment"];
+    
+    for (const field of fieldOrder) {
+      if (errors[field] && fieldRefMap[field]?.current) {
+        fieldRefMap[field].current?.focus();
+        fieldRefMap[field].current?.scrollIntoView({ behavior: "smooth", block: "center" });
+        break;
+      }
     }
   };
 
@@ -149,9 +183,10 @@ export function ComplaintPanel() {
     try {
       setLoading(true);
       setError("");
-      const [complaintData, setupData] = await Promise.all([
+      const [complaintData, typeData, sourceData] = await Promise.all([
         apiGet<ApiList<ComplaintRow>>(`/api/v1/admissions/complaints/`),
-        apiGet<ApiList<AdminSetupRow>>("/api/v1/admissions/admin-setups/"),
+        apiGet<ApiList<{ id: number; name: string }>>("/api/v1/admissions/complaint-types/"),
+        apiGet<ApiList<{ id: number; name: string }>>("/api/v1/admissions/complaint-sources/"),
       ]);
       const rows = listData(complaintData);
       const count = getTotalCount(complaintData);
@@ -159,9 +194,10 @@ export function ComplaintPanel() {
       setTotalRecords(count);
       setTotalPages(Math.max(1, Math.ceil(count / pageSize)));
       
-      const setups = listData(setupData);
-      setTypeOptions(setups.filter((row) => row.type === "2").map((row) => ({ value: String(row.id), label: String(row.name || "").trim() })));
-      setSourceOptions(setups.filter((row) => row.type === "3").map((row) => ({ value: String(row.id), label: String(row.name || "").trim() })));
+      const types = listData(typeData);
+      const sources = listData(sourceData);
+      setTypeOptions(types.map((row) => ({ value: String(row.id), label: String(row.name || "").trim() })));
+      setSourceOptions(sources.map((row) => ({ value: String(row.id), label: String(row.name || "").trim() })));
     } catch (err: unknown) {
       const message = getErrorMessage(err, "Unable to load complaints.");
       setError(message);
@@ -217,16 +253,16 @@ export function ComplaintPanel() {
   };
 
   const editRow = (row: ComplaintRow) => {
-    const matchedType = typeOptions.find((option) => option.value === row.complaint_type || option.label === row.complaint_type);
-    const matchedSource = sourceOptions.find((option) => option.value === row.complaint_source || option.label === row.complaint_source);
+    const matchedType = typeOptions.find((option) => option.value === String(row.complaint_type));
+    const matchedSource = sourceOptions.find((option) => option.value === String(row.complaint_source));
     setEditingId(row.id);
     setComplaintBy(sanitizePlain(row.complaint_by || ""));
     setComplaintType(matchedType?.value || "");
     setComplaintSource(matchedSource?.value || "");
-    setPhone((row.phone || "").replace(/\D/g, "").slice(0, 12));
+    setPhone((row.phone || "").replace(/\D/g, "").slice(0, 10));
     setDate(row.date || todayDate);
     setActionTaken(stripHtml(row.action_taken || ""));
-    setAssigned(stripHtml(row.assigned || ""));
+    setAssigned(stripHtml(row.assigned_to ? String(row.assigned_to) : ""));
     setDescription(stripHtml(row.description || ""));
     setFileUrl(row.file_url || "");
     setFieldErrors({});
@@ -265,15 +301,12 @@ export function ComplaintPanel() {
     if (!complaintType) nextErrors.complaintType = "Please select a complaint type.";
     if (!complaintSource) nextErrors.complaintSource = "Please select a complaint source.";
     
-    if (phone.trim() && !/^\d+$/.test(phone)) nextErrors.phone = "Only digits (0-9) are allowed.";
-    else if (phone.trim() && phone.length < 10) nextErrors.phone = "Phone must be at least 10 digits.";
-    else if (phone.trim() && phone.length > 12) nextErrors.phone = "Phone must not exceed 12 digits.";
+    if (phone.trim() && !/^[6-9]\d{9}$/.test(phone)) nextErrors.phone = "Please enter a valid 10-digit mobile number.";
 
     if (!date) nextErrors.date = "Please select a date.";
     else if (date > todayDate) nextErrors.date = "Date cannot be in the future.";
 
     if (actionTaken.trim() && !validateMeaningfulText(actionTaken, "Action Taken").valid) nextErrors.actionTaken = "Please enter meaningful text.";
-    if (assigned.trim() && !validateMeaningfulText(assigned, "Assigned").valid) nextErrors.assigned = "Please enter a valid name.";
     
     if (description.trim() && description.trim().length < 10) nextErrors.description = "Description must be at least 10 characters.";
     else if (description.trim() && !validateMeaningfulText(description, "Description").valid) nextErrors.description = "Please enter meaningful text.";
@@ -290,20 +323,21 @@ export function ComplaintPanel() {
       setFieldErrors(nextErrors);
       setFormBanner("Please fix the errors below before submitting.");
       setError("Please fix the errors below before submitting.");
-      toast.error("Please fix the errors below before submitting.", { autoClose: 5000 });
+      scrollToFirstError(nextErrors);
       return;
     }
 
-    const formData = new FormData();
-    formData.append("complaint_by", complaintBy.trim());
-    formData.append("complaint_type", complaintType.trim());
-    formData.append("complaint_source", complaintSource.trim());
-    formData.append("phone", phone.trim());
-    if (date) formData.append("date", date);
-    formData.append("action_taken", actionTaken.trim());
-    formData.append("assigned", assigned.trim());
-    formData.append("description", description.trim());
-    if (fileUpload) formData.append("file_upload", fileUpload);
+    const payload: any = {
+      complaint_by: complaintBy.trim() || "",
+      complaint_type: complaintType ? parseInt(String(complaintType)) : null,
+      complaint_source: complaintSource ? parseInt(String(complaintSource)) : null,
+      phone: phone.trim() || "",
+      date: date || "",
+      action_taken: actionTaken.trim() || "",
+      description: description.trim() || "",
+    };
+    
+    console.log("DEBUG: Payload before sending:", payload);
 
     try {
       setSaving(true);
@@ -311,23 +345,67 @@ export function ComplaintPanel() {
       setSuccess("");
       setFieldErrors({});
       setFormBanner("");
-      if (editingId) {
-        await apiForm(`/api/v1/admissions/complaints/${editingId}/`, "PATCH", formData);
-        setSuccess("Record updated successfully.");
-        toast.success("Record updated successfully.", { autoClose: 4000 });
+      
+      let response;
+      if (fileUpload) {
+        // Use FormData only when there's a file upload
+        const formData = new FormData();
+        formData.append("complaint_by", payload.complaint_by);
+        if (payload.complaint_type !== null) formData.append("complaint_type", String(payload.complaint_type));
+        if (payload.complaint_source !== null) formData.append("complaint_source", String(payload.complaint_source));
+        formData.append("phone", payload.phone);
+        if (payload.date) formData.append("date", payload.date);
+        formData.append("action_taken", payload.action_taken);
+        formData.append("description", payload.description);
+        formData.append("file_upload", fileUpload);
+        
+        if (editingId) {
+          response = await apiRequestWithRefresh(`/api/v1/admissions/complaints/${editingId}/`, { method: "PATCH", body: formData });
+        } else {
+          response = await apiRequestWithRefresh("/api/v1/admissions/complaints/", { method: "POST", body: formData });
+        }
       } else {
-        await apiForm("/api/v1/admissions/complaints/", "POST", formData);
-        setSuccess("Record created successfully.");
-        toast.success("Record created successfully.", { autoClose: 4000 });
+        // Use JSON when no file upload - don't pass headers, apiRequestWithRefresh handles it
+        const jsonBody = JSON.stringify(payload);
+        console.log("DEBUG: JSON payload:", jsonBody);
+        
+        if (editingId) {
+          response = await apiRequestWithRefresh(`/api/v1/admissions/complaints/${editingId}/`, { method: "PATCH", body: jsonBody });
+        } else {
+          response = await apiRequestWithRefresh("/api/v1/admissions/complaints/", { method: "POST", body: jsonBody });
+        }
       }
+      
+      setSuccess("Record created successfully.");
+      toast.success("Record created successfully.", { autoClose: 4000 });
       resetForm();
       await load();
       setActiveTab("list");
       scrollToTab("list");
     } catch (err: unknown) {
-      const message = getErrorMessage(err, editingId ? "Unable to update complaint." : "Unable to add complaint.");
-      setError(message);
-      toast.error(message, { autoClose: 6000 });
+      // Handle API response errors with field_errors
+      if (err instanceof Error) {
+        try {
+          const response = JSON.parse(err.message);
+          if (response.field_errors && typeof response.field_errors === 'object') {
+            setFieldErrors(response.field_errors);
+            setFormBanner("Please fix the validation errors below.");
+            scrollToFirstError(response.field_errors);
+          } else {
+            const message = response.message || err.message;
+            setError(message);
+            toast.error(message, { autoClose: 6000 });
+          }
+        } catch {
+          const message = getErrorMessage(err, editingId ? "Unable to update complaint." : "Unable to add complaint.");
+          setError(message);
+          toast.error(message, { autoClose: 6000 });
+        }
+      } else {
+        const message = getErrorMessage(err, editingId ? "Unable to update complaint." : "Unable to add complaint.");
+        setError(message);
+        toast.error(message, { autoClose: 6000 });
+      }
     } finally {
       setSaving(false);
     }
@@ -382,10 +460,10 @@ export function ComplaintPanel() {
       next = next.filter((row) => [row.complaint_by, row.phone || "", row.complaint_type, row.complaint_source].join(" ").toLowerCase().includes(q));
     }
     if (filterType) {
-      next = next.filter(row => row.complaint_type === filterType || typeOptions.find(o => o.value === filterType)?.label === row.complaint_type);
+      next = next.filter(row => String(row.complaint_type) === filterType);
     }
     if (filterSource) {
-      next = next.filter(row => row.complaint_source === filterSource || sourceOptions.find(o => o.value === filterSource)?.label === row.complaint_source);
+      next = next.filter(row => String(row.complaint_source) === filterSource);
     }
     if (filterDate) {
       next = next.filter(row => row.date === filterDate);
@@ -449,53 +527,89 @@ export function ComplaintPanel() {
                 
                 <div className={s.roField}>
                   <label>Complaint By *</label>
-                  <input type="text" required minLength={2} maxLength={100} value={complaintBy} onChange={(e) => setComplaintBy(e.target.value)} className={s.roInput} placeholder="e.g. Parent of Rahul" />
+                  <input ref={complaintByRef} type="text" required minLength={2} maxLength={100} value={complaintBy} onChange={(e) => { 
+                    const val = e.target.value; 
+                    setComplaintBy(val); 
+                    const result = validateMeaningfulText(val, "Complaint By");
+                    if (!result.valid && val.trim()) {
+                      setFieldErrors(p => ({ ...p, complaintBy: result.error || "" }));
+                    } else {
+                      setFieldErrors(p => ({ ...p, complaintBy: "" }));
+                    }
+                  }} className={fieldErrors.complaintBy ? s.roInputError : s.roInput} placeholder="e.g. Parent of Rahul" />
+                  {fieldErrors.complaintBy && <span className={s.fieldError}>{fieldErrors.complaintBy}</span>}
                 </div>
                 
                 <div className={s.roField}>
                   <label>Complaint Type *</label>
-                  <select required value={complaintType} onChange={(e) => setComplaintType(e.target.value)} className={s.roInput}>
+                  <select ref={complaintTypeRef} required value={complaintType} onChange={(e) => { setComplaintType(e.target.value); if (fieldErrors.complaintType) setFieldErrors(p => ({ ...p, complaintType: "" })); }} className={fieldErrors.complaintType ? s.roInputError : s.roInput}>
                     <option value="" disabled hidden>Select Type</option>
                     {typeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
+                  {fieldErrors.complaintType && <span className={s.fieldError}>{fieldErrors.complaintType}</span>}
                 </div>
 
                 <div className={s.roField}>
                   <label>Complaint Source *</label>
-                  <select required value={complaintSource} onChange={(e) => setComplaintSource(e.target.value)} className={s.roInput}>
+                  <select ref={complaintSourceRef} required value={complaintSource} onChange={(e) => { setComplaintSource(e.target.value); if (fieldErrors.complaintSource) setFieldErrors(p => ({ ...p, complaintSource: "" })); }} className={fieldErrors.complaintSource ? s.roInputError : s.roInput}>
                     <option value="" disabled hidden>Select Source</option>
                     {sourceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
+                  {fieldErrors.complaintSource && <span className={s.fieldError}>{fieldErrors.complaintSource}</span>}
                 </div>
 
                 <div className={s.roField}>
                   <label>Phone No.</label>
-                  <input type="tel" inputMode="numeric" maxLength={12} value={phone} onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 12))} className={s.roInput} placeholder="e.g. 9876543210" />
+                  <input ref={phoneRef} type="tel" inputMode="numeric" maxLength={10} value={phone} onChange={(e) => { setPhone(e.target.value.replace(/\D/g, "").slice(0, 10)); if (fieldErrors.phone) setFieldErrors(p => ({ ...p, phone: "" })); }} className={fieldErrors.phone ? s.roInputError : s.roInput} placeholder="e.g. 9876543210" />
+                  {fieldErrors.phone && <span className={s.fieldError}>{fieldErrors.phone}</span>}
                 </div>
                 
                 <div className={s.roField}>
                   <label>Date *</label>
-                  <input type="date" required max={todayDate} value={date} onChange={(e) => setDate(e.target.value)} className={s.roInput} />
+                  <input ref={dateRef} type="date" required max={todayDate} value={date} onChange={(e) => { setDate(e.target.value); if (fieldErrors.date) setFieldErrors(p => ({ ...p, date: "" })); }} className={fieldErrors.date ? s.roInputError : s.roInput} />
+                  {fieldErrors.date && <span className={s.fieldError}>{fieldErrors.date}</span>}
                 </div>
                 
                 <div className={s.roField}>
                   <label>Assigned To</label>
-                  <input type="text" maxLength={100} value={assigned} onChange={(e) => setAssigned(e.target.value)} className={s.roInput} placeholder="e.g. Mr. Sharma" />
+                  <input ref={assignedRef} type="text" maxLength={100} value={assigned} onChange={(e) => { setAssigned(e.target.value); if (fieldErrors.assignedTo) setFieldErrors(p => ({ ...p, assignedTo: "" })); }} className={fieldErrors.assignedTo ? s.roInputError : s.roInput} placeholder="e.g. Mr. Sharma" />
+                  {fieldErrors.assignedTo && <span className={s.fieldError}>{fieldErrors.assignedTo}</span>}
                 </div>
 
                 <div className={s.roField} style={{ gridColumn: "1 / -1" }}>
                   <label>Action Taken</label>
-                  <input type="text" maxLength={500} value={actionTaken} onChange={(e) => setActionTaken(e.target.value)} className={s.roInput} placeholder="e.g. Called parent for discussion" />
+                  <input ref={actionTakenRef} type="text" maxLength={500} value={actionTaken} onChange={(e) => { 
+                    const val = e.target.value; 
+                    setActionTaken(val); 
+                    const result = validateMeaningfulText(val, "Action Taken");
+                    if (!result.valid && val.trim()) {
+                      setFieldErrors(p => ({ ...p, actionTaken: result.error || "" }));
+                    } else {
+                      setFieldErrors(p => ({ ...p, actionTaken: "" }));
+                    }
+                  }} className={fieldErrors.actionTaken ? s.roInputError : s.roInput} placeholder="e.g. Called parent for discussion" />
+                  {fieldErrors.actionTaken && <span className={s.fieldError}>{fieldErrors.actionTaken}</span>}
                 </div>
 
                 <div className={s.roField} style={{ gridColumn: "1 / -1" }}>
                   <label>Description</label>
-                  <input type="text" maxLength={2000} value={description} onChange={(e) => setDescription(e.target.value)} className={s.roInput} placeholder="e.g. Parent reported broken fence near playground" />
+                  <input ref={descriptionRef} type="text" maxLength={2000} value={description} onChange={(e) => { 
+                    const val = e.target.value; 
+                    setDescription(val); 
+                    const result = validateMeaningfulText(val, "Description");
+                    if (!result.valid && val.trim()) {
+                      setFieldErrors(p => ({ ...p, description: result.error || "" }));
+                    } else {
+                      setFieldErrors(p => ({ ...p, description: "" }));
+                    }
+                  }} className={fieldErrors.description ? s.roInputError : s.roInput} placeholder="e.g. Parent reported broken fence near playground" />
+                  {fieldErrors.description && <span className={s.fieldError}>{fieldErrors.description}</span>}
                 </div>
 
                 <div className={s.roField}>
                   <label>Attachment</label>
-                  <input type="file" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx" onChange={(e) => setFileUpload(e.target.files?.[0] ?? null)} className={s.roInput} style={{ padding: "4px 8px" }} />
+                  <input ref={attachmentRef} type="file" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx" onChange={(e) => { setFileUpload(e.target.files?.[0] ?? null); if (fieldErrors.attachment) setFieldErrors(p => ({ ...p, attachment: "" })); }} className={fieldErrors.attachment ? s.roInputError : s.roInput} style={{ padding: "4px 8px" }} />
+                  {fieldErrors.attachment && <span className={s.fieldError}>{fieldErrors.attachment}</span>}
                 </div>
                 
               </div>
