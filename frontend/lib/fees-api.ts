@@ -153,11 +153,12 @@ export type FeeSchedule = {
 
 export type ConcessionRule = {
   id: number;
-  academic_year: number;
+  academic_year?: number;
+  academic_year_name?: string;
   name: string;
-  applies_to: string;
-  discount_percentage: string;
-  status: "Active" | "Inactive" | "active" | "inactive";
+  applies_to?: string;
+  discount_percentage?: string;
+  status?: string; // "Active" | "Inactive"
   created_at?: string;
   updated_at?: string;
   created_by?: number;
@@ -165,12 +166,13 @@ export type ConcessionRule = {
 
 export type LateFeeRule = {
   id: number;
-  academic_year: number;
+  academic_year?: number;
+  academic_year_name?: string;
   name: string;
-  grace_period_days: number;
-  penalty_rule: string;
+  grace_period_days?: number;
+  penalty_rule?: string;
   cap_amount?: string | null;
-  status: "Active" | "Inactive" | "active" | "inactive";
+  status?: string; // "Active" | "Inactive"
   created_at?: string;
   updated_at?: string;
   created_by?: number;
@@ -184,13 +186,15 @@ export type SearchParams = {
   sort_by?: string;
 };
 
-export function listData<T>(payload: ApiList<T>): T[] {
-  return Array.isArray(payload) ? payload : payload.results || [];
+export function listData<T = any>(payload: any): T[] {
+  if (Array.isArray(payload)) return payload;
+  if (payload?.results && Array.isArray(payload.results)) return payload.results;
+  if (payload?.data && Array.isArray(payload.data)) return payload.data;
+  return [];
 }
 
 export const feesApi = {
-  listGroups: (params?: SearchParams) =>
-    apiRequestWithRefresh<PaginatedApiList<FeesGroup> | ApiList<FeesGroup>>(`/api/v1/fees/groups/${buildSearchQuery(params)}`),
+  listGroups: () => apiRequestWithRefresh<ApiList<FeesGroup>>("/api/v1/fees/groups/"),
   createGroup: (payload: Partial<FeesGroup>) =>
     apiRequestWithRefresh<FeesGroup>("/api/v1/fees/groups/", {
       method: "POST",
@@ -230,17 +234,7 @@ export const feesApi = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  listAssignments: (params?: SearchParams & { academic_year?: number }) => {
-    const qs = new URLSearchParams();
-    if (params?.page) qs.set("page", String(params.page));
-    if (params?.page_size) qs.set("page_size", String(params.page_size));
-    if (params?.search) qs.set("search", params.search);
-    if (params?.status) qs.set("status", params.status);
-    if (params?.sort_by) qs.set("sort_by", params.sort_by);
-    if (params?.academic_year) qs.set("academic_year", String(params.academic_year));
-    const query = qs.toString();
-    return apiRequestWithRefresh<PaginatedApiList<FeesAssignment> | ApiList<FeesAssignment>>(`/api/v1/fees/assignments/${query ? `?${query}` : ""}`);
-  },
+  listAssignments: () => apiRequestWithRefresh<ApiList<FeesAssignment>>("/api/v1/fees/assignments/"),
   createAssignment: (payload: Partial<FeesAssignment>) =>
     apiRequestWithRefresh<FeesAssignment>("/api/v1/fees/assignments/", {
       method: "POST",
@@ -368,14 +362,5 @@ export const feesApi = {
 
   listAcademicYears: () => apiRequestWithRefresh<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
   listClasses: () => apiRequestWithRefresh<ApiList<SchoolClass>>("/api/v1/core/classes/?page_size=100"),
-  listStudents: (params?: SearchParams & { is_active?: boolean; class?: number }) => {
-    const qs = new URLSearchParams();
-    if (params?.page) qs.set("page", String(params.page));
-    if (params?.page_size) qs.set("page_size", String(params.page_size));
-    if (params?.search) qs.set("search", params.search);
-    if (params?.is_active !== undefined) qs.set("is_active", params.is_active ? "true" : "false");
-    if (params?.class) qs.set("class", String(params.class));
-    const query = qs.toString();
-    return apiRequestWithRefresh<PaginatedApiList<StudentRow> | ApiList<StudentRow>>(`/api/v1/students/students/${query ? `?${query}` : ""}`);
-  },
+  listStudents: () => apiRequestWithRefresh<ApiList<StudentRow>>("/api/v1/students/students/"),
 };

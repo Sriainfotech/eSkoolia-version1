@@ -1,6 +1,5 @@
 "use client";
-import { useState, useMemo, useEffect } from "react";
-import { feesApi, listData } from "@/lib/fees-api";
+import { useState, useMemo } from "react";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type Category  = "Day Scholar" | "Transport Users" | "Full Boarder" | "Unassigned";
@@ -13,12 +12,38 @@ interface FeeRow { type: string; schedule: Schedule; howPaid: string; annual: nu
 interface Override { group: string; annual: number; }
 
 // ── Fee data ───────────────────────────────────────────────────────────────────
+const ANNUAL_FEE: Record<Category, number | null> = {
+  "Day Scholar": 52900, "Transport Users": 44500, "Full Boarder": 78000, Unassigned: null,
+};
 
+const FEE_SCHEDULES: Record<string, FeeRow[]> = {
+  "Day Scholar": [
+    { type: "Tuition Fee",        schedule: "Term-wise", howPaid: "3 terms · ₹12,000/term", annual: 36000 },
+    { type: "Admission Fee",      schedule: "Custom",    howPaid: "1 installment",           annual: 5000  },
+    { type: "Caution Deposit",    schedule: "Custom",    howPaid: "1 installment",           annual: 2000  },
+    { type: "Administrative Fee", schedule: "Term-wise", howPaid: "3 terms · ₹1,500/term",  annual: 4500  },
+    { type: "Lab Fee",            schedule: "Term-wise", howPaid: "3 terms · ₹800/term",    annual: 2400  },
+    { type: "Building Fund",      schedule: "Custom",    howPaid: "2 installments",          annual: 3000  },
+  ],
+  "Transport Users": [
+    { type: "Tuition Fee",     schedule: "Term-wise", howPaid: "3 terms · ₹12,000/term", annual: 36000 },
+    { type: "Transport Fee",   schedule: "Monthly",   howPaid: "₹700/month × 12",         annual: 8400  },
+    { type: "Caution Deposit", schedule: "Custom",    howPaid: "1 installment",            annual: 100   },
+  ],
+  "Full Boarder": [
+    { type: "Tuition Fee", schedule: "Term-wise", howPaid: "3 terms · ₹14,000/term", annual: 42000 },
+    { type: "Hostel Fee",  schedule: "Term-wise", howPaid: "3 terms · ₹12,000/term", annual: 36000 },
+  ],
+};
 
-
-
-
-
+const CONCESSIONS    = ["None", "Staff Ward 50%", "Merit 25%", "Need-Based Full", "Sibling 10%"];
+const PAYMENT_PLANS  = [
+  { id: "2-term",   label: "2-Term Plan",   desc: "Two equal instalments per year"     },
+  { id: "3-term",   label: "3-Term Plan",   desc: "Three equal instalments per year"   },
+  { id: "4-term",   label: "4-Term Plan",   desc: "Four equal instalments per year"    },
+  { id: "monthly",  label: "Monthly Plan",  desc: "12 equal monthly payments"          },
+  { id: "custom",   label: "Custom Plan",   desc: "Admin-defined irregular schedule"   },
+];
 const INFO_STEPS = [
   { n: 1, title: "Select a fee group",    body: "e.g. Day Scholar, Full Boarder. This determines which fee types apply." },
   { n: 2, title: "Choose an instalment plan", body: "term-wise, monthly, or a custom split. This controls when payments are due." },
@@ -34,14 +59,32 @@ const SCHEDULE_BADGE: Record<Schedule, { bg: string; color: string; border: stri
 };
 
 // ── Mock students ──────────────────────────────────────────────────────────────
-
-
-
 const AVATAR_COLORS = ["#6D4AFF","#0E7490","#16a34a","#d97706","#dc2626","#7C3AED","#0284c7","#9333ea","#ca8a04","#059669"];
 function avatarBg(name: string) { let h=0; for(const c of name) h=(h*31+c.charCodeAt(0))>>>0; return AVATAR_COLORS[h%AVATAR_COLORS.length]; }
 function initials(name: string) { const p=name.trim().split(" "); return (p[0][0]+(p[1]?.[0]??"")).toUpperCase(); }
 function fmtRs(n: number)  { return "Rs. "+n.toLocaleString("en-IN"); }
 function fmtInr(n: number) { return "₹"+n.toLocaleString("en-IN"); }
+
+function mkStudents(firstNames: string[], lastName: string, admPrefix: string, unassignedIdx: number[], planAgreedIdx: number[]): Student[] {
+  const uSet=new Set(unassignedIdx), pSet=new Set(planAgreedIdx);
+  const cats: Category[]=["Day Scholar","Transport Users","Full Boarder"]; let ci=0;
+  return firstNames.map((fn,i)=>({
+    id:`${admPrefix}${String(i+1).padStart(3,"0")}`,
+    name:`${fn} ${lastName}`,
+    admNo:`ADM-${admPrefix}${String(i+1).padStart(2,"0")}`,
+    category: uSet.has(i)?"Unassigned":cats[ci++%3],
+    planAgreed: pSet.has(i),
+  }));
+}
+
+const CLASS_DATA: ClassSection[] = [
+  { id:"6a",  name:"Class 6A",  students: mkStudents(["Aarav","Aditi","Vivaan","Ananya","Kabir","Ishaan","Meera","Diya","Riya","Arjun","Saanvi","Neel","Tara","Vihaan","Avni","Reyansh","Mira","Aryan","Nisha","Devika","Ira","Om","Sara","Yash","Ayaan","Anika","Kavya","Rohan"],"Sharma","01",[0,7,14,21],[0,1]) },
+  { id:"7b",  name:"Class 7B",  students: mkStudents(["Priya","Rahul","Aditya","Pooja","Sanya","Raj","Suresh","Lakshmi","Vikram","Neha","Divya","Karan","Anjali","Nikhil","Mohit","Shilpa","Sanjay","Deepa","Akash","Sweta","Gaurav","Kavitha","Rajesh","Meena","Sunil","Geeta","Ramesh","Savita","Harish","Padma","Vinay"],"Verma","02",[2,8,16,22,28],[3,5,10]) },
+  { id:"8a",  name:"Class 8A",  students: mkStudents(["Aman","Bhavna","Chetan","Devika","Esha","Faiz","Geetika","Hari","Indira","Jatin","Komal","Laxman","Manya","Nakul","Ojas","Pari","Rajan","Smita","Tanvi","Ujjwal","Vansh","Wasim","Yuvraj","Zara","Arpit","Bhanu"],"Patel","03",[1,8,15,22],[0,4,11]) },
+  { id:"9a",  name:"Class 9A",  students: mkStudents(["Chirag","Disha","Elan","Fatima","Gaurav","Hina","Ishan","Jyoti","Krishna","Leela","Mukesh","Nandini","Omkar","Pallavi","Rohini","Shruti","Tushar","Uma","Vedant","Waqar","Yamini","Zaid","Aashi","Bhavin","Charu","Dhanush","Ekta","Fahad","Harini"],"Kumar","04",[3,9,18,25],[2,7,14]) },
+  { id:"10b", name:"Class 10B", students: mkStudents(["Ila","Jai","Kohinoor","Lavanya","Madhav","Nalini","Onkar","Preeti","Rishabh","Santosh","Tanuj","Usha","Varun","Waseem","Yash","Zubin","Abhi","Bhumi","Chandan","Devyani","Nishant","Pranav","Sanjana","Tejal"],"Singh","05",[4,12,20],[1,6,13]) },
+];
+const TOTAL_STUDENTS = CLASS_DATA.reduce((s,c)=>s+c.students.length,0);
 
 // ── Style helpers ──────────────────────────────────────────────────────────────
 function primaryBtn(small=false): React.CSSProperties {
@@ -84,12 +127,11 @@ function ModalFooter({ children }: { children:React.ReactNode }) {
 }
 
 // ── Fee schedule table (shared by Assign + Edit modals) ────────────────────────
-function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange, feeSchedules, concessions }: {
+function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange }: {
   group:string; concession:string;
   onGroupChange:(g:string)=>void; onConcessionChange:(c:string)=>void;
-  feeSchedules: Record<string, any[]>; concessions: string[];
 }) {
-  const rows  = feeSchedules[group] ?? [];
+  const rows  = FEE_SCHEDULES[group] ?? [];
   const total = rows.reduce((s,r)=>s+r.annual,0);
   return (
     <div style={{ padding:"14px 20px" }}>
@@ -103,7 +145,7 @@ function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange
         <div>
           <div style={{ fontSize:10, fontWeight:700, letterSpacing:"0.07em", color:"#A0A3B8", marginBottom:6 }}>CONCESSION</div>
           <select value={concession} onChange={e=>onConcessionChange(e.target.value)} style={{ width:"100%", height:36, border:"1px solid #E8E8EE", borderRadius:8, padding:"0 10px", fontSize:12.5, background:"#fff", cursor:"pointer" }}>
-            {concessions.map(c=><option key={c}>{c}</option>)}
+            {CONCESSIONS.map(c=><option key={c}>{c}</option>)}
           </select>
         </div>
       </div>
@@ -117,8 +159,8 @@ function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange
             <div key={h} style={{ fontSize:10, fontWeight:600, color:"#A0A3B8" }}>{h}</div>
           ))}
         </div>
-        {rows.map((row: any, i: number)=>{
-          const b=SCHEDULE_BADGE[row.schedule as keyof typeof SCHEDULE_BADGE] || { bg: "#fff", color: "#000", border: "#ccc" };
+        {rows.map((row,i)=>{
+          const b=SCHEDULE_BADGE[row.schedule];
           return (
             <div key={row.type} style={{ display:"grid", gridTemplateColumns:"1.6fr 1fr 1.4fr auto", padding:"10px 14px", alignItems:"center", borderBottom:i<rows.length-1?"1px solid #F0F0F0":"none", background:"#fff" }}>
               <div style={{ fontSize:12.5, color:"#181B2A" }}>{row.type}</div>
@@ -142,108 +184,6 @@ function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function FeesAssignmentPanel() {
-  const [students, setStudents] = useState<any[]>([]);
-  const [classes, setClasses] = useState<any[]>([]);
-  const [assignments, setAssignments] = useState<any[]>([]);
-  const [groups, setGroups] = useState<any[]>([]);
-  const [schedules, setSchedules] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const fetchDynamicData = async () => {
-    setLoading(true);
-    try {
-      const [stRes, clRes, asgnRes, grpRes, schRes] = await Promise.all([
-        feesApi.listStudents(),
-        feesApi.listClasses(),
-        feesApi.listAssignments(),
-        feesApi.listGroups(),
-        feesApi.listSchedules()
-      ]);
-      setStudents(listData(stRes));
-      setClasses(listData(clRes));
-      setAssignments(listData(asgnRes));
-      setGroups(listData(grpRes));
-      setSchedules(listData(schRes));
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchDynamicData();
-  }, []);
-
-  const PAYMENT_PLANS = [
-    { id: "2-term",   label: "2-Term Plan",   desc: "Two equal instalments per year"     },
-    { id: "3-term",   label: "3-Term Plan",   desc: "Three equal instalments per year"   },
-    { id: "4-term",   label: "4-Term Plan",   desc: "Four equal instalments per year"    },
-    { id: "monthly",  label: "Monthly Plan",  desc: "12 equal monthly payments"          },
-    { id: "custom",   label: "Custom Plan",   desc: "Admin-defined irregular schedule"   },
-  ];
-
-  const FEE_SCHEDULES = useMemo(() => {
-    const map: Record<string, FeeRow[]> = {};
-    groups.forEach(g => {
-      const gScheds = schedules.filter(s => s.fee_group === g.id);
-      map[g.name] = gScheds.map(s => ({
-        type: typeof s.fee_type === "object" && s.fee_type !== null ? s.fee_type.name : "Fee",
-        schedule: s.collection_frequency || "Term-wise",
-        howPaid: "From config",
-        annual: parseFloat(s.amount || "0")
-      }));
-    });
-    return map;
-  }, [groups, schedules]);
-
-  const ANNUAL_FEE = useMemo(() => {
-    const map: Record<string, number | null> = { Unassigned: null };
-    groups.forEach(g => {
-      map[g.name] = (FEE_SCHEDULES[g.name] || []).reduce((s, r) => s + r.annual, 0);
-    });
-    return map;
-  }, [FEE_SCHEDULES, groups]);
-
-  const CONCESSIONS = ["None", "Staff Ward 50%", "Merit 25%", "Need-Based Full", "Sibling 10%"];
-
-  const CLASS_DATA = useMemo(() => {
-    const classMap = new Map<string, ClassSection>();
-    classes.forEach(c => classMap.set(c.id.toString(), { id: c.id.toString(), name: c.name, students: [] }));
-    
-    students.forEach(st => {
-      const clsId = st.current_class?.toString() || "unassigned";
-      if (!classMap.has(clsId)) {
-        classMap.set(clsId, { id: clsId, name: st.current_class_name || "Unassigned", students: [] });
-      }
-      
-      const stAsgns = assignments.filter(a => a.student === st.id);
-      const isAssigned = stAsgns.length > 0;
-      let cat = "Unassigned";
-      if (isAssigned) {
-         const asgn = stAsgns[0];
-         const sched = schedules.find(s => s.fee_type === asgn.fees_type || (s.fee_type && s.fee_type.id === asgn.fees_type));
-         if (sched) {
-            const grp = groups.find(g => g.id === sched.fee_group);
-            if (grp) cat = grp.name;
-         } else {
-            cat = "Assigned";
-         }
-      }
-      
-      classMap.get(clsId)!.students.push({
-        id: st.id.toString(),
-        name: `${st.first_name || ""} ${st.last_name || ""}`.trim(),
-        admNo: st.admission_no || `ID-${st.id}`,
-        category: cat as any,
-        planAgreed: isAssigned
-      });
-    });
-    return Array.from(classMap.values()).filter(c => c.students.length > 0);
-  }, [classes, students, assignments, groups, schedules]);
-
-  const TOTAL_STUDENTS = CLASS_DATA.reduce((s, c) => s + c.students.length, 0);
-
   // Filters
   const [search, setSearch]           = useState("");
   const [yearFilter, setYearFilter]   = useState("2025-26");
@@ -535,7 +475,6 @@ export default function FeesAssignmentPanel() {
           <FeeScheduleTable
             group={modalGroup} concession={modalConcession}
             onGroupChange={setModalGroup} onConcessionChange={setModalConcession}
-            feeSchedules={FEE_SCHEDULES} concessions={CONCESSIONS}
           />
           <ModalFooter>
             <button style={{...outlineBtn(),minWidth:90}} onClick={()=>setAssignModal(null)}>Cancel</button>
