@@ -117,6 +117,7 @@ export function usePermissions() {
   function can(code: string): boolean {
     if (!me) return false; // deny while loading — show loading state, not content
     if (me.is_superuser) return true;
+    if (me.is_school_admin) return true; // school admins have access to all modules
     const codes = me.permission_codes;
     return codes.includes('*') || codes.includes(code);
   }
@@ -124,6 +125,7 @@ export function usePermissions() {
   function canAnyPrefix(prefix: string): boolean {
     if (!me) return false;
     if (me.is_superuser) return true;
+    if (me.is_school_admin) return true; // school admins have access to all modules
     const codes = me.permission_codes;
     return codes.some((c) => c === '*' || c.startsWith(`${prefix}.`));
   }

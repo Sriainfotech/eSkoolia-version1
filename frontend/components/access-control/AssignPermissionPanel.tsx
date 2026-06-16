@@ -219,11 +219,21 @@ function ModuleList(props: ModuleListProps) {
             <input type="text" placeholder="Role name *" value={newRoleName}
               onChange={(e) => onNewRoleNameChange(e.target.value.replace(/[^A-Za-z ]/g, ""))}
               style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1.5px solid #D8D4FF", fontSize: "13px", marginBottom: "6px", boxSizing: "border-box", outline: "none" }} />
-            <input type="text" placeholder="Description (optional)" value={newRoleDesc} onChange={(e) => onNewRoleDescChange(e.target.value)}
-              style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1.5px solid #D8D4FF", fontSize: "13px", marginBottom: "8px", boxSizing: "border-box", outline: "none" }} />
+            <select value={newRoleDesc} onChange={(e) => onNewRoleDescChange(e.target.value)}
+              style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1.5px solid #D8D4FF", fontSize: "13px", marginBottom: "8px", boxSizing: "border-box", outline: "none", background: "#fff", cursor: "pointer" }}>
+              <option value="admin">Admin Console</option>
+              <option value="teacher">Teacher Portal</option>
+              <option value="parent">Parent Portal</option>
+              <option value="student">Student Portal</option>
+              <option value="custom">Custom</option>
+            </select>
             <div style={{ display: "flex", gap: "6px" }}>
-              <button type="button" onClick={() => { onNewRoleNameChange(""); onNewRoleDescChange(""); onToggleNewRoleForm(); }}>Cancel</button>
-              <button type="button" onClick={onCreateRole} disabled={!newRoleName.trim() || creatingRole}>{creatingRole ? "Creating…" : "Create & Configure"}</button>
+              <button type="button" onClick={() => { onNewRoleNameChange(""); onNewRoleDescChange("admin"); onToggleNewRoleForm(); }}
+                style={{ flex: 1, padding: "6px", borderRadius: "6px", border: "1px solid #D8D4FF", background: "#fff", color: "#5B5E72", fontSize: "12px", cursor: "pointer" }}>Cancel</button>
+              <button type="button" onClick={onCreateRole} disabled={!newRoleName.trim() || creatingRole}
+                style={{ flex: 2, padding: "6px", borderRadius: "6px", border: "none", background: !newRoleName.trim() || creatingRole ? "#C4BBFF" : "#6D4AFF", color: "#fff", fontSize: "12px", fontWeight: 600, cursor: !newRoleName.trim() || creatingRole ? "not-allowed" : "pointer" }}>
+                {creatingRole ? "Creating…" : "Create & Configure"}
+              </button>
             </div>
           </div>
         )}
@@ -656,7 +666,8 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
   const [showRoleSwitcher, setShowRoleSwitcher] = useState(false);
   const [showNewRoleForm, setShowNewRoleForm] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
-  const [newRoleDesc, setNewRoleDesc] = useState("");
+  // reused as portal_type selector (description field does not exist on backend Role model)
+  const [newRoleDesc, setNewRoleDesc] = useState("admin");
   const [newRoleNameError, setNewRoleNameError] = useState("");
   const [creatingRole, setCreatingRole] = useState(false);
 
@@ -688,7 +699,10 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
 
   // ── Load permission tree ────────────────────────────────────────────────────
   useEffect(() => {
-    if (!activeRoleId && activeRoleId !== 0) return;
+    if (!activeRoleId && activeRoleId !== 0) {
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -762,14 +776,14 @@ export default function AssignPermissionPanel({ roleId, onBack }: AssignPermissi
     setNewRoleNameError("");
     setCreatingRole(true);
     try {
-      const res = await apiRequestWithRefresh<{ id: number; name: string; data?: { id: number; name: string } }>(
+      const res = await apiRequestWithRefresh<{ id: number; name: string; portal_type?: string; data?: { id: number; name: string; portal_type?: string } }>(
         "/api/v1/access-control/roles/",
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed, description: newRoleDesc.trim() }) }
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: trimmed, portal_type: newRoleDesc || "admin" }) }
       );
       const newRole = (res as { data?: { id: number; name: string } }).data ?? (res as { id: number; name: string });
       setAllRoles((prev) => [...prev, newRole]);
       setNewRoleName("");
-      setNewRoleDesc("");
+      setNewRoleDesc("admin");
       setNewRoleNameError("");
       setShowNewRoleForm(false);
       setToast({ message: `Role "${newRole.name}" created successfully.`, tone: "success" });
