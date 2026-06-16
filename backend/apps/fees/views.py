@@ -6,8 +6,8 @@ from rest_framework import status, permissions
 from decimal import Decimal
 from django.utils import timezone
 
-from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule
-from .serializers import FeesGroupSerializer, FeesTypeSerializer, FeeAssignmentSerializer, PaymentSerializer, TermSettingsSerializer, FeeScheduleSerializer
+from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule
+from .serializers import FeesGroupSerializer, FeesTypeSerializer, FeeAssignmentSerializer, PaymentSerializer, TermSettingsSerializer, FeeScheduleSerializer, ConcessionRuleSerializer, LateFeeRuleSerializer
 from .services import FeeService, FeeServiceError
 from config.pagination import ApiPageNumberPagination
 from apps.core.models import AcademicYear
@@ -62,15 +62,48 @@ class FeesGroupDetailAPIView(BaseFeeAPIView):
 
     def delete(self, request, pk):
         group = self.get_object(pk, request.user)
-        group.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        from django.db import transaction, IntegrityError
+        from django.db.models import ProtectedError
+        try:
+            with transaction.atomic():
+                group.schedules.all().delete()
+                group.fee_types.all().delete()
+                group.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except Exception as e:
+            return Response(
+                {"message": f"Cannot delete: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 # --- FeesType Views (similar pattern) ---
 
 class FeesTypeListCreateAPIView(BaseFeeAPIView):
     def get(self, request):
-        types = FeesType.objects.filter(academic_year__school=request.user.school)
-        return self.get_paginated_response(types, FeesTypeSerializer, request)
+        queryset = FeesType.objects.filter(academic_year__school=request.user.school)
+
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(Q(name__icontains=search) | Q(gl_code__icontains=search))
+
+        status_filter = (request.query_params.get("status") or "").strip().lower()
+        if status_filter in {"active", "inactive"}:
+            queryset = queryset.filter(status=status_filter)
+
+        sort_by = (request.query_params.get("sort_by") or "name").strip().lower()
+        sort_dir = (request.query_params.get("sort_dir") or "asc").strip().lower()
+        sort_map = {
+            "name": "name",
+            "gl_code": "gl_code",
+            "status": "status",
+            "created_date": "created_at",
+            "updated_date": "updated_at",
+        }
+        order_field = sort_map.get(sort_by, "name")
+        prefix = "-" if sort_dir == "desc" else ""
+        queryset = queryset.order_by(f"{prefix}{order_field}", "id")
+
+        return self.get_paginated_response(queryset, FeesTypeSerializer, request)
 
     def post(self, request):
         serializer = FeesTypeSerializer(data=request.data)
@@ -98,8 +131,18 @@ class FeesTypeDetailAPIView(BaseFeeAPIView):
 
     def delete(self, request, pk):
         fee_type = self.get_object(pk, request.user)
-        fee_type.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        from django.db import transaction, IntegrityError
+        from django.db.models import ProtectedError
+        try:
+            with transaction.atomic():
+                fee_type.schedules.all().delete()
+                fee_type.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except (ProtectedError, IntegrityError):
+            return Response(
+                {"message": "Cannot delete this fee type because it has active fee assignments or payments."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 # --- FeeAssignment Views ---
 
@@ -533,5 +576,115 @@ class FeeScheduleDetailAPIView(BaseFeeAPIView):
         schedule.deleted_by = request.user
         schedule.deleted_at = timezone.now()
         schedule.save(update_fields=["is_deleted", "status", "deleted_by", "deleted_at", "updated_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+# --- Concession Rule Views ---
+
+class ConcessionRuleListCreateAPIView(BaseFeeAPIView):
+    def get(self, request):
+        queryset = ConcessionRule.objects.filter(academic_year__school=request.user.school, is_deleted=False)
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(Q(name__icontains=search) | Q(applies_to__icontains=search))
+        status_filter = (request.query_params.get("status") or "").strip().lower()
+        if status_filter in {"active", "inactive"}:
+            queryset = queryset.filter(status=status_filter)
+        queryset = queryset.order_by("name", "id")
+        return self.get_paginated_response(queryset, ConcessionRuleSerializer, request)
+
+    def post(self, request):
+        from django.db import IntegrityError
+        serializer = ConcessionRuleSerializer(data=request.data, context={"request": request})
+        if serializer.is_valid():
+            try:
+                serializer.save(created_by=request.user)
+            except IntegrityError:
+                return Response(
+                    {"success": False, "message": "Validation failed.", "errors": {"name": ["A rule with this name already exists for the academic year."]}},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(
+            {"success": False, "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+class ConcessionRuleDetailAPIView(BaseFeeAPIView):
+    def get_object(self, pk, user):
+        return get_object_or_404(ConcessionRule, pk=pk, academic_year__school=user.school, is_deleted=False)
+
+    def get(self, request, pk):
+        rule = self.get_object(pk, request.user)
+        return Response(ConcessionRuleSerializer(rule).data)
+
+    def patch(self, request, pk):
+        rule = self.get_object(pk, request.user)
+        serializer = ConcessionRuleSerializer(rule, data=request.data, partial=True, context={"request": request})
+        if serializer.is_valid():
+            serializer.save(updated_by=request.user)
+            return Response(serializer.data)
+        return Response(
+            {"success": False, "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def delete(self, request, pk):
+        rule = self.get_object(pk, request.user)
+        rule.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+# --- Late Fee Rule Views ---
+
+class LateFeeRuleListCreateAPIView(BaseFeeAPIView):
+    def get(self, request):
+        queryset = LateFeeRule.objects.filter(academic_year__school=request.user.school, is_deleted=False)
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(Q(name__icontains=search) | Q(penalty_rule__icontains=search))
+        status_filter = (request.query_params.get("status") or "").strip().lower()
+        if status_filter in {"active", "inactive"}:
+            queryset = queryset.filter(status=status_filter)
+        queryset = queryset.order_by("name", "id")
+        return self.get_paginated_response(queryset, LateFeeRuleSerializer, request)
+
+    def post(self, request):
+        from django.db import IntegrityError
+        serializer = LateFeeRuleSerializer(data=request.data, context={"request": request})
+        if serializer.is_valid():
+            try:
+                serializer.save(created_by=request.user)
+            except IntegrityError:
+                return Response(
+                    {"success": False, "message": "Validation failed.", "errors": {"name": ["A rule with this name already exists for the academic year."]}},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(
+            {"success": False, "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+class LateFeeRuleDetailAPIView(BaseFeeAPIView):
+    def get_object(self, pk, user):
+        return get_object_or_404(LateFeeRule, pk=pk, academic_year__school=user.school, is_deleted=False)
+
+    def get(self, request, pk):
+        rule = self.get_object(pk, request.user)
+        return Response(LateFeeRuleSerializer(rule).data)
+
+    def patch(self, request, pk):
+        rule = self.get_object(pk, request.user)
+        serializer = LateFeeRuleSerializer(rule, data=request.data, partial=True, context={"request": request})
+        if serializer.is_valid():
+            serializer.save(updated_by=request.user)
+            return Response(serializer.data)
+        return Response(
+            {"success": False, "message": "Validation failed.", "errors": serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    def delete(self, request, pk):
+        rule = self.get_object(pk, request.user)
+        rule.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 

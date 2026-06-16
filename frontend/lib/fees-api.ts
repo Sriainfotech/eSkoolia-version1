@@ -151,6 +151,33 @@ export type FeeSchedule = {
   updated_by?: number;
 };
 
+export type ConcessionRule = {
+  id: number;
+  academic_year?: number;
+  academic_year_name?: string;
+  name: string;
+  applies_to?: string;
+  discount_percentage?: string;
+  status?: string; // "Active" | "Inactive"
+  created_at?: string;
+  updated_at?: string;
+  created_by?: number;
+};
+
+export type LateFeeRule = {
+  id: number;
+  academic_year?: number;
+  academic_year_name?: string;
+  name: string;
+  grace_period_days?: number;
+  penalty_rule?: string;
+  cap_amount?: string | null;
+  status?: string; // "Active" | "Inactive"
+  created_at?: string;
+  updated_at?: string;
+  created_by?: number;
+};
+
 export type SearchParams = {
   page?: number;
   page_size?: number;
@@ -159,8 +186,11 @@ export type SearchParams = {
   sort_by?: string;
 };
 
-export function listData<T>(payload: ApiList<T>): T[] {
-  return Array.isArray(payload) ? payload : payload.results || [];
+export function listData<T = any>(payload: any): T[] {
+  if (Array.isArray(payload)) return payload;
+  if (payload?.results && Array.isArray(payload.results)) return payload.results;
+  if (payload?.data && Array.isArray(payload.data)) return payload.data;
+  return [];
 }
 
 export const feesApi = {
@@ -286,6 +316,46 @@ export const feesApi = {
     }),
   deleteSchedule: (id: number) =>
     apiRequestWithRefresh<void>(`/api/v1/fees/schedules/${id}/`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+    }),
+
+  listConcessionRules: (params?: SearchParams) =>
+    apiRequestWithRefresh<PaginatedApiList<ConcessionRule> | ApiList<ConcessionRule>>(`/api/v1/fees/concession-rules/${buildSearchQuery(params)}`),
+  createConcessionRule: (payload: Partial<ConcessionRule>) =>
+    apiRequestWithRefresh<ConcessionRule>("/api/v1/fees/concession-rules/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  updateConcessionRule: (id: number, payload: Partial<ConcessionRule>) =>
+    apiRequestWithRefresh<ConcessionRule>(`/api/v1/fees/concession-rules/${id}/`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  deleteConcessionRule: (id: number) =>
+    apiRequestWithRefresh<void>(`/api/v1/fees/concession-rules/${id}/`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+    }),
+
+  listLateFeeRules: (params?: SearchParams) =>
+    apiRequestWithRefresh<PaginatedApiList<LateFeeRule> | ApiList<LateFeeRule>>(`/api/v1/fees/late-fee-rules/${buildSearchQuery(params)}`),
+  createLateFeeRule: (payload: Partial<LateFeeRule>) =>
+    apiRequestWithRefresh<LateFeeRule>("/api/v1/fees/late-fee-rules/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  updateLateFeeRule: (id: number, payload: Partial<LateFeeRule>) =>
+    apiRequestWithRefresh<LateFeeRule>(`/api/v1/fees/late-fee-rules/${id}/`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  deleteLateFeeRule: (id: number) =>
+    apiRequestWithRefresh<void>(`/api/v1/fees/late-fee-rules/${id}/`, {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
     }),

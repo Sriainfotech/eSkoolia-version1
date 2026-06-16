@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { feesApi, listData, type AcademicYear, type FeeTypeListParams, type FeesGroup, type FeesType, type SchoolClass, type TermSettings, type FeeSchedule, type SearchParams } from "@/lib/fees-api";
+import { feesApi, listData, type AcademicYear, type FeeTypeListParams, type FeesGroup, type FeesType, type SchoolClass, type TermSettings, type FeeSchedule, type SearchParams, type ConcessionRule, type LateFeeRule } from "@/lib/fees-api";
 import { sortAcademicsClasses } from "@/lib/classOrdering";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -46,6 +46,143 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "concession-rules", label: "Concession Rules" },
   { id: "late-fee-rules", label: "Late Fee Rules" },
 ];
+
+type HelpContent = {
+  whatIsThis: string;
+  whatNeedsToBeDone: string[];
+  howToSetUp: string[];
+  examples: { title: string; body: string }[];
+  suggestions: string[];
+};
+
+const HELP_CONTENT: Record<Tab, HelpContent> = {
+  "fee-groups": {
+    whatIsThis: "Fee Groups organise fee types into logical buckets such as Day Scholar, Transport, or Boarding. They let you apply and report fees by category and student segment.",
+    whatNeedsToBeDone: [
+      "Identify the broad fee categories your school charges.",
+      "Decide which classes each group applies to.",
+      "Keep names clear so staff and parents recognise them.",
+      "Deactivate groups you no longer use instead of deleting them.",
+    ],
+    howToSetUp: [
+      "Enter a group name, such as 'Day Scholar'.",
+      "Add a short description of who it covers.",
+      "Pick the applicable classes (optional).",
+      "Set the status to Active.",
+      "Click Add to save the group.",
+    ],
+    examples: [
+      { title: "Day Scholar", body: "Regular day students; tuition and development fees." },
+      { title: "Transport Users", body: "Students using the bus service; route-based fees." },
+      { title: "Full Boarder", body: "Residential students; boarding and meal fees." },
+    ],
+    suggestions: [
+      "Use a few clear groups rather than many overlapping ones.",
+      "Deactivate unused groups so historical data stays intact.",
+    ],
+  },
+  "fee-types": {
+    whatIsThis: "Fee Types are the individual chargeable items such as Tuition, Transport, or Lunch. Each belongs to a group and carries a GL code, tax flag, and default structure.",
+    whatNeedsToBeDone: [
+      "List every distinct charge the school raises.",
+      "Assign a unique GL code to each for accounting.",
+      "Mark whether the item is taxable.",
+      "Choose the default collection structure.",
+    ],
+    howToSetUp: [
+      "Select the fee group this item belongs to.",
+      "Enter the fee type name, e.g. 'Tuition Fee'.",
+      "Enter a GL code in the format 4001-TUITION.",
+      "Set taxable and the default structure.",
+      "Click Add to save the fee type.",
+    ],
+    examples: [
+      { title: "Tuition Fee", body: "GL 4001-TUITION, taxable No, term-wise." },
+      { title: "Transport Fee", body: "GL 3005-TRANSPORT, monthly collection." },
+      { title: "Lunch Fee", body: "GL 5002-LUNCH, monthly, optional." },
+    ],
+    suggestions: [
+      "Keep GL codes unique and consistent with your chart of accounts.",
+      "Use Inactive instead of deleting types that already have history.",
+    ],
+  },
+  "fee-schedules": {
+    whatIsThis: "Fee Schedules define how much a fee type costs and when it is collected — the amount, frequency, due dates, and any term-wise breakdown.",
+    whatNeedsToBeDone: [
+      "Pick the fee group and fee type to schedule.",
+      "Decide the collection frequency (term-wise, monthly, etc.).",
+      "Set amounts and due dates per term or period.",
+      "Decide whether a late fee applies.",
+    ],
+    howToSetUp: [
+      "Choose the fee group and fee type.",
+      "Select the collection frequency / structure.",
+      "Enter the amount and due date for each term.",
+      "Optionally enable a late fee and grace period.",
+      "Set the status and click Save.",
+    ],
+    examples: [
+      { title: "Tuition (Term-wise)", body: "3 terms × Rs. 5,000, due at each term start." },
+      { title: "Transport (Monthly)", body: "Rs. 1,200 per month, due on the 5th." },
+      { title: "Admission (One-time)", body: "Rs. 10,000, due once at enrolment." },
+    ],
+    suggestions: [
+      "Make sure term dates fall within the academic year range.",
+      "Keep total term amounts equal to the intended annual fee.",
+    ],
+  },
+  "concession-rules": {
+    whatIsThis: "Concession Rules define reusable discounts such as Staff Ward, Merit, or Sibling. They are referenced during fee assignment to reduce what a student owes.",
+    whatNeedsToBeDone: [
+      "Decide which discounts your school offers.",
+      "Define what each discount applies to.",
+      "Set the discount percentage.",
+      "Keep rules active or inactive as policy changes.",
+    ],
+    howToSetUp: [
+      "Enter a rule name, e.g. 'Staff Ward 50%'.",
+      "Enter what it applies to, e.g. 'Tuition Fee'.",
+      "Enter the discount percentage (0–100).",
+      "Set the status to Active.",
+      "Click Add to save the concession rule.",
+    ],
+    examples: [
+      { title: "Staff Ward", body: "50% off tuition for staff children." },
+      { title: "Merit", body: "25% off for top-ranked students." },
+      { title: "Sibling", body: "10% off for the second child onward." },
+    ],
+    suggestions: [
+      "Keep percentages sensible so net fees stay correct.",
+      "Deactivate a rule instead of deleting it when a scheme ends.",
+    ],
+  },
+  "late-fee-rules": {
+    whatIsThis: "Late Fee Rules calculate penalty after a fee crosses its due date and grace period. They should be clear enough to explain to parents.",
+    whatNeedsToBeDone: [
+      "Decide when a payment becomes late.",
+      "Choose how penalty should be calculated.",
+      "Set a maximum cap so the penalty stays reasonable.",
+      "Make sure the calculation can be explained on reminders and receipts.",
+    ],
+    howToSetUp: [
+      "Enter the grace period, such as 7 days after due date.",
+      "Choose the penalty method: daily, weekly, flat, or percentage.",
+      "Enter the penalty value, such as Rs. 50 per day.",
+      "Set a cap amount, such as Rs. 1,500.",
+      "Attach the rule to the relevant Fee Type.",
+      "Use the calculator preview to check the result before saving.",
+    ],
+    examples: [
+      { title: "Tuition", body: "7-day grace, Rs. 50 per day, capped at Rs. 1,500." },
+      { title: "Transport", body: "5-day grace, Rs. 100 weekly, capped at Rs. 800." },
+      { title: "Lunch", body: "Reminder only, no monetary penalty." },
+    ],
+    suggestions: [
+      "Avoid hidden penalties. Receipts and dues reminders should show how the late fee was calculated.",
+      "Use caps so old dues do not become unrealistic.",
+    ],
+  },
+};
 
 const DEFAULT_TERMS: TermConfig[] = [
   { name: "Term 1 (Apr–Jul)", startDate: "2026-04-01", endDate: "2026-07-31", dueDate: "2026-04-10" },
@@ -164,20 +301,6 @@ const FEE_GROUPS: FeeGroup[] = [
   },
 ];
 
-const CONCESSION_RULES = [
-  { id: "staff",   name: "Staff Ward 50%",   scope: "Tuition Fee only",  discount: "50%",  status: "Active" },
-  { id: "merit",   name: "Merit 25%",         scope: "Tuition + Dev Fund", discount: "25%", status: "Active" },
-  { id: "need",    name: "Need-Based Full",   scope: "All fee types",     discount: "100%", status: "Active" },
-  { id: "sibling", name: "Sibling 10%",       scope: "Tuition Fee only",  discount: "10%",  status: "Draft"  },
-];
-
-const LATE_FEE_RULES = [
-  { id: "lr1", name: "Tuition late rule",        grace: "7 days",  penalty: "Rs. 50 daily",   cap: "Rs. 1,500" },
-  { id: "lr2", name: "Transport weekly penalty", grace: "5 days",  penalty: "Rs. 200 / week", cap: "Rs. 800"   },
-  { id: "lr3", name: "Development fund grace",   grace: "10 days", penalty: "Rs. 100 daily",  cap: "Rs. 2,000" },
-  { id: "lr4", name: "Lunch fee reminder only",  grace: "3 days",  penalty: "None",           cap: "None"      },
-];
-
 const FEE_GROUPS_DATA = [
   { id: 1, name: "Day Scholar",        description: "Students attending regular day school",        students: "47 students", status: "Active" },
   { id: 2, name: "Transport Users",    description: "Students using school transport service",       students: "31 students", status: "Active" },
@@ -282,6 +405,7 @@ export default function FeeConfigurationPanel() {
   const [isLoadingGroups, setIsLoadingGroups] = useState(false);
   const [feeGroupName, setFeeGroupName] = useState("");
   const [feeGroupDescription, setFeeGroupDescription] = useState("");
+  const [feeGroupStatus, setFeeGroupStatus] = useState<"Active" | "Inactive">("Active");
   const [availableClasses, setAvailableClasses] = useState<SchoolClass[]>([]);
   const [feeGroupClassIds, setFeeGroupClassIds] = useState<number[]>([]);
   const [classSearch, setClassSearch] = useState("");
@@ -320,8 +444,8 @@ export default function FeeConfigurationPanel() {
   const [typeStatus, setTypeStatus] = useState<"Active" | "Inactive">("Active");
   const [typeErrors, setTypeErrors] = useState<Record<string, string>>({});
   const [typeSearch, setTypeSearch] = useState("");
-  const [typeSortBy, setTypeSortBy] = useState<FeeTypeListParams["sort_by"]>("name");
-  const [typeSortDir, setTypeSortDir] = useState<"asc" | "desc">("asc");
+  const typeSortBy: FeeTypeListParams["sort_by"] = "name";
+  const typeSortDir: "asc" | "desc" = "asc";
   const [typeStatusFilter, setTypeStatusFilter] = useState<"" | "active" | "inactive">("");
   const [typePage, setTypePage] = useState(1);
   const [typePageSize] = useState(10);
@@ -357,7 +481,7 @@ export default function FeeConfigurationPanel() {
   const [feeSchedules, setFeeSchedules] = useState<any[]>([]);
   const [isLoadingSchedules, setIsLoadingSchedules] = useState(false);
   const [scheduleSearch, setScheduleSearch] = useState("");
-  const [scheduleSortBy, setScheduleSortBy] = useState("created_at");
+  const scheduleSortBy = "created_at";
   const [scheduleStatusFilter, setScheduleStatusFilter] = useState<"" | "active" | "inactive">("");
   const [schedulePage, setSchedulePage] = useState(1);
   const [schedulePageSize] = useState(10);
@@ -402,6 +526,26 @@ export default function FeeConfigurationPanel() {
   const [isDeleteScheduleOpen, setIsDeleteScheduleOpen] = useState(false);
   const [isDeletingSchedule, setIsDeletingSchedule] = useState(false);
   const [deleteScheduleError, setDeleteScheduleError] = useState("");
+
+  // ── Concession Rules state ──
+  const [concessionRules, setConcessionRules] = useState<ConcessionRule[]>([]);
+  const [isLoadingConcessions, setIsLoadingConcessions] = useState(false);
+  const [concessionName, setConcessionName] = useState("");
+  const [concessionAppliesTo, setConcessionAppliesTo] = useState("");
+  const [concessionDiscount, setConcessionDiscount] = useState("");
+  const [concessionStatus, setConcessionStatus] = useState<"Active" | "Inactive">("Active");
+  const [isSavingConcession, setIsSavingConcession] = useState(false);
+  const [deletingConcessionId, setDeletingConcessionId] = useState<number | null>(null);
+
+  // ── Late Fee Rules state ──
+  const [lateFeeRules, setLateFeeRules] = useState<LateFeeRule[]>([]);
+  const [isLoadingLateFees, setIsLoadingLateFees] = useState(false);
+  const [lateFeeName, setLateFeeName] = useState("");
+  const [lateFeeGrace, setLateFeeGrace] = useState("");
+  const [lateFeePenalty, setLateFeePenalty] = useState("");
+  const [lateFeeCap, setLateFeeCap] = useState("");
+  const [isSavingLateFee, setIsSavingLateFee] = useState(false);
+  const [deletingLateFeeId, setDeletingLateFeeId] = useState<number | null>(null);
 
   // ── Add Fee Schedule inline form ──
   const [showAddForm, setShowAddForm] = useState(false);
@@ -540,11 +684,13 @@ export default function FeeConfigurationPanel() {
         name: feeGroupName.trim(),
         description: feeGroupDescription.trim() || undefined,
         applicable_classes: feeGroupClassIds,
+        is_active: feeGroupStatus === "Active",
       });
       showToast("Fee group saved.");
       await fetchFeeGroups();
       setFeeGroupName("");
       setFeeGroupDescription("");
+      setFeeGroupStatus("Active");
       setFeeGroupClassIds([]);
       setClassSearch("");
       setClassError("");
@@ -710,13 +856,6 @@ export default function FeeConfigurationPanel() {
     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
       <button style={outlineBtn(true)} onClick={() => openEditPanel(group)}>Edit</button>
       <button style={dangerBtn(true)} onClick={() => openDeleteDialog(group)}>Delete</button>
-    </div>
-  );
-
-  const rowActionsLite = (label: string) => (
-    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      <button style={outlineBtn(true)} onClick={() => showToast(`Edit ${label} — would open editor in production.`)}>Edit</button>
-      <button style={dangerBtn(true)} onClick={() => showToast(`Delete ${label} — confirm in production.`)}>Delete</button>
     </div>
   );
 
@@ -1050,6 +1189,7 @@ export default function FeeConfigurationPanel() {
     setIsSavingScheduleEdit(true);
     try {
       await feesApi.updateSchedule(editingSchedule.id, {
+        academic_year: editScheduleAcademicYear === "" ? undefined : editScheduleAcademicYear,
         fee_group: editScheduleFeeGroup === "" ? undefined : editScheduleFeeGroup,
         fee_type: editScheduleFeeType === "" ? undefined : editScheduleFeeType,
         amount: finalAmount,
@@ -1098,6 +1238,123 @@ export default function FeeConfigurationPanel() {
       setIsDeletingSchedule(false);
     }
   };
+
+  // ── Concession Rules functions ──────────────────────────────────────────────
+  const fetchConcessionRules = async () => {
+    setIsLoadingConcessions(true);
+    try {
+      const payload = await feesApi.listConcessionRules({ page_size: 100 });
+      setConcessionRules(listData<ConcessionRule>(payload));
+    } catch (error) {
+      showToast("Unable to load concession rules.");
+    } finally {
+      setIsLoadingConcessions(false);
+    }
+  };
+
+  const handleCreateConcession = async () => {
+    if (!concessionName.trim()) {
+      showToast("Rule name is required.");
+      return;
+    }
+    setIsSavingConcession(true);
+    try {
+      await feesApi.createConcessionRule({
+        name: concessionName.trim(),
+        applies_to: concessionAppliesTo.trim(),
+        discount_percentage: concessionDiscount === "" ? "0" : concessionDiscount,
+        status: concessionStatus,
+      });
+      showToast("Concession rule added.");
+      setConcessionName("");
+      setConcessionAppliesTo("");
+      setConcessionDiscount("");
+      setConcessionStatus("Active");
+      fetchConcessionRules();
+    } catch (error) {
+      const e = error as { details?: unknown; message?: string };
+      const mapped = mapApiFieldErrors(e.details);
+      showToast((Object.values(mapped)[0] as string) || e.message || "Failed to add concession rule.");
+    } finally {
+      setIsSavingConcession(false);
+    }
+  };
+
+  const handleDeleteConcession = async (rule: ConcessionRule) => {
+    setDeletingConcessionId(rule.id);
+    try {
+      await feesApi.deleteConcessionRule(rule.id);
+      showToast("Concession rule deleted.");
+      fetchConcessionRules();
+    } catch (error) {
+      const e = error as { message?: string };
+      showToast(e.message || "Failed to delete concession rule.");
+    } finally {
+      setDeletingConcessionId(null);
+    }
+  };
+
+  // ── Late Fee Rules functions ────────────────────────────────────────────────
+  const fetchLateFeeRules = async () => {
+    setIsLoadingLateFees(true);
+    try {
+      const payload = await feesApi.listLateFeeRules({ page_size: 100 });
+      setLateFeeRules(listData<LateFeeRule>(payload));
+    } catch (error) {
+      showToast("Unable to load late fee rules.");
+    } finally {
+      setIsLoadingLateFees(false);
+    }
+  };
+
+  const handleCreateLateFee = async () => {
+    if (!lateFeeName.trim()) {
+      showToast("Rule name is required.");
+      return;
+    }
+    setIsSavingLateFee(true);
+    try {
+      await feesApi.createLateFeeRule({
+        name: lateFeeName.trim(),
+        grace_period_days: Number(lateFeeGrace) || 0,
+        penalty_rule: lateFeePenalty.trim(),
+        cap_amount: lateFeeCap.trim() === "" ? null : lateFeeCap.trim(),
+        status: "Active",
+      });
+      showToast("Late fee rule added.");
+      setLateFeeName("");
+      setLateFeeGrace("");
+      setLateFeePenalty("");
+      setLateFeeCap("");
+      fetchLateFeeRules();
+    } catch (error) {
+      const e = error as { details?: unknown; message?: string };
+      const mapped = mapApiFieldErrors(e.details);
+      showToast((Object.values(mapped)[0] as string) || e.message || "Failed to add late fee rule.");
+    } finally {
+      setIsSavingLateFee(false);
+    }
+  };
+
+  const handleDeleteLateFee = async (rule: LateFeeRule) => {
+    setDeletingLateFeeId(rule.id);
+    try {
+      await feesApi.deleteLateFeeRule(rule.id);
+      showToast("Late fee rule deleted.");
+      fetchLateFeeRules();
+    } catch (error) {
+      const e = error as { message?: string };
+      showToast(e.message || "Failed to delete late fee rule.");
+    } finally {
+      setDeletingLateFeeId(null);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "concession-rules") fetchConcessionRules();
+    if (activeTab === "late-fee-rules") fetchLateFeeRules();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   useEffect(() => {
     if (activeTab !== "fee-schedules") return;
@@ -1152,7 +1409,7 @@ export default function FeeConfigurationPanel() {
             <div style={{ fontSize: 11.5, color: "#6B7280", margin: "12px 0" }}>
               Academic year: {currentAcademicYearName}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
               <div>
                 <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>GROUP NAME</div>
                 <input
@@ -1347,6 +1604,26 @@ export default function FeeConfigurationPanel() {
                 <div style={{ marginTop: 6, fontSize: 12, color: "#6b7280" }}>
                   {feeGroupClassIds.length} Classes Selected
                 </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>STATUS</div>
+                <select
+                  value={feeGroupStatus}
+                  onChange={event => setFeeGroupStatus(event.target.value as "Active" | "Inactive")}
+                  style={{
+                    ...inputField(""),
+                    width: "100%",
+                    cursor: "pointer",
+                    appearance: "none",
+                    backgroundImage: "url('data:image/svg+xml;utf8,<svg fill=\"%239CA3AF\" viewBox=\"0 0 20 20\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z\"/></svg>')",
+                    backgroundRepeat: "no-repeat",
+                    backgroundPosition: "right 10px center",
+                    backgroundSize: "20px",
+                  }}
+                >
+                  <option value="Active">Active</option>
+                  <option value="Inactive">Inactive</option>
+                </select>
               </div>
             </div>
             <button
@@ -1814,20 +2091,13 @@ export default function FeeConfigurationPanel() {
 
       {/* Table */}
       <div style={{ ...card, padding: 0, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr .9fr .8fr", gap: 10, padding: "14px 16px", borderBottom: "1px solid #E8E8EE" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr .8fr", gap: 10, padding: "14px 16px", borderBottom: "1px solid #E8E8EE" }}>
           <input
             placeholder="Search by fee type name or GL code"
             value={typeSearch}
             onChange={event => setTypeSearch(event.target.value)}
             style={inputField("Search")}
           />
-          <select value={typeSortBy || "name"} onChange={event => { setTypeSortBy(event.target.value as FeeTypeListParams["sort_by"]); setTypePage(1); }} style={inputField("Sort by")}>
-            <option value="name">Sort: Name</option>
-            <option value="gl_code">Sort: GL Code</option>
-            <option value="status">Sort: Status</option>
-            <option value="created_date">Sort: Created Date</option>
-            <option value="updated_date">Sort: Updated Date</option>
-          </select>
           <select value={typeStatusFilter} onChange={event => { setTypeStatusFilter(event.target.value as "" | "active" | "inactive"); setTypePage(1); }} style={inputField("Status filter")}>
             <option value="">All Status</option>
             <option value="active">Active</option>
@@ -2125,7 +2395,7 @@ export default function FeeConfigurationPanel() {
                     }}
                   />
                 </div>
-                <div style={{ flex: 1.2 }}>
+                {/* <div style={{ flex: 1.2 }}>
                   <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>
                     DEFAULT DUE DATE
                   </div>
@@ -2143,7 +2413,7 @@ export default function FeeConfigurationPanel() {
                       background: "#fff", cursor: "pointer",
                     }}
                   />
-                </div>
+                </div> */}
               </div>
             ))}
           </div>
@@ -2200,19 +2470,6 @@ export default function FeeConfigurationPanel() {
               borderRadius: 8, padding: "0 12px", fontSize: 13,
             }}
           />
-          <select
-            value={scheduleSortBy}
-            onChange={e => setScheduleSortBy(e.target.value)}
-            style={{
-              height: 36, border: "1px solid #E8E8EE", borderRadius: 8,
-              padding: "0 12px", fontSize: 13, background: "#fff", cursor: "pointer",
-            }}
-          >
-            <option value="created_at">Latest First</option>
-            <option value="fee_group">By Fee Group</option>
-            <option value="fee_type">By Fee Type</option>
-            <option value="amount">By Amount</option>
-          </select>
           <select
             value={scheduleStatusFilter}
             onChange={e => setScheduleStatusFilter(e.target.value as "" | "active" | "inactive")}
@@ -3079,23 +3336,32 @@ export default function FeeConfigurationPanel() {
           Rows update immediately — each action maps to a feesApi call in production.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
-          {[
-            { label: "RULE NAME",   ph: "Staff Ward 50%" },
-            { label: "APPLIES TO", ph: "Tuition Fee" },
-            { label: "DISCOUNT %", ph: "50%" },
-            { label: "STATUS",     ph: "Active" },
-          ].map(f => (
-            <div key={f.label}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>{f.label}</div>
-              <input placeholder={f.ph} style={inputField(f.ph)} />
-            </div>
-          ))}
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>RULE NAME</div>
+            <input placeholder="Staff Ward 50%" style={inputField("Staff Ward 50%")} value={concessionName} onChange={e => setConcessionName(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>APPLIES TO</div>
+            <input placeholder="Tuition Fee" style={inputField("Tuition Fee")} value={concessionAppliesTo} onChange={e => setConcessionAppliesTo(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>DISCOUNT %</div>
+            <input type="number" min="0" max="100" placeholder="50" style={inputField("50")} value={concessionDiscount} onChange={e => setConcessionDiscount(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>STATUS</div>
+            <select value={concessionStatus} onChange={e => setConcessionStatus(e.target.value as "Active" | "Inactive")} style={inputField("Status")}>
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </select>
+          </div>
         </div>
         <button
           style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
-          onClick={() => showToast("Concession rule added — would save to feesApi in production.")}
+          onClick={handleCreateConcession}
+          disabled={isSavingConcession}
         >
-          Add
+          {isSavingConcession ? "Saving..." : "Add"}
         </button>
       </div>
 
@@ -3110,15 +3376,25 @@ export default function FeeConfigurationPanel() {
             </tr>
           </thead>
           <tbody>
-            {CONCESSION_RULES.map((r, i) => (
-              <tr key={r.id} style={{ borderBottom: i < CONCESSION_RULES.length - 1 ? "1px solid #E8E8EE" : "none" }}>
-                <td style={{ ...tdStyle, fontWeight: 600 }}>{r.name}</td>
-                <td style={tdMuted}>{r.scope}</td>
-                <td style={{ ...tdStyle, fontWeight: 600 }}>{r.discount}</td>
-                <td style={tdStyle}>{statusPill(r.status)}</td>
-                <td style={tdStyle}>{rowActionsLite(r.name)}</td>
-              </tr>
-            ))}
+            {isLoadingConcessions ? (
+              <tr><td colSpan={5} style={{ ...tdStyle, color: "#5B5E72" }}>Loading concession rules...</td></tr>
+            ) : concessionRules.length === 0 ? (
+              <tr><td colSpan={5} style={{ ...tdStyle, color: "#5B5E72" }}>No concession rules yet.</td></tr>
+            ) : (
+              concessionRules.map((r, i) => (
+                <tr key={r.id} style={{ borderBottom: i < concessionRules.length - 1 ? "1px solid #E8E8EE" : "none" }}>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>{r.name}</td>
+                  <td style={tdMuted}>{r.applies_to || "—"}</td>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>{r.discount_percentage != null ? `${r.discount_percentage}%` : "—"}</td>
+                  <td style={tdStyle}>{statusPill(r.status === "Active" ? "Active" : "Inactive")}</td>
+                  <td style={tdStyle}>
+                    <button style={dangerBtn(true)} onClick={() => handleDeleteConcession(r)} disabled={deletingConcessionId === r.id}>
+                      {deletingConcessionId === r.id ? "Deleting..." : "Delete"}
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>
@@ -3136,23 +3412,29 @@ export default function FeeConfigurationPanel() {
           Rows update immediately — each action maps to a feesApi call in production.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
-          {[
-            { label: "RULE NAME",     ph: "Tuition late rule" },
-            { label: "GRACE PERIOD", ph: "7 days" },
-            { label: "PENALTY",      ph: "Rs. 50 daily" },
-            { label: "CAP AMOUNT",   ph: "Rs. 1,500" },
-          ].map(f => (
-            <div key={f.label}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>{f.label}</div>
-              <input placeholder={f.ph} style={inputField(f.ph)} />
-            </div>
-          ))}
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>RULE NAME</div>
+            <input placeholder="Tuition late rule" style={inputField("Tuition late rule")} value={lateFeeName} onChange={e => setLateFeeName(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>GRACE PERIOD (DAYS)</div>
+            <input type="number" min="0" placeholder="7" style={inputField("7")} value={lateFeeGrace} onChange={e => setLateFeeGrace(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>PENALTY</div>
+            <input placeholder="Rs. 50 daily" style={inputField("Rs. 50 daily")} value={lateFeePenalty} onChange={e => setLateFeePenalty(e.target.value)} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>CAP AMOUNT</div>
+            <input type="number" min="0" placeholder="1500" style={inputField("1500")} value={lateFeeCap} onChange={e => setLateFeeCap(e.target.value)} />
+          </div>
         </div>
         <button
           style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
-          onClick={() => showToast("Late fee rule added — would save to feesApi in production.")}
+          onClick={handleCreateLateFee}
+          disabled={isSavingLateFee}
         >
-          Add
+          {isSavingLateFee ? "Saving..." : "Add"}
         </button>
       </div>
 
@@ -3167,15 +3449,25 @@ export default function FeeConfigurationPanel() {
             </tr>
           </thead>
           <tbody>
-            {LATE_FEE_RULES.map((r, i) => (
-              <tr key={r.id} style={{ borderBottom: i < LATE_FEE_RULES.length - 1 ? "1px solid #E8E8EE" : "none" }}>
-                <td style={{ ...tdStyle, fontWeight: 600 }}>{r.name}</td>
-                <td style={tdMuted}>{r.grace}</td>
-                <td style={tdMuted}>{r.penalty}</td>
-                <td style={tdMuted}>{r.cap}</td>
-                <td style={tdStyle}>{rowActionsLite(r.name)}</td>
-              </tr>
-            ))}
+            {isLoadingLateFees ? (
+              <tr><td colSpan={5} style={{ ...tdStyle, color: "#5B5E72" }}>Loading late fee rules...</td></tr>
+            ) : lateFeeRules.length === 0 ? (
+              <tr><td colSpan={5} style={{ ...tdStyle, color: "#5B5E72" }}>No late fee rules yet.</td></tr>
+            ) : (
+              lateFeeRules.map((r, i) => (
+                <tr key={r.id} style={{ borderBottom: i < lateFeeRules.length - 1 ? "1px solid #E8E8EE" : "none" }}>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>{r.name}</td>
+                  <td style={tdMuted}>{r.grace_period_days != null ? `${r.grace_period_days} days` : "—"}</td>
+                  <td style={tdMuted}>{r.penalty_rule || "—"}</td>
+                  <td style={tdMuted}>{r.cap_amount != null ? r.cap_amount : "—"}</td>
+                  <td style={tdStyle}>
+                    <button style={dangerBtn(true)} onClick={() => handleDeleteLateFee(r)} disabled={deletingLateFeeId === r.id}>
+                      {deletingLateFeeId === r.id ? "Deleting..." : "Delete"}
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>

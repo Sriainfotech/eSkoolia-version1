@@ -1,5 +1,6 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { feesApi, listData } from "@/lib/fees-api";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Due { id:string; label:string; amount:number; due:string; }
@@ -9,164 +10,11 @@ interface StudentRecord { id:string; name:string; admNo:string; cls:string; grou
 interface Payment { rcpt:string; student:string; amount:number; method:string; }
 
 // ── Mock data ──────────────────────────────────────────────────────────────────
-const STUDENTS: StudentRecord[] = [
-  {
-    id:"s0105", name:"Kabir Sharma", admNo:"ADM-0105", cls:"6A", group:"Transport Users", status:"partial",
-    dues:[
-      { id:"d1", label:"Tuition Fee Term 2",  amount:12000, due:"10 Aug 2025" },
-      { id:"d2", label:"Development Fund",     amount:4500,  due:"15 Sep 2025" },
-      { id:"d3", label:"Transport Fee - May",  amount:2800,  due:"10 May 2026" },
-    ],
-    ledger:[
-      { date:"10 Aug 2025", title:"Tuition Fee Term 2 assigned",  note:"Installment due date reached after 7-day grace period", amount:12000, type:"charge" },
-      { date:"18 Aug 2025", title:"Late fee accrued",             note:"11 chargeable days x Rs. 50, capped at Rs. 1,500",      amount:550,   type:"charge" },
-      { date:"21 Aug 2025", title:"Merit concession applied",     note:"Principal-approved concession for current term",         amount:3000,  type:"credit" },
-      { date:"27 May 2026", title:"Payment arrangement logged",   note:"Parent agreed partial payment by 31 May 2026",           amount:null,  type:"note"   },
-    ],
-    fullLedger:[
-      { date:"10 Apr 2025", title:"Tuition Fee Term 1 assigned",  note:"Charge created from Day Scholar annual schedule",       amount:12000, type:"charge" },
-      { date:"12 Apr 2025", title:"Payment received",             note:"Cash receipt RCPT-25-1108 posted by Accountant",        amount:12000, type:"credit" },
-      { date:"10 Aug 2025", title:"Tuition Fee Term 2 assigned",  note:"Installment due date reached after 7-day grace period", amount:12000, type:"charge" },
-      { date:"18 Aug 2025", title:"Late fee accrued",             note:"11 chargeable days x Rs. 50, capped at Rs. 1,500",      amount:550,   type:"charge" },
-      { date:"21 Aug 2025", title:"Merit concession applied",     note:"Principal-approved concession for current term",         amount:3000,  type:"credit" },
-      { date:"27 May 2026", title:"Payment arrangement logged",   note:"Parent agreed partial payment by 31 May 2026",           amount:null,  type:"note"   },
-    ],
-    ledgerBalance:17130,
-    lateFeeCalc:{ label:"Kabir Sharma · Tuition Fee Term 2", dueRule:"Due date 10 Aug 2025 · Rule: Rs. 50 daily after 7-day grace period, capped at Rs. 1,500", outstanding:12000, daysOverdue:21, chargeableDays:14, rawPenalty:700, finalDue:12700 },
-  },
-  {
-    id:"s0102", name:"Aditi Sharma", admNo:"ADM-0102", cls:"6A", group:"Transport Users", status:"partial",
-    dues:[
-      { id:"d1", label:"Tuition Fee Term 3",  amount:12000, due:"01 Dec 2025" },
-      { id:"d2", label:"Transport Fee - Apr", amount:2800,  due:"10 Apr 2026" },
-    ],
-    ledger:[
-      { date:"01 Dec 2025", title:"Tuition Fee Term 3 assigned",   note:"Term 3 installment due",   amount:12000, type:"charge" },
-      { date:"10 Apr 2026", title:"Transport Fee - April assigned", note:"Monthly transport fee",    amount:2800,  type:"charge" },
-    ],
-    fullLedger:[
-      { date:"10 Apr 2025", title:"Tuition Fee Term 1 assigned",   note:"Charge created from Transport Users annual schedule",  amount:12000, type:"charge" },
-      { date:"15 Apr 2025", title:"Payment received",              note:"Online payment RCPT-25-0892 posted",                   amount:12000, type:"credit" },
-      { date:"10 Aug 2025", title:"Tuition Fee Term 2 assigned",   note:"Term 2 installment due",                              amount:12000, type:"charge" },
-      { date:"12 Aug 2025", title:"Payment received",              note:"Bank transfer RCPT-25-1204 posted",                    amount:12000, type:"credit" },
-      { date:"01 Dec 2025", title:"Tuition Fee Term 3 assigned",   note:"Term 3 installment due",                              amount:12000, type:"charge" },
-      { date:"10 Apr 2026", title:"Transport Fee - April assigned", note:"Monthly transport fee",                              amount:2800,  type:"charge" },
-    ],
-    ledgerBalance:14800,
-  },
-  {
-    id:"s0103", name:"Vivaan Sharma", admNo:"ADM-0103", cls:"6A", group:"Full Boarder", status:"partial",
-    dues:[
-      { id:"d1", label:"Hostel Fee Term 2", amount:18000, due:"10 Aug 2025" },
-      { id:"d2", label:"Lunch Fee - May",   amount:4200,  due:"10 May 2026" },
-    ],
-    ledger:[
-      { date:"10 Aug 2025", title:"Hostel Fee Term 2 assigned", note:"Second term hostel installment", amount:18000, type:"charge" },
-      { date:"10 May 2026", title:"Lunch Fee - May assigned",   note:"Monthly lunch installment",       amount:4200,  type:"charge" },
-      { date:"15 May 2026", title:"Payment received",           note:"Parent transferred via NEFT",     amount:10000, type:"credit" },
-    ],
-    fullLedger:[
-      { date:"10 Apr 2025", title:"Hostel Fee Term 1 assigned", note:"First term hostel installment",   amount:18000, type:"charge" },
-      { date:"14 Apr 2025", title:"Payment received",           note:"Cheque CHQ-0041 cleared",          amount:18000, type:"credit" },
-      { date:"10 Aug 2025", title:"Hostel Fee Term 2 assigned", note:"Second term hostel installment",   amount:18000, type:"charge" },
-      { date:"10 May 2026", title:"Lunch Fee - May assigned",   note:"Monthly lunch installment",        amount:4200,  type:"charge" },
-      { date:"15 May 2026", title:"Payment received",           note:"Parent transferred via NEFT",      amount:10000, type:"credit" },
-    ],
-    ledgerBalance:12200,
-  },
-  {
-    id:"s0101", name:"Aarav Sharma", admNo:"ADM-0101", cls:"6A", group:"Day Scholar", status:"cleared",
-    dues:[],
-    ledger:[
-      { date:"10 Apr 2025", title:"Tuition Fee Term 1 assigned", note:"First term installment",         amount:12000, type:"charge" },
-      { date:"15 Apr 2025", title:"Payment received",            note:"Paid in full via bank transfer",  amount:12000, type:"credit" },
-    ],
-    fullLedger:[
-      { date:"10 Apr 2025", title:"Tuition Fee Term 1 assigned", note:"Day Scholar annual schedule",     amount:12000, type:"charge" },
-      { date:"15 Apr 2025", title:"Payment received",            note:"Bank transfer RCPT-25-0741",       amount:12000, type:"credit" },
-      { date:"10 Aug 2025", title:"Tuition Fee Term 2 assigned", note:"Term 2 installment",              amount:12000, type:"charge" },
-      { date:"11 Aug 2025", title:"Payment received",            note:"Online RCPT-25-1190",              amount:12000, type:"credit" },
-      { date:"01 Dec 2025", title:"Tuition Fee Term 3 assigned", note:"Term 3 installment",              amount:12000, type:"charge" },
-      { date:"02 Dec 2025", title:"Payment received",            note:"UPI RCPT-25-2341",                 amount:12000, type:"credit" },
-    ],
-    ledgerBalance:0,
-  },
-  {
-    id:"s0104", name:"Ananya Sharma", admNo:"ADM-0104", cls:"6A", group:"Day Scholar", status:"overdue",
-    dues:[
-      { id:"d1", label:"Tuition Fee Term 1", amount:12000, due:"10 Apr 2025" },
-      { id:"d2", label:"Admission Fee",      amount:5000,  due:"01 Apr 2025" },
-    ],
-    ledger:[
-      { date:"01 Apr 2025", title:"Admission Fee assigned",      note:"One-time admission fee",     amount:5000,  type:"charge" },
-      { date:"10 Apr 2025", title:"Tuition Fee Term 1 assigned", note:"Term 1 installment",         amount:12000, type:"charge" },
-      { date:"17 Apr 2025", title:"Late fee accrued",            note:"7 chargeable days × Rs. 50", amount:350,   type:"charge" },
-    ],
-    fullLedger:[
-      { date:"01 Apr 2025", title:"Admission Fee assigned",      note:"One-time admission fee",          amount:5000,  type:"charge" },
-      { date:"10 Apr 2025", title:"Tuition Fee Term 1 assigned", note:"Term 1 installment",              amount:12000, type:"charge" },
-      { date:"17 Apr 2025", title:"Late fee accrued",            note:"7 chargeable days × Rs. 50",      amount:350,   type:"charge" },
-      { date:"01 May 2025", title:"Payment arrangement note",    note:"Parent to settle by 15 May 2025", amount:null,  type:"note"   },
-    ],
-    ledgerBalance:17350,
-    lateFeeCalc:{ label:"Ananya Sharma · Tuition Fee Term 1", dueRule:"Due date 10 Apr 2025 · Rule: Rs. 50 daily after 7-day grace period, capped at Rs. 1,500", outstanding:12000, daysOverdue:37, chargeableDays:30, rawPenalty:1500, finalDue:13500 },
-  },
-  {
-    id:"s0165", name:"Kabir Nair", admNo:"ADM-0165", cls:"8A", group:"Day Scholar", status:"partial",
-    dues:[
-      { id:"d1", label:"Tuition Fee Term 2", amount:12000, due:"10 Aug 2025" },
-    ],
-    ledger:[
-      { date:"10 Aug 2025", title:"Tuition Fee Term 2 assigned", note:"Term 2 installment due", amount:12000, type:"charge" },
-    ],
-    fullLedger:[
-      { date:"10 Apr 2025", title:"Tuition Fee Term 1 assigned", note:"Day Scholar annual schedule",  amount:12000, type:"charge" },
-      { date:"12 Apr 2025", title:"Payment received",            note:"NEFT RCPT-25-0801",             amount:12000, type:"credit" },
-      { date:"10 Aug 2025", title:"Tuition Fee Term 2 assigned", note:"Term 2 installment due",        amount:12000, type:"charge" },
-    ],
-    ledgerBalance:12000,
-  },
-  {
-    id:"s0225", name:"Kabir Iyer", admNo:"ADM-0225", cls:"10B", group:"Transport Users", status:"partial",
-    dues:[
-      { id:"d1", label:"Tuition Fee Term 3",  amount:12000, due:"01 Dec 2025" },
-      { id:"d2", label:"Transport Fee - May", amount:2800,  due:"10 May 2026" },
-    ],
-    ledger:[
-      { date:"01 Dec 2025", title:"Tuition Fee Term 3 assigned",  note:"Term 3 installment due",  amount:12000, type:"charge" },
-      { date:"10 May 2026", title:"Transport Fee - May assigned",  note:"Monthly transport fee",   amount:2800,  type:"charge" },
-    ],
-    fullLedger:[
-      { date:"10 Apr 2025", title:"Tuition Fee Term 1 assigned",  note:"Transport Users schedule", amount:12000, type:"charge" },
-      { date:"14 Apr 2025", title:"Payment received",             note:"Wallet RCPT-25-0910",       amount:12000, type:"credit" },
-      { date:"10 Aug 2025", title:"Tuition Fee Term 2 assigned",  note:"Term 2 installment",        amount:12000, type:"charge" },
-      { date:"11 Aug 2025", title:"Payment received",             note:"UPI RCPT-25-1320",           amount:12000, type:"credit" },
-      { date:"01 Dec 2025", title:"Tuition Fee Term 3 assigned",  note:"Term 3 installment due",    amount:12000, type:"charge" },
-      { date:"10 May 2026", title:"Transport Fee - May assigned",  note:"Monthly transport fee",    amount:2800,  type:"charge" },
-    ],
-    ledgerBalance:14800,
-  },
-];
 
-const RECONCILIATION = [
-  { id:"r1", ref:"HDFC statement UTR HDFC252705881",  match:"Matched to RCPT-25-4218 · Aditi Nair · Online",            score:98, status:"Matched"       },
-  { id:"r2", ref:"Cheque CHQ842901 awaiting clearance",match:"Candidate: RCPT-25-4194 · Kabir Mehta · HDFC Bank",       score:72, status:"Review"         },
-  { id:"r3", ref:"Wallet settlement batch PAYTM-7782", match:"6 receipts grouped · gateway fee difference Rs. 42",       score:91, status:"Matched"       },
-  { id:"r4", ref:"Bank transfer UTR APS529801",        match:"No admission number in narration; possible ADM-0163",      score:64, status:"Needs mapping"  },
-];
 
-const INIT_PAYMENTS: Payment[] = [
-  { rcpt:"RCPT-25-5314", student:"Palak Sharma",   amount:10900, method:"Bank Transfer" },
-  { rcpt:"RCPT-25-5313", student:"Veer Sharma",    amount:9700,  method:"Wallet"        },
-  { rcpt:"RCPT-25-5312", student:"Navya Sharma",   amount:8500,  method:"Online"        },
-  { rcpt:"RCPT-25-5311", student:"Aditya Sharma",  amount:14500, method:"Bank Transfer" },
-  { rcpt:"RCPT-25-5310", student:"Prisha Sharma",  amount:13300, method:"Wallet"        },
-  { rcpt:"RCPT-25-5309", student:"Anika Sharma",   amount:12100, method:"Online"        },
-  { rcpt:"RCPT-25-5308", student:"Ira Sharma",     amount:10900, method:"Bank Transfer" },
-  { rcpt:"RCPT-25-5307", student:"Reyansh Sharma", amount:9700,  method:"Wallet"        },
-  { rcpt:"RCPT-25-5306", student:"Saanvi Sharma",  amount:8500,  method:"Online"        },
-  { rcpt:"RCPT-25-5305", student:"Ishaan Sharma",  amount:14500, method:"Bank Transfer" },
-];
+
+
+
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const AV_COLORS = ["#6D4AFF","#0E7490","#16a34a","#d97706","#dc2626","#7C3AED","#0284c7","#9333ea","#ca8a04","#059669"];
@@ -205,14 +53,103 @@ function StatusPill({label,style}:{label:string;style:{bg:string;color:string}})
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
-const _DEFAULT = STUDENTS[0]; // Kabir Sharma pre-loaded to show all sections
-
 export default function FeesCollectionPanel() {
-  const [searchQ,     setSearchQ]     = useState(_DEFAULT.name);
+  const [studentsData, setStudentsData] = useState<any[]>([]);
+  const [assignments, setAssignments] = useState<any[]>([]);
+  const [paymentsList, setPaymentsList] = useState<any[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchDynamicData = async () => {
+    setLoading(true);
+    try {
+      const [stRes, asgnRes, payRes, grpRes] = await Promise.all([
+        feesApi.listStudents(),
+        feesApi.listAssignments(),
+        feesApi.listPayments(),
+        feesApi.listGroups()
+      ]);
+      setStudentsData(listData(stRes));
+      setAssignments(listData(asgnRes));
+      setPaymentsList(listData(payRes));
+      setGroups(listData(grpRes));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDynamicData();
+  }, []);
+
+  const RECONCILIATION = [
+    { id:"r1", ref:"HDFC statement UTR HDFC252705881",  match:"Matched to RCPT-25-4218 · Aditi Nair · Online",            score:98, status:"Matched"       },
+    { id:"r2", ref:"Cheque CHQ842901 awaiting clearance",match:"Candidate: RCPT-25-4194 · Kabir Mehta · HDFC Bank",       score:72, status:"Review"         },
+    { id:"r3", ref:"Wallet settlement batch PAYTM-7782", match:"6 receipts grouped · gateway fee difference Rs. 42",       score:91, status:"Matched"       },
+    { id:"r4", ref:"Bank transfer UTR APS529801",        match:"No admission number in narration; possible ADM-0163",      score:64, status:"Needs mapping"  },
+  ];
+
+  const STUDENTS = useMemo(() => {
+    return studentsData.map(st => {
+      const stAsgns = assignments.filter(a => a.student === st.id);
+      const stPays = paymentsList.filter(p => p.assignment && stAsgns.some(a => a.id === p.assignment));
+      
+      const ledger: LedgerEntry[] = [];
+      let totalDue = 0;
+      let totalPaid = 0;
+      const dues: Due[] = [];
+      
+      stAsgns.forEach((a, i) => {
+        const amt = parseFloat(a.amount || "0");
+        totalDue += amt;
+        ledger.push({ date: a.due_date || "2025-01-01", title: `Fee Assignment ${i+1}`, note: a.status, amount: amt, type: "charge" });
+        if (a.status !== "paid") {
+          dues.push({ id: a.id.toString(), label: `Fee Assignment ${i+1}`, amount: amt, due: a.due_date || "N/A" });
+        }
+      });
+      
+      stPays.forEach(p => {
+        const pAmt = parseFloat(p.amount_paid || "0");
+        totalPaid += pAmt;
+        ledger.push({ date: p.payment_date || "2025-01-01", title: `Payment Received`, note: p.payment_method, amount: pAmt, type: "credit" });
+      });
+      
+      let status: "partial" | "cleared" | "overdue" = "cleared";
+      if (totalDue > totalPaid && totalPaid > 0) status = "partial";
+      if (totalDue > totalPaid && totalPaid === 0) status = "overdue";
+
+      return {
+        id: st.id.toString(),
+        name: `${st.first_name || ""} ${st.last_name || ""}`.trim(),
+        admNo: st.admission_no || `ID-${st.id}`,
+        cls: st.current_class_name || "N/A",
+        group: "Assigned", // Simplified
+        status: status,
+        dues: dues,
+        ledger: ledger,
+        fullLedger: ledger,
+        ledgerBalance: totalDue - totalPaid,
+      };
+    });
+  }, [studentsData, assignments, paymentsList]);
+
+  const INIT_PAYMENTS = useMemo(() => {
+    return paymentsList.map((p, i) => ({
+      rcpt: p.receipt_number || `RCPT-${i}`,
+      student: studentsData.find(s => s.id === p.student)?.first_name || "Unknown",
+      amount: parseFloat(p.amount_paid || "0"),
+      method: p.payment_method || "Online"
+    }));
+  }, [paymentsList, studentsData]);
+
+  const [searchQ,     setSearchQ]     = useState("");
   const [showDrop,    setShowDrop]    = useState(false);
-  const [selected,    setSelected]    = useState<StudentRecord|null>(_DEFAULT);
-  const [checked,     setChecked]     = useState<Set<string>>(new Set(_DEFAULT.dues.map(d=>d.id)));
-  const [amtPaid,     setAmtPaid]     = useState(String(_DEFAULT.dues.reduce((a,d)=>a+d.amount,0)));
+  const [isFocused,   setIsFocused]   = useState(false);
+  const [selected,    setSelected]    = useState<StudentRecord|null>(null);
+  const [checked,     setChecked]     = useState<Set<string>>(new Set());
+  const [amtPaid,     setAmtPaid]     = useState("0");
   const [method,      setMethod]      = useState("Cash");
   const [dateTime,    setDateTime]    = useState("27-05-2026 10:30");
   const [note,        setNote]        = useState("Parent requested receipt copy by email.");

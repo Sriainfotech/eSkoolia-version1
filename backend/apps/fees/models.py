@@ -341,3 +341,68 @@ class AuditEvent(models.Model):
 
     def __str__(self):
         return f"Audit: {self.event_type} by {self.user} at {self.timestamp}"
+
+class ConcessionRule(models.Model):
+    """
+    A reusable discount/concession definition, e.g. 'Staff Ward 50%'.
+    Referenced during fee assignment. Tenant-scoped via academic_year.
+    """
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+    ]
+
+    academic_year = models.ForeignKey('core.AcademicYear', on_delete=models.PROTECT, related_name='concession_rules')
+    name = models.CharField(max_length=120)
+    applies_to = models.CharField(max_length=150, blank=True, help_text="Scope, e.g. 'Tuition Fee only'")
+    discount_percentage = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'), help_text="Discount percentage (0-100)")
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active')
+
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='created_concession_rules')
+    deleted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='deleted_concession_rules')
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_concession_rules')
+
+    class Meta:
+        unique_together = ('academic_year', 'name')
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+class LateFeeRule(models.Model):
+    """
+    A reusable late-fee penalty definition, e.g. 'Tuition late rule'.
+    Referenced during fee assignment. Tenant-scoped via academic_year.
+    """
+    STATUS_CHOICES = [
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+    ]
+
+    academic_year = models.ForeignKey('core.AcademicYear', on_delete=models.PROTECT, related_name='late_fee_rules')
+    name = models.CharField(max_length=120)
+    grace_period_days = models.IntegerField(default=0, help_text="Grace period in days")
+    penalty_rule = models.CharField(max_length=255, blank=True, help_text="Penalty rule, e.g. 'Rs. 50 daily' or an amount")
+    cap_amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, help_text="Maximum penalty cap amount")
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='active')
+
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='created_late_fee_rules')
+    deleted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='deleted_late_fee_rules')
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_late_fee_rules')
+
+    class Meta:
+        unique_together = ('academic_year', 'name')
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name

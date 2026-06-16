@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
+import { feesApi, listData, StudentRow, FeesSummary } from "@/lib/fees-api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type FeedStatus = "Verified" | "Posted";
@@ -17,18 +19,12 @@ type FeedItem = {
   isNew?: boolean;
 };
 
-type TaskBtn = { label: string; variant: "primary" | "outline"; toast: string };
+type TaskBtn = { label: string; variant: "primary" | "outline"; toast: string; href?: string };
 type Task = { id: string; color: string; title: string; desc: string; buttons: TaskBtn[] };
 type AuditItem = { id: string; initials: string; event: string; desc: string; date: string; bg: string };
 
 // ─── Static data ──────────────────────────────────────────────────────────────
-const KPI = [
-  { label: "TOTAL COLLECTED THIS MONTH", value: "Rs. 48,07,040", sub: "92 receipts posted", border: "#16a34a" },
-  { label: "OUTSTANDING DUES", value: "Rs. 21,72,460", sub: "38 students need follow-up", border: "#f59e0b" },
-  { label: "OVERDUE (>30 DAYS)", value: "Rs. 6,70,000", sub: "Tier 3 escalation active", border: "#ef4444" },
-  { label: "PAYMENTS TODAY", value: "Rs. 0", sub: "0 receipts posted today", border: "#8b5cf6" },
-];
-
+// KPIs are now dynamically fetched
 const TASKS: Task[] = [
   {
     id: "t1", color: "#ef4444",
@@ -36,7 +32,7 @@ const TASKS: Task[] = [
     desc: "Due in 3 days. Reminder template: polite final notice.",
     buttons: [
       { label: "Remind All", variant: "outline", toast: "Reminders sent to 23 students in Class 8A." },
-      { label: "View", variant: "outline", toast: "Opening student dues list for Class 8A..." },
+      { label: "View", variant: "outline", toast: "Opening student dues list for Class 8A...", href: "/fees/dues-reminders" },
     ],
   },
   {
@@ -65,15 +61,7 @@ const TASKS: Task[] = [
   },
 ];
 
-const INITIAL_FEED: FeedItem[] = [
-  { id: "f1", initials: "AS", name: "Advait Sharma", amount: "9,700", method: "Wallet", time: "13:02", status: "Verified", bg: "#7C3AED" },
-  { id: "f2", initials: "TS", name: "Tanvi Sharma", amount: "8,500", method: "Online", time: "13:02", status: "Verified", bg: "#0E7490" },
-  { id: "f3", initials: "KS", name: "Krish Sharma", amount: "14,500", method: "Bank Transfer", time: "13:02", status: "Posted", bg: "#9333EA" },
-  { id: "f4", initials: "AS", name: "Ayaan Sharma", amount: "13,300", method: "Wallet", time: "13:00", status: "Verified", bg: "#7C3AED" },
-  { id: "f5", initials: "DS", name: "Devika Sharma", amount: "12,100", method: "Online", time: "12:59", status: "Verified", bg: "#0E7490" },
-  { id: "f6", initials: "AS", name: "Arnav Sharma", amount: "12,100", method: "Online", time: "13:02", status: "Verified", bg: "#7C3AED" },
-  { id: "f7", initials: "DS", name: "Divya Sharma", amount: "10,900", method: "Bank Transfer", time: "13:02", status: "Posted", bg: "#16a34a" },
-];
+const INITIAL_FEED: FeedItem[] = [];
 
 const AUDIT: AuditItem[] = [
   { id: "a1", initials: "PM", event: "Payment posted", desc: "RCPT-25-4218 posted for Aditi Nair by Finance Admin", date: "27 May, 10:42 AM", bg: "#3B82F6" },
@@ -121,7 +109,10 @@ function btnStyle(v: "primary" | "outline"): React.CSSProperties {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 export default function FeesPaymentsPanel() {
+  const router = useRouter();
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
+  const [kpiData, setKpiData] = useState<FeesSummary | null>(null);
+  const [students, setStudents] = useState<Record<number, StudentRow>>({});
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [toast, setToast] = useState("");
   const feedRef = useRef<HTMLDivElement>(null);
@@ -150,10 +141,57 @@ export default function FeesPaymentsPanel() {
   }, [showToast]);
 
   useEffect(() => {
+    feesApi.assignmentsSummary().then(setKpiData).catch(console.error);
+
+    feesApi.listStudents().then(res => {
+      const studList = listData(res);
+      const studMap: Record<number, StudentRow> = {};
+      studList.forEach(s => { studMap[s.id] = s; });
+      setStudents(studMap);
+    }).catch(console.error);
+  }, []);
+
+  const fetchFeed = useCallback(() => {
+    feesApi.listPayments().then(res => {
+      const payments = listData(res);
+      const newFeed: FeedItem[] = payments.map(p => {
+        const student = students[p.student];
+        const name = student ? `${student.first_name || ""} ${student.last_name || ""}`.trim() : `Student #${p.student}`;
+        const initials = student && student.first_name ? student.first_name.charAt(0) + (student.last_name ? student.last_name.charAt(0) : "") : "?";
+        const time = new Date(p.paid_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false });
+        
+        return {
+          id: p.id.toString(),
+          initials,
+          name: name || "Unknown Student",
+          amount: fmtAmt(Number(p.amount_paid)),
+          method: p.method,
+          time,
+          status: "Posted",
+          bg: SIM_POOL[p.id % SIM_POOL.length].bg,
+          isNew: false
+        };
+      });
+      setFeed(newFeed);
+    }).catch(console.error);
+  }, [students]);
+
+  useEffect(() => {
+    fetchFeed();
+  }, [fetchFeed]);
+
+  useEffect(() => {
     if (!autoRefresh) return;
-    const t = setInterval(simulatePayment, 3500);
+    const t = setInterval(fetchFeed, 5000);
     return () => clearInterval(t);
-  }, [autoRefresh, simulatePayment]);
+  }, [autoRefresh, fetchFeed]);
+
+  const dynamicKPIs = [
+    { label: "TOTAL ASSIGNED", value: kpiData ? `Rs. ${fmtAmt(Number(kpiData.total_assigned))}` : "Rs. 0", sub: "Net total assigned", border: "#3B82F6" },
+    { label: "TOTAL COLLECTED", value: kpiData ? `Rs. ${fmtAmt(Number(kpiData.total_paid))}` : "Rs. 0", sub: "Total payments posted", border: "#16a34a" },
+    { label: "OUTSTANDING DUES", value: kpiData ? `Rs. ${fmtAmt(Number(kpiData.total_due))}` : "Rs. 0", sub: "Amount pending collection", border: "#f59e0b" },
+    { label: "TOTAL DISCOUNT", value: kpiData ? `Rs. ${fmtAmt(Number(kpiData.total_discount))}` : "Rs. 0", sub: "Discounts & concessions", border: "#8b5cf6" },
+  ];
 
   return (
     <>
@@ -191,7 +229,7 @@ export default function FeesPaymentsPanel() {
 
         {/* ── KPI cards ────────────────────────────────────────────── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 24 }}>
-          {KPI.map(kpi => (
+          {dynamicKPIs.map(kpi => (
             <div key={kpi.label} style={{ ...card, borderLeft: `4px solid ${kpi.border}`, padding: "20px 22px" }}>
               <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "var(--ink-3, #A0A3B8)", marginBottom: 14, textTransform: "uppercase" }}>
                 {kpi.label}
@@ -243,7 +281,10 @@ export default function FeesPaymentsPanel() {
                     {task.buttons.map(btn => (
                       <button
                         key={btn.label}
-                        onClick={() => showToast(btn.toast)}
+                        onClick={() => {
+                          showToast(btn.toast);
+                          if (btn.href) router.push(btn.href);
+                        }}
                         style={btnStyle(btn.variant)}
                       >
                         {btn.label}

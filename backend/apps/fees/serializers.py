@@ -2,7 +2,7 @@ import re
 from rest_framework import serializers
 from django.db import models
 from decimal import Decimal
-from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule
+from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule
 from apps.core.models import Class, AcademicYear
 
 class FeesGroupSerializer(serializers.ModelSerializer):
@@ -344,9 +344,11 @@ class FeeScheduleSerializer(serializers.ModelSerializer):
         user = getattr(request, 'user', None)
         school_id = getattr(user, 'school_id', None)
 
-        fee_group = attrs.get('fee_group')
-        fee_type = attrs.get('fee_type')
-        academic_year = attrs.get('academic_year')
+        # Fall back to the existing instance on partial (PATCH) updates, where
+        # unchanged relations like academic_year are not re-sent by the client.
+        fee_group = attrs.get('fee_group') or getattr(self.instance, 'fee_group', None)
+        fee_type = attrs.get('fee_type') or getattr(self.instance, 'fee_type', None)
+        academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
 
         if not fee_group:
             raise serializers.ValidationError({'fee_group': 'Fee group is required.'})
@@ -373,4 +375,130 @@ class FeeScheduleSerializer(serializers.ModelSerializer):
         data['collection_frequency'] = self.FREQUENCY_OUTPUT_MAP.get(instance.collection_frequency, instance.collection_frequency)
         data['status'] = 'Active' if instance.status == 'active' else 'Inactive'
         data['amount'] = str(instance.amount)
+        return data
+
+
+class _CurrentYearScopedMixin:
+    """Shared validate() that auto-assigns the school's current academic year
+    on create, keeps the existing one on partial (PATCH) updates, and enforces
+    a friendly per-year unique name (the DB has unique_together(academic_year, name))."""
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        school_id = getattr(user, 'school_id', None)
+
+        academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
+        if not academic_year and school_id:
+            academic_year = (
+                AcademicYear.objects.filter(school_id=school_id, is_current=True).first()
+                or AcademicYear.objects.filter(school_id=school_id).first()
+            )
+            if academic_year:
+                attrs['academic_year'] = academic_year
+        academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
+        if not academic_year:
+            raise serializers.ValidationError({'academic_year': 'Academic year is required.'})
+
+        if 'status' in attrs:
+            attrs['status'] = (attrs['status'] or 'active').strip().lower()
+
+        name = attrs.get('name') or getattr(self.instance, 'name', None)
+        if name:
+            qs = self.Meta.model.objects.filter(
+                academic_year=academic_year, name__iexact=name.strip(), is_deleted=False
+            )
+            if self.instance:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    {'name': 'A rule with this name already exists for the academic year.'}
+                )
+
+        return attrs
+
+
+class ConcessionRuleSerializer(_CurrentYearScopedMixin, serializers.ModelSerializer):
+    academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False)
+    academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)
+    status = serializers.CharField(required=False)
+    discount_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, coerce_to_string=True, required=False)
+
+    class Meta:
+        model = ConcessionRule
+        fields = [
+            'id', 'academic_year', 'academic_year_name', 'name', 'applies_to',
+            'discount_percentage', 'status', 'created_at', 'updated_at', 'created_by',
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'created_by']
+        validators = []  # disable auto unique_together validator; handled in validate()
+
+    def validate_name(self, value):
+        cleaned = (value or '').strip()
+        if not cleaned:
+            raise serializers.ValidationError('Rule name is required.')
+        if len(cleaned) > 120:
+            raise serializers.ValidationError('Rule name must be at most 120 characters.')
+        return cleaned
+
+    def validate_status(self, value):
+        normalized = (value or 'active').strip().lower()
+        if normalized not in {'active', 'inactive'}:
+            raise serializers.ValidationError('Status must be Active or Inactive.')
+        return normalized
+
+    def validate_discount_percentage(self, value):
+        if value is None:
+            return value
+        if value < 0 or value > 100:
+            raise serializers.ValidationError('Discount must be between 0 and 100.')
+        return value
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['status'] = 'Active' if instance.status == 'active' else 'Inactive'
+        data['discount_percentage'] = str(instance.discount_percentage)
+        return data
+
+
+class LateFeeRuleSerializer(_CurrentYearScopedMixin, serializers.ModelSerializer):
+    academic_year = serializers.PrimaryKeyRelatedField(queryset=AcademicYear.objects.all(), required=False)
+    academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)
+    status = serializers.CharField(required=False)
+    cap_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True, required=False, allow_null=True)
+
+    class Meta:
+        model = LateFeeRule
+        fields = [
+            'id', 'academic_year', 'academic_year_name', 'name', 'grace_period_days',
+            'penalty_rule', 'cap_amount', 'status', 'created_at', 'updated_at', 'created_by',
+        ]
+        read_only_fields = ['created_at', 'updated_at', 'created_by']
+        validators = []  # disable auto unique_together validator; handled in validate()
+
+    def validate_name(self, value):
+        cleaned = (value or '').strip()
+        if not cleaned:
+            raise serializers.ValidationError('Rule name is required.')
+        if len(cleaned) > 120:
+            raise serializers.ValidationError('Rule name must be at most 120 characters.')
+        return cleaned
+
+    def validate_status(self, value):
+        normalized = (value or 'active').strip().lower()
+        if normalized not in {'active', 'inactive'}:
+            raise serializers.ValidationError('Status must be Active or Inactive.')
+        return normalized
+
+    def validate_grace_period_days(self, value):
+        if value is None:
+            return 0
+        if value < 0:
+            raise serializers.ValidationError('Grace period cannot be negative.')
+        return value
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data['status'] = 'Active' if instance.status == 'active' else 'Inactive'
+        data['cap_amount'] = str(instance.cap_amount) if instance.cap_amount is not None else None
         return data
