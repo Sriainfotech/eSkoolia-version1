@@ -54,6 +54,9 @@ class TenantMainMiddleware(MiddlewareMixin):
         "/static/",
         "/media/",
         "/health/",
+        # Global/static reference data — not per-tenant, always served from public schema.
+        "/api/v1/master/",
+        "/api/master/",
     )
 
     def process_request(self, request: HttpRequest) -> Optional[HttpResponse]:
