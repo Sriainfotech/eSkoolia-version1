@@ -38,8 +38,7 @@ const MANDALA_IMAGE =
 const CAMPUS_IMAGE =
   "https://lh3.googleusercontent.com/aida-public/AB6AXuCX6Cr2E0KWnc6ky1i4cIZ53q1vjniOS0c1IRe9xSGIVRkZUeuopkc_-MUdgIRLKHmcKJVG2ZyjbjmEGGsM7jcs18fnD8BARdt4IWkkXfbRHsRezqKyiRu1gVGZi7yuUhWWKKj4DnGjopRYZxlSJI2-X6yFaTfHG1clZp5Fu_5EC2dgZJv-yESQ5uFGmTjXtyEDNXO-Q-y_GX2hQjCVeTkX7nRaxsZGd3Jb8wULk7b-2TBdn0Zz0z5oyXYyUPTftsiBm0cLvvOBY0Q";
 
-const ESKOOLIA_LOGO =
-  "https://lh3.googleusercontent.com/aida-public/AB6AXuBMkE47tearngJgRuiZoTvnI_40bttDEPwdQy6orbI-d0rXKaVxcGyFLvUo-FJJyRnx4G1VlTYeFcbUnSHhPmM88oda_5SN99u6dkF56FAmJ6XuisV_O0H5Y7KbqUJ5u-HEnd0KQTdRPqrZpOELy1r9IAMq9TB7344-04IjSwbCiFIHwf2dWiJ4JhWHnED6-NSzU8ixZeE2Lcez08_SZEwC1wPQRS8wbuIvQSI2-Xqruig2KaO4XKkEguCFLF7oSWdFZq1mr6RHM30";
+const ESKOOLIA_LOGO = "/image.png";
 
 const FACULTY_IMAGES = [
   "https://lh3.googleusercontent.com/aida-public/AB6AXuDaLN6ApEnq-6_WvjugxXKoixkJnonExeFb2b6xwsWY6tTWRhDuMWVfJHqfxYFMlTTuWZc_Nhhbz8rhKJkA5fLXo6WeMAha9yua4TtMoF7APaq2GK47do48BMCe0A8g-LNlcl2oOvgxFQx2V07jBGX7l0_OXVKyTQXTIsNso0Dxhcs9tRS265IFLQ82Eb0zpFkmGdK3gEFhj1EzGKNM5fGW9bITZ2wLc6K0ZBpXXKyDB6ovrV5Ne0aNlGeFLeacVP9EjRPJdWSXgCA",
@@ -215,11 +214,7 @@ function LoginPage() {
       <header className="site-header">
         <div className="glass-panel header-panel">
           <div className="brand-stack">
-            <h1 className="school-brand">
-              {displaySchoolName}
-            </h1>
-            <div className="header-divider" />
-            <p className="header-kicker">Digital Atrium</p>
+            <img src="/image.png" alt="eSkOOlia" style={{ height: "90px", width: "auto", display: "block", objectFit: "contain" }} />
           </div>
           <div className="header-actions">
             <div className="status-pill">

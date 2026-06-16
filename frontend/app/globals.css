@@ -1046,12 +1046,10 @@ tr.date-alert:hover {
 }
 
 .site-header {
-  left: 50%;
-  max-width: 1440px;
+  left: 0;
   position: fixed;
-  top: 24px;
-  transform: translateX(-50%);
-  width: 92%;
+  top: 0;
+  width: 100%;
   z-index: 100;
 }
 
@@ -1063,11 +1061,11 @@ tr.date-alert:hover {
 
 .header-panel {
   align-items: center;
-  border-radius: 999px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.05);
+  border-radius: 0;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
   display: flex;
   justify-content: space-between;
-  padding: 12px 32px;
+  padding: 4px 40px 4px 12px;
 }
 
 .brand-stack,

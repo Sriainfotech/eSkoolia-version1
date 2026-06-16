@@ -1,8 +1,21 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
-## Update — [Teerdaveni] (16/06/2026)
+## Update — Teerdaveni (16/06/2026)
 
-**Branch:** `administration`
+**Branch:** `administratin-16/06`
+
+### Login Page — Logo Branding Update
+
+#### Changes Made (`frontend/app/login/page.tsx`, `frontend/app/globals.css`)
+- Replaced external Google CDN logo URL with local `/image.png` (eSkOOlia branded logo)
+- Replaced old "ESKOOLIA | DIGITAL ATRIUM" text header with the new logo image
+- Applied `mix-blend-mode: multiply` initially to handle blue background, then replaced with proper white-background logo
+- Updated logo size to `90px` height for clear visibility
+- Made header full-width (`width: 100%`, `top: 0`, removed pill shape) to eliminate white corner patches on light gray background
+- Removed `border-radius: 999px` from header panel for clean edge-to-edge layout
+- Reduced header padding to keep topbar compact while logo remains prominent
+
+---
 
 ### Complaints Module — Complete CRUD Implementation with Database Schema Fixes
 
