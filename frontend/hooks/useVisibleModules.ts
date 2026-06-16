@@ -29,9 +29,13 @@ export function useVisibleModules(
   // Each portal renders its own loading state independently.
   if (!me) return [];
 
+  // School admins and wildcard-permission users always see every module they
+  // have permission for — skip the per-user toggle so stale localStorage from
+  // a previous session can't hide modules for them.
+  const isFullAccess = me.is_school_admin || me.permission_codes?.includes('*');
   return getModulesForUser(me, {
     includeHome: options.includeHome,
-    // Only the admin portal respects the per-user module toggle
-    isModuleEnabled: me.portal_type === 'admin' ? isEnabled : undefined,
+    // Admin portal respects per-user module toggle, EXCEPT for full-access users
+    isModuleEnabled: (me.portal_type === 'admin' && !isFullAccess) ? isEnabled : undefined,
   });
 }

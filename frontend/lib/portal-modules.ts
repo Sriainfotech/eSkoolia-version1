@@ -37,9 +37,11 @@ const HOME_IDS = new Set(['teacher-home', 'parent-home']);
 function hasPermission(permission: string | undefined, me: MeData): boolean {
   if (!permission) return true;                          // no guard → always show
   if (me.is_superuser) return true;
+  if (me.is_school_admin) return true;                   // school admins see all modules
+  if (me.permission_codes?.includes('*')) return true;   // wildcard permission
   if (!me.permission_codes?.length) return false;        // no codes → no access
   return me.permission_codes.some(
-    (c) => c === '*' || c === permission || c.startsWith(`${permission}.`),
+    (c) => c === permission || c.startsWith(`${permission}.`),
   );
 }
 

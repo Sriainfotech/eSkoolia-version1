@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TopToast } from "@/components/common/TopToast";
 import { buildPaginationQuery, extractListData, extractPaginationMeta, type ListApiResponse } from "@/lib/pagination";
@@ -51,6 +52,7 @@ function getRoleColor(name: string): string {
 type PanelMode = "add" | "edit" | null;
 
 export function RoleManagementPanel() {
+  const router = useRouter();
   const { page, pageSize, setPage, setPageSize } = usePersistentPagination("roles.list", 1, 10);
   const [roles, setRoles] = useState<RoleItem[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -174,7 +176,7 @@ export function RoleManagementPanel() {
       setSuccess("");
       setFieldError("");
       const isUpdate = editingRoleId !== null;
-      await apiRequestWithRefresh(`/api/v1/access-control/roles/${isUpdate ? `${editingRoleId}/` : ""}`, {
+      const res = await apiRequestWithRefresh<{ id?: number; data?: { id: number } }>(`/api/v1/access-control/roles/${isUpdate ? `${editingRoleId}/` : ""}`, {
         method: isUpdate ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(
@@ -185,6 +187,13 @@ export function RoleManagementPanel() {
       });
       setSuccess(isUpdate ? `"${normalized}" updated.` : `"${normalized}" created.`);
       closePanel();
+      if (!isUpdate) {
+        const newId = (res as { data?: { id: number } }).data?.id ?? (res as { id?: number }).id;
+        if (newId) {
+          router.push(`/roles/assign-permission?roleId=${newId}`);
+          return;
+        }
+      }
       await loadRoles(page, pageSize);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unable to save role.";
@@ -378,7 +387,7 @@ export function RoleManagementPanel() {
                         onClick={(e) => { e.stopPropagation(); }}
                         style={{ width: 22, height: 22, borderRadius: 5, border: "none", background: "var(--pu-soft)", color: "var(--pu)", cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}
                       >
-                        <Link href={`/roles/assign-permission/${role.id}`} style={{ color: "inherit", textDecoration: "none", fontSize: 10 }} title="Assign">🔑</Link>
+                        <Link href={`/roles/assign-permission?roleId=${role.id}`} style={{ color: "inherit", textDecoration: "none", fontSize: 10 }} title="Assign">🔑</Link>
                       </button>
                       <button
                         type="button"

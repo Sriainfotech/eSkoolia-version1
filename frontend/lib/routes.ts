@@ -115,10 +115,9 @@ export const MODULES: ModuleRoute[] = [
     ic: '#6D28D9',
     permission: 'access_control',
     sub: [
-      { label: 'Roles & Assign Permissions', path: '/roles/assign-permission', icon: Lock, permission: 'access_control.assign_permission.view' },
+      { label: 'Roles', path: '/roles', icon: ShieldCheck, permission: 'access_control.assign_permission.view' },
+      { label: 'Assign Permissions', path: '/roles/assign-permission', icon: Lock, permission: 'access_control.assign_permission.view' },
       { label: 'Login Permission', path: '/roles/login-permission', icon: LogIn, permission: 'access_control.due_fees_login_permission.view' },
-      // HIDDEN - no backend yet
-      // { label: 'Due Fees Login', path: '/roles/due-fees-login-permission', icon: ShieldAlert },
     ],
   },
   {
