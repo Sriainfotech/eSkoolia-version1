@@ -194,7 +194,12 @@ export function listData<T = any>(payload: any): T[] {
 }
 
 export const feesApi = {
-  listGroups: () => apiRequestWithRefresh<ApiList<FeesGroup>>("/api/v1/fees/groups/"),
+  listGroups: (params?: { academic_year?: number }) => {
+    const qs = new URLSearchParams();
+    qs.set('page_size', '500');
+    if (params?.academic_year) qs.set('academic_year', String(params.academic_year));
+    return apiRequestWithRefresh<ApiList<FeesGroup>>(`/api/v1/fees/groups/?${qs.toString()}`);
+  },
   createGroup: (payload: Partial<FeesGroup>) =>
     apiRequestWithRefresh<FeesGroup>("/api/v1/fees/groups/", {
       method: "POST",
@@ -234,7 +239,12 @@ export const feesApi = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  listAssignments: () => apiRequestWithRefresh<ApiList<FeesAssignment>>("/api/v1/fees/assignments/"),
+  listAssignments: (params?: { page_size?: number; academic_year?: number }) => {
+    const qs = new URLSearchParams();
+    qs.set('page_size', String(params?.page_size ?? 500));
+    if (params?.academic_year) qs.set('academic_year', String(params.academic_year));
+    return apiRequestWithRefresh<ApiList<FeesAssignment>>(`/api/v1/fees/assignments/?${qs.toString()}`);
+  },
   createAssignment: (payload: Partial<FeesAssignment>) =>
     apiRequestWithRefresh<FeesAssignment>("/api/v1/fees/assignments/", {
       method: "POST",
@@ -299,8 +309,14 @@ export const feesApi = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  listSchedules: (params?: SearchParams) =>
-    apiRequestWithRefresh<PaginatedApiList<FeeSchedule> | ApiList<FeeSchedule>>(`/api/v1/fees/schedules/${buildSearchQuery(params)}`),
+  listSchedules: (params?: SearchParams & { academic_year?: number }) => {
+    const base = `/api/v1/fees/schedules/${buildSearchQuery(params)}`;
+    if (params?.academic_year) {
+      const sep = base.includes('?') ? '&' : '?';
+      return apiRequestWithRefresh<PaginatedApiList<FeeSchedule> | ApiList<FeeSchedule>>(`${base}${sep}academic_year=${params.academic_year}`);
+    }
+    return apiRequestWithRefresh<PaginatedApiList<FeeSchedule> | ApiList<FeeSchedule>>(base);
+  },
   getSchedule: (id: number) => apiRequestWithRefresh<FeeSchedule>(`/api/v1/fees/schedules/${id}/`),
   createSchedule: (payload: Partial<FeeSchedule>) =>
     apiRequestWithRefresh<FeeSchedule>("/api/v1/fees/schedules/", {
@@ -360,7 +376,17 @@ export const feesApi = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  listAcademicYears: () => apiRequestWithRefresh<ApiList<AcademicYear>>("/api/v1/core/academic-years/"),
-  listClasses: () => apiRequestWithRefresh<ApiList<SchoolClass>>("/api/v1/core/classes/?page_size=100"),
-  listStudents: () => apiRequestWithRefresh<ApiList<StudentRow>>("/api/v1/students/students/"),
+  listAcademicYears: () => apiRequestWithRefresh<ApiList<AcademicYear>>("/api/v1/core/academic-years/?page_size=500"),
+  listClasses: (params?: { page_size?: number; academic_year?: number }) => {
+    const qs = new URLSearchParams();
+    qs.set('page_size', String(params?.page_size ?? 500));
+    if (params?.academic_year) qs.set('academic_year', String(params.academic_year));
+    return apiRequestWithRefresh<ApiList<SchoolClass>>(`/api/v1/core/classes/?${qs.toString()}`);
+  },
+  listStudents: (params?: { page_size?: number; academic_year?: number }) => {
+    const qs = new URLSearchParams();
+    qs.set('page_size', String(params?.page_size ?? 500));
+    if (params?.academic_year) qs.set('academic_year', String(params.academic_year));
+    return apiRequestWithRefresh<ApiList<StudentRow>>(`/api/v1/students/students/?${qs.toString()}`);
+  },
 };

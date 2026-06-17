@@ -346,18 +346,22 @@ class FeeScheduleSerializer(serializers.ModelSerializer):
 
         # Fall back to the existing instance on partial (PATCH) updates, where
         # unchanged relations like academic_year are not re-sent by the client.
-        fee_group = attrs.get('fee_group') or getattr(self.instance, 'fee_group', None)
+        fee_group = attrs.get('fee_group') or getattr(self.instance, 'fee_group', None) if 'fee_group' in attrs or not self.instance else getattr(self.instance, 'fee_group', None)
         fee_type = attrs.get('fee_type') or getattr(self.instance, 'fee_type', None)
         academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
 
-        if not fee_group:
-            raise serializers.ValidationError({'fee_group': 'Fee group is required.'})
         if not fee_type:
             raise serializers.ValidationError({'fee_type': 'Fee type is required.'})
         if not academic_year:
             raise serializers.ValidationError({'academic_year': 'Academic year is required.'})
 
-        qs = FeeSchedule.objects.filter(is_deleted=False, academic_year=academic_year, fee_group=fee_group, fee_type=fee_type)
+        # Build query for duplicate check - fee_group is now optional
+        qs = FeeSchedule.objects.filter(is_deleted=False, academic_year=academic_year, fee_type=fee_type)
+        if fee_group is not None:
+            qs = qs.filter(fee_group=fee_group)
+        else:
+            qs = qs.filter(fee_group__isnull=True)
+        
         if self.instance:
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():

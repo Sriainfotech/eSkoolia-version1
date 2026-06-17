@@ -32,6 +32,12 @@ class BaseFeeAPIView(APIView):
 class FeesGroupListCreateAPIView(BaseFeeAPIView):
     def get(self, request):
         groups = FeesGroup.objects.filter(academic_year__school=request.user.school)
+
+        # Filter by academic year if provided
+        academic_year = request.query_params.get('academic_year')
+        if academic_year:
+            groups = groups.filter(academic_year_id=academic_year)
+
         return self.get_paginated_response(groups, FeesGroupSerializer, request)
 
     def post(self, request):
@@ -149,6 +155,16 @@ class FeesTypeDetailAPIView(BaseFeeAPIView):
 class FeeAssignmentListCreateAPIView(BaseFeeAPIView):
     def get(self, request):
         assignments = FeeAssignment.objects.filter(academic_year__school=request.user.school)
+
+        # Optional filters from query params
+        academic_year = request.query_params.get('academic_year')
+        if academic_year:
+            assignments = assignments.filter(academic_year_id=academic_year)
+
+        student = request.query_params.get('student')
+        if student:
+            assignments = assignments.filter(student_id=student)
+
         return self.get_paginated_response(assignments, FeeAssignmentSerializer, request)
 
     def post(self, request):

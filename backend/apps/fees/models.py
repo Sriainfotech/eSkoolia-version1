@@ -167,7 +167,7 @@ class FeeSchedule(models.Model):
     ]
 
     academic_year = models.ForeignKey('core.AcademicYear', on_delete=models.PROTECT)
-    fee_group = models.ForeignKey(FeesGroup, on_delete=models.PROTECT, related_name='schedules')
+    fee_group = models.ForeignKey(FeesGroup, on_delete=models.PROTECT, related_name='schedules', null=True, blank=True)
     fee_type = models.ForeignKey(FeesType, on_delete=models.PROTECT, related_name='schedules')
     
     amount = models.DecimalField(**MONEY_FIELD_KWARGS, help_text="Amount for this schedule")
@@ -197,13 +197,22 @@ class FeeSchedule(models.Model):
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='updated_fee_schedules')
 
     class Meta:
-        unique_together = ('academic_year', 'fee_group', 'fee_type')
         ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['academic_year', 'fee_group', 'fee_type'],
+                condition=models.Q(fee_group__isnull=False, is_deleted=False),
+                name='unique_schedule_with_group'
+            ),
+            models.UniqueConstraint(
+                fields=['academic_year', 'fee_type'],
+                condition=models.Q(fee_group__isnull=True, is_deleted=False),
+                name='unique_schedule_without_group'
+            ),
+        ]
 
     def clean(self):
         super().clean()
-        if not self.fee_group:
-            raise ValidationError({'fee_group': 'Fee group is required.'})
         if not self.fee_type:
             raise ValidationError({'fee_type': 'Fee type is required.'})
         if not self.amount or self.amount <= 0:
