@@ -133,6 +133,38 @@ export function VisitorBookPanel() {
   const filterSecRef = useRef<HTMLDivElement | null>(null);
   const listSecRef = useRef<HTMLDivElement | null>(null);
 
+  // Field refs for auto-scroll to first error
+  const purposeRef = useRef<HTMLSelectElement | null>(null);
+  const nameRef = useRef<HTMLInputElement | null>(null);
+  const phoneRef = useRef<HTMLInputElement | null>(null);
+  const noOfPersonRef = useRef<HTMLInputElement | null>(null);
+  const dateRef = useRef<HTMLInputElement | null>(null);
+  const inTimeRef = useRef<HTMLInputElement | null>(null);
+  const outTimeRef = useRef<HTMLInputElement | null>(null);
+  const attachmentRef = useRef<HTMLInputElement | null>(null);
+
+  const fieldRefMap: Record<string, React.RefObject<HTMLElement | null>> = {
+    purpose: purposeRef as React.RefObject<HTMLElement | null>,
+    name: nameRef as React.RefObject<HTMLElement | null>,
+    phone: phoneRef as React.RefObject<HTMLElement | null>,
+    noOfPerson: noOfPersonRef as React.RefObject<HTMLElement | null>,
+    date: dateRef as React.RefObject<HTMLElement | null>,
+    inTime: inTimeRef as React.RefObject<HTMLElement | null>,
+    outTime: outTimeRef as React.RefObject<HTMLElement | null>,
+    attachment: attachmentRef as React.RefObject<HTMLElement | null>,
+  };
+
+  const scrollToFirstError = (errors: Record<string, string>) => {
+    const fieldOrder = ["purpose", "name", "phone", "noOfPerson", "date", "inTime", "outTime", "attachment"];
+    for (const key of fieldOrder) {
+      if (errors[key] && fieldRefMap[key]?.current) {
+        setTimeout(() => fieldRefMap[key].current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+        (fieldRefMap[key].current as HTMLElement)?.focus?.();
+        return;
+      }
+    }
+  };
+
   const scrollToTab = (id: Tab) => {
     const el = id === "add" ? addSecRef.current : id === "filter" ? filterSecRef.current : listSecRef.current;
     if (el) {
@@ -142,12 +174,21 @@ export function VisitorBookPanel() {
 
   const todayDate = useMemo(() => new Date().toISOString().slice(0, 10), []);
 
-  const load = async (targetPage = page, targetPageSize = pageSize) => {
+  const load = async (targetPage = page, targetPageSize = pageSize, activeSearch = search, activePurpose = filterPurpose, activeDate = filterDate) => {
     try {
       setLoading(true);
       setError("");
+      const params = new URLSearchParams();
+      params.set("page", String(targetPage));
+      params.set("page_size", String(targetPageSize));
+      if (activeSearch.trim()) params.set("search", activeSearch.trim());
+      if (activePurpose) {
+        const purposeLabel = purposeOptions.find(o => o.value === activePurpose)?.label || activePurpose;
+        params.set("purpose", purposeLabel);
+      }
+      if (activeDate) params.set("date", activeDate);
       const [visitorData, setupData] = await Promise.all([
-        apiGet<ApiList<VisitorRow>>(`/api/v1/admissions/visitors/?page=${targetPage}&page_size=${targetPageSize}`),
+        apiGet<ApiList<VisitorRow>>(`/api/v1/admissions/visitors/?${params.toString()}`),
         apiGet<ApiList<AdminSetupRow>>("/api/v1/admissions/admin-setups/"),
       ]);
       const rows = listData(visitorData);
@@ -256,8 +297,8 @@ export function VisitorBookPanel() {
     if (Object.keys(nextErrors).length > 0) {
       setFieldErrors(nextErrors);
       setFormBanner("Please fix the errors below before submitting.");
-      setError("Please fix the errors below before submitting.");
-      toast.error("Please fix the errors below before submitting.", { autoClose: 5000 });
+      console.warn("[VisitorBook] Validation blocked submission:", nextErrors);
+      scrollToFirstError(nextErrors);
       return;
     }
 
@@ -291,8 +332,30 @@ export function VisitorBookPanel() {
       setActiveTab("list");
       scrollToTab("list");
     } catch (err: unknown) {
+      // Map backend field_errors back to field-level display
+      const apiDetails = (err as { details?: { field_errors?: Record<string, string[]> } }).details;
+      if (apiDetails?.field_errors && typeof apiDetails.field_errors === "object") {
+        const backendMap: Record<string, string> = {};
+        const keyMap: Record<string, string> = {
+          in_time: "inTime",
+          out_time: "outTime",
+          no_of_person: "noOfPerson",
+          file_upload: "attachment",
+        };
+        for (const [field, messages] of Object.entries(apiDetails.field_errors)) {
+          const frontendKey = keyMap[field] ?? field;
+          backendMap[frontendKey] = Array.isArray(messages) ? messages[0] : String(messages);
+        }
+        if (Object.keys(backendMap).length > 0) {
+          setFieldErrors(backendMap);
+          setFormBanner("Please fix the errors below before submitting.");
+          console.warn("[VisitorBook] Backend validation errors:", backendMap);
+          scrollToFirstError(backendMap);
+          return;
+        }
+      }
       const message = getErrorMessage(err, editingId ? "Unable to update visitor." : "Unable to add visitor.");
-      setError(message);
+      setFormBanner(message);
       toast.error(message, { autoClose: 6000 });
     } finally {
       setSaving(false);
@@ -332,6 +395,8 @@ export function VisitorBookPanel() {
     if (filterDate) chips.push(`Date: ${filterDate}`);
     setFilterChips(chips);
     setFilterOpen(false);
+    setPage(1);
+    void load(1, pageSize, search, filterPurpose, filterDate);
   };
 
   const clearFilters = () => {
@@ -339,21 +404,12 @@ export function VisitorBookPanel() {
     setFilterPurpose("");
     setFilterDate("");
     setFilterChips([]);
+    setPage(1);
+    void load(1, pageSize, "", "", "");
   };
 
   const filteredSorted = useMemo(() => {
-    let next = [...items];
-    const q = search.trim().toLowerCase();
-    if (q) {
-      next = next.filter((row) => [row.name, row.purpose, row.phone || "", row.visitor_id].join(" ").toLowerCase().includes(q));
-    }
-    if (filterPurpose) {
-      next = next.filter(row => row.purpose === filterPurpose || purposeOptions.find(o => o.value === filterPurpose)?.label === row.purpose);
-    }
-    if (filterDate) {
-      next = next.filter(row => row.date === filterDate);
-    }
-
+    const next = [...items];
     next.sort((a, b) => {
       const mult = sortDir === "asc" ? 1 : -1;
       if (sortKey === "name") return a.name.localeCompare(b.name) * mult;
@@ -362,7 +418,7 @@ export function VisitorBookPanel() {
       return a.out_time.localeCompare(b.out_time) * mult;
     });
     return next;
-  }, [items, search, sortKey, sortDir, filterPurpose, filterDate, purposeOptions]);
+  }, [items, sortKey, sortDir]);
 
   return (
     <div className={s.root} style={{ padding: "16px 24px" }}>
@@ -406,45 +462,53 @@ export function VisitorBookPanel() {
               <div className={s.roGrid} style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "12px 16px" }}>
                 <div className={s.roField}>
                   <label>Purpose *</label>
-                  <select required value={purpose} onChange={(e) => setPurpose(e.target.value)} className={s.roInput}>
+                  <select ref={purposeRef} required value={purpose} onChange={(e) => { setPurpose(e.target.value); if (fieldErrors.purpose) setFieldErrors(p => ({ ...p, purpose: "" })); }} className={fieldErrors.purpose ? s.roInputError : s.roInput}>
                     <option value="" disabled hidden>Select Purpose *</option>
                     {purposeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                   </select>
+                  {fieldErrors.purpose && <span className={s.fieldError}>{fieldErrors.purpose}</span>}
                 </div>
                 
                 <div className={s.roField}>
                   <label>Student / Visitor Name *</label>
-                  <input type="text" required value={name} onChange={(e) => setName(e.target.value)} className={s.roInput} placeholder="Enter name" />
+                  <input ref={nameRef} type="text" required value={name} onChange={(e) => { setName(e.target.value); if (fieldErrors.name) setFieldErrors(p => ({ ...p, name: "" })); }} className={fieldErrors.name ? s.roInputError : s.roInput} placeholder="Enter name" />
+                  {fieldErrors.name && <span className={s.fieldError}>{fieldErrors.name}</span>}
                 </div>
                 
                 <div className={s.roField}>
                   <label>Phone No.</label>
-                  <input type="tel" inputMode="tel" maxLength={13} pattern="\+?\d{10,12}" value={phone} onChange={(e) => setPhone(e.target.value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "").slice(0, 13))} className={s.roInput} placeholder="e.g. +919876543210" />
+                  <input ref={phoneRef} type="tel" inputMode="tel" maxLength={13} pattern="\+?\d{10,12}" value={phone} onChange={(e) => { setPhone(e.target.value.replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "").slice(0, 13)); if (fieldErrors.phone) setFieldErrors(p => ({ ...p, phone: "" })); }} className={fieldErrors.phone ? s.roInputError : s.roInput} placeholder="e.g. +919876543210" />
+                  {fieldErrors.phone && <span className={s.fieldError}>{fieldErrors.phone}</span>}
                 </div>
                 
                 <div className={s.roField}>
                   <label>Number of Persons *</label>
-                  <input type="number" min={1} max={99} value={noOfPerson} onChange={(e) => setNoOfPerson(e.target.value)} className={s.roInput} />
+                  <input ref={noOfPersonRef} type="number" min={1} max={99} value={noOfPerson} onChange={(e) => { setNoOfPerson(e.target.value); if (fieldErrors.noOfPerson) setFieldErrors(p => ({ ...p, noOfPerson: "" })); }} className={fieldErrors.noOfPerson ? s.roInputError : s.roInput} />
+                  {fieldErrors.noOfPerson && <span className={s.fieldError}>{fieldErrors.noOfPerson}</span>}
                 </div>
                 
                 <div className={s.roField}>
                   <label>Date *</label>
-                  <input type="date" max={todayDate} value={date} onChange={(e) => setDate(e.target.value)} className={s.roInput} />
+                  <input ref={dateRef} type="date" max={todayDate} value={date} onChange={(e) => { setDate(e.target.value); if (fieldErrors.date) setFieldErrors(p => ({ ...p, date: "" })); }} className={fieldErrors.date ? s.roInputError : s.roInput} />
+                  {fieldErrors.date && <span className={s.fieldError}>{fieldErrors.date}</span>}
                 </div>
                 
                 <div className={s.roField}>
                   <label>In Time *</label>
-                  <input type="time" value={inTime} onChange={(e) => setInTime(e.target.value)} className={s.roInput} />
+                  <input ref={inTimeRef} type="time" value={inTime} onChange={(e) => { setInTime(e.target.value); if (fieldErrors.inTime) setFieldErrors(p => ({ ...p, inTime: "" })); }} className={fieldErrors.inTime ? s.roInputError : s.roInput} />
+                  {fieldErrors.inTime && <span className={s.fieldError}>{fieldErrors.inTime}</span>}
                 </div>
                 
                 <div className={s.roField}>
                   <label>Out Time *</label>
-                  <input type="time" value={outTime} onChange={(e) => setOutTime(e.target.value)} className={s.roInput} />
+                  <input ref={outTimeRef} type="time" value={outTime} onChange={(e) => { setOutTime(e.target.value); if (fieldErrors.outTime) setFieldErrors(p => ({ ...p, outTime: "" })); }} className={fieldErrors.outTime ? s.roInputError : s.roInput} />
+                  {fieldErrors.outTime && <span className={s.fieldError}>{fieldErrors.outTime}</span>}
                 </div>
                 
                 <div className={s.roField}>
                   <label>Attachment</label>
-                  <input type="file" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx" onChange={(e) => setFileUpload(e.target.files?.[0] ?? null)} className={s.roInput} style={{ padding: "4px 8px" }} />
+                  <input ref={attachmentRef} type="file" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx" onChange={(e) => { setFileUpload(e.target.files?.[0] ?? null); if (fieldErrors.attachment) setFieldErrors(p => ({ ...p, attachment: "" })); }} className={fieldErrors.attachment ? s.roInputError : s.roInput} style={{ padding: "4px 8px" }} />
+                  {fieldErrors.attachment && <span className={s.fieldError}>{fieldErrors.attachment}</span>}
                 </div>
               </div>
 

@@ -248,15 +248,57 @@ class VisitorBookEntry(models.Model):
         ordering = ["-created_at"]
 
 
+class ComplaintType(models.Model):
+    """Master data for complaint types (Academic Issue, Fee & Billing, Transport, etc.)"""
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="complaint_types")
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "complaint_types"
+        unique_together = ("school", "name")
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class ComplaintSource(models.Model):
+    """Master data for complaint sources (Parent, Student, Staff, Email, Phone Call, etc.)"""
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="complaint_sources")
+    name = models.CharField(max_length=120)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "complaint_sources"
+        unique_together = ("school", "name")
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class ComplaintEntry(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="complaint_entries")
     complaint_by = models.CharField(max_length=255)
-    complaint_type = models.CharField(max_length=120)
-    complaint_source = models.CharField(max_length=120)
+    complaint_type = models.ForeignKey("ComplaintType", on_delete=models.PROTECT, null=True, blank=True, related_name="complaints")
+    complaint_source = models.ForeignKey("ComplaintSource", on_delete=models.PROTECT, null=True, blank=True, related_name="complaints")
     phone = models.CharField(max_length=32, blank=True)
     date = models.DateField(null=True, blank=True)
-    action_taken = models.CharField(max_length=255, blank=True)
-    assigned = models.CharField(max_length=255, blank=True)
+    action_taken = models.CharField(max_length=500, blank=True)
+    assigned_to = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="assigned_complaints",
+    )
     description = models.TextField(blank=True)
     file = models.FileField(upload_to="admissions/complaints/", blank=True, null=True)
     created_by = models.ForeignKey(

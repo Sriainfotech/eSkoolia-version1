@@ -4,6 +4,8 @@ from .models import (
     AdminSetupEntry,
     CertificateTemplate,
     ComplaintEntry,
+    ComplaintType,
+    ComplaintSource,
     IdCardTemplate,
     PhoneCallLogEntry,
     PostalDispatchEntry,
@@ -24,6 +26,22 @@ class VisitorBookEntryAdmin(admin.ModelAdmin):
     list_display = ("id", "name", "purpose", "phone", "no_of_person", "date", "school", "created_at")
     search_fields = ("name", "purpose", "phone", "visitor_id")
     list_filter = ("school", "date")
+
+
+@admin.register(ComplaintType)
+class ComplaintTypeAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "school", "is_active", "created_at")
+    search_fields = ("name",)
+    list_filter = ("school", "is_active")
+    ordering = ("school", "name")
+
+
+@admin.register(ComplaintSource)
+class ComplaintSourceAdmin(admin.ModelAdmin):
+    list_display = ("id", "name", "school", "is_active", "created_at")
+    search_fields = ("name",)
+    list_filter = ("school", "is_active")
+    ordering = ("school", "name")
 
 
 @admin.register(ComplaintEntry)

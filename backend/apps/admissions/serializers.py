@@ -7,12 +7,15 @@ from django.utils import timezone
 from django.utils.html import strip_tags
 
 from apps.access_control.models import Role
+from apps.users.models import User
 from .models import (
     AdmissionFollowUp,
     AdmissionInquiry,
     AdminSetupEntry,
     CertificateTemplate,
     ComplaintEntry,
+    ComplaintType,
+    ComplaintSource,
     IdCardTemplate,
     PhoneCallLogEntry,
     PostalDispatchEntry,
@@ -93,12 +96,17 @@ def _normalize_phone(value, field_name, required=False):
             raise serializers.ValidationError({field_name: "This field is required."})
         return ""
 
+    # Remove spaces and hyphens, remove leading +
     phone = re.sub(r"[\s-]", "", phone)
     if phone.startswith("+"):
         phone = phone[1:]
 
-    if not re.fullmatch(r"\d{10,12}", phone):
-        raise serializers.ValidationError({field_name: "Phone number must be 10 to 12 digits."})
+    # Remove non-digit characters
+    phone = re.sub(r"\D", "", phone)
+
+    # Validate: exactly 10 digits, starts with 6, 7, 8, or 9
+    if not re.fullmatch(r"[6-9]\d{9}", phone):
+        raise serializers.ValidationError({field_name: "Please enter a valid 10-digit mobile number."})
 
     return phone
 
@@ -120,16 +128,29 @@ def _is_meaningful_text(value):
     text = str(value or "").strip()
     if not text:
         return True
+    
+    # Must contain at least one letter
     if not re.search(r"[A-Za-z]", text):
         return False
+    
+    # Reject if 3+ consecutive repeated characters (catches "aaa", "fff")
     if re.search(r"(.)\1{2,}", text):
         return False
+    
+    # Check for keyboard patterns
     lowered = re.sub(r"\s+", "", text.lower())
-    keyboard_patterns = ["qwerty", "asdf", "zxcv", "qazwsx", "poiuy", "lkjh", "mnbv", "abcdef", "abcd", "jkl"]
+    keyboard_patterns = ["qwerty", "asdf", "zxcv", "qazwsx", "poiuy", "lkjh", "mnbv", "abcdef", "abcd", "jkl", "12345", "123456"]
     if any(pattern in lowered for pattern in keyboard_patterns):
         return False
-    if len(lowered) >= 2 and re.fullmatch(r"(.)\1+", lowered):
+    
+    # Check if too many repeated character sequences (catches "saaafff")
+    char_groups = re.findall(r"(.)\1*", lowered)
+    repetition_score = sum(len(group) for group in char_groups if len(group) >= 2)
+    
+    # If more than 40% repeated sequences, reject as spam
+    if len(lowered) >= 3 and repetition_score > len(lowered) * 0.4:
         return False
+    
     return True
 
 
@@ -574,12 +595,52 @@ class VisitorBookEntrySerializer(serializers.ModelSerializer):
         return data
 
 
+class ComplaintTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ComplaintType
+        fields = ["id", "name", "description", "is_active"]
+        read_only_fields = ["id"]
+
+    def validate_name(self, value):
+        name = str(value or "").strip()
+        if not name or len(name) < 2:
+            raise serializers.ValidationError("Complaint type name must be at least 2 characters.")
+        if len(name) > 120:
+            raise serializers.ValidationError("Complaint type name must not exceed 120 characters.")
+        return name
+
+
+class ComplaintSourceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ComplaintSource
+        fields = ["id", "name", "description", "is_active"]
+        read_only_fields = ["id"]
+
+    def validate_name(self, value):
+        name = str(value or "").strip()
+        if not name or len(name) < 2:
+            raise serializers.ValidationError("Complaint source name must be at least 2 characters.")
+        if len(name) > 120:
+            raise serializers.ValidationError("Complaint source name must not exceed 120 characters.")
+        return name
+
+
+class StaffLookupSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ["id", "username", "full_name", "email"]
+
+    def get_full_name(self, obj):
+        return obj.get_full_name() or obj.username
+
+
 class ComplaintEntrySerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField(read_only=True)
-    complaint_type_name = serializers.SerializerMethodField(read_only=True)
-    complaint_source_name = serializers.SerializerMethodField(read_only=True)
-    complaint_type = serializers.CharField(write_only=True, required=False, allow_blank=True)
-    complaint_source = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    complaint_type = serializers.IntegerField(required=False, allow_null=True)  # Optional
+    complaint_source = serializers.IntegerField(required=False, allow_null=True)  # Optional
+    assigned_to = serializers.IntegerField(required=False, allow_null=True)  # Optional
     file_upload = serializers.FileField(write_only=True, required=False, allow_null=True)
     file_url = serializers.SerializerMethodField(read_only=True)
 
@@ -590,15 +651,12 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
             "school",
             "complaint_by",
             "complaint_type",
-            "complaint_type_name",
             "complaint_source",
-            "complaint_source_name",
             "phone",
             "date",
             "action_taken",
-            "assigned",
+            "assigned_to",
             "description",
-            "file",
             "file_upload",
             "file_url",
             "created_by",
@@ -606,145 +664,226 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "school", "file", "file_url", "created_by", "created_by_name", "created_at", "updated_at"]
+        read_only_fields = ["id", "school", "file_url", "created_by", "created_by_name", "created_at", "updated_at"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Store school reference for validation
+        request = self.context.get("request")
+        print(f"DEBUG: ComplaintEntrySerializer.__init__ - request: {request}")
+        print(f"DEBUG: ComplaintEntrySerializer.__init__ - context keys: {list(self.context.keys())}")
+        
+        self._school = None
+        if request:
+            user = getattr(request, "user", None)
+            print(f"DEBUG: ComplaintEntrySerializer.__init__ - request.user: {user}")
+            school_from_request = getattr(request, "school", None)
+            school_from_user = user.school if user else None
+            print(f"DEBUG: ComplaintEntrySerializer.__init__ - school_from_request: {school_from_request}")
+            print(f"DEBUG: ComplaintEntrySerializer.__init__ - school_from_user: {school_from_user}")
+            self._school = school_from_request or school_from_user
+            print(f"DEBUG: ComplaintEntrySerializer.__init__ - self._school: {self._school}")
+        else:
+            print(f"DEBUG: ComplaintEntrySerializer.__init__ - NO REQUEST IN CONTEXT")
 
     def get_created_by_name(self, obj):
         if obj.created_by:
             return obj.created_by.get_full_name() or obj.created_by.username
         return None
 
-    def _current_school_id(self):
-        request = self.context.get("request")
-        if not request or not getattr(request, "user", None):
+    def get_assigned_to_name(self, obj):
+        if obj.assigned_to:
+            return obj.assigned_to.get_full_name() or obj.assigned_to.username
+        return None
+
+    def validate_complaint_type(self, value):
+        print(f"DEBUG: validate_complaint_type() called with value: {value} (type: {type(value)})")
+        # Complaint type is optional
+        if value is None or value == "" or value == "null":
+            print(f"DEBUG: validate_complaint_type() - returning None (empty)")
             return None
-        user_school_id = getattr(request.user, "school_id", None)
-        if user_school_id:
-            return user_school_id
-        request_school = getattr(request, "school", None)
-        return getattr(request_school, "id", None)
-
-    def _resolve_setup_name(self, value, setup_type, field_name):
-        raw = str(value or "").strip()
-        if not raw:
-            return ""
-
-        if raw.isdigit():
-            school_id = self._current_school_id() or getattr(getattr(self.instance, "school", None), "id", None)
-            queryset = AdminSetupEntry.objects.filter(type=setup_type, id=int(raw))
-            if school_id:
-                queryset = queryset.filter(school_id=school_id)
-            setup = queryset.only("name").first()
-            if setup:
-                return setup.name
-            raise serializers.ValidationError({field_name: f"Invalid {field_name.replace('_', ' ')} selected."})
-
-        return raw
-
-    def get_complaint_type_name(self, obj):
+        # If it's already an object, extract the id
+        if isinstance(value, ComplaintType):
+            print(f"DEBUG: validate_complaint_type() - extracting ID from object: {value.id}")
+            return value.id
+        # Otherwise treat as integer
         try:
-            return self._resolve_setup_name(obj.complaint_type, "2", "complaint_type")
-        except serializers.ValidationError:
-            return str(obj.complaint_type or "")
+            result = int(value)
+            print(f"DEBUG: validate_complaint_type() - returning int: {result}")
+            return result
+        except (ValueError, TypeError) as e:
+            print(f"DEBUG: validate_complaint_type() - ERROR converting to int: {e}")
+            raise serializers.ValidationError(f"Complaint Type must be a valid number: {str(e)}")
 
-    def get_complaint_source_name(self, obj):
+    def validate_complaint_source(self, value):
+        # Complaint source is optional
+        if value is None or value == "" or value == "null":
+            return None
+        # If it's already an object, extract the id
+        if isinstance(value, ComplaintSource):
+            return value.id
+        # Otherwise treat as integer
         try:
-            return self._resolve_setup_name(obj.complaint_source, "3", "complaint_source")
-        except serializers.ValidationError:
-            return str(obj.complaint_source or "")
+            return int(value)
+        except (ValueError, TypeError):
+            raise serializers.ValidationError("Complaint Source must be a valid number.")
 
-    def validate(self, attrs):
-        errors = {}
+    def validate_assigned_to(self, value):
+        # Assigned to is optional
+        if value is None or value == "" or value == "null":
+            return None
+        # If it's already an object, extract the id
+        if isinstance(value, User):
+            return value.id
+        # Otherwise treat as integer
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            raise serializers.ValidationError("Assigned to must be a valid number.")
 
-        def incoming_or_instance(field_name, default=""):
-            if field_name in attrs:
-                return attrs.get(field_name)
-            if self.instance is not None:
-                return getattr(self.instance, field_name, default)
-            return default
-
-        if "complaint_type" in attrs:
-            attrs["complaint_type"] = self._resolve_setup_name(attrs.get("complaint_type"), "2", "complaint_type")
-        if "complaint_source" in attrs:
-            attrs["complaint_source"] = self._resolve_setup_name(attrs.get("complaint_source"), "3", "complaint_source")
-
-        complaint_by = _sanitize_text(incoming_or_instance("complaint_by", ""))
-        action_taken = _sanitize_text(incoming_or_instance("action_taken", ""))
-        assigned = _sanitize_text(incoming_or_instance("assigned", ""))
-        description = _sanitize_text(incoming_or_instance("description", ""))
-        date_value = incoming_or_instance("date", None)
-
+    def validate_complaint_by(self, value):
+        complaint_by = _sanitize_text(str(value or "")).strip()
         if not complaint_by:
-            errors["complaint_by"] = "Complaint By is required."
-        elif len(complaint_by) < 2:
-            errors["complaint_by"] = "Minimum 2 characters required."
-        elif len(complaint_by) > 100:
-            errors["complaint_by"] = "Complaint By must not exceed 100 characters."
-        elif not NAME_PATTERN.match(complaint_by):
-            errors["complaint_by"] = "Only letters, spaces, hyphens, apostrophes allowed."
-        elif not _is_meaningful_text(complaint_by):
-            errors["complaint_by"] = "Please enter meaningful text."
+            raise serializers.ValidationError("Complaint By is required.")
+        if len(complaint_by) < 3:
+            raise serializers.ValidationError("Minimum 3 characters required.")
+        if len(complaint_by) > 100:
+            raise serializers.ValidationError("Complaint By must not exceed 100 characters.")
+        if not re.match(r"^[A-Za-z0-9\s\-]+$", complaint_by):
+            raise serializers.ValidationError("Only alphanumeric characters, spaces, and hyphens allowed.")
+        if not _is_meaningful_text(complaint_by):
+            raise serializers.ValidationError("Please enter meaningful text.")
+        return complaint_by
 
-        complaint_type_value = incoming_or_instance("complaint_type", "")
-        complaint_source_value = incoming_or_instance("complaint_source", "")
-        if not str(complaint_type_value or "").strip():
-            errors["complaint_type"] = "Please select a complaint type."
-        if not str(complaint_source_value or "").strip():
-            errors["complaint_source"] = "Please select a complaint source."
+    def validate_phone(self, value):
+        if not value or value == "":
+            return ""
+        phone = _normalize_phone(_sanitize_text(str(value)), "phone", required=False)
+        return phone
 
-        if not date_value:
-            errors["date"] = "Please select a date."
-        elif date_value > timezone.localdate():
-            errors["date"] = "Date cannot be in the future."
+    def validate_date(self, value):
+        if not value or value == "":
+            return None  # Date is optional
+        try:
+            # Handle both string and date objects
+            if isinstance(value, str):
+                from datetime import datetime as dt
+                # Try parsing ISO format (YYYY-MM-DD)
+                parsed_date = dt.strptime(value, "%Y-%m-%d").date()
+            else:
+                parsed_date = value
+            
+            if parsed_date > timezone.localdate():
+                raise serializers.ValidationError("Date cannot be in the future.")
+            return parsed_date
+        except ValueError:
+            raise serializers.ValidationError("Invalid date format. Use YYYY-MM-DD.")
 
+    def validate_action_taken(self, value):
+        if not value or value == "":
+            return ""
+        action_taken = _sanitize_text(str(value)).strip()
+        if len(action_taken) > 500:
+            raise serializers.ValidationError("Action taken must not exceed 500 characters.")
         if action_taken and not _is_meaningful_text(action_taken):
-            errors["action_taken"] = "Please enter meaningful text."
-        if assigned and not _is_meaningful_text(assigned):
-            errors["assigned"] = "Please enter a valid name."
+            raise serializers.ValidationError("Please enter meaningful text.")
+        return action_taken
+
+    def validate_description(self, value):
+        if not value or value == "":
+            return ""
+        description = _sanitize_text(str(value)).strip()
         if description:
             if len(description) < 10:
-                errors["description"] = "Description must be at least 10 characters."
-            elif not _is_meaningful_text(description):
-                errors["description"] = "Please enter meaningful text."
+                raise serializers.ValidationError("Description must be at least 10 characters.")
+            if len(description) > 1000:
+                raise serializers.ValidationError("Description must not exceed 1000 characters.")
+            if not _is_meaningful_text(description):
+                raise serializers.ValidationError("Please enter meaningful text.")
+        return description
 
+    def validate(self, attrs):
+        print(f"\nDEBUG: ComplaintEntrySerializer.validate() - START")
+        print(f"DEBUG: attrs keys: {list(attrs.keys())}")
+        print(f"DEBUG: attrs: {attrs}")
+        print(f"DEBUG: self._school: {self._school}")
+        
+        errors = {}
+        
+        # Validate file upload
         upload = attrs.get("file_upload")
         if upload is not None:
+            print(f"DEBUG: Validating file upload: {upload}")
             filename = str(getattr(upload, "name", "") or "").lower()
             extension = "." + filename.rsplit(".", 1)[1] if "." in filename else ""
             if extension not in ALLOWED_COMPLAINT_FILE_EXTENSIONS:
-                errors["file_upload"] = "Invalid file type. Allowed: PDF, DOC, JPG, PNG."
+                errors["file_upload"] = "Invalid file type. Allowed: PDF, DOC, DOCX, JPG, JPEG, PNG."
             elif getattr(upload, "size", 0) > MAX_COMPLAINT_FILE_SIZE:
                 errors["file_upload"] = "File size exceeds 5MB limit."
-
-        phone = _normalize_phone(
-            _sanitize_text(incoming_or_instance("phone", "")),
-            "phone",
-            required=False,
-        )
-
+        
+        # Validate FK permissions - must belong to user's school
+        if self._school:
+            complaint_type_id = attrs.get("complaint_type")
+            print(f"DEBUG: complaint_type_id from attrs: {complaint_type_id} (type: {type(complaint_type_id)})")
+            if complaint_type_id and complaint_type_id != "null":
+                # Extract ID if it's an object
+                ct_id = complaint_type_id.id if isinstance(complaint_type_id, ComplaintType) else complaint_type_id
+                try:
+                    ct_id = int(ct_id)
+                    print(f"DEBUG: Checking ComplaintType exists with id={ct_id}, school={self._school.id}")
+                    ct_exists = ComplaintType.objects.filter(id=ct_id, school=self._school, is_active=True).exists()
+                    print(f"DEBUG: ComplaintType exists: {ct_exists}")
+                    if not ct_exists:
+                        print(f"DEBUG: ComplaintType NOT FOUND - listing all for this school:")
+                        all_cts = ComplaintType.objects.filter(school=self._school)
+                        print(f"DEBUG: All types: {[(ct.id, ct.name, ct.is_active) for ct in all_cts]}")
+                        errors["complaint_type"] = "Invalid Complaint Type for your school."
+                except (ValueError, TypeError) as e:
+                    print(f"DEBUG: Error converting complaint_type to int: {e}")
+                    errors["complaint_type"] = f"Complaint Type must be a valid number: {str(e)}"
+            
+            complaint_source_id = attrs.get("complaint_source")
+            print(f"DEBUG: complaint_source_id from attrs: {complaint_source_id} (type: {type(complaint_source_id)})")
+            if complaint_source_id and complaint_source_id != "null":
+                # Extract ID if it's an object
+                cs_id = complaint_source_id.id if isinstance(complaint_source_id, ComplaintSource) else complaint_source_id
+                try:
+                    cs_id = int(cs_id)
+                    print(f"DEBUG: Checking ComplaintSource exists with id={cs_id}, school={self._school.id}")
+                    cs_exists = ComplaintSource.objects.filter(id=cs_id, school=self._school, is_active=True).exists()
+                    print(f"DEBUG: ComplaintSource exists: {cs_exists}")
+                    if not cs_exists:
+                        print(f"DEBUG: ComplaintSource NOT FOUND - listing all for this school:")
+                        all_css = ComplaintSource.objects.filter(school=self._school)
+                        print(f"DEBUG: All sources: {[(cs.id, cs.name, cs.is_active) for cs in all_css]}")
+                        errors["complaint_source"] = "Invalid Complaint Source for your school."
+                except (ValueError, TypeError) as e:
+                    print(f"DEBUG: Error converting complaint_source to int: {e}")
+                    errors["complaint_source"] = f"Complaint Source must be a valid number: {str(e)}"
+            
+            assigned_to_id = attrs.get("assigned_to")
+            print(f"DEBUG: assigned_to_id from attrs: {assigned_to_id} (type: {type(assigned_to_id)})")
+            if assigned_to_id and assigned_to_id != "null":
+                # Extract ID if it's an object
+                at_id = assigned_to_id.id if isinstance(assigned_to_id, User) else assigned_to_id
+                try:
+                    at_id = int(at_id)
+                    print(f"DEBUG: Checking User exists with id={at_id}, school={self._school.id}")
+                    user_exists = User.objects.filter(id=at_id, school=self._school, is_active=True).exists()
+                    print(f"DEBUG: User exists: {user_exists}")
+                    if not user_exists:
+                        errors["assigned_to"] = "Invalid staff member for your school."
+                except (ValueError, TypeError) as e:
+                    print(f"DEBUG: Error converting assigned_to to int: {e}")
+                    errors["assigned_to"] = f"Assigned to must be a valid number: {str(e)}"
+        else:
+            print(f"DEBUG: No school context, skipping FK validation")
+        
         if errors:
+            print(f"DEBUG: Validation errors found: {errors}")
             raise serializers.ValidationError(errors)
-
-        attrs["complaint_by"] = complaint_by
-        attrs["action_taken"] = action_taken
-        attrs["assigned"] = assigned
-        attrs["description"] = description
-        attrs["phone"] = phone
-
-        school_id = _current_school_id(self.context, self.instance)
-        if school_id:
-            duplicate_filters = {
-                "school_id": school_id,
-                "complaint_by__iexact": complaint_by,
-                "complaint_type__iexact": str(complaint_type_value or "").strip(),
-                "complaint_source__iexact": str(complaint_source_value or "").strip(),
-                "phone": phone,
-                "date": date_value,
-                "action_taken__iexact": action_taken,
-                "assigned__iexact": assigned,
-                "description__iexact": description,
-            }
-            _validate_duplicate_entry(ComplaintEntry, duplicate_filters, instance=self.instance)
-
+        
+        print(f"DEBUG: ComplaintEntrySerializer.validate() - SUCCESS")
         return super().validate(attrs)
 
     def get_file_url(self, obj):
@@ -754,23 +893,146 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
         url = obj.file.url
         return request.build_absolute_uri(url) if request else url
 
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        # Ensure FK fields are returned as integers (IDs) not objects or null
+        if instance:
+            ret['complaint_type'] = instance.complaint_type.id if instance.complaint_type else None
+            ret['complaint_source'] = instance.complaint_source.id if instance.complaint_source else None
+            ret['assigned_to'] = instance.assigned_to.id if instance.assigned_to else None
+            
+            # Add computed name fields for frontend display
+            ret['complaint_type_name'] = instance.complaint_type.name if instance.complaint_type else ""
+            ret['complaint_source_name'] = instance.complaint_source.name if instance.complaint_source else ""
+            ret['assigned_to_name'] = (instance.assigned_to.get_full_name() or instance.assigned_to.username) if instance.assigned_to else ""
+        return ret
+
     def create(self, validated_data):
+        import sys
+        print(f"\nDEBUG: ComplaintEntrySerializer.create() - START")
+        print(f"DEBUG: validated_data keys: {list(validated_data.keys())}")
+        print(f"DEBUG: validated_data: {validated_data}")
+        sys.stdout.flush()
+        
         upload = validated_data.pop("file_upload", None)
         if upload is not None:
             validated_data["file"] = upload
-        return super().create(validated_data)
+        request = self.context.get("request")
+        if request and getattr(request, "user", None):
+            validated_data["created_by"] = request.user
+        
+        print(f"DEBUG: Before FK conversion - complaint_type: {validated_data.get('complaint_type')} (type: {type(validated_data.get('complaint_type'))})")
+        print(f"DEBUG: Before FK conversion - complaint_source: {validated_data.get('complaint_source')} (type: {type(validated_data.get('complaint_source'))})")
+        sys.stdout.flush()
+        
+        # Convert FK integer IDs to model objects
+        if "complaint_type" in validated_data and validated_data["complaint_type"]:
+            print(f"DEBUG: Converting complaint_type {validated_data['complaint_type']} to object")
+            sys.stdout.flush()
+            try:
+                complaint_type_id = int(validated_data["complaint_type"])
+                ct_obj = ComplaintType.objects.get(id=complaint_type_id)
+                print(f"DEBUG: Got ComplaintType object: {ct_obj}")
+                validated_data["complaint_type"] = ct_obj
+                sys.stdout.flush()
+            except (ComplaintType.DoesNotExist, ValueError, TypeError) as e:
+                print(f"DEBUG: Error converting complaint_type: {e}")
+                sys.stdout.flush()
+                pass
+        
+        if "complaint_source" in validated_data and validated_data["complaint_source"]:
+            print(f"DEBUG: Converting complaint_source {validated_data['complaint_source']} to object")
+            sys.stdout.flush()
+            try:
+                complaint_source_id = int(validated_data["complaint_source"])
+                cs_obj = ComplaintSource.objects.get(id=complaint_source_id)
+                print(f"DEBUG: Got ComplaintSource object: {cs_obj}")
+                validated_data["complaint_source"] = cs_obj
+                sys.stdout.flush()
+            except (ComplaintSource.DoesNotExist, ValueError, TypeError) as e:
+                print(f"DEBUG: Error converting complaint_source: {e}")
+                sys.stdout.flush()
+                pass
+        
+        if "assigned_to" in validated_data and validated_data.get("assigned_to"):
+            print(f"DEBUG: Converting assigned_to {validated_data['assigned_to']} to object")
+            sys.stdout.flush()
+            try:
+                assigned_to_id = int(validated_data["assigned_to"])
+                user_obj = User.objects.get(id=assigned_to_id)
+                print(f"DEBUG: Got User object: {user_obj}")
+                validated_data["assigned_to"] = user_obj
+                sys.stdout.flush()
+            except (User.DoesNotExist, ValueError, TypeError) as e:
+                print(f"DEBUG: Error converting assigned_to: {e}")
+                sys.stdout.flush()
+                validated_data["assigned_to"] = None
+        
+        print(f"DEBUG: After FK conversion - complaint_type: {validated_data.get('complaint_type')} (type: {type(validated_data.get('complaint_type'))})")
+        print(f"DEBUG: After FK conversion - complaint_source: {validated_data.get('complaint_source')} (type: {type(validated_data.get('complaint_source'))})")
+        print(f"DEBUG: Calling super().create()")
+        print(f"DEBUG: validated_data BEFORE super().create(): {validated_data}")
+        sys.stdout.flush()
+        
+        # Manually create the object bypassing ModelSerializer.create() to avoid field conversion issues
+        model = self.Meta.model
+        print(f"DEBUG: Model class: {model}")
+        print(f"DEBUG: Creating model with: {validated_data}")
+        sys.stdout.flush()
+        
+        result = model.objects.create(**validated_data)
+        
+        print(f"DEBUG: model.objects.create() completed")
+        print(f"DEBUG: Instance created with id: {result.id}")
+        print(f"DEBUG: Instance.complaint_type: {result.complaint_type}")
+        print(f"DEBUG: Instance.complaint_source: {result.complaint_source}")
+        sys.stdout.flush()
+        return result
 
     def update(self, instance, validated_data):
+        import sys
+        print(f"\nDEBUG: ComplaintEntrySerializer.update() - START")
+        print(f"DEBUG: instance id: {instance.id}")
+        print(f"DEBUG: validated_data: {validated_data}")
+        sys.stdout.flush()
+        
         upload = validated_data.pop("file_upload", None)
         if upload is not None:
             validated_data["file"] = upload
-        return super().update(instance, validated_data)
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        data["complaint_type"] = self.get_complaint_type_name(instance)
-        data["complaint_source"] = self.get_complaint_source_name(instance)
-        return data
+        
+        # Convert FK integer IDs to model objects
+        if "complaint_type" in validated_data and validated_data["complaint_type"]:
+            try:
+                complaint_type_id = int(validated_data["complaint_type"])
+                validated_data["complaint_type"] = ComplaintType.objects.get(id=complaint_type_id)
+                print(f"DEBUG: Converted complaint_type to: {validated_data['complaint_type']}")
+            except (ComplaintType.DoesNotExist, ValueError, TypeError) as e:
+                print(f"DEBUG: Error converting complaint_type: {e}")
+            sys.stdout.flush()
+        
+        if "complaint_source" in validated_data and validated_data["complaint_source"]:
+            try:
+                complaint_source_id = int(validated_data["complaint_source"])
+                validated_data["complaint_source"] = ComplaintSource.objects.get(id=complaint_source_id)
+                print(f"DEBUG: Converted complaint_source to: {validated_data['complaint_source']}")
+            except (ComplaintSource.DoesNotExist, ValueError, TypeError) as e:
+                print(f"DEBUG: Error converting complaint_source: {e}")
+            sys.stdout.flush()
+        
+        if "assigned_to" in validated_data and validated_data.get("assigned_to"):
+            try:
+                assigned_to_id = int(validated_data["assigned_to"])
+                validated_data["assigned_to"] = User.objects.get(id=assigned_to_id)
+                print(f"DEBUG: Converted assigned_to to: {validated_data['assigned_to']}")
+            except (User.DoesNotExist, ValueError, TypeError) as e:
+                print(f"DEBUG: Error converting assigned_to: {e}")
+                validated_data["assigned_to"] = None
+            sys.stdout.flush()
+        
+        result = super().update(instance, validated_data)
+        print(f"DEBUG: super().update() completed")
+        sys.stdout.flush()
+        return result
 
 
 class PostalReceiveEntrySerializer(serializers.ModelSerializer):

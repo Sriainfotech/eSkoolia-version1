@@ -25,6 +25,8 @@ from .models import (
     BulkJob,
     CertificateTemplate,
     ComplaintEntry,
+    ComplaintType,
+    ComplaintSource,
     ContactLog,
     IdCardTemplate,
     PhoneCallLogEntry,
@@ -43,6 +45,9 @@ from .serializers import (
     BulkJobSerializer,
     CertificateTemplateSerializer,
     ComplaintEntrySerializer,
+    ComplaintTypeSerializer,
+    ComplaintSourceSerializer,
+    StaffLookupSerializer,
     ConsentLogSerializer,
     IdCardTemplateSerializer,
     PhoneCallLogEntrySerializer,
@@ -85,19 +90,57 @@ class AdminSectionRBACMixin:
         return self.permission_codes.get("*")
 
     def initial(self, request, *args, **kwargs):
-        super().initial(request, *args, **kwargs)
+        import sys
+        print(f"\nDEBUG: AdminSectionRBACMixin.initial() - START")
+        print(f"DEBUG: Request: {request.method} {request.path}")
+        sys.stdout.flush()
+        
+        try:
+            print(f"DEBUG: Calling super().initial()")
+            sys.stdout.flush()
+            super().initial(request, *args, **kwargs)
+            print(f"DEBUG: super().initial() completed successfully")
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"DEBUG: EXCEPTION in super().initial(): {e}")
+            import traceback
+            traceback.print_exc()
+            sys.stdout.flush()
+            raise
+        
         code = self._get_permission_code()
+        print(f"DEBUG: Permission code: {code}")
+        sys.stdout.flush()
+        
         # Enforce permission checks for all admin section operations (fail-safe)
         # If no permission code is configured, deny access by default
         if code is None:
+            print(f"DEBUG: Permission code is None, raising PermissionDenied")
+            sys.stdout.flush()
             raise PermissionDenied("This action requires specific permissions that are not configured.")
 
         user = request.user
+        print(f"DEBUG: User: {user}, is_superuser: {user.is_superuser}")
+        sys.stdout.flush()
+        
         if user.is_superuser:
+            print(f"DEBUG: User is superuser, returning")
+            sys.stdout.flush()
             return
 
-        if not hasattr(user, "has_permission_code") or not user.has_permission_code(code):
+        print(f"DEBUG: Checking permission code: {code}")
+        sys.stdout.flush()
+        has_perm = hasattr(user, "has_permission_code") and user.has_permission_code(code)
+        print(f"DEBUG: has_permission_code: {has_perm}")
+        sys.stdout.flush()
+        
+        if not has_perm:
+            print(f"DEBUG: User does not have permission, raising PermissionDenied")
+            sys.stdout.flush()
             raise PermissionDenied("You do not have permission to perform this action.")
+        
+        print(f"DEBUG: AdminSectionRBACMixin.initial() - SUCCESS")
+        sys.stdout.flush()
 
 
 class DuplicateSafeWriteMixin:
@@ -720,10 +763,30 @@ class VisitorBookEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
         user = self.request.user
         qs = VisitorBookEntry.objects.select_related("school", "created_by")
         if user.is_superuser:
-            return qs
-        if user.school_id:
-            return qs.filter(school_id=user.school_id)
-        return qs.none()
+            pass
+        elif user.school_id:
+            qs = qs.filter(school_id=user.school_id)
+        else:
+            return qs.none()
+
+        search = self.request.query_params.get("search", "").strip()
+        if search:
+            qs = qs.filter(
+                models.Q(name__icontains=search) |
+                models.Q(purpose__icontains=search) |
+                models.Q(phone__icontains=search) |
+                models.Q(visitor_id__icontains=search)
+            )
+
+        purpose = self.request.query_params.get("purpose", "").strip()
+        if purpose:
+            qs = qs.filter(models.Q(purpose=purpose) | models.Q(purpose__icontains=purpose))
+
+        date = self.request.query_params.get("date", "").strip()
+        if date:
+            qs = qs.filter(date=date)
+
+        return qs
 
     def _build_next_visitor_id(self, school_id: int, year: int) -> str:
         prefix = f"VIS-{year}-"
@@ -794,6 +857,67 @@ class VisitorBookEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
         return self.update(request, *args, **kwargs)
 
 
+class ComplaintTypeListView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        qs = ComplaintType.objects.filter(is_active=True).select_related("school")
+        
+        if user.is_superuser:
+            pass
+        elif user.school_id:
+            qs = qs.filter(school_id=user.school_id)
+        else:
+            qs = qs.none()
+        
+        paginator = ApiPageNumberPagination()
+        paginated_qs = paginator.paginate_queryset(qs, request)
+        serializer = ComplaintTypeSerializer(paginated_qs, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+
+class ComplaintSourceListView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        qs = ComplaintSource.objects.filter(is_active=True).select_related("school")
+        
+        if user.is_superuser:
+            pass
+        elif user.school_id:
+            qs = qs.filter(school_id=user.school_id)
+        else:
+            qs = qs.none()
+        
+        paginator = ApiPageNumberPagination()
+        paginated_qs = paginator.paginate_queryset(qs, request)
+        serializer = ComplaintSourceSerializer(paginated_qs, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+
+class StaffLookupListView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from apps.users.models import User
+        user = request.user
+        qs = User.objects.filter(is_active=True).select_related("school")
+        
+        if user.is_superuser:
+            pass
+        elif user.school_id:
+            qs = qs.filter(school_id=user.school_id)
+        else:
+            qs = qs.none()
+        
+        paginator = ApiPageNumberPagination()
+        paginated_qs = paginator.paginate_queryset(qs, request)
+        serializer = StaffLookupSerializer(paginated_qs, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+
 class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = ComplaintEntrySerializer
     pagination_class = ApiPageNumberPagination
@@ -812,31 +936,154 @@ class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
 
     def get_queryset(self):
         user = self.request.user
-        qs = ComplaintEntry.objects.select_related("school", "created_by")
+        qs = ComplaintEntry.objects.select_related("school", "created_by", "complaint_type", "complaint_source", "assigned_to")
+        
         if user.is_superuser:
-            return qs
-        if user.school_id:
-            return qs.filter(school_id=user.school_id)
-        return qs.none()
+            base_qs = qs
+        elif user.school_id:
+            base_qs = qs.filter(school_id=user.school_id)
+        else:
+            return qs.none()
+        
+        # Apply backend filtering from query_params
+        search = self.request.query_params.get("search", "").strip()
+        complaint_type_id = self.request.query_params.get("complaint_type", "").strip()
+        complaint_source_id = self.request.query_params.get("complaint_source", "").strip()
+        date_value = self.request.query_params.get("date", "").strip()
+        
+        if search:
+            base_qs = base_qs.filter(
+                models.Q(complaint_by__icontains=search)
+                | models.Q(phone__icontains=search)
+                | models.Q(description__icontains=search)
+            )
+        
+        if complaint_type_id and complaint_type_id.isdigit():
+            base_qs = base_qs.filter(complaint_type_id=int(complaint_type_id))
+        
+        if complaint_source_id and complaint_source_id.isdigit():
+            base_qs = base_qs.filter(complaint_source_id=int(complaint_source_id))
+        
+        if date_value:
+            try:
+                from datetime import datetime as dt
+                date_obj = dt.strptime(date_value, "%Y-%m-%d").date()
+                base_qs = base_qs.filter(date=date_obj)
+            except (ValueError, TypeError):
+                pass
+        
+        return base_qs
 
     def perform_create(self, serializer):
         user = self.request.user
-        school = user.school
+        school = user.school if hasattr(user, 'school') else None
         if not school and getattr(self.request, "school", None):
             school = self.request.school
+        if not school:
+            raise PermissionDenied("User must belong to a school to create complaints.")
         serializer.save(school=school, created_by=user)
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        if not serializer.is_valid():
-            field_errors = self._normalize_field_errors(serializer.errors)
-            return self._validation_response(field_errors, self._first_error_message(field_errors))
+        import sys
+        import logging
+        logger = logging.getLogger(__name__)
+        
         try:
-            self.perform_create(serializer)
-        except IntegrityError as exc:
-            return self._integrity_response(exc)
-        output = self.get_serializer(serializer.instance)
-        return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
+            print(f"\n{'='*60}")
+            print(f"DEBUG: ComplaintEntryViewSet.create() - START")
+            sys.stdout.flush()
+            
+            print(f"DEBUG: Request method: {request.method}")
+            print(f"DEBUG: Content-Type: {request.content_type}")
+            print(f"DEBUG: Request data: {request.data}")
+            print(f"DEBUG: Request data type: {type(request.data)}")
+            print(f"DEBUG: Request user: {request.user}")
+            sys.stdout.flush()
+            
+            try:
+                school = getattr(request.user, 'school', None)
+                print(f"DEBUG: Request user school: {school}")
+                sys.stdout.flush()
+            except Exception as e:
+                print(f"DEBUG: Error getting school: {e}")
+                sys.stdout.flush()
+            
+            try:
+                serializer = self.get_serializer(data=request.data)
+                print(f"DEBUG: Serializer created successfully")
+                sys.stdout.flush()
+            except Exception as e:
+                print(f"DEBUG: ERROR creating serializer: {e}")
+                import traceback
+                traceback.print_exc()
+                sys.stdout.flush()
+                raise
+            
+            try:
+                print(f"DEBUG: Serializer class: {serializer.__class__.__name__}")
+                print(f"DEBUG: Serializer fields: {list(serializer.fields.keys())}")
+                print(f"DEBUG: Serializer initial_data keys: {list(serializer.initial_data.keys())}")
+                sys.stdout.flush()
+            except Exception as e:
+                print(f"DEBUG: ERROR accessing serializer properties: {e}")
+                import traceback
+                traceback.print_exc()
+                sys.stdout.flush()
+            
+            try:
+                is_valid = serializer.is_valid()
+                print(f"DEBUG: Serializer is_valid: {is_valid}")
+                sys.stdout.flush()
+            except Exception as e:
+                print(f"DEBUG: ERROR calling is_valid(): {e}")
+                import traceback
+                traceback.print_exc()
+                sys.stdout.flush()
+                raise
+            
+            if not is_valid:
+                print(f"DEBUG: Serializer errors: {serializer.errors}")
+                sys.stdout.flush()
+                logger.error(f"Serializer validation failed: {serializer.errors}")
+                field_errors = self._normalize_field_errors(serializer.errors)
+                print(f"DEBUG: Normalized field_errors: {field_errors}")
+                sys.stdout.flush()
+                return self._validation_response(field_errors, self._first_error_message(field_errors))
+            
+            print(f"DEBUG: Serializer validated_data keys: {list(serializer.validated_data.keys())}")
+            sys.stdout.flush()
+            
+            try:
+                self.perform_create(serializer)
+                print(f"DEBUG: perform_create() completed, instance id: {serializer.instance.id}")
+                sys.stdout.flush()
+            except IntegrityError as exc:
+                print(f"DEBUG: IntegrityError: {exc}")
+                sys.stdout.flush()
+                return self._integrity_response(exc)
+            
+            output = self.get_serializer(serializer.instance)
+            print(f"DEBUG: Output serializer created successfully")
+            sys.stdout.flush()
+            print(f"DEBUG: ComplaintEntryViewSet.create() - SUCCESS")
+            print(f"{'='*60}\n")
+            sys.stdout.flush()
+            return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
+        except Exception as e:
+            # Log the error for debugging
+            import traceback
+            print(f"\nDEBUG: EXCEPTION in ComplaintEntryViewSet.create: {e}")
+            print(f"DEBUG: Exception type: {type(e).__name__}")
+            print(f"DEBUG: Exception module: {type(e).__module__}")
+            traceback.print_exc()
+            sys.stdout.flush()
+            logger.exception(f"Exception in create: {e}")
+            print(f"{'='*60}\n")
+            sys.stdout.flush()
+            return self._validation_response(
+                {"error": [str(e)]}, 
+                f"Failed to process request: {str(e)}"
+            )
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
