@@ -53,12 +53,26 @@ function StatusPill({label,style}:{label:string;style:{bg:string;color:string}})
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
+const METHOD_MAP: Record<string, string> = {
+  "Cash": "cash", "Online": "online", "Bank Transfer": "bank",
+  "Cheque": "cheque", "Wallet": "wallet",
+};
+
+function parseDateTimeToISO(dateStr: string): string {
+  const [datePart, timePart] = dateStr.split(" ");
+  const parts = datePart.split("-");
+  if (parts[0].length === 4) return `${datePart}T${timePart || "00:00"}:00`;
+  const [dd, mm, yyyy] = parts;
+  return `${yyyy}-${mm}-${dd}T${timePart || "00:00"}:00`;
+}
+
 export default function FeesCollectionPanel() {
   const [studentsData, setStudentsData] = useState<any[]>([]);
   const [assignments, setAssignments] = useState<any[]>([]);
   const [paymentsList, setPaymentsList] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
 
   const fetchDynamicData = async () => {
     setLoading(true);
@@ -80,8 +94,24 @@ export default function FeesCollectionPanel() {
     }
   };
 
+  const refreshPaymentData = async () => {
+    try {
+      const [asgnRes, payRes] = await Promise.all([
+        feesApi.listAssignments(),
+        feesApi.listPayments(),
+      ]);
+      setAssignments(listData(asgnRes));
+      setPaymentsList(listData(payRes));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   useEffect(() => {
     fetchDynamicData();
+    const onVisible = () => { if (document.visibilityState === "visible") refreshPaymentData(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
   const RECONCILIATION = [
@@ -103,17 +133,18 @@ export default function FeesCollectionPanel() {
       
       stAsgns.forEach((a, i) => {
         const amt = parseFloat(a.amount || "0");
+        const feeLabel = a.fees_type_name || `Fee Assignment ${i+1}`;
         totalDue += amt;
-        ledger.push({ date: a.due_date || "2025-01-01", title: `Fee Assignment ${i+1}`, note: a.status, amount: amt, type: "charge" });
+        ledger.push({ date: a.due_date || "2025-01-01", title: feeLabel, note: a.status, amount: amt, type: "charge" });
         if (a.status !== "paid") {
-          dues.push({ id: a.id.toString(), label: `Fee Assignment ${i+1}`, amount: amt, due: a.due_date || "N/A" });
+          dues.push({ id: a.id.toString(), label: feeLabel, amount: amt, due: a.due_date || "N/A" });
         }
       });
       
       stPays.forEach(p => {
         const pAmt = parseFloat(p.amount_paid || "0");
         totalPaid += pAmt;
-        ledger.push({ date: p.payment_date || "2025-01-01", title: `Payment Received`, note: p.payment_method, amount: pAmt, type: "credit" });
+        ledger.push({ date: (p.paid_at || "").split("T")[0] || "2025-01-01", title: `Payment Received`, note: p.method, amount: pAmt, type: "credit" });
       });
       
       let status: "partial" | "cleared" | "overdue" = "cleared";
@@ -190,14 +221,37 @@ export default function FeesCollectionPanel() {
     setShowConfirm(true);
   };
 
-  const postPayment=()=>{
-    if(!selected) return;
-    const r=`RCPT-25-${rcptN}`;
-    setPayments(p=>[{rcpt:r,student:selected.name,amount:parseInt(amtPaid)||0,method},...p]);
-    setRcptN(n=>n+1);
-    setShowConfirm(false);
-    toast_(`Receipt ${r} posted for ${selected.name}.`);
-    setSelected(null); setSearchQ(""); setChecked(new Set()); setAmtPaid(""); setNote(""); setMethod("Cash");
+  const postPayment = async () => {
+    if (!selected || isSaving) return;
+    setIsSaving(true);
+    try {
+      const r = `RCPT-25-${rcptN}`;
+      const paidAt = parseDateTimeToISO(dateTime);
+      const backendMethod = METHOD_MAP[method] || "cash";
+      for (const due of selDues) {
+        const dueAmt = selDues.length === 1 ? (parseInt(amtPaid) || due.amount) : due.amount;
+        await feesApi.createPayment({
+          assignment: Number(due.id),
+          student: Number(selected.id),
+          amount_paid: String(dueAmt),
+          method: backendMethod as any,
+          status: "posted" as any,
+          paid_at: paidAt,
+          note: note || "",
+        } as any);
+      }
+      await refreshPaymentData();
+      setPayments(p => [{ rcpt: r, student: selected.name, amount: parseInt(amtPaid) || 0, method }, ...p]);
+      setRcptN(n => n + 1);
+      setShowConfirm(false);
+      toast_(`Receipt ${r} posted for ${selected.name}.`);
+      setSelected(null); setSearchQ(""); setChecked(new Set()); setAmtPaid(""); setNote(""); setMethod("Cash");
+    } catch (err) {
+      console.error("Payment failed:", err);
+      toast_("Payment failed. Please try again.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const selDues = selected?.dues.filter(d=>checked.has(d.id))??[];
@@ -584,8 +638,8 @@ export default function FeesCollectionPanel() {
             {/* Footer */}
             <div style={{display:"flex",justifyContent:"flex-end",gap:12,padding:"14px 24px",borderTop:"1px solid #E8E8EE"}}>
               <button style={{height:38,padding:"0 20px",border:"1px solid #E8E8EE",borderRadius:9,background:"#fff",color:"#181B2A",fontSize:13,fontWeight:500,cursor:"pointer"}} onClick={()=>setShowConfirm(false)}>Cancel</button>
-              <button style={{height:38,padding:"0 20px",border:"none",borderRadius:9,background:"#6D4AFF",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:"0 2px 8px rgba(109,74,255,0.20)"}} onClick={postPayment}>
-                Post {method} Payment
+              <button style={{height:38,padding:"0 20px",border:"none",borderRadius:9,background:isSaving?"#a78bfa":"#6D4AFF",color:"#fff",fontSize:13,fontWeight:600,cursor:isSaving?"not-allowed":"pointer",boxShadow:"0 2px 8px rgba(109,74,255,0.20)"}} onClick={postPayment} disabled={isSaving}>
+                {isSaving ? "Posting…" : `Post ${method} Payment`}
               </button>
             </div>
           </div>

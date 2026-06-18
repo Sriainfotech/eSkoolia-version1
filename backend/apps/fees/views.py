@@ -171,8 +171,8 @@ class FeeAssignmentListCreateAPIView(BaseFeeAPIView):
         serializer = FeeAssignmentSerializer(data=request.data)
         if serializer.is_valid():
             # Use the service layer for business logic
-            FeeService.assign_fees(created_by=request.user, **serializer.validated_data)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            assignment = FeeService.assign_fees(created_by=request.user, **serializer.validated_data)
+            return Response(FeeAssignmentSerializer(assignment).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class FeeAssignmentDetailAPIView(BaseFeeAPIView):

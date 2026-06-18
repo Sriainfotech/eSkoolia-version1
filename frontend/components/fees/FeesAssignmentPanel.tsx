@@ -152,6 +152,7 @@ export default function FeesAssignmentPanel() {
   const [assignments, setAssignments] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [schedules, setSchedules] = useState<any[]>([]);
+  const [feeTypes, setFeeTypes] = useState<any[]>([]);
   const [years, setYears] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -181,9 +182,10 @@ export default function FeesAssignmentPanel() {
         feesApi.listAssignments({ academic_year: yearId }),
         feesApi.listGroups({ academic_year: yearId }),
         feesApi.listSchedules({ academic_year: yearId }),
+        feesApi.listTypes({ page_size: 500 }),
       ]);
-      const [stRes, clRes, asgnRes, grpRes, schRes] = results;
-      console.log("API raw results:", { stRes, clRes, asgnRes, grpRes, schRes });
+      const [stRes, clRes, asgnRes, grpRes, schRes, typeRes] = results;
+      console.log("API raw results:", { stRes, clRes, asgnRes, grpRes, schRes, typeRes });
 
       if (stRes.status === "fulfilled") {
         let studentsData = listData(stRes.value);
@@ -266,6 +268,15 @@ export default function FeesAssignmentPanel() {
         console.error("Failed to load fee schedules", schRes.reason);
         setSchedules([]);
       }
+
+      if (typeRes.status === "fulfilled") {
+        const typesData = listData(typeRes.value);
+        setFeeTypes(typesData);
+        console.log("Fee types loaded:", typesData.length);
+      } else {
+        console.error("Failed to load fee types", typeRes.reason);
+        setFeeTypes([]);
+      }
     } catch (err) {
       console.error(err);
       setStudents([]);
@@ -273,6 +284,7 @@ export default function FeesAssignmentPanel() {
       setAssignments([]);
       setGroups([]);
       setSchedules([]);
+      setFeeTypes([]);
     } finally {
       setLoading(false);
     }
@@ -292,17 +304,24 @@ export default function FeesAssignmentPanel() {
 
   const FEE_SCHEDULES = useMemo(() => {
     const map: Record<string, FeeRow[]> = {};
+    const feeTypeNameById = new Map(
+      feeTypes.map((t) => [String(t.id), t.name || t.fee_type_name || `Fee Type #${t.id}`])
+    );
     groups.forEach(g => {
       const gScheds = schedules.filter(s => s.fee_group === g.id);
       map[g.name] = gScheds.map(s => ({
-        type: typeof s.fee_type === "object" && s.fee_type !== null ? s.fee_type.name : "Fee",
+        type:
+          s.fee_type_name ||
+          (typeof s.fee_type === "object" && s.fee_type !== null
+            ? (s.fee_type as any).name
+            : feeTypeNameById.get(String(s.fee_type)) || `Fee Type #${s.fee_type}`),
         schedule: s.collection_frequency || "Term-wise",
         howPaid: "From config",
         annual: parseFloat(s.amount || "0")
       }));
     });
     return map;
-  }, [groups, schedules]);
+  }, [groups, schedules, feeTypes]);
 
   const ANNUAL_FEE = useMemo(() => {
     const map: Record<string, number | null> = { Unassigned: null };
@@ -431,38 +450,39 @@ export default function FeesAssignmentPanel() {
     const rows  = FEE_SCHEDULES[modalGroup]??[];
     const total = rows.reduce((s,r)=>s+r.annual,0);
 
-    // Find the first fee schedule that belongs to the selected group
+    // Find ALL fee schedules for the selected group (one per fee type)
     const grp = groups.find(g => g.name === modalGroup);
-    const matchingSchedule = grp ? schedules.find(s => s.fee_group === grp.id) : null;
+    const matchingSchedules = grp ? schedules.filter(s => s.fee_group === grp.id) : [];
 
-    if (matchingSchedule && yearFilter) {
+    if (matchingSchedules.length > 0 && yearFilter) {
       setSaving(true);
       try {
-        // Check if an existing assignment already exists for this student+schedule
-        const existingAsgn = assignments.find(
-          a => String(a.student) === String(assignModal.student.id) &&
-               String(a.fees_type) === String(
-                 typeof matchingSchedule.fee_type === 'object' && matchingSchedule.fee_type !== null
-                   ? (matchingSchedule.fee_type as any).id
-                   : matchingSchedule.fee_type
-               )
-        );
+        for (const matchingSchedule of matchingSchedules) {
+          const feeTypeId = typeof matchingSchedule.fee_type === 'object' && matchingSchedule.fee_type !== null
+            ? (matchingSchedule.fee_type as any).id
+            : Number(matchingSchedule.fee_type);
 
-        const payload = {
-          academic_year: Number(yearFilter),
-          student:       Number(assignModal.student.id),
-          fees_type:     typeof matchingSchedule.fee_type === 'object' && matchingSchedule.fee_type !== null
-                           ? (matchingSchedule.fee_type as any).id
-                           : Number(matchingSchedule.fee_type),
-          due_date:      matchingSchedule.due_date,
-          amount:        matchingSchedule.amount,
-          discount_amount: '0.00',
-        };
+          // Check if an existing assignment already exists for this student+fee_type
+          const existingAsgn = assignments.find(
+            a => String(a.student) === String(assignModal.student.id) &&
+                 String(a.fees_type) === String(feeTypeId)
+          );
 
-        if (existingAsgn) {
-          await feesApi.updateAssignment(existingAsgn.id, payload);
-        } else {
-          await feesApi.createAssignment(payload);
+          const payload = {
+            academic_year:     Number(yearFilter),
+            student:           Number(assignModal.student.id),
+            fees_type:         feeTypeId,
+            due_date:          matchingSchedule.due_date,
+            amount:            matchingSchedule.amount,
+            discount_amount:   '0.00',
+            concession_amount: '0.00',
+          };
+
+          if (existingAsgn) {
+            await feesApi.updateAssignment(existingAsgn.id, payload);
+          } else {
+            await feesApi.createAssignment(payload);
+          }
         }
 
         // Refresh assignments from backend so stats reflect DB truth
@@ -471,7 +491,8 @@ export default function FeesAssignmentPanel() {
         setAssignments(freshData);
       } catch (err) {
         console.error('Failed to save assignment:', err);
-        showToast('Save failed — check console for details.');
+        const errorMessage = err instanceof Error ? err.message : 'Save failed';
+        showToast(errorMessage);
         setSaving(false);
         return;
       } finally {

@@ -15,7 +15,6 @@ const COMING_SOON_PATHS = new Set([
 ]);
 
 const FEES_SOON_BADGE_PATHS = new Set([
-  '/fees/fee-assignment',
   '/fees/collection',
   '/fees/dues-reminders',
   '/fees/year-end',

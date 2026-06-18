@@ -178,20 +178,27 @@ class FeesTypeSerializer(serializers.ModelSerializer):
 class FeeAssignmentSerializer(serializers.ModelSerializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
     discount_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
-    concession_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
-    status = serializers.CharField(source='status', read_only=True)
+    concession_amount = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        coerce_to_string=True,
+        required=False,
+        default=Decimal('0.00'),
+    )
+    status = serializers.CharField(read_only=True)
     total_paid = serializers.SerializerMethodField()
     net_due = serializers.SerializerMethodField()
+    fees_type_name = serializers.CharField(source='fees_type.name', read_only=True)
 
     class Meta:
         model = FeeAssignment
         fields = [
-            'id', 'academic_year', 'student', 'fees_type', 'due_date', 
+            'id', 'academic_year', 'student', 'fees_type', 'fees_type_name', 'due_date',
             'amount', 'discount_amount', 'concession_amount',
             'status', 'total_paid', 'net_due',
             'created_at', 'created_by'
         ]
-        read_only_fields = ['created_at', 'created_by', 'status', 'total_paid', 'net_due']
+        read_only_fields = ['created_at', 'created_by', 'status', 'total_paid', 'net_due', 'fees_type_name']
 
     def get_total_paid(self, obj):
         # This should use the ledger for accuracy

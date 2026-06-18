@@ -350,6 +350,21 @@ class FeeAssignment(models.Model):
     class Meta:
         ordering = ['-due_date']
 
+    @property
+    def status(self) -> str:
+        net_amount = self.amount - self.discount_amount - self.concession_amount
+        if hasattr(self, '_prefetched_objects_cache') and 'payments' in self._prefetched_objects_cache:
+            paid = sum(p.amount_paid for p in self.payments.all() if p.status == 'posted')
+        else:
+            paid = self.payments.filter(status='posted').aggregate(total=models.Sum('amount_paid'))['total'] or Decimal('0.00')
+        
+        if paid >= net_amount:
+            return 'paid'
+        elif paid > Decimal('0.00'):
+            return 'partial'
+        else:
+            return 'unpaid'
+
     def __str__(self):
         return f"Assignment of {self.fees_type.name} to {self.student}"
 

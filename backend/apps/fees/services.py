@@ -69,6 +69,7 @@ class FeeService:
         due_date,
         amount: Decimal,
         discount_amount: Decimal,
+        concession_amount: Decimal = Decimal('0.00'),
         created_by: AbstractBaseUser,
         academic_year,
     ) -> FeeAssignment:
@@ -82,6 +83,7 @@ class FeeService:
             due_date=due_date,
             amount=amount,
             discount_amount=discount_amount,
+            concession_amount=concession_amount,
             created_by=created_by,
         )
 
@@ -104,6 +106,17 @@ class FeeService:
                 amount=-discount_amount,
                 created_by=created_by,
                 notes=f"Discount at time of assignment."
+            )
+
+        # 3. If there's a concession amount, create a negative 'concession' entry.
+        if concession_amount > Decimal("0.00"):
+            FeeService._create_ledger_entry(
+                student=student,
+                assignment=assignment,
+                entry_type='concession',
+                amount=-concession_amount,
+                created_by=created_by,
+                notes=f"Concession at time of assignment."
             )
         
         FeeService._create_audit_event(

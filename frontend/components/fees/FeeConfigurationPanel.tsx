@@ -2675,15 +2675,22 @@ export default function FeeConfigurationPanel() {
                 />
               </div>
               <div>
-                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>LATE FEE RULE</div>
-                <select
-                   value={scheduleLateFeeRule}
-                   onChange={e => setScheduleLateFeeRule(e.target.value)}
-                   style={inputField("Select lat fee rule")}
-                >
-                  <option value="">No Late Fee</option>
-                  {lateFeeRules.map(r => <option key={r.id} value={r.name}>{r.name} ({r.penalty_rule})</option>)}
-                </select>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>LATE FEE AMOUNT (RS.)</div>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="0"
+                  value={(() => {
+                    const match = scheduleLateFeeRule.match(/(\d+(\.\d+)?)/);
+                    return match ? match[1] : "";
+                  })()}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setScheduleLateFeeRule(val ? `Rs. ${val} Flat` : "");
+                  }}
+                  style={inputField("0")}
+                />
               </div>
               <div>
                 <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>STATUS</div>
@@ -3342,16 +3349,24 @@ export default function FeeConfigurationPanel() {
                   />
                 </div>
                 <div style={{ flex: 2 }}>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Late Fee Rule</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Late Fee Amount (Rs.)</label>
                   <input
-                    type="text"
-                    value={editScheduleLateFeeRule}
-                    onChange={e => setEditScheduleLateFeeRule(e.target.value)}
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="0"
+                    value={(() => {
+                      const match = editScheduleLateFeeRule.match(/(\d+(\.\d+)?)/);
+                      return match ? match[1] : "";
+                    })()}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setEditScheduleLateFeeRule(val ? `Rs. ${val} Flat` : "");
+                    }}
                     style={{
                       width: "100%", height: 40, border: "1px solid #E8E8EE",
                       borderRadius: 8, padding: "0 12px", fontSize: 13,
                     }}
-                    placeholder="e.g. ₹50 per day after grace period"
                   />
                 </div>
               </div>
