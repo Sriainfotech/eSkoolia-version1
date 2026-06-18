@@ -653,19 +653,19 @@ export async function completeOffboarding(id: number) {
 export interface MasterItem { id: number; name: string; }
 
 export function useMasterLanguages() {
-  return useFetch<MasterItem[]>("/api/master/languages/");
+  return useFetch<MasterItem[]>("/api/v1/master/languages/");
 }
 
 export function useMasterReligions() {
-  return useFetch<MasterItem[]>("/api/master/religions/");
+  return useFetch<MasterItem[]>("/api/v1/master/religions/");
 }
 
 export function useMasterCountries() {
-  return useFetch<MasterItem[]>("/api/master/countries/");
+  return useFetch<MasterItem[]>("/api/v1/master/countries/");
 }
 
 export function useMasterEmploymentTypes() {
-  return useFetch<MasterItem[]>("/api/master/employment-types/");
+  return useFetch<MasterItem[]>("/api/v1/master/employment-types/");
 }
 
 // Staff form options (roles, departments, designations) — backed by hr/staff/form-options/

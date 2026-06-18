@@ -5,7 +5,7 @@
 // (e.g. http://localhost:8000 when frontend and backend share the same VM).
 // On local dev the rewrites are effectively unused because the browser
 // already calls http://localhost:8000 directly.
-const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
+const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:8001";
 
 const nextConfig = {
   reactStrictMode: true,

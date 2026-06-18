@@ -7,7 +7,7 @@ function deriveApiBaseUrl(): string {
     const apiHost = hostname.replace(/-3000\./, "-8000.");
     return `${protocol}//${apiHost}`;
   }
-  if (hostname === "localhost") return "http://localhost:8000";
+  if (hostname === "localhost" || hostname === "127.0.0.1") return "http://127.0.0.1:8000";
   // Subdomain-based multi-tenant access: use same hostname on port 8000
   // so the backend tenant middleware can resolve the tenant from the Host header.
   // e.g. testschool.eskoolia.local:3000 → http://testschool.eskoolia.local:8000
@@ -35,6 +35,10 @@ function pickApiBaseUrl(): string {
     // Host header carries the subdomain to the backend tenant middleware.
     const parts = host.split(".");
     if (parts.length >= 3 && parts[1] === "eskoolia") return DEFAULT_API_BASE_URL;
+    // On local dev (localhost / 127.0.0.1), use relative URLs so all requests
+    // go through the Next.js proxy rewrites — this avoids CORS entirely and
+    // handles IPv4/IPv6 routing transparently.
+    if (host === "localhost" || host === "127.0.0.1") return "";
   }
   return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE_URL;
 }
