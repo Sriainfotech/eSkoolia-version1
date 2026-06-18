@@ -84,10 +84,11 @@ function ModalFooter({ children }: { children:React.ReactNode }) {
 }
 
 // ── Fee schedule table (shared by Assign + Edit modals) ────────────────────────
-function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange, feeSchedules, concessions }: {
+function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange, feeSchedules, concessions, groups }: {
   group:string; concession:string;
   onGroupChange:(g:string)=>void; onConcessionChange:(c:string)=>void;
   feeSchedules: Record<string, any[]>; concessions: string[];
+  groups: any[];
 }) {
   const rows  = feeSchedules[group] ?? [];
   const total = rows.reduce((s,r)=>s+r.annual,0);
@@ -97,7 +98,7 @@ function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange
         <div>
           <div style={{ fontSize:10, fontWeight:700, letterSpacing:"0.07em", color:"#A0A3B8", marginBottom:6 }}>FEE GROUP</div>
           <select value={group} onChange={e=>onGroupChange(e.target.value)} style={{ width:"100%", height:36, border:"1px solid #E8E8EE", borderRadius:8, padding:"0 10px", fontSize:12.5, background:"#fff", cursor:"pointer" }}>
-            <option>Day Scholar</option><option>Transport Users</option><option>Full Boarder</option>
+            {groups.map(g=><option key={g.id} value={g.name}>{g.name}</option>)}
           </select>
         </div>
         <div>
@@ -117,7 +118,11 @@ function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange
             <div key={h} style={{ fontSize:10, fontWeight:600, color:"#A0A3B8" }}>{h}</div>
           ))}
         </div>
-        {rows.map((row: any, i: number)=>{
+        {rows.length === 0 ? (
+          <div style={{ padding:"20px 14px", textAlign:"center", color:"#A0A3B8", fontSize:12.5 }}>
+            No fee schedule configured for this group yet.
+          </div>
+        ) : rows.map((row: any, i: number)=>{
           const b=SCHEDULE_BADGE[row.schedule as keyof typeof SCHEDULE_BADGE] || { bg: "#fff", color: "#000", border: "#ccc" };
           return (
             <div key={row.type} style={{ display:"grid", gridTemplateColumns:"1.6fr 1fr 1.4fr auto", padding:"10px 14px", alignItems:"center", borderBottom:i<rows.length-1?"1px solid #F0F0F0":"none", background:"#fff" }}>
@@ -147,25 +152,139 @@ export default function FeesAssignmentPanel() {
   const [assignments, setAssignments] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [schedules, setSchedules] = useState<any[]>([]);
+  const [feeTypes, setFeeTypes] = useState<any[]>([]);
+  const [years, setYears] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const fetchDynamicData = async () => {
+  const fetchDynamicData = async (yearParam?: string | null) => {
     setLoading(true);
     try {
-      const [stRes, clRes, asgnRes, grpRes, schRes] = await Promise.all([
-        feesApi.listStudents(),
-        feesApi.listClasses(),
-        feesApi.listAssignments(),
-        feesApi.listGroups(),
-        feesApi.listSchedules()
+      let yearId: number | undefined = undefined;
+      if (yearParam == null) {
+        const yearsRes = await feesApi.listAcademicYears();
+        const yearsData = listData(yearsRes);
+        setYears(yearsData);
+        const current = yearsData.find((y: any) => y.is_current) || yearsData[0];
+        yearId = current?.id ?? undefined;
+        if (yearId !== undefined) setYearFilter(String(yearId));
+        // return early — lists will be loaded when yearFilter is set
+        return;
+      }
+
+      yearId = yearParam ? Number(yearParam) : undefined;
+
+      console.log("Fetching lists for academic_year:", yearId);
+
+      const results = await Promise.allSettled([
+        feesApi.listStudents({ academic_year: yearId }),
+        feesApi.listClasses({ academic_year: yearId }),
+        feesApi.listAssignments({ academic_year: yearId }),
+        feesApi.listGroups({ academic_year: yearId }),
+        feesApi.listSchedules({ academic_year: yearId }),
+        feesApi.listTypes({ page_size: 500 }),
       ]);
-      setStudents(listData(stRes));
-      setClasses(listData(clRes));
-      setAssignments(listData(asgnRes));
-      setGroups(listData(grpRes));
-      setSchedules(listData(schRes));
+      const [stRes, clRes, asgnRes, grpRes, schRes, typeRes] = results;
+      console.log("API raw results:", { stRes, clRes, asgnRes, grpRes, schRes, typeRes });
+
+      if (stRes.status === "fulfilled") {
+        let studentsData = listData(stRes.value);
+        // fallback: try without academic_year if empty
+        if ((studentsData || []).length === 0) {
+          try {
+            const raw = await feesApi.listStudents();
+            studentsData = listData(raw);
+            console.log("Students fallback (no year) loaded:", studentsData.length);
+          } catch (e) {
+            console.warn("Students fallback failed", e);
+          }
+        }
+        setStudents(studentsData);
+        console.log("Students loaded:", studentsData.length, studentsData);
+      } else {
+        console.error("Failed to load students", stRes.reason);
+        setStudents([]);
+      }
+
+      if (clRes.status === "fulfilled") {
+        let classesData = listData(clRes.value);
+        if ((classesData || []).length === 0) {
+          try {
+            const raw = await feesApi.listClasses();
+            classesData = listData(raw);
+            console.log("Classes fallback (no year) loaded:", classesData.length);
+          } catch (e) {
+            console.warn("Classes fallback failed", e);
+          }
+        }
+        setClasses(classesData);
+        console.log("Classes loaded:", classesData.length, classesData);
+      } else {
+        console.error("Failed to load classes", clRes.reason);
+        setClasses([]);
+      }
+
+      if (asgnRes.status === "fulfilled") {
+        let assignmentsData = listData(asgnRes.value);
+        if ((assignmentsData || []).length === 0) {
+          try {
+            const raw = await feesApi.listAssignments();
+            assignmentsData = listData(raw);
+            console.log("Assignments fallback (no year) loaded:", assignmentsData.length);
+          } catch (e) {
+            console.warn("Assignments fallback failed", e);
+          }
+        }
+        setAssignments(assignmentsData);
+        console.log("Assignments loaded:", assignmentsData.length);
+      } else {
+        console.error("Failed to load fee assignments", asgnRes.reason);
+        setAssignments([]);
+      }
+
+      if (grpRes.status === "fulfilled") {
+        const groupsData = listData(grpRes.value);
+        setGroups(groupsData);
+        console.log("Groups loaded:", groupsData.length);
+      } else {
+        console.error("Failed to load fee groups", grpRes.reason);
+        setGroups([]);
+      }
+
+      if (schRes.status === "fulfilled") {
+        let schedulesData = listData(schRes.value);
+        if ((schedulesData || []).length === 0) {
+          try {
+            const raw = await feesApi.listSchedules();
+            schedulesData = listData(raw);
+            console.log("Schedules fallback (no year) loaded:", schedulesData.length);
+          } catch (e) {
+            console.warn("Schedules fallback failed", e);
+          }
+        }
+        setSchedules(schedulesData);
+        console.log("Schedules loaded:", schedulesData.length);
+      } else {
+        console.error("Failed to load fee schedules", schRes.reason);
+        setSchedules([]);
+      }
+
+      if (typeRes.status === "fulfilled") {
+        const typesData = listData(typeRes.value);
+        setFeeTypes(typesData);
+        console.log("Fee types loaded:", typesData.length);
+      } else {
+        console.error("Failed to load fee types", typeRes.reason);
+        setFeeTypes([]);
+      }
     } catch (err) {
       console.error(err);
+      setStudents([]);
+      setClasses([]);
+      setAssignments([]);
+      setGroups([]);
+      setSchedules([]);
+      setFeeTypes([]);
     } finally {
       setLoading(false);
     }
@@ -185,17 +304,24 @@ export default function FeesAssignmentPanel() {
 
   const FEE_SCHEDULES = useMemo(() => {
     const map: Record<string, FeeRow[]> = {};
+    const feeTypeNameById = new Map(
+      feeTypes.map((t) => [String(t.id), t.name || t.fee_type_name || `Fee Type #${t.id}`])
+    );
     groups.forEach(g => {
       const gScheds = schedules.filter(s => s.fee_group === g.id);
       map[g.name] = gScheds.map(s => ({
-        type: typeof s.fee_type === "object" && s.fee_type !== null ? s.fee_type.name : "Fee",
+        type:
+          s.fee_type_name ||
+          (typeof s.fee_type === "object" && s.fee_type !== null
+            ? (s.fee_type as any).name
+            : feeTypeNameById.get(String(s.fee_type)) || `Fee Type #${s.fee_type}`),
         schedule: s.collection_frequency || "Term-wise",
         howPaid: "From config",
         annual: parseFloat(s.amount || "0")
       }));
     });
     return map;
-  }, [groups, schedules]);
+  }, [groups, schedules, feeTypes]);
 
   const ANNUAL_FEE = useMemo(() => {
     const map: Record<string, number | null> = { Unassigned: null };
@@ -246,7 +372,7 @@ export default function FeesAssignmentPanel() {
 
   // Filters
   const [search, setSearch]           = useState("");
-  const [yearFilter, setYearFilter]   = useState("2025-26");
+  const [yearFilter, setYearFilter]   = useState("");
   const [classFilter, setClassFilter] = useState("all");
   const [groupFilter, setGroupFilter] = useState("all");
   const [tab, setTab]                 = useState<FilterTab>("all");
@@ -277,6 +403,10 @@ export default function FeesAssignmentPanel() {
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(()=>setToast(""),3000); };
 
+  useEffect(() => {
+    if (yearFilter) fetchDynamicData(yearFilter);
+  }, [yearFilter]);
+
   // Helper — effective category for a student (accounts for session overrides)
   const effectiveCat = (st: Student): string => overrides[st.id]?.group ?? (st.category === "Unassigned" ? "Unassigned" : st.category);
   const isAssigned   = (st: Student): boolean => overrides[st.id] !== undefined || st.category !== "Unassigned";
@@ -286,8 +416,8 @@ export default function FeesAssignmentPanel() {
     let asgn=0;
     for(const cls of CLASS_DATA) for(const st of cls.students) if(isAssigned(st)) asgn++;
     return { assigned:asgn, unassigned:TOTAL_STUDENTS-asgn, total:TOTAL_STUDENTS };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[overrides]);
+  // CLASS_DATA and TOTAL_STUDENTS must be deps so stats refresh when API data arrives
+  },[CLASS_DATA, TOTAL_STUDENTS, overrides]);
 
   // Filtered class list
   const filteredClasses = useMemo(()=>{
@@ -306,19 +436,71 @@ export default function FeesAssignmentPanel() {
         }),
       }))
       .filter(cls=>cls.students.length>0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[search,classFilter,groupFilter,tab,overrides]);
+  // CLASS_DATA must be a dep so the list re-renders when API data arrives
+  },[CLASS_DATA, search,classFilter,groupFilter,tab,overrides]);
 
   // Actions
-  const openAssignModal = (st: Student, clsName: string) => { setAssignModal({student:st,clsName,isEdit:false}); setModalGroup("Day Scholar"); setModalConcession("None"); };
+  const openAssignModal = (st: Student, clsName: string) => { const firstGroup = groups[0]?.name ?? ""; setAssignModal({student:st,clsName,isEdit:false}); setModalGroup(firstGroup); setModalConcession("None"); };
   const openEditModal   = (st: Student, clsName: string) => { setAssignModal({student:st,clsName,isEdit:true}); setModalGroup((overrides[st.id]?.group??st.category) as string); setModalConcession("None"); };
   const openChangePlan  = (st: Student)                   => { setChangePlanModal({student:st}); setSelectedPlan("3-term"); setPlanReason(""); };
-  const openBulkModal   = (clsId: string, clsName: string) => { setBulkModal({clsId,clsName}); setBulkClass(clsId); setBulkGroup("Day Scholar"); };
+  const openBulkModal   = (clsId: string, clsName: string) => { const firstGroup = groups[0]?.name ?? ""; setBulkModal({clsId,clsName}); setBulkClass(clsId); setBulkGroup(firstGroup); };
 
-  const confirmAssign = () => {
+  const confirmAssign = async () => {
     if(!assignModal) return;
     const rows  = FEE_SCHEDULES[modalGroup]??[];
     const total = rows.reduce((s,r)=>s+r.annual,0);
+
+    // Find ALL fee schedules for the selected group (one per fee type)
+    const grp = groups.find(g => g.name === modalGroup);
+    const matchingSchedules = grp ? schedules.filter(s => s.fee_group === grp.id) : [];
+
+    if (matchingSchedules.length > 0 && yearFilter) {
+      setSaving(true);
+      try {
+        for (const matchingSchedule of matchingSchedules) {
+          const feeTypeId = typeof matchingSchedule.fee_type === 'object' && matchingSchedule.fee_type !== null
+            ? (matchingSchedule.fee_type as any).id
+            : Number(matchingSchedule.fee_type);
+
+          // Check if an existing assignment already exists for this student+fee_type
+          const existingAsgn = assignments.find(
+            a => String(a.student) === String(assignModal.student.id) &&
+                 String(a.fees_type) === String(feeTypeId)
+          );
+
+          const payload = {
+            academic_year:     Number(yearFilter),
+            student:           Number(assignModal.student.id),
+            fees_type:         feeTypeId,
+            due_date:          matchingSchedule.due_date,
+            amount:            matchingSchedule.amount,
+            discount_amount:   '0.00',
+            concession_amount: '0.00',
+          };
+
+          if (existingAsgn) {
+            await feesApi.updateAssignment(existingAsgn.id, payload);
+          } else {
+            await feesApi.createAssignment(payload);
+          }
+        }
+
+        // Refresh assignments from backend so stats reflect DB truth
+        const fresh = await feesApi.listAssignments({ academic_year: Number(yearFilter) });
+        const freshData = listData(fresh);
+        setAssignments(freshData);
+      } catch (err) {
+        console.error('Failed to save assignment:', err);
+        const errorMessage = err instanceof Error ? err.message : 'Save failed';
+        showToast(errorMessage);
+        setSaving(false);
+        return;
+      } finally {
+        setSaving(false);
+      }
+    }
+
+    // Optimistically update local UI regardless
     setOverrides(prev=>({...prev,[assignModal.student.id]:{group:modalGroup,annual:total}}));
     setAssignModal(null);
     showToast(`${assignModal.isEdit?"Assignment updated":"Fees assigned"} for ${assignModal.student.name} — ${modalGroup}.`);
@@ -404,18 +586,26 @@ export default function FeesAssignmentPanel() {
               style={{width:"100%",height:40,border:"1px solid #E8E8EE",borderRadius:9,paddingLeft:38,paddingRight:12,fontSize:13.5,boxSizing:"border-box"}}/>
           </div>
         </div>
-        {[
-          {label:"YEAR",      value:yearFilter,  set:setYearFilter,  w:120, opts:<><option>2025-26</option><option>2024-25</option></>},
-          {label:"CLASS",     value:classFilter, set:setClassFilter, w:150, opts:<><option value="all">All Classes</option>{CLASS_DATA.map(c=><option key={c.id} value={c.id}>{c.name.replace("Class ","")}</option>)}</>},
-          {label:"FEE GROUP", value:groupFilter, set:setGroupFilter, w:160, opts:<><option value="all">All Groups</option><option value="Day Scholar">Day Scholar</option><option value="Transport Users">Transport Users</option><option value="Full Boarder">Full Boarder</option></>},
-        ].map(f=>(
-          <div key={f.label} style={{minWidth:f.w}}>
-            <div style={{fontSize:10.5,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:7}}>{f.label}</div>
-            <select value={f.value} onChange={e=>f.set(e.target.value)} style={{height:40,border:"1px solid #E8E8EE",borderRadius:9,padding:"0 12px",fontSize:13.5,background:"#fff",cursor:"pointer",width:"100%"}}>
-              {f.opts}
-            </select>
-          </div>
-        ))}
+        <div style={{minWidth:120}}>
+          <div style={{fontSize:10.5,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:7}}>YEAR</div>
+          <select value={yearFilter} onChange={e=>setYearFilter(e.target.value)} style={{height:40,border:"1px solid #E8E8EE",borderRadius:9,padding:"0 12px",fontSize:13.5,background:"#fff",cursor:"pointer",width:"100%"}}>
+            {years.map(y=><option key={y.id} value={String(y.id)}>{y.name}</option>)}
+          </select>
+        </div>
+        <div style={{minWidth:150}}>
+          <div style={{fontSize:10.5,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:7}}>CLASS</div>
+          <select value={classFilter} onChange={e=>setClassFilter(e.target.value)} style={{height:40,border:"1px solid #E8E8EE",borderRadius:9,padding:"0 12px",fontSize:13.5,background:"#fff",cursor:"pointer",width:"100%"}}>
+            <option value="all">All Classes</option>
+            {CLASS_DATA.map(c=><option key={c.id} value={c.id}>{c.name.replace("Class ","")}</option>)}
+          </select>
+        </div>
+        <div style={{minWidth:160}}>
+          <div style={{fontSize:10.5,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:7}}>FEE GROUP</div>
+          <select value={groupFilter} onChange={e=>setGroupFilter(e.target.value)} style={{height:40,border:"1px solid #E8E8EE",borderRadius:9,padding:"0 12px",fontSize:13.5,background:"#fff",cursor:"pointer",width:"100%"}}>
+            <option value="all">All Groups</option>
+            {groups.map(g=><option key={g.id} value={g.name}>{g.name}</option>)}
+          </select>
+        </div>
       </div>
 
       {/* ── Tabs ─────────────────────────────────────────────────────── */}
@@ -518,7 +708,9 @@ export default function FeesAssignmentPanel() {
           );
         })}
         {filteredClasses.length===0&&(
-          <div style={{textAlign:"center",padding:"60px 0",color:"#A0A3B8",fontSize:14}}>No students match the current filters.</div>
+          <div style={{textAlign:"center",padding:"60px 0",color:"#A0A3B8",fontSize:14}}>
+            {loading ? "Loading students..." : students.length === 0 ? "No students found. Please check if you have access to this school or if students have been enrolled." : "No students match the current filters."}
+          </div>
         )}
       </div>
 
@@ -536,11 +728,12 @@ export default function FeesAssignmentPanel() {
             group={modalGroup} concession={modalConcession}
             onGroupChange={setModalGroup} onConcessionChange={setModalConcession}
             feeSchedules={FEE_SCHEDULES} concessions={CONCESSIONS}
+            groups={groups}
           />
           <ModalFooter>
             <button style={{...outlineBtn(),minWidth:90}} onClick={()=>setAssignModal(null)}>Cancel</button>
-            <button style={{...primaryBtn(),minWidth:130}} onClick={confirmAssign}>
-              {assignModal.isEdit ? "Save Changes" : "Assign Fees"}
+            <button style={{...primaryBtn(),minWidth:130,opacity:saving?0.7:1}} onClick={confirmAssign} disabled={saving}>
+              {saving ? "Saving…" : assignModal.isEdit ? "Save Changes" : "Assign Fees"}
             </button>
           </ModalFooter>
         </ModalShell>
@@ -616,7 +809,7 @@ export default function FeesAssignmentPanel() {
               <div>
                 <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:6}}>FEE GROUP</div>
                 <select value={bulkGroup} onChange={e=>setBulkGroup(e.target.value)} style={{width:"100%",height:36,border:"1px solid #E8E8EE",borderRadius:8,padding:"0 10px",fontSize:12.5,background:"#fff",cursor:"pointer"}}>
-                  <option>Day Scholar</option><option>Transport Users</option><option>Full Boarder</option>
+                  {groups.map(g=><option key={g.id} value={g.name}>{g.name}</option>)}
                 </select>
               </div>
             </div>

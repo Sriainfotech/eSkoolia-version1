@@ -37,6 +37,13 @@ type TermConfig = {
   dueDate: string;
 };
 
+type BreakdownSlot = {
+  term_number: number;
+  term_name: string;
+  amount: string;
+  due_date: string;
+};
+
 // ─── Static data ───────────────────────────────────────────────────────────────
 
 const TABS: { id: Tab; label: string }[] = [
@@ -309,12 +316,13 @@ const FEE_GROUPS_DATA = [
 ];
 
 const FEE_TAXABLE_OPTIONS: Array<"Yes" | "No"> = ["Yes", "No"];
-const FEE_STRUCTURE_OPTIONS: Array<"Monthly" | "Quarterly" | "Term-wise" | "Yearly" | "Custom"> = [
+const FEE_STRUCTURE_OPTIONS: Array<string> = [
   "Monthly",
-  "Quarterly",
   "Term-wise",
+  "Quarterly",
+  "Half-Yearly",
   "Yearly",
-  "Custom",
+  "Custom / One-time",
 ];
 const FEE_STATUS_OPTIONS: Array<"Active" | "Inactive"> = ["Active", "Inactive"];
 const GL_CODE_REGEX = /^[0-9]{4}-[A-Z0-9]+$/;
@@ -398,7 +406,6 @@ export default function FeeConfigurationPanel() {
   const [terms, setTerms] = useState<TermConfig[]>(DEFAULT_TERMS);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState("");
-  const [showInfo, setShowInfo] = useState(false);
   const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
   const [academicYearId, setAcademicYearId] = useState<number | null>(null);
   const [feeGroups, setFeeGroups] = useState<FeesGroup[]>([]);
@@ -501,8 +508,66 @@ export default function FeeConfigurationPanel() {
   const [scheduleLateFeeRule, setScheduleLateFeeRule] = useState("");
   const [scheduleTermBreakdown, setScheduleTermBreakdown] = useState<any[]>([]);
   const [scheduleStatus, setScheduleStatus] = useState("active");
+  const [scheduleNumInstallments, setScheduleNumInstallments] = useState<number | "">(0);
   const [scheduleErrors, setScheduleErrors] = useState<Record<string, string>>({});
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
+  const [shouldScrollToCreateSchedule, setShouldScrollToCreateSchedule] = useState(false);
+  const createScheduleRef = useRef<HTMLDivElement | null>(null);
+
+  const resetCreateScheduleForm = () => {
+    setScheduleAcademicYear(academicYearId || "");
+    setScheduleFeeGroup("");
+    setScheduleFeeType("");
+    setScheduleAmount("");
+    setScheduleFrequency("Monthly");
+    setScheduleNumInstallments(12);
+    setScheduleDueDate("");
+    setScheduleLateFee(false);
+    setScheduleGracePeriod(5);
+    setScheduleLateFeeRule("");
+    setScheduleTermBreakdown([]);
+    setScheduleStatus("active");
+    setScheduleErrors({});
+    setIsCreateScheduleOpen(false);
+  };
+
+  const openCreateScheduleForm = () => {
+    setScheduleAcademicYear(academicYearId || "");
+    setScheduleFeeGroup("");
+    setScheduleFeeType("");
+    setScheduleAmount("");
+    setScheduleFrequency("Monthly");
+    setScheduleNumInstallments(12);
+    setScheduleDueDate("");
+    setScheduleLateFee(false);
+    setScheduleGracePeriod(5);
+    setScheduleLateFeeRule("");
+    setScheduleTermBreakdown([]);
+    setScheduleStatus("active");
+    setScheduleErrors({});
+    setIsCreateScheduleOpen(true);
+  };
+
+  const handleAddFeeTypeForGroup = (groupId: number | string | "") => {
+    const resolvedGroupId = typeof groupId === "number"
+      ? groupId
+      : typeof groupId === "string" && groupId.trim() !== ""
+        ? Number(groupId)
+        : "";
+
+    openCreateScheduleForm();
+    setScheduleFeeGroup(resolvedGroupId);
+    setScheduleFeeType("");
+    setShouldScrollToCreateSchedule(true);
+  };
+
+  useEffect(() => {
+    if (!shouldScrollToCreateSchedule) return;
+    if (!createScheduleRef.current) return;
+
+    createScheduleRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    setShouldScrollToCreateSchedule(false);
+  }, [shouldScrollToCreateSchedule]);
 
   // ── Edit Schedule state ──
   const [editingSchedule, setEditingSchedule] = useState<any | null>(null);
@@ -526,6 +591,7 @@ export default function FeeConfigurationPanel() {
   const [isDeleteScheduleOpen, setIsDeleteScheduleOpen] = useState(false);
   const [isDeletingSchedule, setIsDeletingSchedule] = useState(false);
   const [deleteScheduleError, setDeleteScheduleError] = useState("");
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
 
   // ── Concession Rules state ──
   const [concessionRules, setConcessionRules] = useState<ConcessionRule[]>([]);
@@ -555,6 +621,35 @@ export default function FeeConfigurationPanel() {
   const [formGrace, setFormGrace] = useState("7");
   const [formLateRule, setFormLateRule] = useState("Rs. 50 daily, cap Rs. 1,500");
   const [formAmounts, setFormAmounts] = useState<string[]>(["12000", "12000", "12000", "12000"]);
+
+  const generateMonthlySlots = (): BreakdownSlot[] => {
+    const year = academicYears.find(y => y.id === academicYearId);
+    const startDate = year?.start_date;
+    const endDate = year?.end_date;
+    if (!startDate || !endDate) return [];
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const slots: BreakdownSlot[] = [];
+    let current = new Date(start.getFullYear(), start.getMonth(), 1);
+    const endLimit = new Date(end.getFullYear(), end.getMonth(), 1);
+
+    let count = 1;
+    while (current <= endLimit && count <= 12) {
+      const monthLabel = current.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+      const dueDate = new Date(current.getFullYear(), current.getMonth(), 10).toISOString().split('T')[0];
+      
+      slots.push({
+        term_number: count,
+        term_name: monthLabel,
+        amount: "",
+        due_date: dueDate
+      });
+      current.setMonth(current.getMonth() + 1);
+      count++;
+    }
+    return slots;
+  };
 
   const resetAddForm = () => {
     setFormGroup(FEE_GROUPS[0].name);
@@ -1075,17 +1170,16 @@ export default function FeeConfigurationPanel() {
       return;
     }
     const nextErrors: Record<string, string> = {};
-    if (!scheduleFeeGroup) nextErrors.fee_group = "Fee Group is required.";
     if (!scheduleFeeType) nextErrors.fee_type = "Fee Type is required.";
     
-    if (scheduleFrequency === "Term-wise") {
-      if (!scheduleTermBreakdown || scheduleTermBreakdown.length === 0) {
-        showToast("Please configure school terms under 'School Term Settings' first.");
+    if (scheduleFrequency.includes("Term-wise") || scheduleTermBreakdown.length > 0) {
+      if (scheduleTermBreakdown.length === 0) {
+        showToast("Please apply installments or configure school terms first.");
         return;
       }
       const hasInvalidTerm = scheduleTermBreakdown.some(tb => !tb.amount || isNaN(Number(tb.amount)) || Number(tb.amount) < 0 || !tb.due_date);
       if (hasInvalidTerm) {
-        showToast("Please provide a valid amount and due date for all terms.");
+        showToast("Please provide a valid amount and due date for all installments.");
         return;
       }
     } else {
@@ -1101,13 +1195,18 @@ export default function FeeConfigurationPanel() {
 
     let finalAmount = scheduleAmount;
     let finalDueDate = scheduleDueDate;
-    if (scheduleFrequency === "Term-wise") {
+    if (scheduleTermBreakdown.length > 0) {
       const sum = scheduleTermBreakdown.reduce((acc, current) => acc + (Number(current.amount) || 0), 0);
-      finalAmount = sum.toString();
+      finalAmount = sum.toFixed(2);
       if (scheduleTermBreakdown.length > 0) {
         finalDueDate = scheduleTermBreakdown[0].due_date;
       }
     }
+
+    let normalizedFrequency = scheduleFrequency;
+    if (normalizedFrequency.includes("Monthly")) normalizedFrequency = "Monthly";
+    if (normalizedFrequency.includes("Term-wise")) normalizedFrequency = "Term-wise";
+    if (normalizedFrequency.includes("Custom")) normalizedFrequency = "Custom";
 
     setIsSavingSchedule(true);
     try {
@@ -1116,12 +1215,12 @@ export default function FeeConfigurationPanel() {
         fee_group: scheduleFeeGroup === "" ? undefined : scheduleFeeGroup,
         fee_type: scheduleFeeType === "" ? undefined : scheduleFeeType,
         amount: finalAmount,
-        collection_frequency: scheduleFrequency,
+        collection_frequency: normalizedFrequency,
         due_date: finalDueDate,
-        late_fee_applicable: scheduleLateFee,
+        late_fee_applicable: scheduleLateFee || scheduleLateFeeRule !== "",
         grace_period: Number(scheduleGracePeriod) || 0,
         late_fee_rule: scheduleLateFeeRule,
-        term_breakdown: scheduleFrequency === "Term-wise" ? scheduleTermBreakdown : [],
+        term_breakdown: scheduleTermBreakdown,
         status: scheduleStatus as "active" | "inactive",
       });
       showToast("Fee schedule created successfully.");
@@ -1132,7 +1231,7 @@ export default function FeeConfigurationPanel() {
       setScheduleFrequency("Monthly");
       setScheduleDueDate("");
       setScheduleLateFee(false);
-      setScheduleGracePeriod(0);
+      setScheduleGracePeriod(5);
       setScheduleLateFeeRule("");
       setScheduleTermBreakdown([]);
       setScheduleStatus("active");
@@ -1152,7 +1251,6 @@ export default function FeeConfigurationPanel() {
   const handleUpdateSchedule = async () => {
     if (!editingSchedule) return;
     const nextErrors: Record<string, string> = {};
-    if (!editScheduleFeeGroup) nextErrors.fee_group = "Fee Group is required.";
     if (!editScheduleFeeType) nextErrors.fee_type = "Fee Type is required.";
     
     if (editScheduleFrequency === "Term-wise") {
@@ -1409,7 +1507,7 @@ export default function FeeConfigurationPanel() {
             <div style={{ fontSize: 11.5, color: "#6B7280", margin: "12px 0" }}>
               Academic year: {currentAcademicYearName}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 16 }}>
               <div>
                 <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>GROUP NAME</div>
                 <input
@@ -1605,6 +1703,8 @@ export default function FeeConfigurationPanel() {
                   {feeGroupClassIds.length} Classes Selected
                 </div>
               </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 16 }}>
               <div>
                 <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>STATUS</div>
                 <select
@@ -1637,61 +1737,68 @@ export default function FeeConfigurationPanel() {
         )}
       </div>
 
-      {/* Fee group cards */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {isLoadingGroups ? (
-          <div style={{ ...card, color: "#5B5E72" }}>Loading fee groups...</div>
-        ) : feeGroups.length === 0 ? (
-          <div style={{ ...card, color: "#5B5E72" }}>No fee groups yet.</div>
-        ) : (
-          visibleFeeGroups.map(group => {
-            const studentCount = getStudentCount(group);
-            const studentLabel = studentCount > 0 ? `${studentCount} students` : "—";
-            return (
-              <div key={group.id} style={groupCardStyle}>
-                <div style={groupAccentStyle} />
-                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.6fr .7fr .8fr auto", gap: 16, alignItems: "center" }}>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "#1d2230" }}>{group.name}</div>
-                  <div style={{ fontSize: 12.5, color: "#3b4150" }}>{group.description || "—"}</div>
-                  <div style={{ fontSize: 12.5, color: "#3b4150" }}>{studentLabel}</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {statusPill(group.is_active ? "Active" : "Inactive")}
-                    <button
-                      type="button"
-                      onClick={() => handleToggleGroup(group)}
-                      disabled={togglingGroupId === group.id}
-                      style={{
-                        position: "relative",
-                        width: 32,
-                        height: 18,
-                        borderRadius: 999,
-                        border: "1px solid #E8E8EE",
-                        background: group.is_active ? "#e6f6ee" : "#f3f4f6",
-                        cursor: togglingGroupId === group.id ? "not-allowed" : "pointer",
-                        opacity: togglingGroupId === group.id ? 0.6 : 1,
-                      }}
-                      aria-label={group.is_active ? "Deactivate group" : "Activate group"}
-                    >
-                      <span
-                        style={{
-                          position: "absolute",
-                          top: 2,
-                          left: group.is_active ? 16 : 2,
-                          width: 12,
-                          height: 12,
-                          borderRadius: "50%",
-                          background: group.is_active ? "#1d9e63" : "#8a90a2",
-                          transition: "left 0.2s ease",
-                        }}
-                      />
-                    </button>
-                  </div>
-                  <div>{rowActions(group)}</div>
-                </div>
-              </div>
-            );
-          })
-        )}
+      {/* Fee group list */}
+      <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: "#F8F8FB", borderBottom: "1px solid #E8E8EE" }}>
+              <th style={{ padding: "12px 16px", textAlign: "left", color: "#8a90a2", fontWeight: 700, fontSize: 11, letterSpacing: "0.05em" }}>GROUP NAME</th>
+              <th style={{ padding: "12px 16px", textAlign: "left", color: "#8a90a2", fontWeight: 700, fontSize: 11, letterSpacing: "0.05em" }}>DESCRIPTION</th>
+              <th style={{ padding: "12px 16px", textAlign: "left", color: "#8a90a2", fontWeight: 700, fontSize: 11, letterSpacing: "0.05em" }}>CLASSES</th>
+              <th style={{ padding: "12px 16px", textAlign: "left", color: "#8a90a2", fontWeight: 700, fontSize: 11, letterSpacing: "0.05em" }}>STATUS</th>
+              <th style={{ padding: "12px 16px", textAlign: "right", color: "#8a90a2", fontWeight: 700, fontSize: 11, letterSpacing: "0.05em" }}>ACTIONS</th>
+            </tr>
+          </thead>
+          <tbody>
+            {isLoadingGroups ? (
+              <tr><td colSpan={5} style={{ padding: 24, textAlign: "center", color: "#A0A3B8" }}>Loading fee groups...</td></tr>
+            ) : feeGroups.length === 0 ? (
+              <tr><td colSpan={5} style={{ padding: 24, textAlign: "center", color: "#A0A3B8" }}>No fee groups yet.</td></tr>
+            ) : (
+              visibleFeeGroups.map(group => {
+                const groupClasses = group.applicable_classes && group.applicable_classes.length > 0
+                  ? group.applicable_classes.map(id => availableClasses.find(c => c.id === id)?.name).filter(Boolean).join(", ")
+                  : "All Classes";
+
+                return (
+                  <tr key={group.id} style={{ borderBottom: "1px solid #F1F1F4" }}>
+                    <td style={{ padding: "14px 16px", fontWeight: 700, color: "#1d2230" }}>{group.name}</td>
+                    <td style={{ padding: "14px 16px", color: "#3b4150" }}>{group.description || "—"}</td>
+                    <td style={{ padding: "14px 16px", color: "#3b4150", fontSize: 12 }}>
+                      <div style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={groupClasses}>
+                        {groupClasses}
+                      </div>
+                    </td>
+                    <td style={{ padding: "14px 16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {statusPill(group.is_active ? "Active" : "Inactive")}
+                        <button
+                          type="button"
+                          onClick={() => handleToggleGroup(group)}
+                          disabled={togglingGroupId === group.id}
+                          style={{
+                            position: "relative", width: 32, height: 18, borderRadius: 999,
+                            border: "1px solid #E8E8EE", background: group.is_active ? "#e6f6ee" : "#f3f4f6",
+                            cursor: togglingGroupId === group.id ? "not-allowed" : "pointer",
+                            opacity: togglingGroupId === group.id ? 0.6 : 1,
+                          }}
+                        >
+                          <span style={{
+                            position: "absolute", top: 2, left: group.is_active ? 16 : 2,
+                            width: 12, height: 12, borderRadius: "50%",
+                            background: group.is_active ? "#1d9e63" : "#8a90a2",
+                            transition: "left 0.2s ease",
+                          }} />
+                        </button>
+                      </div>
+                    </td>
+                    <td style={{ padding: "14px 16px", textAlign: "right" }}>{rowActions(group)}</td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
       </div>
       {!isLoadingGroups && feeGroups.length > 0 && (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, alignItems: "center" }}>
@@ -1864,6 +1971,38 @@ export default function FeeConfigurationPanel() {
   }, [activeTab, typePage, typeSortBy, typeSortDir, typeStatusFilter]);
 
   useEffect(() => {
+    if (activeTab !== "fee-schedules") return;
+    let active = true;
+
+    (async () => {
+      try {
+        const payload = await feesApi.listTypes({
+          page: 1,
+          page_size: 500,
+          sort_by: "name",
+          sort_dir: "asc",
+        });
+
+        if (!active) return;
+        if (Array.isArray(payload)) {
+          setFeeTypes(payload);
+        } else if ("results" in payload) {
+          setFeeTypes(payload.results || []);
+        } else {
+          setFeeTypes(listData(payload as { results?: FeesType[] }));
+        }
+      } catch {
+        if (!active) return;
+        showToast("Unable to load fee type options.");
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
     if (activeTab !== "fee-types") return;
     const timer = setTimeout(() => {
       setTypePage(1);
@@ -2016,19 +2155,7 @@ export default function FeeConfigurationPanel() {
         <div style={{ fontSize: 12.5, color: "#A0A3B8", marginBottom: 18 }}>
           Create fee types with GL code, taxation, structure, and status.
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 16 }}>
-          <div>
-            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>FEE GROUP</div>
-            <select
-              value={typeGroupId}
-              onChange={event => setTypeGroupId(event.target.value === "" ? "" : Number(event.target.value))}
-              style={inputField("Select Fee Group")}
-            >
-              <option value="">Select Fee Group</option>
-              {feeGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </select>
-            {typeErrors.fees_group ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.fees_group}</div> : null}
-          </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, marginBottom: 16 }}>
           <div>
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>FEE TYPE NAME</div>
             <input
@@ -2064,6 +2191,8 @@ export default function FeeConfigurationPanel() {
             <div style={{ marginTop: 6, color: "#6b7280", fontSize: 11.5 }}>Format: 4001-TUITION</div>
             {typeErrors.gl_code ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.gl_code}</div> : null}
           </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 16 }}>
           <div>
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>TAXABLE</div>
             <select value={typeTaxable} onChange={event => setTypeTaxable(event.target.value as "Yes" | "No")} style={inputField("Taxable")}>
@@ -2077,6 +2206,14 @@ export default function FeeConfigurationPanel() {
               {FEE_STRUCTURE_OPTIONS.map(option => <option key={option} value={option}>{option}</option>)}
             </select>
             {typeErrors.default_structure ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.default_structure}</div> : null}
+          </div>
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>STATUS</div>
+            <select value={typeStatus} onChange={event => setTypeStatus(event.target.value as "Active" | "Inactive")} style={inputField("Status")}> 
+              <option value="Active">Active</option>
+              <option value="Inactive">Inactive</option>
+            </select>
+            {typeErrors.status ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.status}</div> : null}
           </div>
         </div>
         {typeErrors.general ? <div style={{ marginBottom: 12, color: "#dc2626", fontSize: 12.5, fontWeight: 600 }}>{typeErrors.general}</div> : null}
@@ -2165,21 +2302,23 @@ export default function FeeConfigurationPanel() {
     <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
 
       {/* Academic Calendar card */}
-      <div style={{ background: "#eef0ff", border: "1px solid #ddd8f8", borderRadius: 12, padding: "18px 22px", marginBottom: 20 }}>
+      <div style={{ background: "#f5f6ff", border: "1px solid #ddd8f8", borderRadius: 12, padding: "18px 22px", marginBottom: 20 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", color: "#6D4AFF" }}>
               📅 ACADEMIC CALENDAR
             </span>
             <span style={{ fontSize: 12, fontWeight: 700, background: "#6D4AFF", color: "#fff", padding: "2px 10px", borderRadius: 20 }}>
-              2025-26
+              {currentAcademicYearName}
             </span>
             <span style={{ fontSize: 12, fontWeight: 600, background: "#E8E8EE", color: "#5B5E72", padding: "2px 10px", borderRadius: 20 }}>
               CBSE
             </span>
-            <span style={{ fontSize: 12, fontWeight: 600, background: "#dcfce7", color: "#15803d", padding: "2px 10px", borderRadius: 20 }}>
-              Active Year
-            </span>
+            {academicYears.find(y => y.id === academicYearId)?.is_current && (
+              <span style={{ fontSize: 12, fontWeight: 600, background: "#dcfce7", color: "#15803d", padding: "2px 10px", borderRadius: 20 }}>
+                Active Year
+              </span>
+            )}
           </div>
           <button
             style={{ ...outlineBtn(true), fontSize: 12, height: 30 }}
@@ -2192,11 +2331,21 @@ export default function FeeConfigurationPanel() {
         <div style={{ display: "flex", gap: 40, marginTop: 14, marginBottom: 14 }}>
           <div>
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 4 }}>YEAR START</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#181B2A" }}>01 Jun 2025</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#181B2A" }}>
+              {(() => {
+                const y = academicYears.find(y => y.id === academicYearId);
+                return y?.start_date ? new Date(y.start_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : "—";
+              })()}
+            </div>
           </div>
           <div>
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 4 }}>YEAR END</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#181B2A" }}>31 Mar 2026</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#181B2A" }}>
+              {(() => {
+                const y = academicYears.find(y => y.id === academicYearId);
+                return y?.end_date ? new Date(y.end_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : "—";
+              })()}
+            </div>
           </div>
           <div>
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 4 }}>BASED ON</div>
@@ -2204,14 +2353,16 @@ export default function FeeConfigurationPanel() {
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {ACADEMIC_TERMS.slice(0, numTerms).map(t => (
-            <div key={t.label} style={{
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", overflowX: "auto" }}>
+          {terms.map((t, idx) => (
+            <div key={idx} style={{
               background: "#fff", border: "1px solid #c7c2f8", borderRadius: 10,
-              padding: "10px 16px", flex: "1 1 160px", minWidth: 160,
+              padding: "10px 16px", flex: "1 1 180px", minWidth: 180,
             }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#6D4AFF", marginBottom: 4 }}>{t.label}</div>
-              <div style={{ fontSize: 12.5, color: "#5B5E72" }}>{t.range}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#6D4AFF", marginBottom: 4 }}>{t.name}</div>
+              <div style={{ fontSize: 12.5, color: "#5B5E72" }}>
+                {t.startDate ? new Date(t.startDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : ""} → {t.endDate ? new Date(t.endDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : ""}
+              </div>
             </div>
           ))}
         </div>
@@ -2423,40 +2574,382 @@ export default function FeeConfigurationPanel() {
       {/* Fee Schedules List */}
       <div style={card}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 4 }}>Fee Schedules</div>
-            <div style={{ fontSize: 13, color: "#A0A3B8" }}>Manage fee collection schedules for each fee type per group.</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 4 }}>Fee Schedule per Group</div>
+              <div style={{ fontSize: 13, color: "#A0A3B8" }}>Manage fee collection schedules for each fee type per group.</div>
+            </div>
+            <button
+              onClick={() => setIsHelpModalOpen(true)}
+              style={{
+                width: 24, height: 24, borderRadius: "50%", background: "#f1f3fe",
+                color: "#6D4AFF", border: "1px solid #ddd8f8", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 12, fontWeight: 800, marginTop: -14
+              }}
+              title="View Fee Schedule Help"
+            >
+              i
+            </button>
           </div>
           <button
             style={primaryBtn()}
             onClick={() => {
-              setScheduleAcademicYear(academicYearId || "");
-              setScheduleFeeGroup("");
-              setScheduleFeeType("");
-              setScheduleAmount("");
-              setScheduleFrequency("Term-wise"); // set default to Term-wise
-              setScheduleDueDate("");
-              setScheduleLateFee(false);
-              setScheduleGracePeriod(0);
-              setScheduleLateFeeRule("");
-              
-              // Fill initial term breakdown
-              const initialBreakdown = termSettings.map(term => ({
-                term_number: term.term_number,
-                term_name: term.term_name,
-                amount: "",
-                due_date: term.default_due_date || "",
-              }));
-              setScheduleTermBreakdown(initialBreakdown);
-
-              setScheduleStatus("active");
-              setScheduleErrors({});
-              setIsCreateScheduleOpen(true);
+              if (isCreateScheduleOpen) {
+                resetCreateScheduleForm();
+                return;
+              }
+              openCreateScheduleForm();
             }}
           >
-            + Create Schedule
+            {isCreateScheduleOpen ? "- Close Form" : "+ Create Schedule"}
           </button>
         </div>
+
+        {isCreateScheduleOpen && (
+          <div ref={createScheduleRef} style={{ 
+            background: "#f9fafb", 
+            borderRadius: 12, 
+            padding: 24, 
+            border: "1px solid #E8E8EE", 
+            marginBottom: 24 
+          }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 18, marginBottom: 20 }}>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>FEE GROUP</div>
+                <select
+                  value={scheduleFeeGroup}
+                  onChange={e => {
+                    setScheduleFeeGroup(Number(e.target.value) || "");
+                    setScheduleFeeType("");
+                  }}
+                  style={inputField("Select group")}
+                >
+                  <option value="">Select fee group</option>
+                  {feeGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+                {scheduleErrors.fee_group && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.fee_group}</div>}
+              </div>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>FEE TYPE</div>
+                <select
+                  value={scheduleFeeType}
+                  onChange={e => setScheduleFeeType(Number(e.target.value) || "")}
+                  style={inputField("Select fee type")}
+                >
+                  <option value="">Select fee type</option>
+                  {feeTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                {scheduleErrors.fee_type && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.fee_type}</div>}
+              </div>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>COLLECTION STRUCTURE</div>
+                <select
+                  value={scheduleFrequency}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setScheduleFrequency(val);
+                    setScheduleTermBreakdown([]); // Reset on change
+                    if (val === "Monthly") setScheduleNumInstallments(12);
+                    else if (val === "Term-wise") setScheduleNumInstallments(termSettings.length || 3);
+                    else if (val === "Quarterly") setScheduleNumInstallments(4);
+                    else if (val === "Half-Yearly") setScheduleNumInstallments(2);
+                    else if (val === "Yearly") setScheduleNumInstallments(1);
+                    else setScheduleNumInstallments(1);
+                  }}
+                  style={inputField("Structure")}
+                >
+                  {FEE_STRUCTURE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr 1fr", gap: 18, marginBottom: 20 }}>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>GRACE PERIOD (DAYS)</div>
+                <input
+                  type="number"
+                  value={scheduleGracePeriod}
+                  onChange={e => setScheduleGracePeriod(Number(e.target.value) || 0)}
+                  style={inputField("5")}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>LATE FEE AMOUNT (RS.)</div>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="0"
+                  value={(() => {
+                    const match = scheduleLateFeeRule.match(/(\d+(\.\d+)?)/);
+                    return match ? match[1] : "";
+                  })()}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setScheduleLateFeeRule(val ? `Rs. ${val} Flat` : "");
+                  }}
+                  style={inputField("0")}
+                />
+              </div>
+              <div>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>STATUS</div>
+                <select
+                  value={scheduleStatus}
+                  onChange={e => setScheduleStatus(e.target.value as "active" | "inactive")}
+                  style={inputField("Active")}
+                >
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Monthly Structure (Image 2) */}
+            {scheduleFrequency === "Monthly" && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 10 }}>MONTHLY AMOUNT (RS.) — APPLIES PER MONTH</div>
+                <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+                  <input
+                    type="number"
+                    value={scheduleAmount}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setScheduleAmount(val);
+                      if (val) {
+                        const slots = generateMonthlySlots();
+                        const updated = slots.map((s: BreakdownSlot) => ({ ...s, amount: val }));
+                        setScheduleTermBreakdown(updated);
+                      }
+                    }}
+                    style={{ ...inputField("e.g. 2800"), maxWidth: 200 }}
+                  />
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button
+                      style={{ ...primaryBtn(), height: 38 }}
+                      onClick={handleCreateSchedule}
+                      disabled={isSavingSchedule}
+                    >
+                      {isSavingSchedule ? "Saving..." : "Save Schedule"}
+                    </button>
+                    <button
+                      style={{ ...outlineBtn(), height: 38 }}
+                      onClick={resetCreateScheduleForm}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+
+                {scheduleTermBreakdown.length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
+                    {scheduleTermBreakdown.map((slot, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px", background: "#f8fafc", borderRadius: 10, border: "1px solid #e2e8f0" }}>
+                        <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#6D4AFF10", color: "#6D4AFF", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 11 }}>{i + 1}</div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>{slot.term_name}</div>
+                          <div style={{ fontSize: 11, color: "#64748b" }}>Due: {slot.due_date}</div>
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>₹{slot.amount}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {scheduleFrequency === "Yearly" && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 10 }}>YEARLY AMOUNT (RS.)</div>
+                <div style={{ display: "grid", gridTemplateColumns: "220px 200px auto", gap: 12, alignItems: "end" }}>
+                  <div>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: "#8a90a2", marginBottom: 4, textTransform: "uppercase" }}>Amount (₹)</div>
+                    <input
+                      type="number"
+                      value={scheduleAmount}
+                      onChange={e => setScheduleAmount(e.target.value)}
+                      style={inputField("e.g. 25000")}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: "#8a90a2", marginBottom: 4, textTransform: "uppercase" }}>Due Date</div>
+                    <input
+                      type="date"
+                      value={scheduleDueDate}
+                      onChange={e => setScheduleDueDate(e.target.value)}
+                      style={inputField("")}
+                    />
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button style={{ ...primaryBtn(), height: 40 }} onClick={handleCreateSchedule} disabled={isSavingSchedule}>{isSavingSchedule ? "Saving..." : "Save Schedule"}</button>
+                    <button style={{ ...outlineBtn(), height: 40 }} onClick={resetCreateScheduleForm}>Cancel</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Custom / One-time (Image 3) */}
+            {scheduleFrequency === "Custom / One-time" && (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 12 }}>HOW MANY INSTALLMENTS?</div>
+                <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+                  <input
+                    type="number"
+                    value={scheduleNumInstallments}
+                    onChange={e => setScheduleNumInstallments(Number(e.target.value) || 1)}
+                    style={{ ...inputField("1"), maxWidth: 80 }}
+                  />
+                  <button
+                    onClick={() => {
+                      const count = Number(scheduleNumInstallments) || 1;
+                      const slots: BreakdownSlot[] = [];
+                      for (let i = 1; i <= count; i++) {
+                        slots.push({
+                          term_number: i,
+                          term_name: `INSTALLMENT ${i}`,
+                          amount: "",
+                          due_date: ""
+                        });
+                      }
+                      setScheduleTermBreakdown(slots);
+                    }}
+                    style={{
+                      height: 38, padding: "0 16px", borderRadius: 8, background: "#f1f5f9", border: "1px solid #e2e8f0", 
+                      color: "#475569", fontSize: 12, fontWeight: 700, cursor: "pointer"
+                    }}
+                  >
+                    Apply →
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Quarterly / Half-Yearly (Auto-init) */}
+            {(scheduleFrequency === "Quarterly" || scheduleFrequency === "Half-Yearly") && (
+               <div style={{ marginBottom: 20 }}>
+                 {(() => {
+                    if (scheduleTermBreakdown.length === 0) {
+                      const count = scheduleFrequency === "Quarterly" ? 4 : 2;
+                      const slots: BreakdownSlot[] = [];
+                      for (let i = 1; i <= count; i++) {
+                        slots.push({
+                          term_number: i,
+                          term_name: `${scheduleFrequency === "Quarterly" ? "QUARTER" : "HALF-YEAR"} ${i}`,
+                          amount: "",
+                          due_date: ""
+                        });
+                      }
+                      setTimeout(() => setScheduleTermBreakdown(slots), 0);
+                    }
+                    return null;
+                 })()}
+               </div>
+            )}
+
+            {/* Term-wise Structure (Image 5/6) */}
+            {scheduleFrequency === "Term-wise" && (
+               <div style={{ marginBottom: 20 }}>
+                 {(() => {
+                    if (scheduleTermBreakdown.length === 0 && termSettings.length > 0) {
+                      const slots: BreakdownSlot[] = [];
+                      termSettings.forEach((ts, i) => {
+                        slots.push({
+                          term_number: ts.term_number || i + 1,
+                          term_name: ts.term_name || `TERM ${i + 1}`,
+                          amount: "",
+                          due_date: ts.default_due_date || ""
+                        });
+                      });
+                      setTimeout(() => setScheduleTermBreakdown(slots), 0);
+                    }
+                    return null;
+                 })()}
+                 {termSettings.length === 0 && scheduleTermBreakdown.length === 0 && (
+                   <div style={{ padding: 20, textAlign: "center", border: "1px dashed #E8E8EE", borderRadius: 12, color: "#8a90a2" }}>
+                     No terms configured. Please set them up in "School Term Settings" above.
+                   </div>
+                 )}
+               </div>
+            )}
+
+            {/* Common Grid Renderer for Multi-Installment Frequencies */}
+            {scheduleTermBreakdown.length > 0 && scheduleFrequency !== "Monthly" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+                <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 4 }}>BREAKDOWN SLOTS</div>
+                {scheduleTermBreakdown.map((slot: BreakdownSlot, i: number) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "40px 1fr 150px 150px", gap: 16, alignItems: "center", background: "#f8fafc", padding: "12px 18px", borderRadius: 12, border: "1px solid #e2e8f0" }}>
+                    <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#6D4AFF15", color: "#6D4AFF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700 }}>
+                      {scheduleFrequency === "Term-wise" ? `T${slot.term_number}` : i + 1}
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: "#8a90a2", marginBottom: 2, textTransform: "uppercase" }}>Slot Name</div>
+                      <input
+                        type="text"
+                        value={slot.term_name}
+                        onChange={e => {
+                          const next = [...scheduleTermBreakdown];
+                          next[i].term_name = e.target.value;
+                          setScheduleTermBreakdown(next);
+                        }}
+                        style={{ border: "none", background: "transparent", fontSize: 14, fontWeight: 700, color: "#1e293b", width: "100%", padding: 0 }}
+                        readOnly={scheduleFrequency === "Term-wise"}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: "#8a90a2", marginBottom: 4, textTransform: "uppercase" }}>Amount (₹)</div>
+                      <input
+                        type="number"
+                        value={slot.amount}
+                        onChange={e => {
+                          const next = [...scheduleTermBreakdown];
+                          next[i].amount = e.target.value;
+                          setScheduleTermBreakdown(next);
+                          const total = next.reduce((sum, curr) => sum + (Number(curr.amount) || 0), 0);
+                          setScheduleAmount(total > 0 ? total.toString() : "");
+                        }}
+                        style={{ ...inputField("0.00"), height: 34 }}
+                      />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: "#8a90a2", marginBottom: 4, textTransform: "uppercase" }}>Due Date</div>
+                      <input
+                        type="date"
+                        value={slot.due_date}
+                        onChange={e => {
+                          const next = [...scheduleTermBreakdown];
+                          next[i].due_date = e.target.value;
+                          setScheduleTermBreakdown(next);
+                        }}
+                        style={{ ...inputField(""), height: 34, padding: "0 8px" }}
+                      />
+                    </div>
+                  </div>
+                ))}
+                
+                {/* Total amount summary & Actions */}
+                <div style={{ 
+                  marginTop: 10, 
+                  padding: "16px 20px", 
+                  background: "#f1f5f9", 
+                  borderRadius: 12, 
+                  display: "flex", 
+                  justifyContent: "space-between", 
+                  alignItems: "center",
+                  border: "1px solid #e2e8f0"
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#475569" }}>Total Amount:</span>
+                    <span style={{ fontSize: 18, fontWeight: 800, color: "#1e293b" }}>₹{Number(scheduleAmount || 0).toLocaleString()}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button style={primaryBtn()} onClick={handleCreateSchedule} disabled={isSavingSchedule}>Save Schedule</button>
+                    <button style={outlineBtn()} onClick={resetCreateScheduleForm}>Cancel</button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Search & Filters */}
         <div style={{ display: "flex", gap: 12, marginBottom: 18, flexWrap: "wrap" }}>
@@ -2496,90 +2989,173 @@ export default function FeeConfigurationPanel() {
         ) : (
           <>
             <div style={{ overflowX: "auto", marginBottom: 16 }}>
-              <table style={{
-                width: "100%", borderCollapse: "collapse",
-                fontSize: 13, color: "#181B2A",
-              }}>
-                <thead>
-                  <tr style={{ borderBottom: "2px solid #E8E8EE", background: "#F8F8FB" }}>
-                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Fee Group</th>
-                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Fee Type</th>
-                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Amount</th>
-                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Frequency</th>
-                    <th style={{ padding: "12px", textAlign: "left", fontWeight: 700 }}>Status</th>
-                    <th style={{ padding: "12px", textAlign: "center", fontWeight: 700 }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {feeSchedules.map((schedule, idx) => (
-                    <tr key={schedule.id} style={{
-                      borderBottom: "1px solid #E8E8EE",
-                      background: idx % 2 === 0 ? "#fff" : "#F8F8FB",
-                    }}>
-                      <td style={{ padding: "12px" }}>{schedule.fee_group_name || schedule.fee_group}</td>
-                      <td style={{ padding: "12px" }}>{schedule.fee_type_name || schedule.fee_type}</td>
-                      <td style={{ padding: "12px", fontWeight: 600 }}>₹{Number(schedule.amount).toLocaleString('en-IN')}</td>
-                      <td style={{ padding: "12px" }}>{schedule.collection_frequency}</td>
-                      <td style={{ padding: "12px" }}>
-                        <span style={{
-                          padding: "4px 10px", borderRadius: 4, fontSize: 12, fontWeight: 600,
-                          background: schedule.status === "active" ? "#dcfce7" : "#fee2e2",
-                          color: schedule.status === "active" ? "#15803d" : "#991b1b",
-                        }}>
-                          {schedule.status}
-                        </span>
-                      </td>
-                      <td style={{ padding: "12px", textAlign: "center" }}>
-                        <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
-                          <button
-                            style={outlineBtn(true)}
-                            onClick={() => {
-                              setEditingSchedule(schedule);
-                              setEditScheduleAcademicYear(schedule.academic_year);
-                              setEditScheduleFeeGroup(schedule.fee_group);
-                              setEditScheduleFeeType(schedule.fee_type);
-                              setEditScheduleAmount(schedule.amount);
-                              setEditScheduleFrequency(schedule.collection_frequency);
-                              setEditScheduleDueDate(schedule.due_date);
-                              setEditScheduleLateFee(schedule.late_fee_applicable);
-                              setEditScheduleStatus(schedule.status);
-                              setEditScheduleGracePeriod(schedule.grace_period || 0);
-                              setEditScheduleLateFeeRule(schedule.late_fee_rule || "");
-                              
-                              if (schedule.term_breakdown && schedule.term_breakdown.length > 0) {
-                                setEditScheduleTermBreakdown(JSON.parse(JSON.stringify(schedule.term_breakdown)));
-                              } else {
-                                const initialBreakdown = termSettings.map(term => ({
-                                  term_number: term.term_number,
-                                  term_name: term.term_name,
-                                  amount: "",
-                                  due_date: term.default_due_date || "",
-                                }));
-                                setEditScheduleTermBreakdown(initialBreakdown);
-                              }
-                              
-                              setEditScheduleErrors({});
-                              setIsEditScheduleOpen(true);
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            style={dangerBtn(true)}
-                            onClick={() => {
-                              setDeleteSchedule(schedule);
-                              setDeleteScheduleError("");
-                              setIsDeleteScheduleOpen(true);
-                            }}
-                          >
-                            Delete
-                          </button>
+              {Object.entries(
+                feeSchedules.reduce((acc: Record<string, any[]>, row: any) => {
+                  const key = row.fee_group_name || String(row.fee_group || "Ungrouped");
+                  if (!acc[key]) acc[key] = [];
+                  acc[key].push(row);
+                  return acc;
+                }, {})
+              ).map(([groupName, rows]) => {
+                const initials = groupName
+                  .split(" ")
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map(word => word[0]?.toUpperCase())
+                  .join("");
+
+                const summary = rows
+                  .map((s: any) => {
+                    const amount = Number(s.amount || 0).toLocaleString("en-IN");
+                    if (s.collection_frequency === "Custom") return `₹${amount} custom`;
+                    if (s.collection_frequency === "Monthly") return `₹${amount} / mo`;
+                    if (s.collection_frequency === "Yearly") return `₹${amount} / yr`;
+                    return `₹${amount} / yr`;
+                  })
+                  .join(" + ");
+
+                return (
+                  <div key={groupName} style={{ border: "1px solid #E5E7EB", borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", background: "#fff", borderBottom: "1px solid #E5E7EB" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                        <div style={{ width: 38, height: 38, borderRadius: 12, background: "#5B4FCF", color: "#fff", fontWeight: 800, fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          {initials || "FG"}
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                        <div>
+                          <div style={{ fontSize: 15, fontWeight: 700, color: "#111827" }}>{groupName}</div>
+                          <div style={{ fontSize: 12, color: "#8A94A6" }}>{rows.length} fee types configured · {summary}</div>
+                        </div>
+                      </div>
+                      <button
+                        style={{ ...outlineBtn(), height: 46, padding: "0 20px", fontWeight: 700 }}
+                        onClick={() => {
+                          const firstGroup = rows[0]?.fee_group;
+                          const groupId = typeof firstGroup === "number"
+                            ? firstGroup
+                            : typeof firstGroup === "string" && firstGroup.trim() !== ""
+                              ? Number(firstGroup)
+                              : feeGroups.find(g => g.name === groupName)?.id ?? "";
+                          handleAddFeeTypeForGroup(groupId);
+                        }}
+                      >
+                        + Add Fee Type
+                      </button>
+                    </div>
+
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, color: "#181B2A" }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid #D9DEE8", background: "#F4F5FA" }}>
+                          <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#8A94A6", letterSpacing: "0.06em", fontSize: 11 }}>FEE TYPE</th>
+                          <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#8A94A6", letterSpacing: "0.06em", fontSize: 11 }}>STRUCTURE</th>
+                          <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#8A94A6", letterSpacing: "0.06em", fontSize: 11 }}>AMOUNT / PLAN</th>
+                          <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#8A94A6", letterSpacing: "0.06em", fontSize: 11 }}>GRACE</th>
+                          <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#8A94A6", letterSpacing: "0.06em", fontSize: 11 }}>LATE FEE RULE</th>
+                          <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#8A94A6", letterSpacing: "0.06em", fontSize: 11 }}>ACTIONS</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((schedule: any, idx: number) => (
+                          <tr key={schedule.id} style={{ borderBottom: idx === rows.length - 1 ? "none" : "1px solid #E5E7EB", background: "#fff" }}>
+                            <td style={{ padding: "12px 16px", fontSize: 14, fontWeight: 700, color: "#111827" }}>{schedule.fee_type_name || schedule.fee_type}</td>
+                            <td style={{ padding: "12px 16px" }}>
+                              <span style={{
+                                display: "inline-flex", alignItems: "center", padding: "5px 12px", borderRadius: 999,
+                                fontSize: 12, fontWeight: 700,
+                                background: schedule.collection_frequency === "Term-wise" ? "#DDF7E7" : schedule.collection_frequency === "Custom" ? "#FEE5E2" : "#E6E9FF",
+                                color: schedule.collection_frequency === "Term-wise" ? "#19A159" : schedule.collection_frequency === "Custom" ? "#E54D42" : "#4A57E2",
+                                border: "1px solid #CFE3D9"
+                              }}>
+                                {schedule.collection_frequency}
+                              </span>
+                            </td>
+                            <td style={{ padding: "12px 16px" }}>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                {Array.isArray(schedule.term_breakdown) && schedule.term_breakdown.length > 0 ? (
+                                  <>
+                                    {schedule.term_breakdown.slice(0, 3).map((slot: any, i: number) => (
+                                      <span key={i} style={{
+                                        background: "#EEF0F6", border: "1px solid #D8DCE8", borderRadius: 999,
+                                        padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#50607A"
+                                      }}>
+                                        {(slot.term_name || `I${i + 1}`).toString().replace("INSTALLMENT ", "I")}: ₹{Number(slot.amount || 0).toLocaleString("en-IN")}
+                                      </span>
+                                    ))}
+                                    {schedule.term_breakdown.length > 3 && (
+                                      <span style={{ fontSize: 12, color: "#8A94A6", alignSelf: "center" }}>+{schedule.term_breakdown.length - 3} more</span>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span style={{
+                                    background: "#EEF0F6", border: "1px solid #D8DCE8", borderRadius: 999,
+                                    padding: "6px 12px", fontSize: 12, fontWeight: 700, color: "#50607A"
+                                  }}>
+                                    I1: ₹{Number(schedule.amount || 0).toLocaleString("en-IN")}{schedule.due_date ? ` (${new Date(schedule.due_date).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })})` : ""}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td style={{ padding: "12px 16px", color: "#6B7280", fontSize: 13 }}>{Number(schedule.grace_period || 0)} days</td>
+                            <td style={{ padding: "12px 16px", color: "#8A94A6", fontSize: 13 }}>{schedule.late_fee_rule || "None"}</td>
+                            <td style={{ padding: "12px 16px", verticalAlign: "middle" }}>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start" }}>
+                                <button
+                                  style={{
+                                    height: 32, minWidth: 70, padding: "0 16px", borderRadius: 12, border: "1px solid #DADDE7",
+                                    background: "#fff", color: "#40506A", fontSize: 13, fontWeight: 700, cursor: "pointer"
+                                  }}
+                                  onClick={() => {
+                                    setEditingSchedule(schedule);
+                                    setEditScheduleAcademicYear(schedule.academic_year);
+                                    setEditScheduleFeeGroup(schedule.fee_group);
+                                    setEditScheduleFeeType(schedule.fee_type);
+                                    setEditScheduleAmount(schedule.amount);
+                                    setEditScheduleFrequency(schedule.collection_frequency);
+                                    setEditScheduleDueDate(schedule.due_date);
+                                    setEditScheduleLateFee(schedule.late_fee_applicable);
+                                    setEditScheduleStatus(schedule.status);
+                                    setEditScheduleGracePeriod(schedule.grace_period || 0);
+                                    setEditScheduleLateFeeRule(schedule.late_fee_rule || "");
+
+                                    if (schedule.term_breakdown && schedule.term_breakdown.length > 0) {
+                                      setEditScheduleTermBreakdown(JSON.parse(JSON.stringify(schedule.term_breakdown)));
+                                    } else {
+                                      const initialBreakdown = termSettings.map(term => ({
+                                        term_number: term.term_number,
+                                        term_name: term.term_name,
+                                        amount: "",
+                                        due_date: term.default_due_date || "",
+                                      }));
+                                      setEditScheduleTermBreakdown(initialBreakdown);
+                                    }
+
+                                    setEditScheduleErrors({});
+                                    setIsEditScheduleOpen(true);
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  style={{
+                                    height: 32, minWidth: 90, padding: "0 16px", borderRadius: 12, border: "1px solid #F2B6B1",
+                                    background: "#fff", color: "#EF4444", fontSize: 13, fontWeight: 700, cursor: "pointer"
+                                  }}
+                                  onClick={() => {
+                                    setDeleteSchedule(schedule);
+                                    setDeleteScheduleError("");
+                                    setIsDeleteScheduleOpen(true);
+                                  }}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
             </div>
 
             {/* Pagination */}
@@ -2610,341 +3186,6 @@ export default function FeeConfigurationPanel() {
     </div>
   );
 
-  // ── Create/Edit Schedule Modal ───────────────────────────────────────
-
-  const createScheduleModal = isCreateScheduleOpen && (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex",
-      alignItems: "center", justifyContent: "center", zIndex: 9999,
-    }} onClick={() => setIsCreateScheduleOpen(false)}>
-      <div
-        style={{
-          background: "#fff", borderRadius: 12, padding: "28px", maxWidth: scheduleFrequency === "Term-wise" ? 950 : 540,
-          width: "95%", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 50px rgba(0,0,0,0.15)",
-          transition: "max-width 0.2s ease-in-out",
-        }}
-        onClick={e => e.stopPropagation()}
-      >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, borderBottom: "1px solid #F1F1F4", paddingBottom: 12 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: "#181B2A", margin: 0 }}>Create Fee Schedule</h2>
-          <button 
-            onClick={() => setIsCreateScheduleOpen(false)}
-            style={{ border: "none", background: "none", fontSize: 20, color: "#A0A3B8", cursor: "pointer", fontWeight: "bold" }}
-          >
-            ×
-          </button>
-        </div>
-
-        <div style={{ display: "flex", gap: "28px", flexDirection: scheduleFrequency === "Term-wise" ? "row" : "column", flexWrap: "wrap" }}>
-          
-          {/* Left / Main Section: General Configuration */}
-          <div style={{ flex: "1 1 420px", display: "flex", flexDirection: "column", gap: 14 }}>
-            <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Academic Year</label>
-              <select
-                disabled
-                value={scheduleAcademicYear}
-                style={{
-                  width: "100%", height: 40, border: "1px solid #E8E8EE",
-                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#F8F8FB", color: "#5B5E72",
-                }}
-              >
-                {academicYears.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Group</label>
-              <select
-                value={scheduleFeeGroup}
-                onChange={e => {
-                  const val = Number(e.target.value) || "";
-                  setScheduleFeeGroup(val);
-                  setScheduleFeeType("");
-                }}
-                style={{
-                  width: "100%", height: 40, border: `1px solid ${scheduleErrors.fee_group ? "#dc2626" : "#E8E8EE"}`,
-                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
-                }}
-              >
-                <option value="">Select fee group</option>
-                {feeGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-              </select>
-              {scheduleErrors.fee_group && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.fee_group}</div>}
-            </div>
-
-            <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Type</label>
-              <select
-                value={scheduleFeeType}
-                onChange={e => setScheduleFeeType(Number(e.target.value) || "")}
-                style={{
-                  width: "100%", height: 40, border: `1px solid ${scheduleErrors.fee_type ? "#dc2626" : "#E8E8EE"}`,
-                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
-                }}
-              >
-                <option value="">Select fee type</option>
-                {feeTypes.filter(t => !scheduleFeeGroup || t.fees_group === scheduleFeeGroup).map(t => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
-              {scheduleErrors.fee_type && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.fee_type}</div>}
-            </div>
-
-            <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Collection Frequency / Structure</label>
-              <select
-                value={scheduleFrequency}
-                onChange={e => {
-                  const val = e.target.value;
-                  setScheduleFrequency(val);
-                  if (val === "Term-wise" && scheduleTermBreakdown.length === 0) {
-                    const initialBreakdown = termSettings.map(term => ({
-                      term_number: term.term_number,
-                      term_name: term.term_name,
-                      amount: "",
-                      due_date: term.default_due_date || "",
-                    }));
-                    setScheduleTermBreakdown(initialBreakdown);
-                  }
-                }}
-                style={{
-                  width: "100%", height: 40, border: "1px solid #E8E8EE",
-                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
-                }}
-              >
-                <option value="Term-wise">Term-wise</option>
-                <option value="Monthly">Monthly</option>
-                <option value="Quarterly">Quarterly</option>
-                <option value="Half-Yearly">Half-Yearly</option>
-                <option value="Yearly">Yearly</option>
-                <option value="One-Time">One-Time</option>
-                <option value="Custom">Custom</option>
-              </select>
-            </div>
-
-            {scheduleFrequency !== "Term-wise" && (
-              <>
-                <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Amount (₹)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={scheduleAmount}
-                    onChange={e => setScheduleAmount(e.target.value)}
-                    style={{
-                      width: "100%", height: 40, border: `1px solid ${scheduleErrors.amount ? "#dc2626" : "#E8E8EE"}`,
-                      borderRadius: 8, padding: "0 12px", fontSize: 13,
-                    }}
-                    placeholder="0.00"
-                  />
-                  {scheduleErrors.amount && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.amount}</div>}
-                </div>
-
-                <div>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Due Date</label>
-                  <input
-                    type="date"
-                    value={scheduleDueDate}
-                    onChange={e => setScheduleDueDate(e.target.value)}
-                    style={{
-                      width: "100%", height: 40, border: `1px solid ${scheduleErrors.due_date ? "#dc2626" : "#E8E8EE"}`,
-                      borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
-                    }}
-                  />
-                  {scheduleErrors.due_date && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.due_date}</div>}
-                </div>
-              </>
-            )}
-
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
-              <input
-                type="checkbox"
-                id="scheduleLateFee"
-                checked={scheduleLateFee}
-                onChange={e => setScheduleLateFee(e.target.checked)}
-                style={{ width: 18, height: 18, cursor: "pointer" }}
-              />
-              <label htmlFor="scheduleLateFee" style={{ fontSize: 13, color: "#181B2A", fontWeight: 600, cursor: "pointer" }}>Late fee applicable</label>
-            </div>
-
-            {scheduleLateFee && (
-              <div style={{ display: "flex", gap: "12px" }}>
-                <div style={{ flex: 1 }}>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Grace Period (Days)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={scheduleGracePeriod}
-                    onChange={e => setScheduleGracePeriod(Number(e.target.value) || 0)}
-                    style={{
-                      width: "100%", height: 40, border: "1px solid #E8E8EE",
-                      borderRadius: 8, padding: "0 12px", fontSize: 13,
-                    }}
-                    placeholder="0"
-                  />
-                </div>
-                <div style={{ flex: 2 }}>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Late Fee Rule</label>
-                  <input
-                    type="text"
-                    value={scheduleLateFeeRule}
-                    onChange={e => setScheduleLateFeeRule(e.target.value)}
-                    style={{
-                      width: "100%", height: 40, border: "1px solid #E8E8EE",
-                      borderRadius: 8, padding: "0 12px", fontSize: 13,
-                    }}
-                    placeholder="e.g. ₹50 per day after grace period"
-                  />
-                </div>
-              </div>
-            )}
-
-            <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Status</label>
-              <select
-                value={scheduleStatus}
-                onChange={e => setScheduleStatus(e.target.value)}
-                style={{
-                  width: "100%", height: 40, border: "1px solid #E8E8EE",
-                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#fff",
-                }}
-              >
-                <option value="active">Active</option>
-                <option value="inactive">Inactive</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Right Section: Term Settings breakdown slots */}
-          {scheduleFrequency === "Term-wise" && (
-            <div style={{ flex: "1 1 420px", display: "flex", flexDirection: "column", gap: 14 }}>
-              <div style={{ borderBottom: "1px solid #E8E8EE", paddingBottom: 6 }}>
-                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#181B2A", margin: 0 }}>Term-wise Breakdown Slots</h3>
-                <p style={{ fontSize: 11, color: "#A0A3B8", margin: "2px 0 0 0" }}>Specify amounts and due dates of each term. Total amount is calculated automatically.</p>
-              </div>
-
-              {scheduleTermBreakdown.length === 0 ? (
-                <div style={{ padding: "30px 10px", border: "1px dashed #E8E8EE", borderRadius: 8, textAlign: "center", color: "#A0A3B8" }}>
-                  <p style={{ fontSize: 13, margin: 0 }}>No terms configured for this Academic Year.</p>
-                  <p style={{ fontSize: 11, margin: "4px 0 0 0" }}>Please configure terms first in the 'School Term Settings' collapsible section above.</p>
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: "55vh", overflowY: "auto", paddingRight: 6 }}>
-                  {scheduleTermBreakdown.map((tb, i) => (
-                    <div 
-                      key={i} 
-                      style={{ 
-                        display: "flex", 
-                        alignItems: "center", 
-                        gap: 12, 
-                        padding: "12px", 
-                        background: "#F8F8FB", 
-                        borderRadius: 10, 
-                        border: "1px solid #E5E7EB" 
-                      }}
-                    >
-                      <div style={{ 
-                        width: 34, 
-                        height: 34, 
-                        borderRadius: "50%", 
-                        background: "#EDE9FE", 
-                        color: "#6D28D9", 
-                        display: "flex", 
-                        alignItems: "center", 
-                        justifyContent: "center", 
-                        fontWeight: 700, 
-                        fontSize: 12, 
-                        flexShrink: 0,
-                        border: "1px solid #C4B5FD"
-                      }}>
-                        T{tb.term_number || (i + 1)}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 80 }}>
-                        <div style={{ fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Term Name</div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: "#1F2937", marginTop: 2 }}>{tb.term_name}</div>
-                      </div>
-                      <div style={{ width: 110 }}>
-                        <label style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", marginBottom: 4 }}>AMOUNT (₹)</label>
-                        <input
-                          type="number"
-                          value={tb.amount}
-                          onChange={e => {
-                            const next = [...scheduleTermBreakdown];
-                            next[i] = { ...next[i], amount: e.target.value };
-                            setScheduleTermBreakdown(next);
-                            const total = next.reduce((sum, curr) => sum + (Number(curr.amount) || 0), 0);
-                            setScheduleAmount(total > 0 ? total.toString() : "");
-                          }}
-                          style={{
-                            width: "100%", height: 34, border: "1px solid #E8E8EE",
-                            borderRadius: 6, padding: "0 8px", fontSize: 12.5,
-                          }}
-                          placeholder="₹0.00"
-                        />
-                      </div>
-                      <div style={{ width: 140 }}>
-                        <label style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", marginBottom: 4 }}>DUE DATE</label>
-                        <input
-                          type="date"
-                          value={tb.due_date}
-                          onChange={e => {
-                            const next = [...scheduleTermBreakdown];
-                            next[i] = { ...next[i], due_date: e.target.value };
-                            setScheduleTermBreakdown(next);
-                          }}
-                          style={{
-                            width: "100%", height: 34, border: "1px solid #E8E8EE",
-                            borderRadius: 6, padding: "0 8px", fontSize: 12, background: "#fff", cursor: "pointer",
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                  
-                  {/* Dynamic Total Amount breakdown summary */}
-                  <div style={{ 
-                    marginTop: 8, 
-                    padding: "12px", 
-                    background: "#EEF2F6", 
-                    borderRadius: 8, 
-                    display: "flex", 
-                    justifyContent: "space-between", 
-                    alignItems: "center",
-                    border: "1px solid #D2D6DC"
-                  }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: "#475569" }}>Total Fee Schedule Amount:</span>
-                    <span style={{ fontSize: 16, fontWeight: 800, color: "#1E293B" }}>
-                      ₹{Number(scheduleAmount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-        </div>
-
-        <div style={{ display: "flex", gap: 10, marginTop: 28, borderTop: "1px solid #F1F1F4", paddingTop: 18 }}>
-          <button
-            style={{...outlineBtn(), flex: 1}}
-            onClick={() => setIsCreateScheduleOpen(false)}
-          >
-            Cancel
-          </button>
-          <button
-            style={{...primaryBtn(), flex: 1}}
-            onClick={handleCreateSchedule}
-            disabled={isSavingSchedule}
-          >
-            {isSavingSchedule ? "Creating..." : "Create Schedule"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-
   // ── Edit Schedule Modal ──────────────────────────────────────────────
 
   const editScheduleModal = isEditScheduleOpen && editingSchedule && (
@@ -2954,7 +3195,8 @@ export default function FeeConfigurationPanel() {
     }} onClick={() => setIsEditScheduleOpen(false)}>
       <div
         style={{
-          background: "#fff", borderRadius: 12, padding: "28px", maxWidth: editScheduleFrequency === "Term-wise" ? 950 : 540,
+          background: "#fff", borderRadius: 12, padding: "28px", 
+          maxWidth: ["Term-wise", "Quarterly", "Half-Yearly", "Custom", "Monthly"].includes(editScheduleFrequency) ? 950 : 540,
           width: "95%", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 50px rgba(0,0,0,0.15)",
           transition: "max-width 0.2s ease-in-out",
         }}
@@ -2974,20 +3216,6 @@ export default function FeeConfigurationPanel() {
           
           {/* Left / Main Section: General Configuration */}
           <div style={{ flex: "1 1 420px", display: "flex", flexDirection: "column", gap: 14 }}>
-            <div>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Academic Year</label>
-              <select
-                disabled
-                value={editScheduleAcademicYear}
-                style={{
-                  width: "100%", height: 40, border: "1px solid #E8E8EE",
-                  borderRadius: 8, padding: "0 12px", fontSize: 13, background: "#F8F8FB", color: "#5B5E72",
-                }}
-              >
-                {academicYears.map(y => <option key={y.id} value={y.id}>{y.name}</option>)}
-              </select>
-            </div>
-
             <div>
               <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Fee Group</label>
               <select
@@ -3019,7 +3247,7 @@ export default function FeeConfigurationPanel() {
                 }}
               >
                 <option value="">Select fee type</option>
-                {feeTypes.filter(t => !editScheduleFeeGroup || t.fees_group === editScheduleFeeGroup).map(t => (
+                {feeTypes.map(t => (
                   <option key={t.id} value={t.id}>{t.name}</option>
                 ))}
               </select>
@@ -3058,7 +3286,7 @@ export default function FeeConfigurationPanel() {
               </select>
             </div>
 
-            {editScheduleFrequency !== "Term-wise" && (
+            {!["Term-wise", "Quarterly", "Half-Yearly", "Custom", "Monthly"].includes(editScheduleFrequency) && (
               <>
                 <div>
                   <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Amount (₹)</label>
@@ -3121,16 +3349,24 @@ export default function FeeConfigurationPanel() {
                   />
                 </div>
                 <div style={{ flex: 2 }}>
-                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Late Fee Rule</label>
+                  <label style={{ display: "block", fontSize: 12, fontWeight: 700, marginBottom: 6, color: "#5B5E72" }}>Late Fee Amount (Rs.)</label>
                   <input
-                    type="text"
-                    value={editScheduleLateFeeRule}
-                    onChange={e => setEditScheduleLateFeeRule(e.target.value)}
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="0"
+                    value={(() => {
+                      const match = editScheduleLateFeeRule.match(/(\d+(\.\d+)?)/);
+                      return match ? match[1] : "";
+                    })()}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setEditScheduleLateFeeRule(val ? `Rs. ${val} Flat` : "");
+                    }}
                     style={{
                       width: "100%", height: 40, border: "1px solid #E8E8EE",
                       borderRadius: 8, padding: "0 12px", fontSize: 13,
                     }}
-                    placeholder="e.g. ₹50 per day after grace period"
                   />
                 </div>
               </div>
@@ -3152,18 +3388,17 @@ export default function FeeConfigurationPanel() {
             </div>
           </div>
 
-          {/* Right Section: Term Settings breakdown slots */}
-          {editScheduleFrequency === "Term-wise" && (
+          {/* Right Section: Breakdown slots */}
+          {["Term-wise", "Quarterly", "Half-Yearly", "Custom", "Monthly"].includes(editScheduleFrequency) && (
             <div style={{ flex: "1 1 420px", display: "flex", flexDirection: "column", gap: 14 }}>
               <div style={{ borderBottom: "1px solid #E8E8EE", paddingBottom: 6 }}>
-                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#181B2A", margin: 0 }}>Term-wise Breakdown Slots</h3>
-                <p style={{ fontSize: 11, color: "#A0A3B8", margin: "2px 0 0 0" }}>Specify amounts and due dates of each term. Total amount is calculated automatically.</p>
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#181B2A", margin: 0 }}>{editScheduleFrequency} Breakdown Slots</h3>
+                <p style={{ fontSize: 11, color: "#A0A3B8", margin: "2px 0 0 0" }}>Specify amounts and due dates. Total amount is calculated automatically.</p>
               </div>
 
               {editScheduleTermBreakdown.length === 0 ? (
                 <div style={{ padding: "30px 10px", border: "1px dashed #E8E8EE", borderRadius: 8, textAlign: "center", color: "#A0A3B8" }}>
-                  <p style={{ fontSize: 13, margin: 0 }}>No terms configured for this Academic Year.</p>
-                  <p style={{ fontSize: 11, margin: "4px 0 0 0" }}>Please configure terms first in the 'School Term Settings' collapsible section above.</p>
+                  <p style={{ fontSize: 13, margin: 0 }}>No slots configured for this schedule.</p>
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 10, maxHeight: "55vh", overflowY: "auto", paddingRight: 6 }}>
@@ -3194,11 +3429,23 @@ export default function FeeConfigurationPanel() {
                         flexShrink: 0,
                         border: "1px solid #C4B5FD"
                       }}>
-                        T{tb.term_number || (i + 1)}
+                        {editScheduleFrequency === "Term-wise" ? `T${tb.term_number || (i + 1)}` : (i + 1)}
                       </div>
                       <div style={{ flex: 1, minWidth: 80 }}>
-                        <div style={{ fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Term Name</div>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: "#1F2937", marginTop: 2 }}>{tb.term_name}</div>
+                        <div style={{ fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", textTransform: "uppercase", letterSpacing: "0.05em" }}>Slot Name</div>
+                        <input
+                          type="text"
+                          value={tb.term_name}
+                          onChange={e => {
+                            const next = [...editScheduleTermBreakdown];
+                            next[i] = { ...next[i], term_name: e.target.value };
+                            setEditScheduleTermBreakdown(next);
+                          }}
+                          style={{
+                            border: "none", background: "transparent", fontSize: 13, fontWeight: 700, color: "#1F2937", width: "100%", padding: 0
+                          }}
+                          readOnly={editScheduleFrequency === "Term-wise" || editScheduleFrequency === "Monthly"}
+                        />
                       </div>
                       <div style={{ width: 110 }}>
                         <label style={{ display: "block", fontSize: 10.5, fontWeight: 700, color: "#A0A3B8", marginBottom: 4 }}>AMOUNT (₹)</label>
@@ -3834,18 +4081,6 @@ export default function FeeConfigurationPanel() {
                 </button>
               </div>
               <div style={{ padding: 20, display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14 }}>
-                <div style={{ gridColumn: "1 / -1" }}>
-                  <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>FEE GROUP</div>
-                  <select
-                    value={editTypeGroupId}
-                    onChange={event => setEditTypeGroupId(event.target.value === "" ? "" : Number(event.target.value))}
-                    style={inputField("Select Fee Group")}
-                  >
-                    <option value="">Select Fee Group</option>
-                    {feeGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-                  </select>
-                  {editTypeErrors.fees_group ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{editTypeErrors.fees_group}</div> : null}
-                </div>
                 <div>
                   <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>FEE TYPE NAME</div>
                   <input
@@ -3967,7 +4202,6 @@ export default function FeeConfigurationPanel() {
         )}
 
         {/* ── Fee Schedule Modals ─────────────────────────────────────── */}
-        {createScheduleModal}
         {editScheduleModal}
         {deleteScheduleModal}
 
@@ -3995,40 +4229,83 @@ export default function FeeConfigurationPanel() {
               </button>
             );
           })}
-          {/* Info icon */}
-          <div style={{ marginLeft: "auto", position: "relative" }}>
-            <button
-              onClick={() => setShowInfo(v => !v)}
-              style={{
-                width: 32, height: 32, borderRadius: "50%",
-                border: "1.5px solid #E8E8EE",
-                background: showInfo ? "#EDE9FE" : "#fff",
-                color: "#6D4AFF",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                cursor: "pointer", fontSize: 14, fontWeight: 700,
-              }}
-              title="About fee configuration"
-            >
-              i
-            </button>
-            {showInfo && (
-              <div style={{
-                position: "absolute", top: 40, right: 0, zIndex: 50,
-                background: "#fff", border: "1px solid #E8E8EE",
-                borderRadius: 10, padding: "14px 16px",
-                width: 280, boxShadow: "0 8px 24px rgba(0,0,0,0.10)",
-              }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#181B2A", marginBottom: 6 }}>Fee Configuration</div>
-                <div style={{ fontSize: 12.5, color: "#A0A3B8", lineHeight: 1.6 }}>
-                  Configure fee groups, types, and schedules independently. Term counts control how many installments appear across all schedule rows. Concession and late fee rules are referenced during fee assignment.
-                </div>
-              </div>
-            )}
-          </div>
         </div>
 
         {/* ── Tab content ────────────────────────────────────────────── */}
         {tabContent[activeTab]?.()}
+
+        {/* ── Help Modal ─────────────────────────────────────────────── */}
+        {isHelpModalOpen && (
+          <div style={{
+            position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+            background: "rgba(15, 23, 42, 0.4)",
+            backdropFilter: "blur(2px)",
+            zIndex: 10000,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 24
+          }} onClick={() => setIsHelpModalOpen(false)}>
+            <div style={{
+              background: "#fff",
+              width: "100%", maxWidth: 640,
+              borderRadius: 16,
+              boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+              overflow: "hidden",
+            }} onClick={e => e.stopPropagation()}>
+              <div style={{ padding: "24px 32px", borderBottom: "1px solid #F1F5F9", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#0F172A" }}>Help & Information</h2>
+                <button 
+                  onClick={() => setIsHelpModalOpen(false)}
+                  style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: "#64748B" }}
+                >
+                  &times;
+                </button>
+              </div>
+              
+              <div style={{ padding: 32, maxHeight: "70vh", overflowY: "auto" }}>
+                <div style={{ marginBottom: 24 }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 700, color: "#6D4AFF", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>WHAT IS THIS PAGE?</h3>
+                  <p style={{ fontSize: 13.5, color: "#475569", lineHeight: 1.6 }}>
+                    This module allows you to structure how fees are collected across your institution. You can define various fee groups (like Day Scholars or Hostellers), fee types (Tuition, Transport), and most importantly, the schedules that dictate when these fees are due and how they are split.
+                  </p>
+                </div>
+
+                <div style={{ marginBottom: 24 }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 700, color: "#6D4AFF", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>HOW TO SET IT UP?</h3>
+                  <ol style={{ fontSize: 13.5, color: "#475569", lineHeight: 1.6, paddingLeft: 20 }}>
+                    <li style={{ marginBottom: 8 }}><b>Create Fee Groups:</b> Define student categories that share the same fee structure.</li>
+                    <li style={{ marginBottom: 8 }}><b>Define Fee Types:</b> Create the individual line items (e.g., Admission Fee, Library Fee).</li>
+                    <li style={{ marginBottom: 8 }}><b>Configure Schedules:</b> Link a group to a type, set the total amount, and define the installments.</li>
+                  </ol>
+                </div>
+
+                <div style={{ marginBottom: 24 }}>
+                  <h3 style={{ fontSize: 14, fontWeight: 700, color: "#6D4AFF", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>WHAT ARE THOSE OPTIONS?</h3>
+                  <ul style={{ fontSize: 13.5, color: "#475569", lineHeight: 1.6, paddingLeft: 20 }}>
+                    <li style={{ marginBottom: 8 }}><b>Collection Structure:</b> Determines if a fee is collected monthly, quarterly, or yearly.</li>
+                    <li style={{ marginBottom: 8 }}><b>Grace Period:</b> Number of days after the due date before late fees start applying.</li>
+                    <li style={{ marginBottom: 8 }}><b>Late Fee Rule:</b> The specific penalty calculation method to use.</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h3 style={{ fontSize: 14, fontWeight: 700, color: "#6D4AFF", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>SUGGESTIONS</h3>
+                  <p style={{ fontSize: 13.5, color: "#475569", lineHeight: 1.6 }}>
+                    Always ensure your Academic Calendar (at the top) is correct before generating monthly slots, as due dates are calculated based on your academic year start and end dates.
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ padding: "20px 32px", background: "#F8FAFC", borderTop: "1px solid #F1F5F9", textAlign: "right" }}>
+                <button 
+                  onClick={() => setIsHelpModalOpen(false)}
+                  style={{ ...primaryBtn(), minWidth: 100 }}
+                >
+                  Got it
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Toast ──────────────────────────────────────────────────── */}
         {toast && (

@@ -1,5 +1,84 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Swetha D (16/06/2026 – 18/06/2026)
+
+**Branch:** `fees-module-fixes`
+
+### Fees Module — Bug Fixes (Fee Assignment & Collection)
+
+#### Problem Summary
+Two critical bugs were reported in the Fees module:
+1. **Fee Assignment vs Collection discrepancy** — Fee Assignment showed two fees (Exam Fee + Tuition Fee) but the Collection page only showed one (Exam Fee).
+2. **Payment not reflected** — Paying ₹600 in the Collection panel did not update the Student Ledger View balance or payment history.
+
+---
+
+#### Fix 1 — Fee Assignment Panel: Only First Fee Type Was Being Created
+**File:** `frontend/components/fees/FeesAssignmentPanel.tsx`
+
+**Root cause:** `schedules.find(s => s.fee_group === grp.id)` returns only the first matching schedule, so only one `FeeAssignment` record was ever created per fee group (regardless of how many fee types it contained).
+
+**Fix:** Replaced `.find()` with `.filter()` + `for...of` loop to iterate over every matching schedule and create one `FeeAssignment` per fee type.
+
+```ts
+// Before (broken — only first match)
+const schedule = schedules.find(s => s.fee_group === grp.id);
+
+// After (fixed — all matches)
+const groupSchedules = schedules.filter(s => s.fee_group === grp.id);
+for (const schedule of groupSchedules) {
+  // create FeeAssignment for each fee type
+}
+```
+
+**Note:** Existing students who were assigned fees before this fix have only one FeeAssignment record in the DB. They need to be re-saved in the Fee Assignment panel to create the missing records.
+
+---
+
+#### Fix 2 — Fee Collection Panel: Multiple Issues
+**File:** `frontend/components/fees/FeesCollectionPanel.tsx`
+
+**Issue A — Generic labels ("Fee Assignment 1", "Fee Assignment 2")**
+- Labels were index-based instead of showing the actual fee type name.
+- Fixed by reading `a.fees_type_name` from the API response (see Fix 3 below).
+
+**Issue B — Payment submission never hit the backend API**
+- `postPayment()` was only updating local React state; `feesApi.createPayment()` was never called.
+- **Fix:** Rewrote `postPayment()` to call `feesApi.createPayment()`, then call `refreshPaymentData()` to re-fetch the latest assignments and payments from the server.
+
+**Issue C — Wrong API response field names**
+- Code was reading `p.payment_date` and `p.payment_method` which do not exist on the API response.
+- **Fix:** Corrected to `(p.paid_at || "").split("T")[0]` and `p.method`.
+
+**Additional improvements:**
+- Added `isSaving` state — disables the Post Payment button while a request is in flight to prevent duplicate submissions.
+- Added `METHOD_MAP` constant (UI label → backend enum, e.g. `"Cash" → "cash"`).
+- Added `parseDateTimeToISO` utility for consistent date formatting.
+- Added `visibilitychange` listener in `useEffect` so stale data is automatically refreshed when the user switches browser tabs and returns to the page.
+
+---
+
+#### Fix 3 — Fee Assignment Serializer: Expose `fees_type_name`
+**File:** `backend/apps/fees/serializers.py`
+
+Added `fees_type_name` as a read-only computed field to `FeeAssignmentSerializer` so the frontend can display the human-readable fee type name instead of falling back to index-based labels.
+
+```python
+fees_type_name = serializers.CharField(source='fees_type.name', read_only=True)
+```
+
+---
+
+#### Files Changed
+- `backend/apps/fees/serializers.py`
+- `frontend/components/fees/FeesAssignmentPanel.tsx`
+- `frontend/components/fees/FeesCollectionPanel.tsx`
+
+#### Status
+✅ **COMPLETE** — All three bugs fixed. Backend serializer updated, frontend assignment and collection panels corrected. Existing students with only one FeeAssignment record need a manual re-save in the Fee Assignment panel to populate missing fee types.
+
+---
+
 ## Update — Teerdaveni (16/06/2026)
 
 **Branch:** `administratin-16/06`
