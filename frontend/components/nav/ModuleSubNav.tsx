@@ -14,13 +14,7 @@ const COMING_SOON_PATHS = new Set([
   '/academics/academic-reports',
 ]);
 
-const FEES_SOON_BADGE_PATHS = new Set([
-  '/fees/fee-assignment',
-  '/fees/collection',
-  '/fees/dues-reminders',
-  '/fees/year-end',
-  '/fees/enroll-student',
-]);
+const FEES_SOON_BADGE_PATHS = new Set<string>([]);
 
 /** Finds the module that "owns" the given pathname */
 function findOwnerModule(pathname: string) {

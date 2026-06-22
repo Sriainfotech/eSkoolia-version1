@@ -1,3 +1,4 @@
+import re
 from django.shortcuts import get_object_or_404
 from django.db.models import Sum, Q
 from rest_framework.views import APIView
@@ -10,7 +11,7 @@ from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, Te
 from .serializers import FeesGroupSerializer, FeesTypeSerializer, FeeAssignmentSerializer, PaymentSerializer, TermSettingsSerializer, FeeScheduleSerializer, ConcessionRuleSerializer, LateFeeRuleSerializer
 from .services import FeeService, FeeServiceError
 from config.pagination import ApiPageNumberPagination
-from apps.core.models import AcademicYear
+from apps.core.models import AcademicYear, Class
 
 # --- Base Views for Reusability ---
 
@@ -255,6 +256,244 @@ class FeeAssignmentOverdueAPIView(BaseFeeAPIView):
         overdue = [a for a in all_assignments if a.status != 'paid']
         
         return self.get_paginated_response(overdue, FeeAssignmentSerializer, request)
+
+def _user_display_name(user):
+    """Best-effort human label for a User instance used in interaction logs."""
+    if not user:
+        return "System"
+    full = ""
+    getter = getattr(user, "get_full_name", None)
+    if callable(getter):
+        try:
+            full = (getter() or "").strip()
+        except Exception:
+            full = ""
+    return full or getattr(user, "username", None) or getattr(user, "email", None) or "Staff"
+
+
+def _fmt_date(value):
+    if not value:
+        return "—"
+    try:
+        return timezone.localtime(value).strftime("%d %b %Y") if hasattr(value, "hour") else value.strftime("%d %b %Y")
+    except Exception:
+        return str(value)
+
+
+def _parse_daily_penalty(penalty_rule):
+    """Extract a per-day rupee amount from a free-text penalty rule string."""
+    if not penalty_rule:
+        return Decimal("0.00")
+    match = re.search(r"([0-9][0-9,]*(?:\.[0-9]+)?)", penalty_rule)
+    if not match:
+        return Decimal("0.00")
+    try:
+        return Decimal(match.group(1).replace(",", ""))
+    except Exception:
+        return Decimal("0.00")
+
+
+class FeeAssignmentDuesRemindersAPIView(BaseFeeAPIView):
+    """
+    Aggregated, fully dynamic payload for the Dues & Reminders screen:
+    headline stats, class-wise sections, per-student overdue rows with an
+    interaction log derived from the ledger, and a late-fee calculator preview.
+    """
+
+    def get(self, request):
+        school = request.user.school
+        today = timezone.localdate()
+
+        # Scope to the current academic year when one is flagged, else everything.
+        current_year = (
+            AcademicYear.objects.filter(school=school, is_current=True).first()
+            or AcademicYear.objects.filter(school=school).first()
+        )
+
+        assignments_qs = FeeAssignment.objects.filter(academic_year__school=school)
+        if current_year:
+            assignments_qs = assignments_qs.filter(academic_year=current_year)
+        assignments_qs = assignments_qs.select_related(
+            "student", "student__current_class", "student__current_section", "fees_type"
+        ).prefetch_related("payments", "ledger_entries", "ledger_entries__created_by")
+
+        # ── Aggregate dues per student ─────────────────────────────────────────
+        per_student = {}
+        total_net_all = Decimal("0.00")
+        total_paid_all = Decimal("0.00")
+
+        for a in assignments_qs:
+            net = (a.amount or Decimal("0.00")) - (a.discount_amount or Decimal("0.00")) - (a.concession_amount or Decimal("0.00"))
+            paid = sum((p.amount_paid for p in a.payments.all() if p.status == "posted"), Decimal("0.00"))
+            total_net_all += net
+            total_paid_all += paid
+
+            due = net - paid
+            # Only overdue, still-owing charges contribute to the dues list.
+            if due <= Decimal("0.00") or not a.due_date or a.due_date >= today:
+                continue
+
+            st = a.student
+            entry = per_student.setdefault(st.id, {
+                "student": st,
+                "amount_due": Decimal("0.00"),
+                "earliest_due": a.due_date,
+                "has_partial": False,
+                "assignments": [],
+            })
+            entry["amount_due"] += due
+            if a.due_date < entry["earliest_due"]:
+                entry["earliest_due"] = a.due_date
+            if paid > Decimal("0.00"):
+                entry["has_partial"] = True
+            entry["assignments"].append(a)
+
+        # ── Build student rows ─────────────────────────────────────────────────
+        students_payload = []
+        weighted_days = Decimal("0.00")
+        total_overdue_amount = Decimal("0.00")
+
+        for data in per_student.values():
+            st = data["student"]
+            days_overdue = (today - data["earliest_due"]).days
+            amount_due = data["amount_due"]
+            total_overdue_amount += amount_due
+            weighted_days += Decimal(days_overdue) * amount_due
+
+            if data["has_partial"]:
+                fee_status = "Payment Watch"
+            elif days_overdue > 30:
+                fee_status = "Escalated"
+            else:
+                fee_status = "Overdue"
+
+            if days_overdue <= 15:
+                status_note = "Within early follow-up window"
+            elif days_overdue <= 30:
+                status_note = "Reminder stage — awaiting payment"
+            else:
+                status_note = "Final notice / escalation due"
+
+            cls = st.current_class
+            # Prefixed (non-numeric) ids so the frontend's id-normaliser keeps
+            # them as strings; cls_id must match the classes[].id below.
+            cls_id = f"cls-{cls.id}" if cls else "unassigned"
+            section = st.current_section.name if st.current_section else ""
+            cls_label = (f"{cls.name} {section}".strip() if cls else "Unassigned")
+
+            # Interaction log from the real ledger trail for this student.
+            log = []
+            seen_entries = []
+            for a in data["assignments"]:
+                seen_entries.extend(a.ledger_entries.all())
+            for le in sorted(seen_entries, key=lambda e: e.created_at):
+                log.append({
+                    "date": _fmt_date(le.created_at),
+                    "by": _user_display_name(le.created_by),
+                    "note": le.notes or le.get_entry_type_display(),
+                })
+
+            students_payload.append({
+                "id": f"stu-{st.id}",
+                "name": f"{st.first_name} {st.last_name}".strip() or st.admission_no,
+                "adm_no": st.admission_no,
+                "cls": cls_label,
+                "cls_id": cls_id,
+                "amount_due": float(amount_due),
+                "days_overdue": days_overdue,
+                "last_reminder": "—",
+                "status": fee_status,
+                "status_note": status_note,
+                "log": log,
+            })
+
+        students_payload.sort(key=lambda s: s["days_overdue"], reverse=True)
+
+        # ── Class sections (counts) ────────────────────────────────────────────
+        classes_payload = []
+        all_classes = Class.objects.filter(school=school).order_by("numeric_order", "name")
+        for cls in all_classes:
+            total = cls.students.filter(is_deleted=False).count()
+            assigned = (
+                FeeAssignment.objects.filter(
+                    student__current_class=cls,
+                    **({"academic_year": current_year} if current_year else {}),
+                )
+                .values("student").distinct().count()
+            )
+            classes_payload.append({
+                "id": f"cls-{cls.id}",
+                "name": cls.name,
+                "total": total,
+                "assigned": assigned,
+                "unassigned": max(total - assigned, 0),
+            })
+        if "unassigned" in {s["cls_id"] for s in students_payload}:
+            classes_payload.append({
+                "id": "unassigned", "name": "Unassigned Class",
+                "total": 0, "assigned": 0, "unassigned": 0,
+            })
+
+        # ── Headline stats ─────────────────────────────────────────────────────
+        students_with_dues = len(students_payload)
+        avg_days = int(weighted_days / total_overdue_amount) if total_overdue_amount > 0 else 0
+        percent_collected = int((total_paid_all / total_net_all) * 100) if total_net_all > 0 else 0
+
+        stats = {
+            "total_overdue_amount": float(total_overdue_amount),
+            "students_with_dues": students_with_dues,
+            "average_days_overdue": avg_days,
+            "percent_collected": percent_collected,
+        }
+
+        # ── Late-fee calculator preview (worst overdue + active rule) ───────────
+        late_fee_preview = None
+        rule = LateFeeRule.objects.filter(
+            academic_year__school=school, status="active", is_deleted=False
+        ).order_by("name").first()
+        # Pick the single worst overdue assignment to illustrate the rule.
+        worst = None
+        worst_due = Decimal("0.00")
+        worst_days = -1
+        for data in per_student.values():
+            for a in data["assignments"]:
+                net = (a.amount or 0) - (a.discount_amount or 0) - (a.concession_amount or 0)
+                paid = sum((p.amount_paid for p in a.payments.all() if p.status == "posted"), Decimal("0.00"))
+                due = net - paid
+                d = (today - a.due_date).days
+                if due > 0 and d > worst_days:
+                    worst, worst_due, worst_days = a, due, d
+
+        if worst is not None:
+            grace = rule.grace_period_days if rule else 0
+            daily = _parse_daily_penalty(rule.penalty_rule) if rule else Decimal("0.00")
+            cap = rule.cap_amount if (rule and rule.cap_amount is not None) else None
+            chargeable_days = max(worst_days - grace, 0)
+            raw_penalty = daily * chargeable_days
+            penalty = min(raw_penalty, cap) if cap is not None else raw_penalty
+            student_name = f"{worst.student.first_name} {worst.student.last_name}".strip()
+            rule_text = (
+                f"Due date {_fmt_date(worst.due_date)} · Rule: {rule.penalty_rule}"
+                f"{f' after {grace}-day grace period' if grace else ''}"
+                f"{f', capped at Rs. {cap:,.0f}' if cap is not None else ''}"
+            ) if rule else f"Due date {_fmt_date(worst.due_date)} · No active late-fee rule configured"
+            late_fee_preview = {
+                "label": f"{student_name} · {worst.fees_type.name}",
+                "due_rule": rule_text,
+                "outstanding": float(worst_due),
+                "days_overdue": worst_days,
+                "chargeable_days": chargeable_days,
+                "raw_penalty": float(raw_penalty),
+                "final_due": float(worst_due + penalty),
+            }
+
+        return Response({
+            "stats": stats,
+            "classes": classes_payload,
+            "students": students_payload,
+            "late_fee_preview": late_fee_preview,
+        })
+
 
 class FeeAssignmentCarryForwardAPIView(BaseFeeAPIView):
     def post(self, request):

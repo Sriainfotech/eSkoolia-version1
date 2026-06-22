@@ -25,51 +25,7 @@ type AuditItem = { id: string; initials: string; event: string; desc: string; da
 
 // ─── Static data ──────────────────────────────────────────────────────────────
 // KPIs are now dynamically fetched
-const TASKS: Task[] = [
-  {
-    id: "t1", color: "#ef4444",
-    title: "23 students in Class 8A haven't paid Term 2 fees",
-    desc: "Due in 3 days. Reminder template: polite final notice.",
-    buttons: [
-      { label: "Remind All", variant: "outline", toast: "Reminders sent to 23 students in Class 8A." },
-      { label: "View", variant: "outline", toast: "Opening student dues list for Class 8A...", href: "/fees/dues-reminders" },
-    ],
-  },
-  {
-    id: "t2", color: "#f59e0b",
-    title: "5 cheque payments pending clearance",
-    desc: "Finance needs bank confirmation before receipts are finalized.",
-    buttons: [
-      { label: "Mark Cleared", variant: "primary", toast: "5 cheque payments marked as cleared." },
-    ],
-  },
-  {
-    id: "t3", color: "#f59e0b",
-    title: "Transport Users schedule has 2 missing April amounts",
-    desc: "Configuration gap affects new admissions added this week.",
-    buttons: [
-      { label: "Fix Schedule", variant: "outline", toast: "Opening fee schedule configuration..." },
-    ],
-  },
-  {
-    id: "t4", color: "#22c55e",
-    title: "Carry forward incomplete for 2024-25",
-    desc: "11 balances still pending review before rollover.",
-    buttons: [
-      { label: "Complete Now", variant: "outline", toast: "Opening carry-forward review panel..." },
-    ],
-  },
-];
-
 const INITIAL_FEED: FeedItem[] = [];
-
-const AUDIT: AuditItem[] = [
-  { id: "a1", initials: "PM", event: "Payment posted", desc: "RCPT-25-4218 posted for Aditi Nair by Finance Admin", date: "27 May, 10:42 AM", bg: "#3B82F6" },
-  { id: "a2", initials: "AS", event: "Fee assignment edited", desc: "Transport Users schedule assigned to ADM-0142 with Merit 25% concession", date: "27 May, 10:16 AM", bg: "#7C3AED" },
-  { id: "a3", initials: "CN", event: "Concession approved", desc: "Need-Based Full concession approved by Principal for Vihaan Reddy", date: "26 May, 4:30 PM", bg: "#0E7490" },
-  { id: "a4", initials: "DL", event: "Receipt deleted", desc: "Draft receipt RCPT-25-4189 removed before posting; reason captured", date: "26 May, 2:05 PM", bg: "#ef4444" },
-  { id: "a5", initials: "YR", event: "Rollover reviewed", desc: "2024-25 carry forward batch marked ready for final approval", date: "25 May, 5:12 PM", bg: "#6B7280" },
-];
 
 // Simulate pool
 const SIM_POOL = [
@@ -112,6 +68,8 @@ export default function FeesPaymentsPanel() {
   const router = useRouter();
   const [feed, setFeed] = useState<FeedItem[]>(INITIAL_FEED);
   const [kpiData, setKpiData] = useState<FeesSummary | null>(null);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [auditTrail, setAuditTrail] = useState<AuditItem[]>([]);
   const [students, setStudents] = useState<Record<number, StudentRow>>({});
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [toast, setToast] = useState("");
@@ -143,6 +101,13 @@ export default function FeesPaymentsPanel() {
   useEffect(() => {
     feesApi.assignmentsSummary().then(setKpiData).catch(console.error);
 
+    feesApi.homeDashboard().then(data => {
+      if (data) {
+        setTasks(data.tasks || []);
+        setAuditTrail(data.audit_trail || []);
+      }
+    }).catch(console.error);
+
     feesApi.listStudents().then(res => {
       const studList = listData(res);
       const studMap: Record<number, StudentRow> = {};
@@ -159,7 +124,7 @@ export default function FeesPaymentsPanel() {
         const name = student ? `${student.first_name || ""} ${student.last_name || ""}`.trim() : `Student #${p.student}`;
         const initials = student && student.first_name ? student.first_name.charAt(0) + (student.last_name ? student.last_name.charAt(0) : "") : "?";
         const time = new Date(p.paid_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false });
-        
+
         return {
           id: p.id.toString(),
           initials,
@@ -259,7 +224,7 @@ export default function FeesPaymentsPanel() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {TASKS.map(task => (
+              {tasks.map(task => (
                 <div
                   key={task.id}
                   style={{
@@ -387,7 +352,7 @@ export default function FeesPaymentsPanel() {
             </button>
           </div>
           <div>
-            {AUDIT.map((item, i) => (
+            {auditTrail.map((item, i) => (
               <div key={item.id} style={{
                 display: "flex", alignItems: "flex-start", gap: 14,
                 padding: "14px 0",

@@ -1,83 +1,12 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { feesApi, type DuesRemindersData, type DuesReminderStudent, type DuesReminderClass } from "@/lib/fees-api";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type FeeStatus = "Overdue" | "Payment Watch" | "Escalated" | "Defaulter";
 type TierNum   = 1 | 2 | 3;
 
-interface LogEntry { date:string; by:string; note:string; }
-interface DueStudent {
-  id:string; name:string; admNo:string; cls:string; clsId:string;
-  amountDue:number; daysOverdue:number; lastReminder:string; status:FeeStatus;
-  statusNote:string; log:LogEntry[];
-}
-
 function tierOf(d:number): TierNum { return d<=15 ? 1 : d<=30 ? 2 : 3; }
-
-// ── Mock data ──────────────────────────────────────────────────────────────────
-const DEFAULT_LOG: LogEntry[] = [
-  { date:"18 May 2026", by:"System",        note:"Reminder sent by SMS and app notification"              },
-  { date:"19 May 2026", by:"Finance Admin", note:"Parent called finance office and requested two weeks"   },
-  { date:"20 May 2026", by:"System",        note:"Class teacher notified for diary note"                  },
-  { date:"21 May 2026", by:"Finance Admin", note:"Escalation prepared for principal review"               },
-];
-
-const ALL_DUES: DueStudent[] = [
-  // ── Tier 3 (31+ days) ──────────────────────────────────────────────────────
-  { id:"s0120", name:"Devika Sharma", admNo:"ADM-0120", cls:"6A",  clsId:"6a",  amountDue:44500, daysOverdue:53, lastReminder:"5 May 2026",  status:"Payment Watch", statusNote:"Final notice stage",        log: DEFAULT_LOG },
-  { id:"s0133", name:"Zara Sharma",   admNo:"ADM-0133", cls:"7B",  clsId:"7b",  amountDue:78000, daysOverdue:38, lastReminder:"2 May 2026",  status:"Payment Watch", statusNote:"Principal escalation due",  log: DEFAULT_LOG },
-  { id:"s0153", name:"Mihika Sharma", admNo:"ADM-0153", cls:"7B",  clsId:"7b",  amountDue:44500, daysOverdue:58, lastReminder:"6 May 2026",  status:"Payment Watch", statusNote:"Awaiting parent response",  log:[
-    { date:"10 May 2026", by:"System",        note:"Automated reminder sent via app"                       },
-    { date:"12 May 2026", by:"Finance Admin", note:"No response — escalated to class teacher"              },
-    { date:"16 May 2026", by:"Finance Admin", note:"Parent unreachable — noted for principal review"       },
-  ]},
-  { id:"s0302", name:"Bhavna Patel",  admNo:"ADM-0302", cls:"8A",  clsId:"8a",  amountDue:52900, daysOverdue:31, lastReminder:"10 May 2026", status:"Overdue",       statusNote:"First overdue notice",     log:[
-    { date:"10 May 2026", by:"System", note:"Fee due date passed — overdue notice sent" },
-    { date:"12 May 2026", by:"System", note:"Second reminder sent via SMS" },
-  ]},
-  { id:"s0404", name:"Fatima Kumar",  admNo:"ADM-0404", cls:"9A",  clsId:"9a",  amountDue:44500, daysOverdue:35, lastReminder:"8 May 2026",  status:"Payment Watch", statusNote:"Payment plan requested",   log:[
-    { date:"8 May 2026",  by:"Finance Admin", note:"Parent requested instalment plan"                      },
-    { date:"9 May 2026",  by:"Finance Admin", note:"Plan proposal sent to parent for review"               },
-  ]},
-  { id:"s0502", name:"Jai Singh",     admNo:"ADM-0502", cls:"10B", clsId:"10b", amountDue:78000, daysOverdue:32, lastReminder:"12 May 2026", status:"Overdue",       statusNote:"Pending bank transfer",    log:[
-    { date:"12 May 2026", by:"System",        note:"Overdue alert triggered — reminder sent"               },
-    { date:"14 May 2026", by:"Finance Admin", note:"Student reports bank delay — monitoring"               },
-  ]},
-  // ── Tier 2 (16-30 days) ────────────────────────────────────────────────────
-  { id:"s0104", name:"Ananya Sharma", admNo:"ADM-0104", cls:"6A",  clsId:"6a",  amountDue:12000, daysOverdue:22, lastReminder:"14 May 2026", status:"Overdue",       statusNote:"Second reminder sent",     log:[{ date:"14 May 2026", by:"System", note:"Second reminder dispatched via SMS" }] },
-  { id:"s0107", name:"Meera Sharma",  admNo:"ADM-0107", cls:"6A",  clsId:"6a",  amountDue:36000, daysOverdue:18, lastReminder:"18 May 2026", status:"Overdue",       statusNote:"First reminder sent",      log:[{ date:"18 May 2026", by:"System", note:"First automated reminder sent" }] },
-  { id:"s0201", name:"Priya Verma",   admNo:"ADM-0201", cls:"7B",  clsId:"7b",  amountDue:36000, daysOverdue:24, lastReminder:"12 May 2026", status:"Overdue",       statusNote:"Awaiting response",        log:[{ date:"12 May 2026", by:"System", note:"SMS reminder sent; no response yet" }] },
-  { id:"s0217", name:"Sanjay Verma",  admNo:"ADM-0217", cls:"7B",  clsId:"7b",  amountDue:44500, daysOverdue:27, lastReminder:"10 May 2026", status:"Payment Watch", statusNote:"Parent informed",          log:[{ date:"10 May 2026", by:"Finance Admin", note:"Parent acknowledged — payment expected soon" }] },
-  { id:"s0308", name:"Hari Patel",    admNo:"ADM-0308", cls:"8A",  clsId:"8a",  amountDue:44500, daysOverdue:19, lastReminder:"8 May 2026",  status:"Overdue",       statusNote:"First reminder sent",      log:[{ date:"8 May 2026", by:"System", note:"Reminder sent via SMS and email" }] },
-  { id:"s0318", name:"Arpit Patel",   admNo:"ADM-0318", cls:"8A",  clsId:"8a",  amountDue:78000, daysOverdue:23, lastReminder:"9 May 2026",  status:"Overdue",       statusNote:"Awaiting confirmation",   log:[{ date:"9 May 2026", by:"System", note:"Automated follow-up sent" }] },
-  { id:"s0403", name:"Chirag Kumar",  admNo:"ADM-0403", cls:"9A",  clsId:"9a",  amountDue:52900, daysOverdue:28, lastReminder:"16 May 2026", status:"Overdue",       statusNote:"Second reminder issued",  log:[{ date:"16 May 2026", by:"System", note:"Second reminder — no reply recorded" }] },
-  { id:"s0419", name:"Harini Kumar",  admNo:"ADM-0419", cls:"9A",  clsId:"9a",  amountDue:36000, daysOverdue:17, lastReminder:"17 May 2026", status:"Overdue",       statusNote:"New overdue",              log:[{ date:"17 May 2026", by:"System", note:"First reminder sent automatically" }] },
-  { id:"s0508", name:"Preeti Singh",  admNo:"ADM-0508", cls:"10B", clsId:"10b", amountDue:44500, daysOverdue:18, lastReminder:"14 May 2026", status:"Overdue",       statusNote:"Reminder sent",            log:[{ date:"14 May 2026", by:"System", note:"SMS reminder dispatched" }] },
-  { id:"s0514", name:"Usha Singh",    admNo:"ADM-0514", cls:"10B", clsId:"10b", amountDue:52900, daysOverdue:26, lastReminder:"11 May 2026", status:"Overdue",       statusNote:"Parent contacted",         log:[{ date:"11 May 2026", by:"Finance Admin", note:"Spoke to parent — payment by month end promised" }] },
-  // ── Tier 1 (1-15 days) ─────────────────────────────────────────────────────
-  { id:"s0103", name:"Vivaan Sharma", admNo:"ADM-0103", cls:"6A",  clsId:"6a",  amountDue:22200, daysOverdue:8,  lastReminder:"—", status:"Overdue", statusNote:"Grace period",       log:[] },
-  { id:"s0110", name:"Arjun Sharma",  admNo:"ADM-0110", cls:"6A",  clsId:"6a",  amountDue:36000, daysOverdue:12, lastReminder:"—", status:"Overdue", statusNote:"Grace period",       log:[] },
-  { id:"s0205", name:"Sanya Verma",   admNo:"ADM-0205", cls:"7B",  clsId:"7b",  amountDue:44500, daysOverdue:11, lastReminder:"—", status:"Overdue", statusNote:"New due",            log:[] },
-  { id:"s0213", name:"Anjali Verma",  admNo:"ADM-0213", cls:"7B",  clsId:"7b",  amountDue:36000, daysOverdue:5,  lastReminder:"—", status:"Overdue", statusNote:"Just due",           log:[] },
-  { id:"s0315", name:"Pari Patel",    admNo:"ADM-0315", cls:"8A",  clsId:"8a",  amountDue:36000, daysOverdue:7,  lastReminder:"—", status:"Overdue", statusNote:"Grace period",       log:[] },
-  { id:"s0418", name:"Vedant Kumar",  admNo:"ADM-0418", cls:"9A",  clsId:"9a",  amountDue:78000, daysOverdue:13, lastReminder:"—", status:"Overdue", statusNote:"First due",          log:[] },
-  { id:"s0515", name:"Tanuj Singh",   admNo:"ADM-0515", cls:"10B", clsId:"10b", amountDue:36000, daysOverdue:9,  lastReminder:"—", status:"Overdue", statusNote:"Grace period",       log:[] },
-];
-
-const CLASS_META = [
-  { id:"6a",  name:"Class 6A",  total:28, assigned:25, unassigned:3 },
-  { id:"7b",  name:"Class 7B",  total:31, assigned:26, unassigned:5 },
-  { id:"8a",  name:"Class 8A",  total:26, assigned:22, unassigned:4 },
-  { id:"9a",  name:"Class 9A",  total:29, assigned:25, unassigned:4 },
-  { id:"10b", name:"Class 10B", total:24, assigned:21, unassigned:3 },
-];
-
-const STATS = [
-  { label:"TOTAL OVERDUE AMOUNT", value:"Rs. 21,72,460", sub:"Across unpaid and partial records",  border:"#F97316" },
-  { label:"STUDENTS WITH DUES",   value:"55",            sub:"Filtered by active academic year",   border:"#F59E0B" },
-  { label:"AVERAGE DAYS OVERDUE", value:"17",            sub:"Weighted across due students",       border:"#6D4AFF" },
-  { label:"% COLLECTED",          value:"68%",           sub:"Year-to-date collection",            border:"#16a34a" },
-];
 
 const TIERS = [
   { n:1 as TierNum, label:"Tier 1: 1-15 days overdue"  },
@@ -85,11 +14,7 @@ const TIERS = [
   { n:3 as TierNum, label:"Tier 3: 31+ days overdue"   },
 ];
 
-const LATE_FEE = {
-  label:"Aarav Sharma · Tuition Fee Term 2",
-  dueRule:"Due date 10 Aug 2025 · Rule: Rs. 50 daily after 7-day grace period, capped at Rs. 1,500",
-  outstanding:12000, daysOverdue:42, chargeableDays:35, rawPenalty:1750, finalDue:13500,
-};
+const STAT_BORDERS = ["#F97316", "#F59E0B", "#6D4AFF", "#16a34a"];
 
 const STATUS_STYLE: Record<FeeStatus,{bg:string;color:string}> = {
   "Overdue":       { bg:"#FEE2E2", color:"#DC2626" },
@@ -101,8 +26,8 @@ const STATUS_STYLE: Record<FeeStatus,{bg:string;color:string}> = {
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const AV = ["#6D4AFF","#0E7490","#16a34a","#d97706","#dc2626","#7C3AED","#0284c7","#9333ea"];
 function avBg(n:string){let h=0;for(const c of n)h=(h*31+c.charCodeAt(0))>>>0;return AV[h%AV.length];}
-function ini(n:string){const p=n.trim().split(" ");return(p[0][0]+(p[1]?.[0]??"")).toUpperCase();}
-function fmtRs(n:number){return"Rs. "+n.toLocaleString("en-IN");}
+function ini(n:string){const p=(n||"?").trim().split(" ");return(p[0][0]+(p[1]?.[0]??"")).toUpperCase();}
+function fmtRs(n:number){return"Rs. "+Math.round(n).toLocaleString("en-IN");}
 
 function pBtn(sm=false):React.CSSProperties{return{height:sm?30:36,padding:sm?"0 12px":"0 18px",background:"#6D4AFF",color:"#fff",border:"none",borderRadius:sm?7:9,fontSize:sm?12:13,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap",boxShadow:"0 2px 8px rgba(109,74,255,0.20)"};}
 function oBtn(sm=false):React.CSSProperties{return{height:sm?30:36,padding:sm?"0 12px":"0 16px",background:"#fff",color:"#181B2A",border:"1px solid #E8E8EE",borderRadius:sm?7:9,fontSize:sm?12:13,fontWeight:500,cursor:"pointer",whiteSpace:"nowrap"};}
@@ -111,35 +36,94 @@ const TD:React.CSSProperties={padding:"13px 16px",fontSize:13.5,color:"#181B2A",
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function FeesDuesRemindersPanel() {
+  const [data,    setData]    = useState<DuesRemindersData|null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState("");
+
   const [activeTier, setActiveTier] = useState<TierNum>(3);
-  const [expanded,   setExpanded]   = useState<Set<string>>(new Set(["6a"]));
+  const [expanded,   setExpanded]   = useState<Set<string>>(new Set());
   const [resolved,   setResolved]   = useState<Set<string>>(new Set());
   const [selSet,     setSelSet]     = useState<Set<string>>(new Set());
   const [toast,      setToast]      = useState("");
 
   // Follow-up panel state
-  const [followUp,      setFollowUp]      = useState<DueStudent|null>(null);
-  const [followNote,    setFollowNote]    = useState("Spoke to parent. Expected payment by 31 May 2026.");
-  const [agreedAmount,  setAgreedAmount]  = useState("10000");
-  const [agreedDate,    setAgreedDate]    = useState("31-05-2026");
+  const [followUp,      setFollowUp]      = useState<DuesReminderStudent|null>(null);
+  const [followNote,    setFollowNote]    = useState("");
+  const [agreedAmount,  setAgreedAmount]  = useState("");
+  const [agreedDate,    setAgreedDate]    = useState("");
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    feesApi.duesReminders()
+      .then((res) => {
+        setData(res);
+        // Expand the first class that actually has dues so the table isn't hidden.
+        const firstWithDues = res.classes.find((c) => res.students.some((s) => s.cls_id === c.id));
+        if (firstWithDues) setExpanded(new Set([firstWithDues.id]));
+      })
+      .catch((e) => setError(e?.message || "Failed to load dues & reminders."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   const toast_ = (m:string) => { setToast(m); setTimeout(()=>setToast(""),3000); };
   const toggleExpand = (id:string) => setExpanded(prev=>{ const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
   const resolve = (id:string) => { setResolved(prev=>new Set([...prev,id])); setFollowUp(null); toast_("Student resolved — removed from dues list."); };
   const toggleSel = (id:string) => setSelSet(prev=>{ const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
 
-  const openFollowUp = (st:DueStudent) => {
+  const openFollowUp = (st:DuesReminderStudent) => {
     setFollowUp(st);
-    setFollowNote("Spoke to parent. Expected payment by 31 May 2026.");
-    setAgreedAmount("10000");
-    setAgreedDate("31-05-2026");
+    setFollowNote("");
+    setAgreedAmount(String(Math.round(st.amount_due)));
+    setAgreedDate("");
   };
 
-  const filtered = useMemo(()=>
-    ALL_DUES.filter(s=>!resolved.has(s.id)&&tierOf(s.daysOverdue)===activeTier),
-  [activeTier, resolved]);
+  const students = data?.students ?? [];
+  const classes  = data?.classes ?? [];
 
-  const byClass = (clsId:string) => filtered.filter(s=>s.clsId===clsId);
+  const filtered = useMemo(()=>
+    students.filter(s=>!resolved.has(s.id)&&tierOf(s.days_overdue)===activeTier),
+  [students, activeTier, resolved]);
+
+  const byClass = (clsId:string) => filtered.filter(s=>s.cls_id===clsId);
+
+  // Only render class sections that have students in the active tier, plus
+  // keep classes with any dues so the layout stays meaningful.
+  const visibleClasses = useMemo(()=>{
+    const withDues = new Set(students.filter(s=>!resolved.has(s.id)).map(s=>s.cls_id));
+    return classes.filter(c=>withDues.has(c.id));
+  }, [classes, students, resolved]);
+
+  const stats = data?.stats;
+  const STATS = stats ? [
+    { label:"TOTAL OVERDUE AMOUNT", value:fmtRs(stats.total_overdue_amount) },
+    { label:"STUDENTS WITH DUES",   value:String(stats.students_with_dues) },
+    { label:"AVERAGE DAYS OVERDUE", value:String(stats.average_days_overdue) },
+    { label:"% COLLECTED",          value:`${stats.percent_collected}%` },
+  ] : [];
+
+  const lateFee = data?.late_fee_preview ?? null;
+
+  const exportExcel = async () => {
+    const rows = students.filter(s=>!resolved.has(s.id));
+    if (rows.length === 0) { toast_("No dues to export."); return; }
+    const XLSX = await import("xlsx");
+    const aoa = [
+      ["Student","Admission No","Class","Amount Due","Days Overdue","Tier","Fee Status","Status Note","Last Reminder"],
+      ...rows.map(s=>[
+        s.name, s.adm_no, s.cls, Math.round(s.amount_due), s.days_overdue,
+        `Tier ${tierOf(s.days_overdue)}`, s.status, s.status_note, s.last_reminder,
+      ]),
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{wch:22},{wch:16},{wch:14},{wch:12},{wch:13},{wch:8},{wch:15},{wch:30},{wch:14}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Dues & Reminders");
+    XLSX.writeFile(wb, `dues-reminders-${new Date().toISOString().slice(0,10)}.xlsx`);
+    toast_(`Exported ${rows.length} record(s) to Excel.`);
+  };
 
   return (
     <>
@@ -157,16 +141,28 @@ export default function FeesDuesRemindersPanel() {
           <h1 style={{margin:"0 0 6px",fontSize:34,fontWeight:800,color:"#181B2A",lineHeight:1.1}}>Dues & Reminders</h1>
           <p style={{margin:0,fontSize:14,color:"#A0A3B8"}}>Escalation tiers, class-wise due lists, and a detailed interaction log for each student.</p>
         </div>
-        <button style={{...oBtn(),marginTop:8}} onClick={()=>toast_("Exporting CSV…")}>Export CSV</button>
+        <button style={{...oBtn(),marginTop:8}} onClick={exportExcel}>Export Excel</button>
       </div>
 
+      {loading && (
+        <div style={{padding:"60px 0",textAlign:"center",color:"#A0A3B8",fontSize:14}}>Loading dues & reminders…</div>
+      )}
+
+      {!loading && error && (
+        <div style={{padding:"24px",border:"1px solid #FECACA",background:"#FEF2F2",borderRadius:12,color:"#DC2626",fontSize:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span>{error}</span>
+          <button style={oBtn()} onClick={load}>Retry</button>
+        </div>
+      )}
+
+      {!loading && !error && data && (
+      <>
       {/* ── Stats grid ────────────────────────────────────────── */}
       <div style={{display:"flex",border:"1px solid #E8E8EE",borderRadius:12,overflow:"hidden",background:"#fff"}}>
         {STATS.map((s,i)=>(
-          <div key={s.label} style={{flex:1,padding:"22px 24px",borderLeft:`4px solid ${s.border}`,borderRight:i<STATS.length-1?"1px solid #E8E8EE":"none"}}>
+          <div key={s.label} style={{flex:1,padding:"22px 24px",borderLeft:`4px solid ${STAT_BORDERS[i]}`,borderRight:i<STATS.length-1?"1px solid #E8E8EE":"none"}}>
             <div style={{fontSize:10.5,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:10,textTransform:"uppercase"as const}}>{s.label}</div>
-            <div style={{fontSize:28,fontWeight:800,color:"#181B2A",lineHeight:1.1,marginBottom:6}}>{s.value}</div>
-            <div style={{fontSize:12.5,color:"#A0A3B8"}}>{s.sub}</div>
+            <div style={{fontSize:28,fontWeight:800,color:"#181B2A",lineHeight:1.1}}>{s.value}</div>
           </div>
         ))}
       </div>
@@ -195,6 +191,7 @@ export default function FeesDuesRemindersPanel() {
       </div>
 
       {/* ── Late Fee Calculator Preview ───────────────────────── */}
+      {lateFee && (
       <div style={{background:"#fff",border:"1px solid #E8E8EE",borderRadius:12,padding:"20px 24px",marginBottom:20}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
           <div>
@@ -204,15 +201,15 @@ export default function FeesDuesRemindersPanel() {
           <button style={oBtn()} onClick={()=>toast_("Breakdown copied to clipboard.")}>Copy Breakdown</button>
         </div>
         <div style={{border:"1px solid #E8E8EE",borderRadius:10,padding:"16px 18px"}}>
-          <div style={{fontSize:14,fontWeight:600,color:"#181B2A",marginBottom:3}}>{LATE_FEE.label}</div>
-          <div style={{fontSize:12.5,color:"#A0A3B8",marginBottom:14}}>{LATE_FEE.dueRule}</div>
+          <div style={{fontSize:14,fontWeight:600,color:"#181B2A",marginBottom:3}}>{lateFee.label}</div>
+          <div style={{fontSize:12.5,color:"#A0A3B8",marginBottom:14}}>{lateFee.due_rule}</div>
           <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10}}>
             {[
-              {label:"OUTSTANDING",     value:fmtRs(LATE_FEE.outstanding)},
-              {label:"DAYS OVERDUE",    value:String(LATE_FEE.daysOverdue)},
-              {label:"CHARGEABLE DAYS", value:String(LATE_FEE.chargeableDays)},
-              {label:"RAW PENALTY",     value:fmtRs(LATE_FEE.rawPenalty)},
-              {label:"FINAL DUE",       value:fmtRs(LATE_FEE.finalDue)},
+              {label:"OUTSTANDING",     value:fmtRs(lateFee.outstanding)},
+              {label:"DAYS OVERDUE",    value:String(lateFee.days_overdue)},
+              {label:"CHARGEABLE DAYS", value:String(lateFee.chargeable_days)},
+              {label:"RAW PENALTY",     value:fmtRs(lateFee.raw_penalty)},
+              {label:"FINAL DUE",       value:fmtRs(lateFee.final_due)},
             ].map(s=>(
               <div key={s.label} style={{padding:"12px 14px",border:"1px solid #E8E8EE",borderRadius:8}}>
                 <div style={{fontSize:9.5,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:6}}>{s.label}</div>
@@ -222,14 +219,20 @@ export default function FeesDuesRemindersPanel() {
           </div>
         </div>
       </div>
+      )}
 
       {/* ── Class sections ────────────────────────────────────── */}
+      {visibleClasses.length===0 && (
+        <div style={{background:"#fff",border:"1px solid #E8E8EE",borderRadius:12,padding:"40px",textAlign:"center",color:"#A0A3B8",fontSize:14}}>
+          No outstanding dues found for the active academic year.
+        </div>
+      )}
       <div style={{display:"flex",flexDirection:"column",gap:12}}>
-        {CLASS_META.map(cls=>{
-          const students   = byClass(cls.id);
-          const isExpanded = expanded.has(cls.id);
-          const dueCount   = students.length;
-          const allSel     = dueCount>0&&students.every(s=>selSet.has(s.id));
+        {visibleClasses.map((cls:DuesReminderClass)=>{
+          const clsStudents = byClass(cls.id);
+          const isExpanded  = expanded.has(cls.id);
+          const dueCount    = clsStudents.length;
+          const allSel      = dueCount>0&&clsStudents.every(s=>selSet.has(s.id));
 
           return (
             <div key={cls.id} style={{background:"#fff",border:"1px solid #E8E8EE",borderRadius:12,overflow:"hidden"}}>
@@ -260,8 +263,8 @@ export default function FeesDuesRemindersPanel() {
                       <tr style={{background:"#F8F8FB"}}>
                         <th style={{...TH,width:44}}>
                           <input type="checkbox" checked={allSel} onChange={()=>{
-                            if(allSel){setSelSet(p=>{const n=new Set(p);students.forEach(s=>n.delete(s.id));return n;});}
-                            else{setSelSet(p=>{const n=new Set(p);students.forEach(s=>n.add(s.id));return n;});}
+                            if(allSel){setSelSet(p=>{const n=new Set(p);clsStudents.forEach(s=>n.delete(s.id));return n;});}
+                            else{setSelSet(p=>{const n=new Set(p);clsStudents.forEach(s=>n.add(s.id));return n;});}
                           }}/>
                         </th>
                         <th style={TH}>STUDENT</th>
@@ -273,8 +276,8 @@ export default function FeesDuesRemindersPanel() {
                       </tr>
                     </thead>
                     <tbody>
-                      {students.map((st,i)=>(
-                        <tr key={st.id} className="dr-row" style={{borderBottom:i<students.length-1?"1px solid #E8E8EE":"none",background:selSet.has(st.id)?"#F5F3FF":"#fff"}}>
+                      {clsStudents.map((st,i)=>(
+                        <tr key={st.id} className="dr-row" style={{borderBottom:i<clsStudents.length-1?"1px solid #E8E8EE":"none",background:selSet.has(st.id)?"#F5F3FF":"#fff"}}>
                           <td style={{...TD,width:44}}>
                             <input type="checkbox" checked={selSet.has(st.id)} onChange={()=>toggleSel(st.id)}/>
                           </td>
@@ -283,13 +286,13 @@ export default function FeesDuesRemindersPanel() {
                               <div style={{width:36,height:36,borderRadius:"50%",flexShrink:0,background:avBg(st.name),color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12.5,fontWeight:700}}>{ini(st.name)}</div>
                               <div>
                                 <div style={{fontSize:13.5,fontWeight:600,color:"#181B2A"}}>{st.name}</div>
-                                <div style={{fontSize:12,color:"#A0A3B8",marginTop:2}}>{st.admNo} · Class {st.cls}</div>
+                                <div style={{fontSize:12,color:"#A0A3B8",marginTop:2}}>{st.adm_no} · {st.cls}</div>
                               </div>
                             </div>
                           </td>
-                          <td style={{...TD,fontWeight:600}}>{fmtRs(st.amountDue)}</td>
-                          <td style={{...TD,fontWeight:600,color:st.daysOverdue>30?"#DC2626":st.daysOverdue>15?"#D97706":"#181B2A"}}>{st.daysOverdue}</td>
-                          <td style={{...TD,color:"#5B5E72"}}>{st.lastReminder}</td>
+                          <td style={{...TD,fontWeight:600}}>{fmtRs(st.amount_due)}</td>
+                          <td style={{...TD,fontWeight:600,color:st.days_overdue>30?"#DC2626":st.days_overdue>15?"#D97706":"#181B2A"}}>{st.days_overdue}</td>
+                          <td style={{...TD,color:"#5B5E72"}}>{st.last_reminder}</td>
                           <td style={TD}>
                             <span style={{fontSize:12.5,fontWeight:600,padding:"4px 12px",borderRadius:20,background:STATUS_STYLE[st.status].bg,color:STATUS_STYLE[st.status].color}}>
                               {st.status}
@@ -316,6 +319,8 @@ export default function FeesDuesRemindersPanel() {
           );
         })}
       </div>
+      </>
+      )}
 
       {/* ── Follow-up Side Panel ──────────────────────────────── */}
       {followUp&&(
@@ -337,7 +342,7 @@ export default function FeesDuesRemindersPanel() {
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                 <div>
                   <div style={{fontSize:16,fontWeight:700,color:"#181B2A",marginBottom:3}}>{followUp.name} Follow-up</div>
-                  <div style={{fontSize:12,color:"#A0A3B8"}}>{followUp.admNo} · Class {followUp.cls} · Due {fmtRs(followUp.amountDue)}</div>
+                  <div style={{fontSize:12,color:"#A0A3B8"}}>{followUp.adm_no} · {followUp.cls} · Due {fmtRs(followUp.amount_due)}</div>
                 </div>
                 <button onClick={()=>setFollowUp(null)} style={{width:28,height:28,borderRadius:6,border:"1px solid #E8E8EE",background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:16,color:"#A0A3B8",lineHeight:1}}>×</button>
               </div>
@@ -351,7 +356,7 @@ export default function FeesDuesRemindersPanel() {
                 <div style={{width:40,height:40,borderRadius:"50%",background:avBg(followUp.name),color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,flexShrink:0}}>{ini(followUp.name)}</div>
                 <div style={{flex:1}}>
                   <div style={{fontSize:14,fontWeight:700,color:"#181B2A"}}>{followUp.name}</div>
-                  <div style={{fontSize:12,color:"#A0A3B8"}}>{followUp.statusNote}</div>
+                  <div style={{fontSize:12,color:"#A0A3B8"}}>{followUp.status_note}</div>
                 </div>
                 <span style={{fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:20,background:STATUS_STYLE[followUp.status].bg,color:STATUS_STYLE[followUp.status].color}}>
                   {followUp.status.toLowerCase()}
@@ -362,7 +367,7 @@ export default function FeesDuesRemindersPanel() {
               {followUp.log.length>0&&(
                 <div style={{marginBottom:20}}>
                   {followUp.log.map((e,i)=>(
-                    <div key={i} style={{display:"flex",gap:12,paddingBottom:i<followUp.log.length-1?14:0,marginBottom:i<followUp.log.length-1?0:0}}>
+                    <div key={i} style={{display:"flex",gap:12,paddingBottom:i<followUp.log.length-1?14:0}}>
                       <div style={{display:"flex",flexDirection:"column",alignItems:"center",flexShrink:0}}>
                         <div style={{width:10,height:10,borderRadius:"50%",background:"#6D4AFF",marginTop:3,flexShrink:0}}/>
                         {i<followUp.log.length-1&&<div style={{width:2,flex:1,background:"#E8E8EE",marginTop:4,marginBottom:0}}/>}
@@ -400,7 +405,7 @@ export default function FeesDuesRemindersPanel() {
                 <div>
                   <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:7}}>AGREED DATE</div>
                   <div style={{position:"relative"}}>
-                    <input value={agreedDate} onChange={e=>setAgreedDate(e.target.value)}
+                    <input value={agreedDate} onChange={e=>setAgreedDate(e.target.value)} placeholder="DD-MM-YYYY"
                       style={{width:"100%",height:40,border:"1px solid #E8E8EE",borderRadius:9,padding:"0 36px 0 12px",fontSize:13.5,boxSizing:"border-box"as const}}/>
                     <span style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",pointerEvents:"none",fontSize:14}}>📅</span>
                   </div>

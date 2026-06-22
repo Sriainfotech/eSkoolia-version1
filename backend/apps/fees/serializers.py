@@ -179,7 +179,7 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
     discount_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
     concession_amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
-    status = serializers.CharField(source='status', read_only=True)
+    status = serializers.SerializerMethodField()
     total_paid = serializers.SerializerMethodField()
     net_due = serializers.SerializerMethodField()
 
@@ -204,6 +204,13 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
         paid = obj.payments.filter(status='posted').aggregate(total=models.Sum('amount_paid'))['total'] or Decimal('0.00')
         due = net_amount - paid
         return str(due)
+
+    def get_status(self, obj):
+        net_amount = obj.amount - obj.discount_amount - obj.concession_amount
+        paid = obj.payments.filter(status='posted').aggregate(total=models.Sum('amount_paid'))['total'] or Decimal('0.00')
+        if paid >= net_amount:
+            return 'paid'
+        return 'active'
 
 
 class PaymentSerializer(serializers.ModelSerializer):
