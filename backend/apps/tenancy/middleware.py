@@ -240,6 +240,10 @@ class TenantMainMiddleware(MiddlewareMixin):
         if ".eskoolia.app" in host:
             return host.split(".eskoolia.app")[0]
 
+        # Production format: greenwood.eskoolia.com
+        if ".eskoolia.com" in host:
+            return host.split(".eskoolia.com")[0]
+
         # No subdomain found
         return None
 
