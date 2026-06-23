@@ -12,6 +12,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className="h-full">
       <head>
+        <link rel="icon" type="image/png" sizes="16x16" href="/mascot-icon-16.png?v=2" />
+        <link rel="icon" type="image/png" sizes="32x32" href="/mascot-icon-32.png?v=2" />
+        <link rel="icon" type="image/png" sizes="48x48" href="/mascot-icon-48.png?v=2" />
+        <link rel="shortcut icon" href="/mascot-icon-32.png?v=2" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
         {/* All project fonts loaded via CDN — avoids build-time network fetch */}

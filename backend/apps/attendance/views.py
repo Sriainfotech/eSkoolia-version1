@@ -1339,6 +1339,128 @@ class StudentAttendanceDailySummaryAPIView(AttendanceTenantMixin, APIView):
             "unmarked": unmarked,
         })
 
+
+class StudentAttendanceDashboardAPIView(AttendanceTenantMixin, APIView):
+    """Returns dashboard data for the home screen widget.
+    
+    Includes:
+    - Today's attendance percentage and counts
+    - Last 5 days trend
+    - Teacher marking coverage
+    - Last updated timestamp
+    - Pending classes (optional)
+    """
+
+    def get(self, request):
+        from datetime import date as date_type, timedelta
+        
+        date_str = request.query_params.get("date") or str(date_type.today())
+        try:
+            parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response(
+                {"success": False, "message": "Invalid date format. Use YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        school_filter = self.school_filter(request)
+
+        # Get total active students
+        total = Student.objects.filter(is_active=True, **school_filter).count()
+
+        # Get today's attendance data
+        daily_queryset = StudentAttendance.objects.filter(
+            attendance_date=parsed_date,
+            **school_filter,
+        )
+        latest_ids = daily_queryset.values("student_id").annotate(latest_id=Max("id")).values("latest_id")
+        latest_rows = StudentAttendance.objects.filter(id__in=latest_ids)
+
+        counts = latest_rows.aggregate(
+            present=Count(Case(When(attendance_type="P", then=1), output_field=IntegerField())),
+            absent=Count(Case(When(attendance_type="A", then=1), output_field=IntegerField())),
+            late=Count(Case(When(attendance_type="L", then=1), output_field=IntegerField())),
+            leave=Count(Case(When(attendance_type="H", then=1), output_field=IntegerField())),
+        )
+
+        present = counts.get("present") or 0
+        absent = counts.get("absent") or 0
+        late = counts.get("late") or 0
+        leave = counts.get("leave") or 0
+        marked = present + absent + late + leave
+        
+        # Calculate percentage
+        attendance_pct = round((present / total * 100), 1) if total > 0 else 0
+
+        # Get last 5 days trend
+        trend = []
+        for i in range(4, -1, -1):  # Last 5 days including today
+            trend_date = parsed_date - timedelta(days=i)
+            trend_qs = StudentAttendance.objects.filter(
+                attendance_date=trend_date,
+                **school_filter,
+            )
+            trend_ids = trend_qs.values("student_id").annotate(latest_id=Max("id")).values("latest_id")
+            trend_rows = StudentAttendance.objects.filter(id__in=trend_ids)
+            
+            trend_counts = trend_rows.aggregate(
+                p=Count(Case(When(attendance_type="P", then=1), output_field=IntegerField())),
+            )
+            trend_present = trend_counts.get("p") or 0
+            trend_pct = round((trend_present / total * 100), 1) if total > 0 else 0
+            trend.append(trend_pct)
+
+        # Get last marked time
+        last_marked = latest_rows.filter(marked_at__isnull=False).order_by("-marked_at").first()
+        last_updated = last_marked.marked_at.strftime("%I:%M %p") if last_marked else "—"
+
+        # Count total teachers and marked teachers
+        from apps.hr.models import Staff
+        total_teachers = Staff.objects.filter(status="active", school_id=school_filter.get("school_id")).count() if school_filter.get("school_id") else Staff.objects.filter(status="active").count()
+        
+        # Count sections that have marked attendance (at least one student marked)
+        marked_sections = (
+            StudentAttendance.objects
+            .filter(attendance_date=parsed_date, **school_filter)
+            .values("section_id")
+            .distinct()
+            .count()
+        )
+        marked_teachers = min(marked_sections, total_teachers)  # Cap at total teachers
+
+        # Get pending classes (sections without attendance marked)
+        section_filter = {}
+        if school_filter.get("school_id"):
+            section_filter = {"school_class__school_id": school_filter.get("school_id")}
+        
+        all_sections = Section.objects.filter(**section_filter).values_list("id", "name")
+        pending_classes = []
+        for section_id, section_name in all_sections:
+            has_attendance = StudentAttendance.objects.filter(
+                section_id=section_id,
+                attendance_date=parsed_date,
+                **school_filter,
+            ).exists()
+            if not has_attendance:
+                pending_classes.append({
+                    "name": section_name or f"Section {section_id}",
+                    "section_id": str(section_id),
+                })
+
+        return Response({
+            "attendance_percentage": attendance_pct,
+            "present": present,
+            "absent": absent,
+            "leave": leave,
+            "late": late,
+            "marked_teachers": marked_teachers,
+            "total_teachers": total_teachers,
+            "last_updated": last_updated,
+            "trend": trend,
+            "pending_classes": pending_classes,
+        })
+
+
 class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
     """Exports attendance rows in CSV/XLSX format.
 

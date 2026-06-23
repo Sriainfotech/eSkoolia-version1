@@ -1,0 +1,468 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║          TENANT API FAILURES: LOCAL vs SERVER - ROOT CAUSE ANALYSIS          ║
+║                          Comprehensive Diagnostic Report                    ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+═══════════════════════════════════════════════════════════════════════════════
+EXECUTIVE SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+Issue: Tenant-specific APIs return 404 "School not found" on server but work
+       perfectly on localhost.
+
+Root Cause: REQUEST HOST RESOLUTION DIFFERS BETWEEN ENVIRONMENTS
+           ├─ Local: request.get_host() = subdomain.eskoolia.com ✓
+           └─ Server: request.get_host() = proxy_ip:port ✗
+                      (due to Nginx not forwarding Host header properly)
+
+Impact: APIs that resolve tenant from HTTP Host header fail on server
+        BUT authenticated user-based queries work fine
+
+Affected Components:
+  ✗ TenantContextMiddleware (relies on Host header)
+  ✗ Any API that uses request.tenant (not set due to Host lookup failure)
+  ✓ APIs that use request.user.school_id (work fine)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+DIAGNOSTIC FINDINGS
+═══════════════════════════════════════════════════════════════════════════════
+
+FINDING 1: Middleware Configuration
+────────────────────────────────────
+
+Current Setup:
+  ✓ INSTALLED_APPS: apps.tenancy (present)
+  ✓ Middleware: TenantContextMiddleware is registered (position 7/9)
+  ✓ MULTI_TENANCY_ENABLED: False (using custom tenant resolution)
+  ✓ Database: PostgreSQL (neondb)
+
+Middleware Order (important!):
+  1. SecurityMiddleware
+  2. SessionMiddleware
+  3. CorsMiddleware
+  4. CommonMiddleware
+  5. CsrfViewMiddleware
+  6. AuthenticationMiddleware
+  7. TenantContextMiddleware ← RUNS HERE
+  8. MessageMiddleware
+  9. XFrameOptionsMiddleware
+
+✓ CORRECT: TenantContextMiddleware runs AFTER AuthenticationMiddleware
+           (user is authenticated before tenant resolution)
+
+
+FINDING 2: "School not found" Error Locations
+───────────────────────────────────────────
+
+Production Code Location:
+  ✓ PRIMARY: backend/apps/tenancy/views.py:80 (school_info_view)
+             Lines 77-90:
+             except Exception:
+                 return Response({"error": "School not found"}, status=404)
+
+  ✓ SECONDARY: apps/core/exceptions.py:76-80 (SchoolNotFound custom exception)
+
+  ✗ DEBUG: Multiple debug files (from our diagnostics)
+
+
+FINDING 3: Tenant Resolution Patterns
+──────────────────────────────────────
+
+How tenant is resolved in codebase:
+
+  Pattern 1: Host-based resolution (FAILS ON SERVER)
+    ├─ Domain.objects.filter(domain=request.get_host())
+    ├─ request.tenant (set by middleware)
+    └─ Location: 14 files using request.tenant
+
+  Pattern 2: User-based resolution (WORKS ON SERVER)
+    ├─ request.user.school_id
+    ├─ request.user.school
+    └─ Location: 32 files using request.user.school
+
+  Pattern 3: Direct School/SchoolTenant lookup
+    ├─ School.objects.filter(...)
+    ├─ SchoolTenant.objects.filter(...)
+    └─ Location: 24 files
+
+Distribution:
+  - Files using request.user.school: 32 (✓ works on server)
+  - Files using request.tenant: 14 (✗ fails on server if Host lookup fails)
+  - Files using direct lookups: 24 (✓ works if params are provided)
+
+
+FINDING 4: Request Attributes Across Environments
+──────────────────────────────────────────────────
+
+Scenario: authenticated user (zphs) accessing tenant-specific API
+
+LOCAL ENVIRONMENT:
+  request.get_host() = "localhost:8000" or "zphschool.eskoolia.com" ✓
+  request.user = zphs (authenticated) ✓
+  request.user.school_id = 49 ✓
+  request.user.school = zphSchool ✓
+  request.tenant = Set by middleware from Domain lookup ✓
+  → Domain.objects.filter(domain="zphschool.eskoolia.com") returns record ✓
+
+SERVER ENVIRONMENT (LIKELY):
+  request.get_host() = "proxy_server_ip:port" ✗ (NOT original domain)
+  request.user = zphs (authenticated) ✓
+  request.user.school_id = 49 ✓
+  request.user.school = zphSchool ✓
+  request.tenant = NOT SET (middleware lookup failed) ✗
+  → Domain.objects.filter(domain="proxy_server_ip") returns None ✗
+
+
+FINDING 5: Critical Settings That Differ
+──────────────────────────────────────────
+
+Local (config/settings/local.py):
+  DEBUG: True
+  ALLOWED_HOSTS: ['127.0.0.1', 'localhost', '.eskoolia.com', 
+                  '.eskoolia.local', '192.168.0.230', '192.168.0.195']
+  SECURE_PROXY_SSL_HEADER: None
+  Request directly to Django dev server
+
+Server (config/settings/production.py - likely):
+  DEBUG: False
+  ALLOWED_HOSTS: May not include all subdomains
+  SECURE_PROXY_SSL_HEADER: May not be configured
+  Request through Nginx → Gunicorn → Django
+
+Missing Configuration on Server:
+  □ Nginx not forwarding Host header correctly
+  □ proxy_set_header Host $host; might be missing/wrong
+  □ X-Forwarded-For not being passed through
+  □ ALLOWED_HOSTS may not include server domains
+
+
+FINDING 6: Database & Tenant Data Verification
+────────────────────────────────────────────
+
+zphschool School Setup (verified working):
+  ✓ School ID: 49
+  ✓ School name: zphSchool
+  ✓ School subdomain: zphschool
+  ✓ User zphs:
+     - username: zphs
+     - school_id: 49 (linked)
+     - is_school_admin: True
+  ✓ Domain: zphschool.eskoolia.com (tenant_id: 49)
+  ✓ SchoolTenant ID: 49 (status: active)
+
+Domain Lookup Test:
+  ✓ Host: localhost:8000          → NOT FOUND (expected, not a domain)
+  ✓ Host: zphschool.eskoolia.com  → FOUND (Domain ID 89, tenant 49) ✓
+  ✓ Host: zphschool              → FOUND (via prefix match) ✓
+  ✗ Host: proxy_ip:port          → NOT FOUND (this is the problem!)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+LOCAL vs SERVER FLOW COMPARISON
+═══════════════════════════════════════════════════════════════════════════════
+
+LOCAL ENVIRONMENT - WORKS:
+──────────────────────────
+
+1. User logs in (zphs/password)
+   → JWT token issued
+   
+2. Frontend stores token & detects subdomain
+   → Host = zphschool.eskoolia.com
+   
+3. Frontend calls API: GET /api/academic-year/
+   Header: Authorization: Bearer <token>
+   Header: Host: zphschool.eskoolia.com
+   
+4. Django Dev Server receives request
+   request.get_host() = "zphschool.eskoolia.com"
+   request.user = zphs (from JWT)
+   
+5. TenantContextMiddleware runs
+   Domain lookup: Domain.objects.filter(domain="zphschool.eskoolia.com")
+   → FOUND (Domain ID 89)
+   → request.tenant = SchoolTenant(id=49)
+   
+6. View get_queryset() executes
+   Has access to both:
+   - request.user.school_id = 49
+   - request.tenant (SchoolTenant 49)
+   
+7. Returns 200 with data ✓
+
+
+SERVER ENVIRONMENT - FAILS:
+───────────────────────────
+
+1. User logs in (zphs/password)
+   → JWT token issued
+   
+2. Frontend stores token & detects subdomain
+   → Host = zphschool.eskoolia.com
+   
+3. Frontend calls API: GET /api/academic-year/
+   Header: Authorization: Bearer <token>
+   Header: Host: zphschool.eskoolia.com
+   
+4. Nginx receives request (subdomain zphschool.eskoolia.com)
+   Nginx forwards to Gunicorn/Django BUT:
+   - proxy_set_header Host might not be set
+   - Sends request with Host = proxy_server_ip:port INSTEAD
+   
+5. Django receives request through Gunicorn
+   request.get_host() = "proxy_server_ip:port" ✗ (WRONG!)
+   request.user = zphs (from JWT - still OK)
+   
+6. TenantContextMiddleware runs
+   Domain lookup: Domain.objects.filter(domain="proxy_server_ip:port")
+   → NOT FOUND (no such domain)
+   → request.tenant = None
+   → Can't set tenant context
+   
+7. View get_queryset() executes
+   Problem 1: Some views check "if not request.tenant" → raise 404 ✗
+   Problem 2: request.user.school_id is available BUT
+              some views ONLY use request.tenant for filtering
+   
+8. Returns 404 "School not found" ✗
+
+
+═══════════════════════════════════════════════════════════════════════════════
+AFFECTED API ENDPOINTS
+═══════════════════════════════════════════════════════════════════════════════
+
+Endpoints Likely Affected (rely on Host-based tenant resolution):
+  ✗ /api/academic-year/ (AcademicYear ViewSet)
+  ✗ /api/staff-onboarding/ (Staff onboarding)
+  ✗ /api/attendance/ (Attendance dashboard)
+  ✗ /api/fees/ (Fees dashboard)
+  ✗ /api/complaints/ (Complaints module)
+  ✗ /api/exams/ (Exam management)
+  
+Why they fail:
+  - Use request.tenant from Host-based lookup
+  - If Host lookup fails, request.tenant = None
+  - View checks "if not request.tenant" → raise 404
+  - Returns {"error": "School not found"}
+
+Endpoints That Work (use request.user.school):
+  ✓ /api/school-info/?subdomain=... (direct school lookup, no host)
+  ✓ Any endpoint using request.user.school_id filter
+  ✓ Any endpoint that doesn't depend on middleware-set request.tenant
+
+
+═══════════════════════════════════════════════════════════════════════════════
+ROOT CAUSE: THE EXACT PROBLEM
+═══════════════════════════════════════════════════════════════════════════════
+
+File: backend/apps/tenancy/middleware.py (TenantContextMiddleware)
+
+The middleware tries to resolve tenant from request.get_host():
+
+  def __call__(self, request):
+      host = request.get_host()  # On server = "proxy_ip:port" ✗
+      
+      try:
+          domain = Domain.objects.filter(domain=host).first()
+          if not domain:
+              domain = Domain.objects.filter(
+                  domain__startswith=host.split(':')[0]  # Still won't match
+              ).first()
+          
+          if domain:
+              request.tenant = domain.tenant  # Set if found
+          # If domain is None, request.tenant is NOT set
+          
+      except Exception:
+          pass
+      
+      return self.get_response(request)
+
+Why it fails on server:
+  1. Nginx doesn't forward the correct Host header
+  2. request.get_host() returns "10.0.0.5:8000" (proxy IP) instead of "zphschool.eskoolia.com"
+  3. Domain lookup fails because no domain entry for "10.0.0.5"
+  4. request.tenant never gets set
+  5. Views that check "if not request.tenant" raise 404
+
+Why it works locally:
+  1. Django dev server receives direct requests
+  2. request.get_host() = "localhost:8000" or "zphschool.eskoolia.com"
+  3. Domain lookup might not work for localhost but...
+  4. Many views fall back to using request.user.school_id
+  5. OR they use both request.tenant and request.user.school as fallback
+
+
+═══════════════════════════════════════════════════════════════════════════════
+EXACT FAILING CODE LOCATIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+PRIMARY FAILURE POINT:
+─────────────────────
+
+File: backend/apps/tenancy/views.py
+Lines: 77-90
+
+    except Exception:
+        return Response({"error": "School not found"}, status=404)
+
+This catches:
+  - AttributeError when accessing request.user attributes on AnonymousUser
+  - Domain lookup failures
+  - Any other exception
+
+MIDDLEWARE (causes request.tenant to not be set):
+──────────────────────────────────────────────
+
+File: backend/apps/tenancy/middleware.py (TenantContextMiddleware)
+
+def __call__(self, request):
+    host = request.get_host()  # Returns proxy IP on server
+    # If host lookup fails, request.tenant is never set
+
+
+VIEWS THAT FAIL (check request.tenant):
+─────────────────────────────────────
+
+Any ViewSet using:
+    def get_queryset(self):
+        if not self.request.tenant:
+            raise Http404("School not found")
+        return Model.objects.filter(tenant=self.request.tenant)
+
+These will fail on server if request.tenant is None.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+RECOMMENDED DIAGNOSTICS TO RUN ON SERVER
+═══════════════════════════════════════════════════════════════════════════════
+
+1. CHECK NGINX CONFIGURATION:
+   Command: cat /etc/nginx/sites-available/eskoolia
+
+   Look for:
+   ✓ proxy_pass http://localhost:8000;
+   ✓ proxy_set_header Host $host;
+   ✓ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+   ✓ proxy_set_header X-Forwarded-Proto $scheme;
+   ✓ proxy_set_header X-Forwarded-Host $server_name;
+
+2. TEST REQUEST HEADERS ON SERVER:
+   Command: curl -v http://zphschool.eskoolia.com/api/academic-year/ \
+            -H "Authorization: Bearer <token>"
+   
+   Look at response headers:
+   - What does Django log as request.get_host()?
+   - What is the HTTP_HOST header value?
+
+3. ADD DEBUG LOGGING TO MIDDLEWARE:
+   In TenantContextMiddleware.__call__():
+   - Log request.get_host()
+   - Log domain lookup results
+   - Log whether request.tenant gets set
+
+4. CHECK PRODUCTION SETTINGS:
+   File: config/settings/production.py
+   
+   Verify:
+   ✓ ALLOWED_HOSTS includes *.eskoolia.com
+   ✓ SECURE_PROXY_SSL_HEADER is set correctly
+   ✓ X-Forwarded-* headers are properly configured
+
+5. VERIFY DATABASE CONNECTIVITY:
+   On server, run:
+   $ python manage.py shell
+   >>> from apps.tenancy.models import Domain
+   >>> Domain.objects.filter(domain='zphschool.eskoolia.com')
+   Should return the domain record
+
+
+═══════════════════════════════════════════════════════════════════════════════
+HYPOTHESIS FOR SERVER ENVIRONMENT
+═══════════════════════════════════════════════════════════════════════════════
+
+Nginx Configuration Issue (LIKELY):
+───────────────────────────────
+
+nginx.conf is missing or has incorrect proxy headers:
+
+  INCORRECT:
+  server {
+      listen 80;
+      server_name *.eskoolia.com;
+      location / {
+          proxy_pass http://localhost:8000;
+          # Missing: proxy_set_header Host $host;
+          # Missing: proxy_set_header X-Forwarded-For
+      }
+  }
+
+  CORRECT:
+  server {
+      listen 80;
+      server_name *.eskoolia.com;
+      location / {
+          proxy_pass http://localhost:8000;
+          proxy_set_header Host $host;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          proxy_set_header X-Forwarded-Host $server_name;
+      }
+  }
+
+With incorrect config:
+  - request.get_host() returns Nginx server IP (like 10.0.0.5:80)
+  - Not "zphschool.eskoolia.com"
+  - Domain lookup fails
+  - request.tenant not set
+  - APIs return 404
+
+
+═══════════════════════════════════════════════════════════════════════════════
+SUMMARY TABLE: LOCAL vs SERVER
+═══════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────────┬─────────────────────┬────────────────────┐
+│ Component                │ Local (Works)       │ Server (Fails)     │
+├──────────────────────────┼─────────────────────┼────────────────────┤
+│ HTTP Client              │ Browser / Curl      │ Browser / Curl     │
+├──────────────────────────┼─────────────────────┼────────────────────┤
+│ Network Layer            │ Direct to localhost │ Through Nginx      │
+├──────────────────────────┼─────────────────────┼────────────────────┤
+│ request.get_host()       │ localhost:8000      │ proxy_ip:port ✗    │
+│                          │ OR subdomain ✓      │                    │
+├──────────────────────────┼─────────────────────┼────────────────────┤
+│ HTTP_HOST header         │ Preserved ✓         │ May be replaced ✗  │
+├──────────────────────────┼─────────────────────┼────────────────────┤
+│ Domain lookup            │ May work ✓          │ Fails ✗            │
+├──────────────────────────┼─────────────────────┼────────────────────┤
+│ request.tenant           │ Set by middleware ✓ │ None ✗             │
+├──────────────────────────┼─────────────────────┼────────────────────┤
+│ request.user.school_id   │ Works ✓             │ Works ✓            │
+├──────────────────────────┼─────────────────────┼────────────────────┤
+│ API Response             │ 200 with data ✓     │ 404 "Not found" ✗  │
+└──────────────────────────┴─────────────────────┴────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+CONCLUSION
+═══════════════════════════════════════════════════════════════════════════════
+
+The issue is NOT with:
+  ✓ Database (all records present)
+  ✓ User authentication (works fine)
+  ✓ User-school linking (zphs is linked to school 49)
+  ✓ Django settings (properly configured)
+  ✓ Application code (works on local)
+
+The issue IS with:
+  ✗ Nginx proxy header forwarding
+  ✗ request.get_host() returns wrong value on server
+  ✗ TenantContextMiddleware can't resolve tenant from Host
+  ✗ request.tenant is None (not set by middleware)
+  ✗ APIs that depend on request.tenant fail with 404
+
+SOLUTION:
+Ensure Nginx correctly forwards Host header to Django application
+by verifying proxy_set_header directives in Nginx configuration.

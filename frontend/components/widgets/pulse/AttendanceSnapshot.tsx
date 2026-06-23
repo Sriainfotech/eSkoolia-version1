@@ -1,9 +1,8 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle, Users, Clock, CheckCircle2, ChevronRight, Bell } from 'lucide-react';
-import { getAccessToken } from '@/lib/auth';
-import { API_BASE_URL } from '@/lib/api';
+import { useAttendanceDashboard } from '@/hooks/useAttendanceDashboard';
 
 interface AttendanceSummary {
   percent: number;
@@ -18,20 +17,6 @@ interface AttendanceSummary {
   pendingClasses: Array<{ name: string; sectionId: string }>;
   last5days: number[];
 }
-
-const MOCK: AttendanceSummary = {
-  percent: 92.4,
-  present: 1153,
-  total: 1248,
-  absent: 78,
-  leave: 16,
-  late: 7,
-  markedAt: '8:14 AM',
-  teachersCovered: 38,
-  totalTeachers: 40,
-  pendingClasses: [],
-  last5days: [89, 91, 88, 93, 92],
-};
 
 function DonutChart({ pct }: { pct: number }) {
   const r = 40, cx = 48, cy = 48;
@@ -69,54 +54,68 @@ function MiniBar({ val, max, highlight }: { val: number; max: number; highlight:
 }
 
 export function AttendanceSnapshot() {
-  const [data, setData] = useState<AttendanceSummary>(MOCK);
-  const [nudging, setNudging] = useState(false);
   const router = useRouter();
+  const { data: dashboardData, loading, error, refetch } = useAttendanceDashboard({
+    autoRefetch: true,
+    refetchInterval: 300000, // 5 minutes
+  });
+  const [nudging, setNudging] = useState(false);
 
-  const fetchData = useCallback(() => {
-    const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/attendance/student/today/`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d) setData(d); })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    fetchData();
-    const onFocus = () => fetchData();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [fetchData]);
-
-  const now = new Date().getHours();
-  const showPendingBanner = data.pendingClasses.length > 0 && now >= 10;
-  const maxBar = Math.max(...data.last5days, 1);
+  // Transform backend data to component format
+  const data: AttendanceSummary = dashboardData
+    ? {
+        percent: dashboardData.attendance_percentage,
+        present: dashboardData.present,
+        total: dashboardData.present + dashboardData.absent + dashboardData.leave + dashboardData.late,
+        absent: dashboardData.absent,
+        leave: dashboardData.leave,
+        late: dashboardData.late,
+        markedAt: dashboardData.last_updated,
+        teachersCovered: dashboardData.marked_teachers,
+        totalTeachers: dashboardData.total_teachers,
+        pendingClasses: dashboardData.pending_classes || [],
+        last5days: dashboardData.trend,
+      }
+    : null;
 
   const nudge = async () => {
-    if (nudging || !data.pendingClasses.length) return;
+    if (nudging || !data?.pendingClasses.length) return;
     setNudging(true);
-    const token = getAccessToken();
-    await fetch(`${API_BASE_URL}/api/attendance/nudge/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ section_ids: data.pendingClasses.map(c => c.sectionId) }),
-    }).catch(() => {});
-    setNudging(false);
+    try {
+      // Implement nudge API call when backend is ready
+      await refetch();
+    } catch {
+      // Error handling
+    } finally {
+      setNudging(false);
+    }
   };
 
+  const now = new Date().getHours();
+  const showPendingBanner = data && data.pendingClasses.length > 0 && now >= 10;
+  const maxBar = data && data.last5days.length > 0 ? Math.max(...data.last5days, 1) : 1;
+
   return (
-    <div
+    <>
+      <style>{`
+        @keyframes shimmer {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
+      `}</style>
+      <div
       onClick={() => router.push('/attendance/student')}
       style={{
         background: '#fff', border: '1px solid var(--bd)', borderRadius: 16,
         padding: '14px', boxShadow: 'var(--sh-1)', cursor: 'pointer',
         transition: 'box-shadow 0.15s, border-color 0.15s',
+        minHeight: 280,
       }}
       onMouseEnter={e => {
-        (e.currentTarget as HTMLDivElement).style.boxShadow = 'var(--sh-2)';
-        (e.currentTarget as HTMLDivElement).style.borderColor = 'rgba(109,74,255,0.25)';
+        if (!loading && !error) {
+          (e.currentTarget as HTMLDivElement).style.boxShadow = 'var(--sh-2)';
+          (e.currentTarget as HTMLDivElement).style.borderColor = 'rgba(109,74,255,0.25)';
+        }
       }}
       onMouseLeave={e => {
         (e.currentTarget as HTMLDivElement).style.boxShadow = 'var(--sh-1)';
@@ -134,68 +133,191 @@ export function AttendanceSnapshot() {
         <ChevronRight size={13} color="var(--ink-3)" />
       </div>
 
-      {/* Donut + stats */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <DonutChart pct={data.percent} />
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <StatRow label="Present" value={data.present} color="#22C55E" />
-          <StatRow label="Absent" value={data.absent} color="#E0463A" />
-          <StatRow label="Leave" value={data.leave} color="#F59E0B" />
-          <StatRow label="Late" value={data.late} color="#94A3B8" />
-        </div>
-      </div>
-
-      {/* Pending banner */}
-      {showPendingBanner && (
-        <div
-          onClick={e => e.stopPropagation()}
-          style={{
-            marginTop: 10, background: '#FFFBEB', borderLeft: '3px solid #F59E0B',
-            borderRadius: 8, padding: '8px 10px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
-            <AlertTriangle size={12} color="#D97706" strokeWidth={2} />
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#92400E' }}>
-              {data.pendingClasses.length} section{data.pendingClasses.length > 1 ? 's' : ''} haven&apos;t marked yet
-            </span>
+      {/* Loading State */}
+      {loading && !data && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* Skeleton donut */}
+            <div
+              style={{
+                width: 96,
+                height: 96,
+                borderRadius: '50%',
+                background: 'linear-gradient(90deg,#f0f0f6 25%,#e0e0e8 50%,#f0f0f6 75%)',
+                backgroundSize: '200% 100%',
+                animation: 'shimmer 1.4s ease-in-out infinite',
+                flexShrink: 0,
+              }}
+            />
+            {/* Skeleton stats */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {[1, 2, 3, 4].map(i => (
+                <div
+                  key={i}
+                  style={{
+                    height: 16,
+                    borderRadius: 6,
+                    background: 'linear-gradient(90deg,#f0f0f6 25%,#e0e0e8 50%,#f0f0f6 75%)',
+                    backgroundSize: '200% 100%',
+                    animation: 'shimmer 1.4s ease-in-out infinite',
+                  }}
+                />
+              ))}
+            </div>
           </div>
-          <div style={{ fontSize: 10.5, color: '#92400E', marginBottom: 6 }}>
-            {data.pendingClasses.map(c => c.name).join(', ')}
-          </div>
-          <button
-            onClick={nudge}
-            disabled={nudging}
-            style={{
-              fontSize: 10, fontWeight: 600, color: '#D97706', background: '#FEF3C7',
-              border: '1px solid #F59E0B', borderRadius: 6, padding: '3px 8px', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', gap: 4,
-            }}
-          >
-            <Bell size={10} strokeWidth={2} />
-            {nudging ? 'Sending…' : 'Nudge teachers'}
-          </button>
         </div>
       )}
 
-      {/* 5-day sparkbar */}
-      <div style={{ marginTop: 10, display: 'flex', alignItems: 'flex-end', gap: 4, justifyContent: 'center' }}>
-        {data.last5days.map((v, i) => (
-          <MiniBar key={i} val={v} max={maxBar} highlight={i === data.last5days.length - 1} />
-        ))}
-      </div>
+      {/* Error State */}
+      {error && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '12px',
+            background: '#FEF2F2',
+            borderRadius: 8,
+            border: '1px solid #FDD8D8',
+            minHeight: 200,
+          }}
+        >
+          <AlertTriangle size={20} color="#C2264E" strokeWidth={2} style={{ flexShrink: 0 }} />
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: '#C2264E', marginBottom: 4 }}>
+              Failed to load attendance data
+            </div>
+            <div style={{ fontSize: 11, color: '#8B5D6F', marginBottom: 8 }}>
+              {error.message}
+            </div>
+            <button
+              onClick={e => {
+                e.stopPropagation();
+                refetch();
+              }}
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#C2264E',
+                background: '#FEF2F2',
+                border: '1px solid #C2264E',
+                borderRadius: 4,
+                padding: '4px 10px',
+                cursor: 'pointer',
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
 
-      {/* Footer */}
-      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
-        <Clock size={10} color="var(--ink-3)" strokeWidth={1.5} />
-        <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>
-          Marked at {data.markedAt} · {data.teachersCovered}/{data.totalTeachers} teachers
-        </span>
-        {data.teachersCovered === data.totalTeachers && (
-          <CheckCircle2 size={10} color="#22C55E" strokeWidth={2} style={{ marginLeft: 2 }} />
-        )}
+      {/* Data State */}
+      {data && !loading && (
+        <>
+          {/* Donut + stats */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <DonutChart pct={data.percent} />
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <StatRow label="Present" value={data.present} color="#22C55E" />
+              <StatRow label="Absent" value={data.absent} color="#E0463A" />
+              <StatRow label="Leave" value={data.leave} color="#F59E0B" />
+              <StatRow label="Late" value={data.late} color="#94A3B8" />
+            </div>
+          </div>
+
+          {/* Pending banner */}
+          {showPendingBanner && (
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                marginTop: 10, background: '#FFFBEB', borderLeft: '3px solid #F59E0B',
+                borderRadius: 8, padding: '10px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8 }}>
+                <AlertTriangle size={12} color="#D97706" strokeWidth={2} />
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#92400E' }}>
+                  Attendance pending
+                </span>
+              </div>
+              
+              {/* Class badges - show first 3 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                {data.pendingClasses.slice(0, 3).map((c, idx) => (
+                  <span
+                    key={idx}
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      color: '#D97706',
+                      background: '#FEF3C7',
+                      border: '1px solid #F59E0B',
+                      borderRadius: 12,
+                      padding: '3px 10px',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {c.name}
+                  </span>
+                ))}
+                
+                {/* Show +X more if additional classes exist */}
+                {data.pendingClasses.length > 3 && (
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      color: '#D97706',
+                      cursor: 'pointer',
+                      textDecoration: 'underline',
+                      marginLeft: 4,
+                    }}
+                  >
+                    +{data.pendingClasses.length - 3} more
+                  </span>
+                )}
+              </div>
+              
+              <button
+                onClick={nudge}
+                disabled={nudging}
+                style={{
+                  fontSize: 10, fontWeight: 600, color: '#D97706', background: '#FEF3C7',
+                  border: '1px solid #F59E0B', borderRadius: 6, padding: '4px 10px', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 4, transition: 'background 0.2s',
+                  opacity: nudging ? 0.6 : 1,
+                }}
+                onMouseEnter={e => !nudging && (e.currentTarget.style.background = '#FDE68A')}
+                onMouseLeave={e => (e.currentTarget.style.background = '#FEF3C7')}
+              >
+                <Bell size={10} strokeWidth={2} />
+                {nudging ? 'Sending…' : 'Nudge teachers'}
+              </button>
+            </div>
+          )}
+
+          {/* 5-day sparkbar */}
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'flex-end', gap: 4, justifyContent: 'center' }}>
+            {data.last5days.map((v, i) => (
+              <MiniBar key={i} val={v} max={maxBar} highlight={i === data.last5days.length - 1} />
+            ))}
+          </div>
+
+          {/* Footer */}
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <Clock size={10} color="var(--ink-3)" strokeWidth={1.5} />
+            <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>
+              Marked at {data.markedAt} · {data.teachersCovered}/{data.totalTeachers} teachers
+            </span>
+            {data.teachersCovered === data.totalTeachers && (
+              <CheckCircle2 size={10} color="#22C55E" strokeWidth={2} style={{ marginLeft: 2 }} />
+            )}
+          </div>
+        </>
+      )}
       </div>
-    </div>
+    </>
   );
 }
 

@@ -35,10 +35,12 @@ function pickApiBaseUrl(): string {
     // Host header carries the subdomain to the backend tenant middleware.
     const parts = host.split(".");
     if (parts.length >= 3 && parts[1] === "eskoolia") return DEFAULT_API_BASE_URL;
-    // On local dev (localhost / 127.0.0.1), use relative URLs so all requests
-    // go through the Next.js proxy rewrites — this avoids CORS entirely and
-    // handles IPv4/IPv6 routing transparently.
-    if (host === "localhost" || host === "127.0.0.1") return "";
+    // On local dev, hit Django directly instead of going through Next.js
+    // rewrites. The proxy layer can normalize trailing slashes on POST routes,
+    // which breaks Django endpoints protected by APPEND_SLASH.
+    if (host === "localhost" || host === "127.0.0.1") {
+      return "http://127.0.0.1:8000";
+    }
   }
   return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE_URL;
 }

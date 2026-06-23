@@ -134,9 +134,7 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
           )}
 
           <Link href="/home" style={{ display: "flex", alignItems: "center", gap: 8, textDecoration: "none", flexShrink: 0 }}>
-            <span style={{ width: 32, height: 32, borderRadius: 9, background: "linear-gradient(135deg, var(--pu) 0%, var(--pu-deep) 100%)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 18, letterSpacing: "-0.04em", flexShrink: 0 }}>
-              e
-            </span>
+            <img src="/mascot-icon.png?v=2" alt="Eskoolia" style={{ width: 32, height: 32, borderRadius: 9, objectFit: "contain", flexShrink: 0 }} />
             <span style={{ fontWeight: 600, fontSize: 17, letterSpacing: "-0.02em", color: "var(--ink-1)" }}>eskoolia</span>
           </Link>
 

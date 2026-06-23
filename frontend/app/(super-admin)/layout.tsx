@@ -106,12 +106,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
         }}>
           {/* Logo */}
           <Link href="/home" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 8, marginRight: 32 }}>
-            <span style={{
-              width: 30, height: 30, borderRadius: 8, flexShrink: 0,
-              background: 'linear-gradient(135deg, #6D28D9 0%, #4F46E5 100%)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              color: '#fff', fontWeight: 700, fontSize: 16,
-            }}>e</span>
+            <img src="/mascot-icon.png?v=2" alt="Eskoolia" style={{ width: 30, height: 30, borderRadius: 8, objectFit: 'contain', flexShrink: 0 }} />
             <span style={{ fontWeight: 700, fontSize: 16, color: '#111827', letterSpacing: '-0.02em' }}>
               eskoolia
             </span>

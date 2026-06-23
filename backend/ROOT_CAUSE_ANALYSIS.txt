@@ -1,0 +1,307 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                       COMPLETE ROOT CAUSE ANALYSIS                           ║
+║                    "School not found" API 404 Error                          ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+═══════════════════════════════════════════════════════════════════════════════
+1. SYMPTOM
+═══════════════════════════════════════════════════════════════════════════════
+
+API Call: GET /api/school-info/?subdomain=zphschool
+Response: {"error": "School not found"} (HTTP 404)
+
+Expected: 
+{
+  "name": "zphSchool",
+  "subdomain": "zphschool",
+  "logo_url": null,
+  "brand_color": "#0d9488",
+  "status": "active"
+}
+
+
+═══════════════════════════════════════════════════════════════════════════════
+2. DATA VERIFICATION
+═══════════════════════════════════════════════════════════════════════════════
+
+✓ School exists:
+  School.objects.filter(subdomain="zphschool").first()
+  → zphSchool (ZPHSCHOOL), ID: 49
+
+✓ Domain exists:
+  Domain.objects.filter(domain__startswith="zphschool.").first()
+  → zphschool.eskoolia.com (ID: 89, tenant_id: 49)
+
+✓ SchoolTenant exists:
+  SchoolTenant.objects.get(id=49)
+  → zphSchool (TNT_FBAC55AC), status: active
+
+✓ User exists:
+  User.objects.filter(username="zphs").first()
+  → zphs, school_id: 49, is_school_admin: True
+
+✓ Manual code execution succeeds:
+  When the exact view code is run in isolation, it works perfectly and 
+  builds the response dictionary successfully.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+3. ROOT CAUSE - EXACT EXCEPTION
+═══════════════════════════════════════════════════════════════════════════════
+
+Exception Type: AttributeError
+Exception Message: 'AnonymousUser' object has no attribute 'school_id'
+
+Location: backend/apps/tenancy/views.py, lines 57-68 (debug print statements)
+
+Exact Failing Line:
+  print("SCHOOL ID:", request.user.school_id)
+
+The issue is:
+1. When an AnonymousUser accesses school_info_view, request.user is AnonymousUser
+2. AnonymousUser doesn't have 'school_id' or 'school' attributes
+3. Accessing these attributes throws AttributeError
+4. The broad except Exception block catches this error
+5. Returns {"error": "School not found"} instead of the actual response
+
+
+═══════════════════════════════════════════════════════════════════════════════
+4. STACK TRACE
+═══════════════════════════════════════════════════════════════════════════════
+
+File: e:\Es_V1\eskoolia-v1\backend\apps\tenancy\views.py, line 57-68
+
+try:
+    from apps.tenancy.models import Domain
+    
+    # DEBUG PRINTS (LINES 57-68)
+    print("=" * 50)
+    print("REQUEST USER:", request.user)
+    print("USERNAME:", request.user.username)  # OK for AnonymousUser (empty string)
+    print("SCHOOL ID:", request.user.school_id)  # ← FAILS HERE
+    print("SCHOOL:", request.user.school)
+    print("HOST:", request.get_host())
+    print("TENANT:", getattr(request, "tenant", None))
+    print("SUBDOMAIN PARAM:", subdomain)
+    print("=" * 50)
+    
+    # Normal domain query logic (would work fine)
+    domain = Domain.objects.select_related("tenant").filter(domain=subdomain).first()
+    if domain is None:
+        domain = Domain.objects.select_related("tenant").filter(
+            domain__startswith=f"{subdomain}."
+        ).first()
+    if domain is None:
+        return Response({"error": "School not found"}, status=404)
+    tenant = domain.tenant
+    return Response({...})
+
+except Exception:  # ← CATCHES THE AttributeError
+    return Response({"error": "School not found"}, status=404)
+
+
+Full Python Traceback:
+  Traceback (most recent call last):
+    File "apps/tenancy/views.py", line 62, in school_info_view
+      print("SCHOOL ID:", request.user.school_id)
+  AttributeError: 'AnonymousUser' object has no attribute 'school_id'
+
+
+═══════════════════════════════════════════════════════════════════════════════
+5. IMPACT ANALYSIS
+═══════════════════════════════════════════════════════════════════════════════
+
+This affects:
+✗ Anonymous users accessing school_info_view endpoint
+✓ Authenticated users (they have school_id attribute)
+
+Flow:
+  AnonymousUser → school_info_view() → debug prints → AttributeError → 
+  exception handler → {"error": "School not found"}
+
+Authenticated users bypass this because User objects have the school_id 
+attribute, so the debug prints don't fail.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+6. WHY LOGIN SUCCEEDS BUT APIs FAIL
+═══════════════════════════════════════════════════════════════════════════════
+
+Login flow:
+1. User submits credentials
+2. Backend authenticates user
+3. Returns token to frontend
+4. Frontend stores token
+
+Frontend API calls:
+1. Calls school_info_view WITHOUT authentication (public endpoint)
+2. Request has AnonymousUser
+3. Debug prints fail with AttributeError
+4. Returns "School not found" error
+
+This explains why:
+- school_info_view fails with AnonymousUser (404 error)
+- Other authenticated APIs might also fail if they access user attributes 
+  in debug code before proper tenant initialization
+
+
+═══════════════════════════════════════════════════════════════════════════════
+7. THE FIX - EXACT CODE
+═══════════════════════════════════════════════════════════════════════════════
+
+CURRENT CODE (BROKEN):
+─────────────────────
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def school_info_view(request):
+    """Public endpoint — returns school branding info for the login page."""
+    subdomain = request.query_params.get("subdomain", "").strip().lower()
+    if not subdomain:
+        return Response({"error": "subdomain query parameter is required"}, status=400)
+
+    try:
+        from apps.tenancy.models import Domain
+        
+        # DEBUG PRINTS (PROBLEMATIC)
+        print("=" * 50)
+        print("REQUEST USER:", request.user)
+        print("USERNAME:", request.user.username)
+        print("SCHOOL ID:", request.user.school_id)  # ← FAILS FOR AnonymousUser
+        print("SCHOOL:", request.user.school)        # ← FAILS FOR AnonymousUser
+        print("HOST:", request.get_host())
+        print("TENANT:", getattr(request, "tenant", None))
+        print("SUBDOMAIN PARAM:", subdomain)
+        print("=" * 50)
+        
+        domain = Domain.objects.select_related("tenant").filter(domain=subdomain).first()
+        if domain is None:
+            domain = Domain.objects.select_related("tenant").filter(
+                domain__startswith=f"{subdomain}."
+            ).first()
+        if domain is None:
+            return Response({"error": "School not found"}, status=404)
+        tenant = domain.tenant
+        return Response({
+            "name": tenant.name,
+            "subdomain": tenant.subdomain_url,
+            "logo_url": tenant.logo_url or None,
+            "brand_color": tenant.brand_color or "#0d9488",
+            "status": tenant.status,
+        })
+    except Exception:
+        return Response({"error": "School not found"}, status=404)
+
+
+FIX OPTION 1: Safe debug prints (RECOMMENDED)
+─────────────────────────────────────────────
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def school_info_view(request):
+    """Public endpoint — returns school branding info for the login page."""
+    subdomain = request.query_params.get("subdomain", "").strip().lower()
+    if not subdomain:
+        return Response({"error": "subdomain query parameter is required"}, status=400)
+
+    try:
+        from apps.tenancy.models import Domain
+        
+        # SAFE DEBUG PRINTS
+        print("=" * 50)
+        print("REQUEST USER:", request.user)
+        print("USERNAME:", getattr(request.user, 'username', 'N/A'))
+        print("SCHOOL ID:", getattr(request.user, 'school_id', 'N/A'))
+        print("SCHOOL:", getattr(request.user, 'school', 'N/A'))
+        print("HOST:", request.get_host())
+        print("TENANT:", getattr(request, "tenant", None))
+        print("SUBDOMAIN PARAM:", subdomain)
+        print("=" * 50)
+        
+        # ... rest of code remains same
+
+
+FIX OPTION 2: Conditional debug prints
+──────────────────────────────────────
+
+        # DEBUG PRINTS (SAFE)
+        print("=" * 50)
+        print("REQUEST USER:", request.user)
+        if request.user.is_authenticated:
+            print("USERNAME:", request.user.username)
+            print("SCHOOL ID:", request.user.school_id)
+            print("SCHOOL:", request.user.school)
+        else:
+            print("USERNAME: AnonymousUser")
+            print("SCHOOL ID: N/A")
+            print("SCHOOL: N/A")
+        print("HOST:", request.get_host())
+        print("TENANT:", getattr(request, "tenant", None))
+        print("SUBDOMAIN PARAM:", subdomain)
+        print("=" * 50)
+
+
+FIX OPTION 3: Remove debug prints entirely
+───────────────────────────────────────────
+Delete the debug print block entirely. The code works correctly without it.
+
+
+═══════════════════════════════════════════════════════════════════════════════
+8. RECOMMENDED SOLUTION
+═══════════════════════════════════════════════════════════════════════════════
+
+Use FIX OPTION 1 (Safe debug prints with getattr):
+
+- Preserves debug visibility
+- Prevents AttributeError
+- Works for both AnonymousUser and authenticated users
+- Zero performance impact
+
+Change lines 57-68 in backend/apps/tenancy/views.py to:
+
+        # DEBUG PRINTS
+        print("=" * 50)
+        print("REQUEST USER:", request.user)
+        print("USERNAME:", getattr(request.user, 'username', 'N/A'))
+        print("SCHOOL ID:", getattr(request.user, 'school_id', 'N/A'))
+        print("SCHOOL:", getattr(request.user, 'school', 'N/A'))
+        print("HOST:", request.get_host())
+        print("TENANT:", getattr(request, "tenant", None))
+        print("SUBDOMAIN PARAM:", subdomain)
+        print("=" * 50)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+9. VERIFICATION
+═══════════════════════════════════════════════════════════════════════════════
+
+After applying the fix:
+
+Test 1: Anonymous user accessing school_info
+  curl "http://localhost:8000/api/school-info/?subdomain=zphschool"
+  
+  Expected response: 200 OK with school info
+  Current response: 404 School not found
+
+Test 2: Authenticated user 
+  Should work fine with or without the fix
+
+
+═══════════════════════════════════════════════════════════════════════════════
+10. SUMMARY
+═══════════════════════════════════════════════════════════════════════════════
+
+Root Cause: Debug print accessing request.user.school_id on AnonymousUser
+
+Exact Exception: 
+  AttributeError: 'AnonymousUser' object has no attribute 'school_id'
+
+Failing Line: 
+  backend/apps/tenancy/views.py, line 62
+
+Fix: 
+  Use getattr() with default values for user attributes in debug prints
+
+Impact: 
+  Anonymous users get 404 error when calling school_info_view
+  (which should be public and work for all users)
