@@ -5,6 +5,7 @@ from .views import (
 	StudentAttendanceChatbotMarkAPIView,
 	ClassAttendanceSummaryAPIView,
 	StudentAttendanceDailySummaryAPIView,
+	StudentAttendanceDashboardAPIView,
 	StudentAttendanceExportAPIView,
 	StudentAttendanceDownloadSampleAPIView,
 	StudentAttendanceImportAPIView,
@@ -47,6 +48,7 @@ urlpatterns = [
 	path("student-attendance/report-insights/", StudentAttendanceReportInsightsAPIView.as_view(), name="student-attendance-report-insights"),
 	path("student-attendance/export/", StudentAttendanceExportAPIView.as_view(), name="student-attendance-export"),
 	path("student-attendance/daily-summary/", StudentAttendanceDailySummaryAPIView.as_view(), name="student-attendance-daily-summary"),
+	path("dashboard/today/", StudentAttendanceDashboardAPIView.as_view(), name="student-attendance-dashboard"),
 	path("student-attendance/class-summary/", ClassAttendanceSummaryAPIView.as_view(), name="student-attendance-class-summary"),
 
 	path("subject-attendance/index/", SubjectAttendanceIndexAPIView.as_view(), name="subject-attendance-index"),

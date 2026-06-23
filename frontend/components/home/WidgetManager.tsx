@@ -117,6 +117,23 @@ function Section({ title, subtitle, color, children }: { title: string; subtitle
   );
 }
 
+function ComingSoonBadge() {
+  return (
+    <span style={{
+      fontSize: 11,
+      fontWeight: 600,
+      color: '#F57C00',
+      background: '#FFF3E0',
+      borderRadius: 12,
+      padding: '2px 8px',
+      whiteSpace: 'nowrap',
+      flexShrink: 0,
+    }}>
+      Soon
+    </span>
+  );
+}
+
 function WidgetRow({ widget, enabled, onToggle }: { widget: typeof ALL_WIDGETS[0]; enabled: boolean; onToggle: () => void }) {
   const isDisabled = widget.disabled;
   return (
@@ -134,7 +151,8 @@ function WidgetRow({ widget, enabled, onToggle }: { widget: typeof ALL_WIDGETS[0
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-1)' }}>{widget.name}</span>
-          {isDisabled && (
+          {widget.comingSoon && <ComingSoonBadge />}
+          {isDisabled && !widget.comingSoon && (
             <span style={{ fontSize: 9, fontWeight: 700, color: '#D97706', background: '#FEF3C7', border: '1px solid #F59E0B', borderRadius: 4, padding: '1px 5px', letterSpacing: '0.04em' }}>
               SOON
             </span>

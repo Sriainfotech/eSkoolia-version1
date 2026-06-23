@@ -57,6 +57,18 @@ def school_info_view(request):
 
     try:
         from apps.tenancy.models import Domain
+        
+        # DEBUG PRINTS
+        print("=" * 50)
+        print("REQUEST USER:", request.user)
+        print("USERNAME:", request.user.username)
+        print("SCHOOL ID:", request.user.school_id)
+        print("SCHOOL:", request.user.school)
+        print("HOST:", request.get_host())
+        print("TENANT:", getattr(request, "tenant", None))
+        print("SUBDOMAIN PARAM:", subdomain)
+        print("=" * 50)
+        
         # First try exact match (subdomain stored as-is)
         domain = Domain.objects.select_related("tenant").filter(domain=subdomain).first()
         # Fall back to prefix match for full FQDNs like "testschool.eskoolia.local"

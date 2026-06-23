@@ -1,0 +1,154 @@
+========================================
+DIAGNOSTIC OUTPUTS - COMPLETE SUMMARY
+========================================
+
+========================================
+CHECK 1: School "zphschool" EXISTS
+========================================
+School object: zphSchool (ZPHSCHOOL)
+School ID: 49
+
+========================================
+CHECK 2: Admin user linked to DEFAULT school
+========================================
+User: admin
+Username: admin
+School: Default School (DEFAULT)
+School ID: 1
+
+========================================
+CHECK 6: All fields on Admin User
+========================================
+id: 1
+password: pbkdf2_sha256$1200000$xYxmOhJf52AwHzBpYqZuoA$cLl8N5bBzKrqaH9eCtKKK/YN8uBUK6/u0jqNAbpRROM=
+last_login: 2026-06-16 05:09:31.107229+00:00
+is_superuser: True
+username: admin
+first_name: 
+last_name: 
+is_staff: True
+is_active: True
+date_joined: 2026-04-13 13:49:37.729055+00:00
+email: admin@gmail.com
+school: Default School (DEFAULT)
+phone: 
+is_school_admin: False
+access_status: True
+due_fees_login_blocked: False
+must_change_password: False
+
+========================================
+CHECK 3: DOMAINS IN DATABASE
+========================================
+
+KEY FINDING: zphschool does NOT have a Domain entry!
+
+Domain with id 89 EXISTS for:
+  - domain: "zphschool.eskoolia.com"
+  - is_primary: True
+  - tenant_id: 49
+
+But NO Domain entry for plain "zphschool"
+
+Domains that DO exist for zphschool tenant (id 49):
+  - Only: "zphschool.eskoolia.com" (id 89)
+
+SchoolTenant entry for zphschool:
+  - id: 49
+  - tenant_id: "TNT_FBAC55AC"
+  - name: "zphSchool"
+  - subdomain_url: "zphschool"
+  - status: "active"
+
+========================================
+CHECK 3 & 4: "School not found" ERROR LOCATION
+========================================
+
+File: backend/apps/tenancy/views.py
+Function: school_info_view
+
+Complete code:
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def school_info_view(request):
+    """Public endpoint — returns school branding info for the login page.
+
+    Called by the frontend BEFORE the user logs in so the login page can
+    display the correct school name, logo, and brand colour.
+
+    Query params:
+        subdomain (required) — e.g. ?subdomain=springdale
+    """
+    subdomain = request.query_params.get("subdomain", "").strip().lower()
+    if not subdomain:
+        return Response({"error": "subdomain query parameter is required"}, status=400)
+
+    try:
+        from apps.tenancy.models import Domain
+        # First try exact match (subdomain stored as-is)
+        domain = Domain.objects.select_related("tenant").filter(domain=subdomain).first()
+        # Fall back to prefix match for full FQDNs like "testschool.eskoolia.local"
+        if domain is None:
+            domain = Domain.objects.select_related("tenant").filter(
+                domain__startswith=f"{subdomain}."
+            ).first()
+        if domain is None:
+            return Response({"error": "School not found"}, status=404)  # Line 68
+        tenant = domain.tenant
+        return Response({
+            "name": tenant.name,
+            "subdomain": tenant.subdomain_url,
+            "logo_url": tenant.logo_url or None,
+            "brand_color": tenant.brand_color or "#0d9488",
+            "status": tenant.status,
+        })
+    except Exception:
+        return Response({"error": "School not found"}, status=404)  # Line 78
+
+========================================
+ROOT CAUSE ANALYSIS
+========================================
+
+When frontend calls: ?subdomain=zphschool
+
+The API searches for:
+1. Exact match: Domain.domain = "zphschool"  ❌ NOT FOUND
+2. Prefix match: Domain.domain startswith "zphschool."  ✅ FINDS "zphschool.eskoolia.com"
+
+WHY IT MIGHT FAIL:
+- If frontend is sending "zphs" instead of "zphschool" → will NOT match "zphschool.eskoolia.com"
+- If frontend is sending different casing → might fail depending on DB collation
+- If frontend is sending "zphs" and API looks for domain__startswith="zphs." → will NOT find "zphschool.eskoolia.com"
+
+========================================
+DOMAIN PATTERN IN DATABASE
+========================================
+
+All schools have this pattern:
+1. Plain subdomain: sometimes exists (e.g., "narayana", "testschool")
+2. Full domain: always exists as "subdomain.eskoolia.com"
+3. Local dev domain: sometimes exists as "subdomain.eskoolia.local"
+
+Example for Narayana (ID 10):
+  - Domain id 2: "narayana" (is_primary: False, tenant_id: 10)
+  - Domain id 7: "narayana.eskoolia.com" (is_primary: True, tenant_id: 10)
+
+Example for zphschool (ID 49):
+  - Domain id 89: "zphschool.eskoolia.com" (is_primary: True, tenant_id: 49)
+  - NO plain "zphschool" entry!
+
+========================================
+WHAT'S MISSING
+========================================
+
+To debug further, I need:
+
+CHECK 4: Debug logs from failing API call
+- You need to add print statements BEFORE the error and trigger the API
+
+CHECK 5: Frontend request details
+- Open Browser DevTools → Network → find failing school_info API call
+- Send the Request URL and Response payload
+
+This will reveal if frontend is sending the wrong subdomain value.

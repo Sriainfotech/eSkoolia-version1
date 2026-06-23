@@ -11,6 +11,7 @@ export interface WidgetDef {
   icon: string;
   defaultEnabled: boolean;
   disabled?: boolean;
+  comingSoon?: boolean;
   /** Which portal roles can see this widget. Omit to show to all roles. */
   roles?: PortalRole[];
 }
@@ -21,10 +22,10 @@ export const ALL_WIDGETS: WidgetDef[] = [
 
   // ── Admin-only — Left rail (Today's Pulse) ────────────────────────────────
   { id: 'attendance',    name: 'Student Attendance',   description: 'Live attendance snapshot with class-wise breakdown', rail: 'left',  icon: '📊', defaultEnabled: true,  roles: ['admin'] },
-  { id: 'sickbay',       name: 'Sick Bay',              description: 'Active sick-bay cases & parent contact status',      rail: 'left',  icon: '🏥', defaultEnabled: true,  roles: ['admin'] },
-  { id: 'busfleet',      name: 'Bus Fleet',             description: 'Live bus positions & ETA for all routes',            rail: 'left',  icon: '🚌', defaultEnabled: true,  roles: ['admin'] },
+  { id: 'sickbay',       name: 'Sick Bay',              description: 'Active sick-bay cases & parent contact status',      rail: 'left',  icon: '🏥', defaultEnabled: false, roles: ['admin'], disabled: true, comingSoon: true },
+  { id: 'busfleet',      name: 'Bus Fleet',             description: 'Live bus positions & ETA for all routes',            rail: 'left',  icon: '🚌', defaultEnabled: false, roles: ['admin'], disabled: true, comingSoon: true },
   { id: 'feestoday',     name: "Today's Fees",          description: 'Fee collections received today vs target',           rail: 'left',  icon: '💰', defaultEnabled: true,  roles: ['admin'] },
-  { id: 'staffleave',    name: 'Staff Leave',           description: 'Staff on leave today & substitute assignments',      rail: 'left',  icon: '👤', defaultEnabled: true,  roles: ['admin'] },
+  { id: 'staffleave',    name: 'Staff Leave',           description: 'Staff on leave today & substitute assignments',      rail: 'left',  icon: '👤', defaultEnabled: false, roles: ['admin'], disabled: true, comingSoon: true },
 
   // ── Admin-only — Right rail (Admin Cockpit) ───────────────────────────────
   { id: 'morning-brief', name: 'Morning Brief',         description: 'AI-generated start-of-day briefing',                rail: 'right', icon: '☀️', defaultEnabled: true,  roles: ['admin'] },

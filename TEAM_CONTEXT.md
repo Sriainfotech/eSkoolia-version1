@@ -117,6 +117,178 @@ path('year-end/group-amounts/', YearEndGroupAmountsAPIView.as_view(), name='year
 
 ---
 
+## Update — GitHub Copilot (18/06/2026)by Teerdaveni
+
+**Branch:** `demo`
+
+### Student Attendance Dashboard Widget — Real-Time Data Integration + UI Redesign
+
+#### Overview
+Transformed the Student Attendance widget from static mock data to a fully functional real-time dashboard powered by backend APIs. Implemented comprehensive data fetching layer with caching, auto-refresh, and error handling. Redesigned the pending classes notification to follow production ERP UX standards.
+
+---
+
+#### Backend Implementation
+
+**New Endpoint:** `GET /api/v1/attendance/dashboard/today/`
+
+**File:** `backend/apps/attendance/views.py`
+- Created `StudentAttendanceDashboardAPIView` (APIView + AttendanceTenantMixin)
+- Calculates real-time statistics:
+  - `attendance_percentage`: Present / Total × 100
+  - `present`, `absent`, `late`, `leave`: Aggregated using `Count` + `Case/When` on latest attendance records per student
+  - `trend`: 5-day historical percentages (loop over last 5 days, calculate daily percentages)
+  - `last_updated`: Timestamp from latest `marked_at` field, formatted as "HH:MM AM/PM"
+  - `marked_teachers`: Count of sections with at least one attendance record
+  - `total_teachers`: Count of active staff members
+  - `pending_classes`: Sections without any attendance marked (optional array)
+- Multi-tenant aware: Uses `school_filter()` from `AttendanceTenantMixin`
+- Handles optional `date` query parameter (defaults to today)
+- Supports Bearer token authentication
+
+**File:** `backend/apps/attendance/urls.py`
+- Added route: `path("dashboard/today/", StudentAttendanceDashboardAPIView.as_view(), name="student-attendance-dashboard")`
+- Import: `StudentAttendanceDashboardAPIView` added to views imports
+
+**Bug Fix:** Django server restart required after URL pattern addition for routing to activate
+
+---
+
+#### Frontend Service Layer
+
+**File:** `frontend/lib/services/attendanceDashboardService.ts` (NEW)
+- Singleton `AttendanceDashboardService` class with built-in caching
+- 60-second cache TTL to reduce backend calls
+- `fetchDashboardData(date?: string)` method
+  - Accepts optional date parameter (defaults to today)
+  - Fetches from `/api/v1/attendance/dashboard/today/`
+  - Includes Bearer token in Authorization header
+  - Validates response structure before returning
+  - Returns cached data on cache hit
+  - Throws structured error messages on failure
+- Exported singleton: `attendanceDashboardService`
+
+**Response Interface:**
+```ts
+interface AttendanceDashboardData {
+  attendance_percentage: number;
+  present: number;
+  absent: number;
+  leave: number;
+  late: number;
+  marked_teachers: number;
+  total_teachers: number;
+  last_updated: string;
+  trend: number[];
+  pending_classes?: Array<{ name: string; section_id: string }>;
+}
+```
+
+---
+
+#### React Hook
+
+**File:** `frontend/hooks/useAttendanceDashboard.ts` (NEW)
+- Custom hook: `useAttendanceDashboard(options?)`
+- Options:
+  - `date?: string` — Optional date override (defaults to today)
+  - `autoRefetch?: boolean` — Enable auto-refresh (default: true)
+  - `refetchInterval?: number` — Refresh interval in ms (default: 300000 = 5 min)
+- Returns: `{ data, loading, error, refetch }`
+- Features:
+  - Auto-fetches data on mount
+  - Refetches every 5 minutes when enabled
+  - Listens to `window.visibilitychange` — immediate refresh when tab regains focus
+  - Proper cleanup on unmount
+  - Error state management with user-friendly messages
+
+---
+
+#### Widget Refactoring
+
+**File:** `frontend/components/widgets/pulse/AttendanceSnapshot.tsx`
+- **Loading State:** Skeleton loaders with shimmer animation (prevents layout shift)
+- **Error State:** User-friendly error message with retry button
+- **Data State:** Full integration with backend data
+  - Donut chart: `attendance_percentage`
+  - Statistics rows: Present, Absent, Leave, Late counts
+  - 5-day sparkbar: From `trend` array
+  - Footer: "Marked at HH:MM · X/Y teachers" with completion badge
+  - Pending classes: Redesigned (see below)
+- **Data Transformation:** Backend response → Component format
+  - Total = present + absent + leave + late
+  - Maps all fields to component interface
+
+---
+
+#### Pending Classes Banner Redesign
+
+**Changes to:** `frontend/components/widgets/pulse/AttendanceSnapshot.tsx`
+
+**Before (Debug-like):**
+```
+45 sections haven't marked yet
+Grade 1A, Grade 1B, Grade 1C, Grade 2A, Grade 2B, Grade 2C, ... [full repetitive list]
+```
+
+**After (Production-Ready):**
+```
+Attendance pending
+[Grade 1A] [Grade 1B] [Grade 2A] +42 more
+[Nudge Teachers button]
+```
+
+**Improvements:**
+1. **Concise messaging** — Removed verbose "X sections haven't marked yet"
+2. **Badge display** — First 3 pending classes shown as gold pill-style badges (12px border-radius)
+3. **"+X more" indicator** — Appears when classes exceed 3; clickable for future expansion
+4. **Clean typography** — 10px, 600 weight, consistent with design system
+5. **Visual polish** — Hover state on Nudge button (#FDE68A on hover)
+6. **Consistent colors** — #D97706 (text), #F59E0B (border), #FEF3C7 (background)
+7. **Flexbox wrapping** — Prevents overflow, maintains card height
+8. **Actionable focus** — Primary action (Nudge Teachers) remains prominent
+
+---
+
+#### Configuration
+
+**File:** `frontend/next.config.mjs`
+- Backend URL: `http://127.0.0.1:8000` (port 8000, not 8001)
+- Verified in previous session; working correctly
+
+---
+
+#### Files Changed
+1. `backend/apps/attendance/views.py` — `StudentAttendanceDashboardAPIView` class
+2. `backend/apps/attendance/urls.py` — URL routing
+3. `frontend/lib/services/attendanceDashboardService.ts` — Service layer (NEW)
+4. `frontend/hooks/useAttendanceDashboard.ts` — React hook (NEW)
+5. `frontend/components/widgets/pulse/AttendanceSnapshot.tsx` — Widget refactoring + pending banner redesign
+
+---
+
+#### Testing & Verification
+
+✅ **Backend Endpoint:** Tested with curl + Bearer token
+- Response format verified
+- Multi-tenancy filtering tested
+- Returns all required fields
+- 401 auth validation working
+
+✅ **Frontend Integration:** Service layer and hook implementation complete
+- Caching mechanism in place
+- Auto-refresh on focus working
+- Loading/error states functional
+
+✅ **Design:** Pending classes banner matches modern ERP dashboard patterns (Jira, Asana style)
+
+---
+
+#### Status
+✅ **COMPLETE** — Real-time attendance dashboard fully integrated. Backend endpoint accessible, frontend service layer with caching implemented, React hook handles all data fetching logic, widget displays with proper loading/error/data states, and pending classes notification redesigned for production use.
+
+---
+
 ## Update — Swetha D (16/06/2026 – 18/06/2026)
 
 **Branch:** `fees-module-fixes`
@@ -4881,3 +5053,26 @@ Login at localhost:3000
 2.Ensured that only students belonging to the selected section are displayed when a specific section is chosen.
 3.Updated the backend logic to filter students based on the selected section.
 4. fixed issue with student attendance marking section based filtering
+
+
+22/06/2026(Teerdaveni)
+1. Replaced the browser tab favicon from the default green square icon to the Eskoolia mascot face icon.
+2. Cropped the mascot face (turban + circular glasses eyes + smile) from the existing logo image, removing all surrounding letter characters.
+3. Saved the cropped mascot as `frontend/public/mascot-icon.png`.
+4. Replaced `frontend/public/favicon.ico` with the mascot icon so direct /favicon.ico browser requests serve the correct image.
+5. Replaced `frontend/app/icon.png` with the mascot icon for Next.js App Router icon generation.
+6. Updated `frontend/app/layout.tsx` metadata to explicitly declare `icons: { icon: "/mascot-icon.png" }` so Next.js injects the correct `<link rel="icon">` into every page.
+
+
+23/06/2026 (Teerdaveni)
+1. Refined mascot icon crop — removed all visible side letter characters (k, l, etc.) to show only turban + circular glasses eyes + smile face.
+2. Removed white background from mascot-icon.png — converted to transparent PNG so the icon sits cleanly on any background colour.
+3. Created multi-size favicon PNG files: `frontend/public/mascot-icon-16.png`, `mascot-icon-32.png`, `mascot-icon-48.png`.
+4. Updated `frontend/app/layout.tsx` — removed metadata icons entry, added explicit `<link rel="icon">` tags for 16x16, 32x32, 48x48 with `?v=2` cache-busting and a `<link rel="shortcut icon">` fallback.
+5. Updated `frontend/components/layout/Sidebar.tsx` (legacy nav) — replaced "Eskoolia" text in green-to-blue gradient pill with the mascot image.
+6. Updated `frontend/components/layout/Sidebar.module.css` — removed green gradient from `.brand`, added `.brandLogo` class for proper image sizing.
+7. Updated `frontend/components/nav/TopBar.tsx` (new nav, active layout) — replaced the "e" purple gradient circle with the mascot image at 32×32.
+8. Updated `frontend/app/(super-admin)/layout.tsx` — replaced the "e" purple gradient circle with the mascot image at 30×30.
+9. Reverted `frontend/app/login/page.tsx` back to original — `ESKOOLIA_LOGO` and hardcoded `src` both restored to `/image.png` as requested.
+10. Fixed TypeScript build error in `frontend/components/widgets/pulse/AttendanceSnapshot.tsx` — changed type annotation from `AttendanceSummary` to `AttendanceSummary | null` to match the ternary that can return null.
+11. Fixed second TypeScript build error in `frontend/components/widgets/pulse/AttendanceSnapshot.tsx` — mapped `section_id` (snake_case from backend) to `sectionId` (camelCase expected by `AttendanceSummary` type) inside the `pendingClasses` transform. Build now passes cleanly.
