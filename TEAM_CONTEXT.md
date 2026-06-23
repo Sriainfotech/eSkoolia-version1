@@ -4945,3 +4945,17 @@ Login at localhost:3000
 4. Replaced `frontend/public/favicon.ico` with the mascot icon so direct /favicon.ico browser requests serve the correct image.
 5. Replaced `frontend/app/icon.png` with the mascot icon for Next.js App Router icon generation.
 6. Updated `frontend/app/layout.tsx` metadata to explicitly declare `icons: { icon: "/mascot-icon.png" }` so Next.js injects the correct `<link rel="icon">` into every page.
+
+
+23/06/2026 (Teerdaveni)
+1. Refined mascot icon crop — removed all visible side letter characters (k, l, etc.) to show only turban + circular glasses eyes + smile face.
+2. Removed white background from mascot-icon.png — converted to transparent PNG so the icon sits cleanly on any background colour.
+3. Created multi-size favicon PNG files: `frontend/public/mascot-icon-16.png`, `mascot-icon-32.png`, `mascot-icon-48.png`.
+4. Updated `frontend/app/layout.tsx` — removed metadata icons entry, added explicit `<link rel="icon">` tags for 16x16, 32x32, 48x48 with `?v=2` cache-busting and a `<link rel="shortcut icon">` fallback.
+5. Updated `frontend/components/layout/Sidebar.tsx` (legacy nav) — replaced "Eskoolia" text in green-to-blue gradient pill with the mascot image.
+6. Updated `frontend/components/layout/Sidebar.module.css` — removed green gradient from `.brand`, added `.brandLogo` class for proper image sizing.
+7. Updated `frontend/components/nav/TopBar.tsx` (new nav, active layout) — replaced the "e" purple gradient circle with the mascot image at 32×32.
+8. Updated `frontend/app/(super-admin)/layout.tsx` — replaced the "e" purple gradient circle with the mascot image at 30×30.
+9. Reverted `frontend/app/login/page.tsx` back to original — `ESKOOLIA_LOGO` and hardcoded `src` both restored to `/image.png` as requested.
+10. Fixed TypeScript build error in `frontend/components/widgets/pulse/AttendanceSnapshot.tsx` — changed type annotation from `AttendanceSummary` to `AttendanceSummary | null` to match the ternary that can return null.
+11. Fixed second TypeScript build error in `frontend/components/widgets/pulse/AttendanceSnapshot.tsx` — mapped `section_id` (snake_case from backend) to `sectionId` (camelCase expected by `AttendanceSummary` type) inside the `pendingClasses` transform. Build now passes cleanly.

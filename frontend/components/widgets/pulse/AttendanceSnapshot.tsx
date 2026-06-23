@@ -62,7 +62,7 @@ export function AttendanceSnapshot() {
   const [nudging, setNudging] = useState(false);
 
   // Transform backend data to component format
-  const data: AttendanceSummary = dashboardData
+  const data: AttendanceSummary | null = dashboardData
     ? {
         percent: dashboardData.attendance_percentage,
         present: dashboardData.present,
@@ -73,7 +73,7 @@ export function AttendanceSnapshot() {
         markedAt: dashboardData.last_updated,
         teachersCovered: dashboardData.marked_teachers,
         totalTeachers: dashboardData.total_teachers,
-        pendingClasses: dashboardData.pending_classes || [],
+        pendingClasses: (dashboardData.pending_classes || []).map(c => ({ name: c.name, sectionId: c.section_id })),
         last5days: dashboardData.trend,
       }
     : null;
