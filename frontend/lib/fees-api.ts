@@ -200,6 +200,68 @@ export type SearchParams = {
   sort_by?: string;
 };
 
+export type DuesReminderLog = { date: string; by: string; note: string };
+
+export type DuesReminderStudent = {
+  id: string;
+  name: string;
+  adm_no: string;
+  cls: string;
+  cls_id: string;
+  amount_due: number;
+  days_overdue: number;
+  last_reminder: string;
+  status: "Overdue" | "Payment Watch" | "Escalated" | "Defaulter";
+  status_note: string;
+  log: DuesReminderLog[];
+};
+
+export type DuesReminderClass = {
+  id: string;
+  name: string;
+  total: number;
+  assigned: number;
+  unassigned: number;
+};
+
+export type DuesRemindersData = {
+  stats: {
+    total_overdue_amount: number;
+    students_with_dues: number;
+    average_days_overdue: number;
+    percent_collected: number;
+  };
+  classes: DuesReminderClass[];
+  students: DuesReminderStudent[];
+  late_fee_preview: {
+    label: string;
+    due_rule: string;
+    outstanding: number;
+    days_overdue: number;
+    chargeable_days: number;
+    raw_penalty: number;
+    final_due: number;
+  } | null;
+};
+
+export type FeesHomeData = {
+  tasks: Array<{
+    id: string;
+    color: string;
+    title: string;
+    desc: string;
+    buttons: Array<{ label: string; variant: "primary" | "outline"; toast: string; href?: string }>;
+  }>;
+  audit_trail: Array<{
+    id: string;
+    initials: string;
+    event: string;
+    desc: string;
+    date: string;
+    bg: string;
+  }>;
+};
+
 export function listData<T = any>(payload: any): T[] {
   if (Array.isArray(payload)) return payload;
   if (payload?.results && Array.isArray(payload.results)) return payload.results;
@@ -208,6 +270,8 @@ export function listData<T = any>(payload: any): T[] {
 }
 
 export const feesApi = {
+  // Home Dashboard
+  homeDashboard: () => apiRequestWithRefresh<FeesHomeData>("/api/v1/fees/home/"),
   listGroups: (params?: { academic_year?: number }) => {
     const qs = new URLSearchParams();
     qs.set('page_size', '500');
@@ -282,6 +346,7 @@ export const feesApi = {
     }),
   assignmentsSummary: () => apiRequestWithRefresh<FeesSummary>("/api/v1/fees/assignments/summary/"),
   assignmentsOverdue: () => apiRequestWithRefresh<ApiList<FeesAssignment>>("/api/v1/fees/assignments/overdue/"),
+  duesReminders: () => apiRequestWithRefresh<DuesRemindersData>("/api/v1/fees/assignments/dues-reminders/"),
   assignmentsCarryForward: (payload: { from_academic_year: number; to_academic_year: number; due_date?: string }) =>
     apiRequestWithRefresh<{ message: string; created: number; updated: number; total_amount: string }>(
       "/api/v1/fees/assignments/carry-forward/",

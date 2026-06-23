@@ -592,6 +592,26 @@ function isAlphabetsOnly(value: string): boolean {
   return /^[A-Za-z\s'-]*$/.test(value);
 }
 
+/**
+ * A "proper" name: must contain real letters (not just punctuation), start and
+ * end with a letter, with only single space / apostrophe / hyphen / dot
+ * separators between letter groups. Rejects values like "--", "''", "A-", ".",
+ * or "A--B". Allows "Mary Jane", "O'Brien", "Jean-Luc", "A. Kumar".
+ */
+function isProperName(value: string): boolean {
+  const v = value.trim();
+  if (v.length < 2) return false;
+  return /^[A-Za-z]+(?:[ '.-][A-Za-z]+)*\.?$/.test(v);
+}
+
+/** Keep only name characters, forbid a leading separator, and collapse spaces. */
+function sanitizeNameInput(raw: string): string {
+  return raw
+    .replace(/[^A-Za-z\s'.-]/g, "")
+    .replace(/^[\s'.-]+/, "")
+    .replace(/\s{2,}/g, " ");
+}
+
 function isValidAdmissionOrRoll(value: string): boolean {
   return /^[A-Za-z0-9]+$/.test(value.trim());
 }
@@ -1945,8 +1965,8 @@ export function StudentAddPanel() {
         }
       }
 
-      clearIf("first_name", Boolean(cleanFirstName && isAlphabetsOnly(cleanFirstName)));
-      clearIf("last_name", Boolean(cleanLastName && isAlphabetsOnly(cleanLastName)));
+      clearIf("first_name", Boolean(cleanFirstName && isProperName(cleanFirstName)));
+      clearIf("last_name", Boolean(cleanLastName && isProperName(cleanLastName)));
       clearIf("dob", Boolean(hasValidDobDate && hasValidClassAge));
       clearIf("gender", Boolean(gender));
       clearIf("custom_gender", gender !== "other" || Boolean(sanitizeText(customGender)));
@@ -2179,8 +2199,18 @@ export function StudentAddPanel() {
           setActiveNavSection(currentId as NavItemId);
           return false;
         }
+        if (!isProperName(firstName)) {
+          setSingleFieldError('first_name', 'Enter a valid first name (letters only, e.g. Rahul).');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
         if (!lastName.trim()) {
           setSingleFieldError('last_name', 'Last name is required before proceeding.');
+          setActiveNavSection(currentId as NavItemId);
+          return false;
+        }
+        if (!isProperName(lastName)) {
+          setSingleFieldError('last_name', 'Enter a valid last name (letters only, e.g. Sharma).');
           setActiveNavSection(currentId as NavItemId);
           return false;
         }
@@ -2516,10 +2546,10 @@ export function StudentAddPanel() {
     const cleanFirstName = sanitizeText(firstName);
     const cleanLastName = sanitizeText(lastName);
     if (!cleanFirstName) nextErrors.first_name = "First name is required";
-    else if (!isAlphabetsOnly(cleanFirstName)) nextErrors.first_name = "First name can contain only letters, spaces, apostrophe, and hyphen";
+    else if (!isProperName(cleanFirstName)) nextErrors.first_name = "Enter a valid first name (letters only, e.g. Rahul)";
 
     if (!cleanLastName) nextErrors.last_name = "Last name is required";
-    else if (!isAlphabetsOnly(cleanLastName)) nextErrors.last_name = "Last name can contain only letters, spaces, apostrophe, and hyphen";
+    else if (!isProperName(cleanLastName)) nextErrors.last_name = "Enter a valid last name (letters only, e.g. Sharma)";
 
     if (!dateOfBirth) nextErrors.dob = "Date of birth is required";
     else {
@@ -3900,9 +3930,9 @@ export function StudentAddPanel() {
               </div>
 
               <div className="grid-3 mt-20">
-                <div className="field-wrapper"><label className="field-label">First name <span className="req">*</span></label><input aria-describedby="first_name-error" className={fieldErrors.first_name ? "field-input error" : "field-input"} value={firstName} onChange={(e) => { setFirstName(e.target.value.replace(/[^A-Za-z\s'.-]/g, '')); setSingleFieldError('first_name', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setFirstName(val); if (val.trim() && val.trim().length < 2) { setSingleFieldError('first_name', 'First name must be at least 2 characters'); } }} placeholder="e.g. Rahul" />{fieldErrors.first_name ? <span id="first_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.first_name}</span> : null}</div>
+                <div className="field-wrapper"><label className="field-label">First name <span className="req">*</span></label><input aria-describedby="first_name-error" className={fieldErrors.first_name ? "field-input error" : "field-input"} value={firstName} onChange={(e) => { setFirstName(sanitizeNameInput(e.target.value)); setSingleFieldError('first_name', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setFirstName(val); if (val.trim() && !isProperName(val)) { setSingleFieldError('first_name', 'Enter a valid first name (letters only)'); } }} placeholder="e.g. Rahul" />{fieldErrors.first_name ? <span id="first_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.first_name}</span> : null}</div>
                 <div className="field-wrapper"><label className="field-label">Middle name <span className="badge badge-optional">OPTIONAL</span></label><input className="field-input" title="Middle name" value={customGender} onChange={(e) => setCustomGender(e.target.value)} placeholder="e.g. Kumar" /></div>
-                <div className="field-wrapper"><label className="field-label">Last name <span className="req">*</span></label><input aria-describedby="last_name-error" className={fieldErrors.last_name ? "field-input error" : "field-input"} value={lastName} onChange={(e) => { setLastName(e.target.value.replace(/[^A-Za-z\s'.-]/g, '')); setSingleFieldError('last_name', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setLastName(val); if (val.trim() && val.trim().length < 2) { setSingleFieldError('last_name', 'Last name must be at least 2 characters'); } }} placeholder="e.g. Sharma" />{fieldErrors.last_name ? <span id="last_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.last_name}</span> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Last name <span className="req">*</span></label><input aria-describedby="last_name-error" className={fieldErrors.last_name ? "field-input error" : "field-input"} value={lastName} onChange={(e) => { setLastName(sanitizeNameInput(e.target.value)); setSingleFieldError('last_name', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setLastName(val); if (val.trim() && !isProperName(val)) { setSingleFieldError('last_name', 'Enter a valid last name (letters only)'); } }} placeholder="e.g. Sharma" />{fieldErrors.last_name ? <span id="last_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.last_name}</span> : null}</div>
               </div>
 
               <div className="grid-3 mt-20">

@@ -10,6 +10,7 @@ from .views import (
     PaymentDetailAPIView,
     FeeAssignmentSummaryAPIView,
     FeeAssignmentOverdueAPIView,
+    FeeAssignmentDuesRemindersAPIView,
     FeeAssignmentCarryForwardAPIView,
     PaymentReceiptAPIView,
     PaymentTransitionAPIView,
@@ -67,6 +68,7 @@ urlpatterns = [
     # Custom Assignment Actions
     path('assignments/summary/', FeeAssignmentSummaryAPIView.as_view(), name='fee-assignment-summary'),
     path('assignments/overdue/', FeeAssignmentOverdueAPIView.as_view(), name='fee-assignment-overdue'),
+    path('assignments/dues-reminders/', FeeAssignmentDuesRemindersAPIView.as_view(), name='fee-assignment-dues-reminders'),
     path('assignments/carry-forward/', FeeAssignmentCarryForwardAPIView.as_view(), name='fee-assignment-carry-forward'),
 
     # Payments

@@ -602,6 +602,7 @@ export default function FeeConfigurationPanel() {
   const [concessionStatus, setConcessionStatus] = useState<"Active" | "Inactive">("Active");
   const [isSavingConcession, setIsSavingConcession] = useState(false);
   const [deletingConcessionId, setDeletingConcessionId] = useState<number | null>(null);
+  const [editingConcessionId, setEditingConcessionId] = useState<number | null>(null);
 
   // ── Late Fee Rules state ──
   const [lateFeeRules, setLateFeeRules] = useState<LateFeeRule[]>([]);
@@ -612,6 +613,7 @@ export default function FeeConfigurationPanel() {
   const [lateFeeCap, setLateFeeCap] = useState("");
   const [isSavingLateFee, setIsSavingLateFee] = useState(false);
   const [deletingLateFeeId, setDeletingLateFeeId] = useState<number | null>(null);
+  const [editingLateFeeId, setEditingLateFeeId] = useState<number | null>(null);
 
   // ── Add Fee Schedule inline form ──
   const [showAddForm, setShowAddForm] = useState(false);
@@ -1357,25 +1359,46 @@ export default function FeeConfigurationPanel() {
     }
     setIsSavingConcession(true);
     try {
-      await feesApi.createConcessionRule({
+      const payload = {
         name: concessionName.trim(),
         applies_to: concessionAppliesTo.trim(),
         discount_percentage: concessionDiscount === "" ? "0" : concessionDiscount,
         status: concessionStatus,
-      });
-      showToast("Concession rule added.");
-      setConcessionName("");
-      setConcessionAppliesTo("");
-      setConcessionDiscount("");
-      setConcessionStatus("Active");
+      };
+
+      if (editingConcessionId) {
+        await feesApi.updateConcessionRule(editingConcessionId, payload);
+        showToast("Concession rule updated.");
+      } else {
+        await feesApi.createConcessionRule(payload);
+        showToast("Concession rule added.");
+      }
+      
+      handleCancelEditConcession();
       fetchConcessionRules();
     } catch (error) {
       const e = error as { details?: unknown; message?: string };
       const mapped = mapApiFieldErrors(e.details);
-      showToast((Object.values(mapped)[0] as string) || e.message || "Failed to add concession rule.");
+      showToast((Object.values(mapped)[0] as string) || e.message || "Failed to save concession rule.");
     } finally {
       setIsSavingConcession(false);
     }
+  };
+
+  const handleEditConcessionClick = (rule: ConcessionRule) => {
+    setConcessionName(rule.name);
+    setConcessionAppliesTo(rule.applies_to || "");
+    setConcessionDiscount(rule.discount_percentage ? rule.discount_percentage.toString() : "");
+    setConcessionStatus(rule.status === "Inactive" ? "Inactive" : "Active");
+    setEditingConcessionId(rule.id);
+  };
+
+  const handleCancelEditConcession = () => {
+    setConcessionName("");
+    setConcessionAppliesTo("");
+    setConcessionDiscount("");
+    setConcessionStatus("Active");
+    setEditingConcessionId(null);
   };
 
   const handleDeleteConcession = async (rule: ConcessionRule) => {
@@ -1412,26 +1435,47 @@ export default function FeeConfigurationPanel() {
     }
     setIsSavingLateFee(true);
     try {
-      await feesApi.createLateFeeRule({
+      const payload = {
         name: lateFeeName.trim(),
         grace_period_days: Number(lateFeeGrace) || 0,
         penalty_rule: lateFeePenalty.trim(),
         cap_amount: lateFeeCap.trim() === "" ? null : lateFeeCap.trim(),
         status: "Active",
-      });
-      showToast("Late fee rule added.");
-      setLateFeeName("");
-      setLateFeeGrace("");
-      setLateFeePenalty("");
-      setLateFeeCap("");
+      };
+
+      if (editingLateFeeId) {
+        await feesApi.updateLateFeeRule(editingLateFeeId, payload);
+        showToast("Late fee rule updated.");
+      } else {
+        await feesApi.createLateFeeRule(payload);
+        showToast("Late fee rule added.");
+      }
+      
+      handleCancelEditLateFee();
       fetchLateFeeRules();
     } catch (error) {
       const e = error as { details?: unknown; message?: string };
       const mapped = mapApiFieldErrors(e.details);
-      showToast((Object.values(mapped)[0] as string) || e.message || "Failed to add late fee rule.");
+      showToast((Object.values(mapped)[0] as string) || e.message || "Failed to save late fee rule.");
     } finally {
       setIsSavingLateFee(false);
     }
+  };
+
+  const handleEditLateFeeClick = (rule: LateFeeRule) => {
+    setLateFeeName(rule.name);
+    setLateFeeGrace(rule.grace_period_days ? rule.grace_period_days.toString() : "");
+    setLateFeePenalty(rule.penalty_rule || "");
+    setLateFeeCap(rule.cap_amount ? rule.cap_amount.toString() : "");
+    setEditingLateFeeId(rule.id);
+  };
+
+  const handleCancelEditLateFee = () => {
+    setLateFeeName("");
+    setLateFeeGrace("");
+    setLateFeePenalty("");
+    setLateFeeCap("");
+    setEditingLateFeeId(null);
   };
 
   const handleDeleteLateFee = async (rule: LateFeeRule) => {
@@ -3578,7 +3622,9 @@ export default function FeeConfigurationPanel() {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Create form */}
       <div style={card}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>Create Concession Rule</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>
+          {editingConcessionId ? "Edit Concession Rule" : "Create Concession Rule"}
+        </div>
         <div style={{ fontSize: 12.5, color: "#A0A3B8", marginBottom: 18 }}>
           Rows update immediately — each action maps to a feesApi call in production.
         </div>
@@ -3603,13 +3649,24 @@ export default function FeeConfigurationPanel() {
             </select>
           </div>
         </div>
-        <button
-          style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
-          onClick={handleCreateConcession}
-          disabled={isSavingConcession}
-        >
-          {isSavingConcession ? "Saving..." : "Add"}
-        </button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button
+            style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
+            onClick={handleCreateConcession}
+            disabled={isSavingConcession}
+          >
+            {isSavingConcession ? "Saving..." : editingConcessionId ? "Save Changes" : "Add"}
+          </button>
+          {editingConcessionId && (
+            <button
+              style={{ ...outlineBtn(), minWidth: 100 }}
+              onClick={handleCancelEditConcession}
+              disabled={isSavingConcession}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -3635,9 +3692,14 @@ export default function FeeConfigurationPanel() {
                   <td style={{ ...tdStyle, fontWeight: 600 }}>{r.discount_percentage != null ? `${r.discount_percentage}%` : "—"}</td>
                   <td style={tdStyle}>{statusPill(r.status === "Active" ? "Active" : "Inactive")}</td>
                   <td style={tdStyle}>
-                    <button style={dangerBtn(true)} onClick={() => handleDeleteConcession(r)} disabled={deletingConcessionId === r.id}>
-                      {deletingConcessionId === r.id ? "Deleting..." : "Delete"}
-                    </button>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button style={outlineBtn(true)} onClick={() => handleEditConcessionClick(r)}>
+                        Edit
+                      </button>
+                      <button style={dangerBtn(true)} onClick={() => handleDeleteConcession(r)} disabled={deletingConcessionId === r.id}>
+                        {deletingConcessionId === r.id ? "Deleting..." : "Delete"}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -3654,7 +3716,9 @@ export default function FeeConfigurationPanel() {
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {/* Create form */}
       <div style={card}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>Create Late Fee Rule</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#181B2A", marginBottom: 3 }}>
+          {editingLateFeeId ? "Edit Late Fee Rule" : "Create Late Fee Rule"}
+        </div>
         <div style={{ fontSize: 12.5, color: "#A0A3B8", marginBottom: 18 }}>
           Rows update immediately — each action maps to a feesApi call in production.
         </div>
@@ -3676,13 +3740,24 @@ export default function FeeConfigurationPanel() {
             <input type="number" min="0" placeholder="1500" style={inputField("1500")} value={lateFeeCap} onChange={e => setLateFeeCap(e.target.value)} />
           </div>
         </div>
-        <button
-          style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
-          onClick={handleCreateLateFee}
-          disabled={isSavingLateFee}
-        >
-          {isSavingLateFee ? "Saving..." : "Add"}
-        </button>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button
+            style={{ ...primaryBtn(), minWidth: 160, paddingLeft: 32, paddingRight: 32 }}
+            onClick={handleCreateLateFee}
+            disabled={isSavingLateFee}
+          >
+            {isSavingLateFee ? "Saving..." : editingLateFeeId ? "Save Changes" : "Add"}
+          </button>
+          {editingLateFeeId && (
+            <button
+              style={{ ...outlineBtn(), minWidth: 100 }}
+              onClick={handleCancelEditLateFee}
+              disabled={isSavingLateFee}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -3708,9 +3783,14 @@ export default function FeeConfigurationPanel() {
                   <td style={tdMuted}>{r.penalty_rule || "—"}</td>
                   <td style={tdMuted}>{r.cap_amount != null ? r.cap_amount : "—"}</td>
                   <td style={tdStyle}>
-                    <button style={dangerBtn(true)} onClick={() => handleDeleteLateFee(r)} disabled={deletingLateFeeId === r.id}>
-                      {deletingLateFeeId === r.id ? "Deleting..." : "Delete"}
-                    </button>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button style={outlineBtn(true)} onClick={() => handleEditLateFeeClick(r)}>
+                        Edit
+                      </button>
+                      <button style={dangerBtn(true)} onClick={() => handleDeleteLateFee(r)} disabled={deletingLateFeeId === r.id}>
+                        {deletingLateFeeId === r.id ? "Deleting..." : "Delete"}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))
