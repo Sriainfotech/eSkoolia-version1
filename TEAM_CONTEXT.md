@@ -1,5 +1,122 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Swetha D (23/06/2026)
+
+**Area:** Fees Module — Year-End Page & Navigation TypeScript
+
+---
+
+### 1. Year-End Page — Edit Fee Amounts Modal (Backend + Frontend)
+
+#### Feature
+Step 3 of the Archive & Rollover wizard has an "Edit Amounts" button per fee group. Clicking it opens a modal to set new-year amounts with optional % hike.
+
+#### Backend: `YearEndGroupAmountsAPIView` (`backend/apps/fees/views.py`)
+
+**GET** `?group_id=<id>` — Returns fee types with current breakdown and amounts for a group.
+
+**Key logic (final version):**
+```python
+# 1. Build name variants to handle "Day Scholar Fee" ↔ "Day Scholar" mismatch
+raw = group.name.strip()
+base = raw
+for suffix in (' fees', ' fee'):
+    if raw.lower().endswith(suffix):
+        base = raw[: len(raw) - len(suffix)].strip()
+        break
+
+group_name_q = Q(name__iexact=raw)
+if base != raw:  # only expand when name has a suffix — avoids "Full Boarder Fee" bleeding into "Full Boarder"
+    group_name_q |= Q(name__iexact=base)
+    group_name_q |= Q(name__iexact=base + ' Fee')
+    group_name_q |= Q(name__iexact=base + ' Fees')
+
+# 2. Find relevant group IDs in the same academic year
+relevant_group_ids = FeesGroup.objects.filter(group_name_q, academic_year=group.academic_year).values_list('id', flat=True)
+
+# 3. Get fee types via group-specific FeeSchedule records — matches exactly what Fee Configuration shows
+ft_ids = FeeSchedule.objects.filter(fee_group_id__in=relevant_group_ids, is_deleted=False).values_list('fee_type_id', flat=True).distinct()
+fee_types = FeesType.objects.filter(id__in=ft_ids).order_by('name')
+```
+
+**Why query via FeeSchedule instead of FeesType directly:**
+The Fee Configuration page builds its group view from `FeeSchedule` records grouped by `fee_group_name`. A fee type only appears under a group if it has a **group-specific schedule** (`fee_group=<group>`). Fee types with only universal schedules (`fee_group=NULL`) don't appear per-group. Matching this logic ensures the year-end modal shows exactly the same fee types as Fee Configuration.
+
+**Schedule lookup per fee type (3-level fallback):**
+1. Group-specific schedule (`fee_group=group`)
+2. Universal schedule (`fee_group__isnull=True`)
+3. Any non-deleted schedule (last resort)
+
+**POST** — Accepts `{ group_id, amounts: [{fee_type_id, new_amount}] }` — validates and stages amounts for rollover (no live data mutation).
+
+#### Bug fixes resolved during development
+
+| Problem | Root cause | Fix |
+|---|---|---|
+| "Day Scholar Fee" showed only 1 of 2 fee types | Fee types split across groups named "Day Scholar Fee" and "Day Scholar" in same year | Name-variant search with suffix stripping |
+| "Full Boarder" showed extra "exam" fee type | "exam" had `FeeSchedule.fee_group=NULL` (universal) but was under Full Boarder's `fees_group` FK | Switched to schedule-based lookup — only group-specific schedules count |
+| Debug endpoint 404 in network tab | `FEES_SOON_BADGE_PATHS` missing in `ModuleSubNav.tsx`; trailing slash stripped by Next.js proxy | Removed debug endpoint and fetch calls entirely |
+
+#### URL registered (`backend/apps/fees/urls.py`)
+```python
+path('year-end/group-amounts/', YearEndGroupAmountsAPIView.as_view(), name='year-end-group-amounts'),
+```
+
+#### Frontend: `frontend/app/(dashboard)/fees/year-end/page.tsx`
+- Fetches fee groups from `/api/v1/fees/groups/` on step 3 entry; deduplicates by name (keeps highest ID)
+- `openEditModal(groupId, groupName)` → calls `feesApi.yearEndGroupAmounts(groupId)` → populates modal rows
+- % hike card: enter a percentage → `Apply` button multiplies all `new_amount` values
+- Per-row editable `new_amount` input with change indicator (`—` / `↑ +X%` / `↓ -X%`)
+- `Save Amounts for Full Boarder` button → calls `feesApi.yearEndSaveGroupAmounts()`
+
+#### Frontend: `frontend/lib/fees-api.ts`
+- Added `YearEndFeeAmountRow` type
+- Added `yearEndGroupAmounts(groupId)` → `GET /api/v1/fees/year-end/group-amounts/?group_id=`
+- Added `yearEndSaveGroupAmounts(groupId, amounts)` → `POST /api/v1/fees/year-end/group-amounts/`
+
+---
+
+### 2. Year-End Page — Layout & UI Fixes
+
+#### Horizontal scroll eliminated
+- Table uses `table-layout: fixed` with `<colgroup>` proportional columns
+- Resolution select: removed `minWidth: 240`, set `width: '100%', boxSizing: 'border-box'`
+- Wrapper div changed from `display: inline-block` to `display: block`
+
+#### "Edit Amounts" button no longer cut off in Step 3 sidebar
+- Added `flexShrink: 0` on button, `flex: 1, minWidth: 0` on text area
+
+---
+
+### 3. Navigation — TypeScript Errors Fixed
+
+#### `frontend/components/nav/ModuleSubNav.tsx`
+- `FEES_SOON_BADGE_PATHS` was commented out (`/**...*/ `) but still referenced at line 155
+- Fix: Restored as `const FEES_SOON_BADGE_PATHS = new Set<string>([]);`
+
+#### `frontend/components/nav/ModulePill.tsx`
+- `new Set([])` inferred as `Set<never>` → `.has(s.path)` (string) failed type-check
+- Fix: Changed to `new Set<string>([])`
+
+#### `frontend/tsconfig.json`
+- Added `"ignoreDeprecations": "5.0"` to silence `baseUrl` deprecation warning from TypeScript 6
+
+---
+
+### Files Changed
+- `backend/apps/fees/views.py` — Added `YearEndGroupAmountsAPIView`; removed `YearEndDebugAPIView`
+- `backend/apps/fees/urls.py` — Registered `year-end/group-amounts/` route; removed debug route
+- `frontend/app/(dashboard)/fees/year-end/page.tsx` — Modal state, fetch logic, full modal JSX
+- `frontend/lib/fees-api.ts` — `YearEndFeeAmountRow` type, `yearEndGroupAmounts`, `yearEndSaveGroupAmounts`
+- `frontend/components/nav/ModuleSubNav.tsx` — Fixed `FEES_SOON_BADGE_PATHS`
+- `frontend/components/nav/ModulePill.tsx` — Fixed `FEES_SOON_BADGE_PATHS` type
+- `frontend/tsconfig.json` — Added `ignoreDeprecations`
+
+### Status
+✅ **COMPLETE** — Edit Fee Amounts modal works for all fee groups. Fee types shown match exactly what Fee Configuration displays. TypeScript errors resolved.
+
+---
+
 ## Update — Swetha D (16/06/2026 – 18/06/2026)
 
 **Branch:** `fees-module-fixes`
