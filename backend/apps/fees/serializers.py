@@ -2,7 +2,7 @@ import re
 from rest_framework import serializers
 from django.db import models
 from decimal import Decimal
-from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule
+from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule, PaymentReconciliation, DueInteraction
 from apps.core.models import Class, AcademicYear
 
 class FeesGroupSerializer(serializers.ModelSerializer):
@@ -201,14 +201,19 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
         read_only_fields = ['created_at', 'created_by', 'status', 'total_paid', 'net_due', 'fees_type_name']
 
     def get_total_paid(self, obj):
-        # This should use the ledger for accuracy
-        paid = obj.payments.filter(status='posted').aggregate(total=models.Sum('amount_paid'))['total'] or Decimal('0.00')
+        # Use prefetch cache when available to avoid N+1 queries
+        if hasattr(obj, '_prefetched_objects_cache') and 'payments' in obj._prefetched_objects_cache:
+            paid = sum(p.amount_paid for p in obj.payments.all() if p.status == 'posted')
+        else:
+            paid = obj.payments.filter(status='posted').aggregate(total=models.Sum('amount_paid'))['total'] or Decimal('0.00')
         return str(paid)
 
     def get_net_due(self, obj):
-        # This should use the ledger for accuracy
         net_amount = obj.amount - obj.discount_amount - obj.concession_amount
-        paid = obj.payments.filter(status='posted').aggregate(total=models.Sum('amount_paid'))['total'] or Decimal('0.00')
+        if hasattr(obj, '_prefetched_objects_cache') and 'payments' in obj._prefetched_objects_cache:
+            paid = sum(p.amount_paid for p in obj.payments.all() if p.status == 'posted')
+        else:
+            paid = obj.payments.filter(status='posted').aggregate(total=models.Sum('amount_paid'))['total'] or Decimal('0.00')
         due = net_amount - paid
         return str(due)
 
@@ -219,11 +224,14 @@ class PaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Payment
         fields = [
-            'id', 'assignment', 'student', 'amount_paid', 'method', 'status', 
-            'paid_at', 'transaction_reference', 'note', 
+            'id', 'assignment', 'student', 'amount_paid', 'method', 'status',
+            'paid_at', 'transaction_reference', 'note',
             'collected_by', 'created_at'
         ]
-        read_only_fields = ['collected_by', 'created_at']
+        # student is derived from assignment.student by the service layer.
+        # status is computed from payment method by the service layer.
+        # Never let the client override these — it would break FeeService.post_payment().
+        read_only_fields = ['student', 'status', 'collected_by', 'created_at']
 
 class TermSettingsSerializer(serializers.ModelSerializer):
     academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)
@@ -389,6 +397,19 @@ class FeeScheduleSerializer(serializers.ModelSerializer):
         return data
 
 
+class DueInteractionSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
+
+    class Meta:
+        model = DueInteraction
+        fields = [
+            'id', 'student', 'interaction_type', 'note',
+            'agreed_amount', 'agreed_date', 'is_resolved',
+            'created_by', 'created_by_name', 'created_at',
+        ]
+        read_only_fields = ['id', 'created_by', 'created_by_name', 'created_at']
+
+
 class _CurrentYearScopedMixin:
     """Shared validate() that auto-assigns the school's current academic year
     on create, keeps the existing one on partial (PATCH) updates, and enforces
@@ -513,3 +534,15 @@ class LateFeeRuleSerializer(_CurrentYearScopedMixin, serializers.ModelSerializer
         data['status'] = 'Active' if instance.status == 'active' else 'Inactive'
         data['cap_amount'] = str(instance.cap_amount) if instance.cap_amount is not None else None
         return data
+
+
+class PaymentReconciliationSerializer(serializers.ModelSerializer):
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True)
+
+    class Meta:
+        model = PaymentReconciliation
+        fields = [
+            'id', 'reference', 'amount', 'method', 'date',
+            'status', 'match_note', 'score', 'notes', 'created_at',
+        ]
+        read_only_fields = ['created_at']

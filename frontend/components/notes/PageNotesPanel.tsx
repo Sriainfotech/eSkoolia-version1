@@ -4,7 +4,6 @@ import { usePathname } from 'next/navigation';
 import { StickyNote, ChevronDown, ChevronUp } from 'lucide-react';
 import { StickyNoteCard, NoteData } from './StickyNoteCard';
 import { getAccessToken } from '@/lib/auth';
-import { API_BASE_URL } from '@/lib/api';
 
 const LS_KEY = (route: string) => `eskoolia_notes_${route.replace(/\//g, '_')}`;
 
@@ -22,7 +21,7 @@ export function PageNotesPanel() {
 
   const fetchNotes = useCallback(() => {
     const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/notes/?route=${encodeURIComponent(pathname)}`, {
+    fetch(`/api/notes/?route=${encodeURIComponent(pathname)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then(r => r.ok ? r.json() : null)

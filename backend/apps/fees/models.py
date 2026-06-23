@@ -448,6 +448,74 @@ class LedgerEntry(models.Model):
     def __str__(self):
         return f"Ledger: {self.student} - {self.entry_type} of {self.amount}"
 
+class PaymentReconciliation(models.Model):
+    """
+    Manual reconciliation record linking an external bank/payment reference
+    to a school's fee receipt.
+    """
+    STATUS_CHOICES = [
+        ('matched',       'Matched'),
+        ('review',        'Review'),
+        ('needs_mapping', 'Needs Mapping'),
+    ]
+    METHOD_CHOICES = [
+        ('cash',   'Cash'),
+        ('bank',   'Bank Transfer'),
+        ('online', 'Online / UPI'),
+        ('cheque', 'Cheque'),
+        ('wallet', 'Wallet'),
+    ]
+
+    school       = models.ForeignKey('tenancy.School', on_delete=models.CASCADE, related_name='reconciliations')
+    reference    = models.CharField(max_length=200, help_text="UTR / cheque number / batch ID")
+    amount       = models.DecimalField(**MONEY_FIELD_KWARGS)
+    method       = models.CharField(max_length=20, choices=METHOD_CHOICES, default='bank')
+    date         = models.DateField()
+    status       = models.CharField(max_length=20, choices=STATUS_CHOICES, default='review')
+    match_note   = models.TextField(blank=True, help_text="Details of the match or candidate receipt")
+    score        = models.PositiveSmallIntegerField(default=0, help_text="Confidence score 0-100")
+    notes        = models.TextField(blank=True)
+
+    created_at   = models.DateTimeField(auto_now_add=True)
+    created_by   = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                                     related_name='created_reconciliations')
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Recon {self.reference} ({self.status})"
+
+
+class DueInteraction(models.Model):
+    """
+    Tracks every follow-up action taken on an overdue student's dues
+    (calls, notes, reminders sent, resolution recorded).
+    """
+    INTERACTION_TYPES = [
+        ('call',     'Phone Call'),
+        ('note',     'Manual Note'),
+        ('reminder', 'Reminder Sent'),
+        ('sms',      'SMS'),
+        ('email',    'Email'),
+        ('resolved', 'Resolved'),
+    ]
+    student          = models.ForeignKey('students.Student', on_delete=models.CASCADE, related_name='due_interactions')
+    interaction_type = models.CharField(max_length=20, choices=INTERACTION_TYPES, default='note')
+    note             = models.TextField()
+    agreed_amount    = models.DecimalField(**MONEY_FIELD_KWARGS, null=True, blank=True)
+    agreed_date      = models.DateField(null=True, blank=True)
+    is_resolved      = models.BooleanField(default=False)
+    created_by       = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='due_interactions')
+    created_at       = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.interaction_type} for {self.student} on {self.created_at.date()}"
+
+
 class AuditEvent(models.Model):
     """
     Records significant state changes or actions for auditing purposes.

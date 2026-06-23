@@ -87,10 +87,24 @@ export type FeesPayment = {
   paid_at: string;
 };
 
+export type FeesReconciliation = {
+  id?: number;
+  reference: string;
+  amount: string;
+  method: "bank" | "online" | "cheque" | "wallet";
+  date: string;
+  status: "matched" | "review" | "needs_mapping";
+  match_note?: string;
+  score?: number;
+  notes?: string;
+  created_at?: string;
+};
+
 export type FeesSummary = {
   count: number;
   total_assigned: string;
   total_discount: string;
+  total_concession: string;
   total_net: string;
   total_paid: string;
   total_due: string;
@@ -218,8 +232,11 @@ export const feesApi = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  listTypes: (params?: FeeTypeListParams) =>
-    apiRequestWithRefresh<PaginatedApiList<FeesType> | ApiList<FeesType>>(`/api/v1/fees/types/${buildQuery(params)}`),
+  listTypes: (params?: FeeTypeListParams) => {
+    // Default to large page_size so all fee types load (backend default is 10)
+    const merged: FeeTypeListParams = { page_size: 1000, ...params };
+    return apiRequestWithRefresh<PaginatedApiList<FeesType> | ApiList<FeesType>>(`/api/v1/fees/types/${buildQuery(merged)}`);
+  },
   getType: (id: number) => apiRequestWithRefresh<FeesType>(`/api/v1/fees/types/${id}/`),
   createType: (payload: Partial<FeesType>) =>
     apiRequestWithRefresh<FeesType>("/api/v1/fees/types/", {
@@ -239,10 +256,11 @@ export const feesApi = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  listAssignments: (params?: { page_size?: number; academic_year?: number }) => {
+  listAssignments: (params?: { page_size?: number; academic_year?: number; student?: string | number }) => {
     const qs = new URLSearchParams();
-    qs.set('page_size', String(params?.page_size ?? 500));
+    qs.set('page_size', String(params?.page_size ?? 10000));
     if (params?.academic_year) qs.set('academic_year', String(params.academic_year));
+    if (params?.student)       qs.set('student', String(params.student));
     return apiRequestWithRefresh<ApiList<FeesAssignment>>(`/api/v1/fees/assignments/?${qs.toString()}`);
   },
   createAssignment: (payload: Partial<FeesAssignment>) =>
@@ -274,7 +292,11 @@ export const feesApi = {
       },
     ),
 
-  listPayments: () => apiRequestWithRefresh<ApiList<FeesPayment>>("/api/v1/fees/payments/"),
+  listPayments: (params?: { page_size?: number }) => {
+    const qs = new URLSearchParams();
+    qs.set('page_size', String(params?.page_size ?? 1000));
+    return apiRequestWithRefresh<ApiList<FeesPayment>>(`/api/v1/fees/payments/?${qs.toString()}`);
+  },
   createPayment: (payload: Partial<FeesPayment>) =>
     apiRequestWithRefresh<FeesPayment>("/api/v1/fees/payments/", {
       method: "POST",
@@ -310,12 +332,15 @@ export const feesApi = {
     }),
 
   listSchedules: (params?: SearchParams & { academic_year?: number }) => {
-    const base = `/api/v1/fees/schedules/${buildSearchQuery(params)}`;
-    if (params?.academic_year) {
-      const sep = base.includes('?') ? '&' : '?';
-      return apiRequestWithRefresh<PaginatedApiList<FeeSchedule> | ApiList<FeeSchedule>>(`${base}${sep}academic_year=${params.academic_year}`);
-    }
-    return apiRequestWithRefresh<PaginatedApiList<FeeSchedule> | ApiList<FeeSchedule>>(base);
+    // Always request a large page — backend default is 10 and would silently truncate results
+    const merged: SearchParams & { academic_year?: number } = { page_size: 1000, ...params };
+    const qs = new URLSearchParams();
+    qs.set('page_size', String(merged.page_size ?? 1000));
+    if (merged.page) qs.set('page', String(merged.page));
+    if (merged.search) qs.set('search', merged.search);
+    if (merged.status) qs.set('status', merged.status);
+    if (merged.academic_year) qs.set('academic_year', String(merged.academic_year));
+    return apiRequestWithRefresh<PaginatedApiList<FeeSchedule> | ApiList<FeeSchedule>>(`/api/v1/fees/schedules/?${qs.toString()}`);
   },
   getSchedule: (id: number) => apiRequestWithRefresh<FeeSchedule>(`/api/v1/fees/schedules/${id}/`),
   createSchedule: (payload: Partial<FeeSchedule>) =>
@@ -389,4 +414,136 @@ export const feesApi = {
     if (params?.academic_year) qs.set('academic_year', String(params.academic_year));
     return apiRequestWithRefresh<ApiList<StudentRow>>(`/api/v1/students/students/?${qs.toString()}`);
   },
+
+  listReconciliations: () =>
+    apiRequestWithRefresh<ApiList<FeesReconciliation>>("/api/v1/fees/reconciliations/?page_size=200"),
+  createReconciliation: (payload: Omit<FeesReconciliation, "id" | "created_at">) =>
+    apiRequestWithRefresh<FeesReconciliation>("/api/v1/fees/reconciliations/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  deleteReconciliation: (id: number) =>
+    apiRequestWithRefresh<void>(`/api/v1/fees/reconciliations/${id}/`, { method: "DELETE" }),
+
+  getMySchoolInfo: () =>
+    apiRequestWithRefresh<{ name: string; address: string; email: string; phone: string; logo_url: string }>(
+      "/api/v1/tenancy/my-school-info/"
+    ),
+
+  // Dues & Reminders
+  getDuesSummary: () =>
+    apiRequestWithRefresh<{
+      total_overdue_amount: string;
+      students_with_dues: number;
+      avg_days_overdue: number;
+      pct_collected: number;
+    }>("/api/v1/fees/dues/summary/"),
+
+  getDuesByClass: (tier?: string) =>
+    apiRequestWithRefresh<DuesClassGroup[]>(
+      `/api/v1/fees/dues/by-class/${tier ? `?tier=${tier}` : ""}`
+    ),
+
+  getDueInteractions: (studentId: string) =>
+    apiRequestWithRefresh<DueInteraction[]>(
+      `/api/v1/fees/dues/interactions/?student=${studentId}`
+    ),
+
+  createDueInteraction: (data: {
+    student: string;
+    interaction_type: string;
+    note: string;
+    agreed_amount?: string;
+    agreed_date?: string;
+  }) =>
+    apiRequestWithRefresh<DueInteraction>("/api/v1/fees/dues/interactions/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+
+  resolveStudentDue: (studentId: string, note?: string) =>
+    apiRequestWithRefresh<DueInteraction>("/api/v1/fees/dues/resolve/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ student_id: studentId, note }),
+    }),
+
+  sendDueReminders: (studentIds: string[], message: string) =>
+    apiRequestWithRefresh<{ sent: number; interaction_ids: number[] }>(
+      "/api/v1/fees/dues/send-reminder/",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_ids: studentIds, message }),
+      }
+    ),
+
+  exportDuesCSV: () =>
+    fetch("/api/v1/fees/dues/export-csv/", {
+      headers: { Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("access_token") || "" : ""}` },
+    }),
+
+  yearEndReportCSV: (reportType: string) =>
+    fetch(`/api/v1/fees/year-end/report/?report_type=${reportType}`, {
+      headers: { Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("access_token") || "" : ""}` },
+    }),
+
+  yearEndGroupAmounts: (groupId: number) =>
+    apiRequestWithRefresh<{ group_id: number; group_name: string; fee_types: YearEndFeeAmountRow[] }>(
+      `/api/v1/fees/year-end/group-amounts/?group_id=${groupId}`
+    ),
+
+  yearEndSaveGroupAmounts: (groupId: number, amounts: { fee_type_id: number; new_amount: string }[]) =>
+    apiRequestWithRefresh<{ status: string; message: string; updated_count: number }>(
+      `/api/v1/fees/year-end/group-amounts/`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group_id: groupId, amounts }),
+      }
+    ),
+};
+
+export type YearEndFeeAmountRow = {
+  id: number;
+  name: string;
+  breakdown: string;
+  current_total: string;
+  schedule_type: string;
+  new_amount: string;
+  is_deleted?: boolean;
+};
+
+export type DuesClassGroup = {
+  cls: string;
+  total_students: number;
+  assigned_students: number;
+  students: DueStudent[];
+};
+
+export type DueStudent = {
+  id: string;
+  name: string;
+  admNo: string;
+  cls: string;
+  amount_due: string;
+  days_overdue: number;
+  last_reminder: string | null;
+  status: "Overdue" | "Payment Watch" | "Escalated" | "Defaulter";
+  is_resolved: boolean;
+};
+
+export type DueInteraction = {
+  id: number;
+  student: string;
+  interaction_type: string;
+  note: string;
+  agreed_amount: string | null;
+  agreed_date: string | null;
+  is_resolved: boolean;
+  created_by: number;
+  created_by_name: string;
+  created_at: string;
 };

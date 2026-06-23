@@ -1,7 +1,7 @@
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .models import School
@@ -75,4 +75,31 @@ def school_info_view(request):
             "status": tenant.status,
         })
     except Exception:
+        return Response({"error": "School not found"}, status=404)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def my_school_info_view(request):
+    """Authenticated endpoint — returns the current user's school details for receipts and documents."""
+    school_id = getattr(request.user, "school_id", None)
+    if not school_id:
+        return Response({"error": "No school associated with this account"}, status=404)
+    try:
+        school = School.objects.get(id=school_id)
+        address_parts = []
+        if school.campus_address:
+            address_parts.append(school.campus_address.strip())
+        if school.city:
+            address_parts.append(school.city)
+        if school.pin_code:
+            address_parts.append(school.pin_code)
+        return Response({
+            "name": school.name,
+            "address": ", ".join(address_parts),
+            "email": school.principal_email or "",
+            "phone": school.principal_phone or "",
+            "logo_url": school.logo_url or "",
+        })
+    except School.DoesNotExist:
         return Response({"error": "School not found"}, status=404)

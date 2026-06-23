@@ -18,10 +18,7 @@ const COMING_SOON_PATHS = new Set([
   '/hr/leave', '/hr/offboarding',
 ]);
 
-const FEES_SOON_BADGE_PATHS = new Set([
-  '/fees/fee-assignment', '/fees/collection', '/fees/dues-reminders',
-  '/fees/year-end', '/fees/enroll-student',
-]);
+const FEES_SOON_BADGE_PATHS = new Set<string>([]);
 
 export function ModulePill({ mod, exactMatch = false }: { mod: ModuleRoute; exactMatch?: boolean }) {
   const comingSoon = COMING_SOON_IDS.has(mod.id);

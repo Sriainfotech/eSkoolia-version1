@@ -10,7 +10,7 @@ type Schedule  = "Term-wise" | "Monthly" | "Custom";
 interface Student { id: string; name: string; admNo: string; category: Category; planAgreed: boolean; }
 interface ClassSection { id: string; name: string; students: Student[]; }
 interface FeeRow { type: string; schedule: Schedule; howPaid: string; annual: number; }
-interface Override { group: string; annual: number; }
+interface Override { group: string; annual: number; concession?: string; }
 
 // ── Fee data ───────────────────────────────────────────────────────────────────
 
@@ -84,6 +84,13 @@ function ModalFooter({ children }: { children:React.ReactNode }) {
 }
 
 // ── Fee schedule table (shared by Assign + Edit modals) ────────────────────────
+function parseConcessionPct(c: string): number {
+  const m = c.match(/(\d+(\.\d+)?)\s*%/);
+  if (m) return parseFloat(m[1]) / 100;
+  if (/full/i.test(c)) return 1;
+  return 0;
+}
+
 function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange, feeSchedules, concessions, groups }: {
   group:string; concession:string;
   onGroupChange:(g:string)=>void; onConcessionChange:(c:string)=>void;
@@ -91,7 +98,8 @@ function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange
   groups: any[];
 }) {
   const rows  = feeSchedules[group] ?? [];
-  const total = rows.reduce((s,r)=>s+r.annual,0);
+  const pct   = parseConcessionPct(concession);
+  const total = rows.reduce((s,r) => s + r.annual * (1 - pct), 0);
   return (
     <div style={{ padding:"14px 20px" }}>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, marginBottom:18 }}>
@@ -129,7 +137,12 @@ function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange
               <div style={{ fontSize:12.5, color:"#181B2A" }}>{row.type}</div>
               <div><span style={{ fontSize:10.5, fontWeight:600, padding:"2px 9px", borderRadius:20, background:b.bg, color:b.color, border:`1px solid ${b.border}` }}>{row.schedule}</span></div>
               <div style={{ fontSize:12, color:"#5B5E72" }}>{row.howPaid}</div>
-              <div style={{ fontSize:12.5, fontWeight:600, color:"#181B2A", textAlign:"right", minWidth:66 }}>{fmtInr(row.annual)}</div>
+              <div style={{ fontSize:12.5, fontWeight:600, color:"#181B2A", textAlign:"right", minWidth:66 }}>
+                {pct > 0
+                  ? <><span style={{ textDecoration:"line-through", color:"#A0A3B8", fontSize:11, marginRight:5 }}>{fmtInr(row.annual)}</span>{fmtInr(row.annual * (1 - pct))}</>
+                  : fmtInr(row.annual)
+                }
+              </div>
             </div>
           );
         })}
@@ -308,7 +321,7 @@ export default function FeesAssignmentPanel() {
       feeTypes.map((t) => [String(t.id), t.name || t.fee_type_name || `Fee Type #${t.id}`])
     );
     groups.forEach(g => {
-      const gScheds = schedules.filter(s => s.fee_group === g.id);
+      const gScheds = schedules.filter(s => String(s.fee_group) === String(g.id));
       map[g.name] = gScheds.map(s => ({
         type:
           s.fee_type_name ||
@@ -331,6 +344,47 @@ export default function FeesAssignmentPanel() {
     return map;
   }, [FEE_SCHEDULES, groups]);
 
+  // Deduped assignments: latest record per student+fees_type (handles stale duplicates in DB).
+  const LATEST_ASSIGNMENTS = useMemo(() => {
+    const latest: Record<string, any> = {};
+    assignments.forEach((a: any) => {
+      const key = `${a.student}-${a.fees_type}`;
+      if (!latest[key] || Number(a.id) > Number(latest[key].id)) {
+        latest[key] = a;
+      }
+    });
+    return Object.values(latest);
+  }, [assignments]);
+
+  // Inferred concession percentage per student — derived from the first deduped assignment
+  // that carries a non-zero concession_amount. Used so the list total stays consistent
+  // with the modal (which computes from schedule × pct) even when some fee types
+  // did not get their concession_amount saved yet.
+  const STUDENT_CONCESSION_PCT = useMemo(() => {
+    const map: Record<string, number> = {};
+    LATEST_ASSIGNMENTS.forEach((a: any) => {
+      const sid = String(a.student);
+      if (map[sid] != null) return;
+      const concAmt = parseFloat(a.concession_amount || '0');
+      const amt     = parseFloat(a.amount || '0');
+      if (concAmt > 0 && amt > 0) map[sid] = concAmt / amt;
+    });
+    return map;
+  }, [LATEST_ASSIGNMENTS]);
+
+  // Net annual per student from DB (fallback when no schedule rows available).
+  const STUDENT_NET_ANNUAL = useMemo(() => {
+    const map: Record<string, number> = {};
+    LATEST_ASSIGNMENTS.forEach((a: any) => {
+      const sid = String(a.student);
+      const net = parseFloat(a.amount || '0')
+                - parseFloat(a.discount_amount || '0')
+                - parseFloat(a.concession_amount || '0');
+      map[sid] = (map[sid] || 0) + net;
+    });
+    return map;
+  }, [LATEST_ASSIGNMENTS]);
+
   const CONCESSIONS = ["None", "Staff Ward 50%", "Merit 25%", "Need-Based Full", "Sibling 10%"];
 
   const CLASS_DATA = useMemo(() => {
@@ -343,14 +397,17 @@ export default function FeesAssignmentPanel() {
         classMap.set(clsId, { id: clsId, name: st.current_class_name || "Unassigned", students: [] });
       }
       
-      const stAsgns = assignments.filter(a => a.student === st.id);
+      // Use String() — API can return IDs as number or string (same fix as CollectionPanel)
+      const stAsgns = assignments.filter(a => String(a.student) === String(st.id));
       const isAssigned = stAsgns.length > 0;
       let cat = "Unassigned";
       if (isAssigned) {
          const asgn = stAsgns[0];
-         const sched = schedules.find(s => s.fee_type === asgn.fees_type || (s.fee_type && s.fee_type.id === asgn.fees_type));
+         const sched = schedules.find(s =>
+           String(typeof s.fee_type === "object" && s.fee_type !== null ? (s.fee_type as any).id : s.fee_type) === String(asgn.fees_type)
+         );
          if (sched) {
-            const grp = groups.find(g => g.id === sched.fee_group);
+            const grp = groups.find(g => String(g.id) === String(sched.fee_group));
             if (grp) cat = grp.name;
          } else {
             cat = "Assigned";
@@ -441,67 +498,129 @@ export default function FeesAssignmentPanel() {
 
   // Actions
   const openAssignModal = (st: Student, clsName: string) => { const firstGroup = groups[0]?.name ?? ""; setAssignModal({student:st,clsName,isEdit:false}); setModalGroup(firstGroup); setModalConcession("None"); };
-  const openEditModal   = (st: Student, clsName: string) => { setAssignModal({student:st,clsName,isEdit:true}); setModalGroup((overrides[st.id]?.group??st.category) as string); setModalConcession("None"); };
+  const openEditModal   = (st: Student, clsName: string) => {
+    setAssignModal({student:st,clsName,isEdit:true});
+    setModalGroup((overrides[st.id]?.group ?? st.category) as string);
+
+    // If override state has a concession (same session), use it directly.
+    if (overrides[st.id]?.concession) {
+      setModalConcession(overrides[st.id].concession!);
+      return;
+    }
+
+    // After a page refresh the override state is gone.
+    // Infer the concession label from the concession_amount stored in DB:
+    // deduplicate by fees_type (keep highest id), then find the ratio on the
+    // first assignment that has a non-zero concession.
+    const stAsgns = assignments.filter((a: any) => String(a.student) === String(st.id));
+    const latestPerType: Record<string, any> = {};
+    stAsgns.forEach((a: any) => {
+      const k = String(a.fees_type);
+      if (!latestPerType[k] || Number(a.id) > Number(latestPerType[k].id)) latestPerType[k] = a;
+    });
+    let inferred = "None";
+    for (const a of Object.values(latestPerType)) {
+      const concAmt = parseFloat(a.concession_amount || '0');
+      const amt     = parseFloat(a.amount || '0');
+      if (concAmt > 0 && amt > 0) {
+        const pct     = concAmt / amt;
+        const matched = CONCESSIONS.find(c => Math.abs(parseConcessionPct(c) - pct) < 0.01);
+        if (matched && matched !== "None") { inferred = matched; break; }
+      }
+    }
+    setModalConcession(inferred);
+  };
   const openChangePlan  = (st: Student)                   => { setChangePlanModal({student:st}); setSelectedPlan("3-term"); setPlanReason(""); };
   const openBulkModal   = (clsId: string, clsName: string) => { const firstGroup = groups[0]?.name ?? ""; setBulkModal({clsId,clsName}); setBulkClass(clsId); setBulkGroup(firstGroup); };
 
   const confirmAssign = async () => {
     if(!assignModal) return;
-    const rows  = FEE_SCHEDULES[modalGroup]??[];
-    const total = rows.reduce((s,r)=>s+r.annual,0);
+    const rows = FEE_SCHEDULES[modalGroup]??[];
+
+    // Validate pre-conditions before attempting any DB write
+    if (!yearFilter) {
+      showToast("Please select an academic year before saving.");
+      return;
+    }
 
     // Find ALL fee schedules for the selected group (one per fee type)
     const grp = groups.find(g => g.name === modalGroup);
-    const matchingSchedules = grp ? schedules.filter(s => s.fee_group === grp.id) : [];
+    // Use String() comparison — API can return IDs as number or string depending on serializer
+    const matchingSchedules = grp ? schedules.filter(s => String(s.fee_group) === String(grp.id)) : [];
 
-    if (matchingSchedules.length > 0 && yearFilter) {
-      setSaving(true);
-      try {
-        for (const matchingSchedule of matchingSchedules) {
-          const feeTypeId = typeof matchingSchedule.fee_type === 'object' && matchingSchedule.fee_type !== null
-            ? (matchingSchedule.fee_type as any).id
-            : Number(matchingSchedule.fee_type);
+    if (matchingSchedules.length === 0) {
+      showToast(`No fee schedules found for "${modalGroup}". Please create fee schedules for this group first (Fee Schedules section).`);
+      return;
+    }
 
-          // Check if an existing assignment already exists for this student+fee_type
-          const existingAsgn = assignments.find(
-            a => String(a.student) === String(assignModal.student.id) &&
-                 String(a.fees_type) === String(feeTypeId)
-          );
+    setSaving(true);
+    const errors: string[] = [];
+    // Track fee_types processed in this run so multiple schedules for the same fee_type
+    // (e.g. two installment rows) don't create duplicate assignments.
+    const processedFeeTypes = new Set<number>();
+    try {
+      for (const matchingSchedule of matchingSchedules) {
+        const feeTypeId = typeof matchingSchedule.fee_type === 'object' && matchingSchedule.fee_type !== null
+          ? (matchingSchedule.fee_type as any).id
+          : Number(matchingSchedule.fee_type);
 
-          const payload = {
-            academic_year:     Number(yearFilter),
-            student:           Number(assignModal.student.id),
-            fees_type:         feeTypeId,
-            due_date:          matchingSchedule.due_date,
-            amount:            matchingSchedule.amount,
-            discount_amount:   '0.00',
-            concession_amount: '0.00',
-          };
+        if (processedFeeTypes.has(feeTypeId)) continue;
+        processedFeeTypes.add(feeTypeId);
 
+        const existingAsgn = assignments.find(
+          a => String(a.student) === String(assignModal.student.id) &&
+               String(a.fees_type) === String(feeTypeId)
+        );
+
+        const rawAmount = parseFloat(matchingSchedule.amount || '0');
+        const concPct   = parseConcessionPct(modalConcession);
+        const concAmt   = (rawAmount * concPct).toFixed(2);
+
+        const payload: Record<string, unknown> = {
+          academic_year:     Number(yearFilter),
+          student:           Number(assignModal.student.id),
+          fees_type:         feeTypeId,
+          amount:            matchingSchedule.amount,
+          discount_amount:   '0.00',
+          concession_amount: concAmt,
+        };
+        if (matchingSchedule.due_date) payload.due_date = matchingSchedule.due_date;
+
+        try {
           if (existingAsgn) {
             await feesApi.updateAssignment(existingAsgn.id, payload);
           } else {
             await feesApi.createAssignment(payload);
           }
+        } catch (itemErr: any) {
+          const msg = itemErr?.message || String(itemErr);
+          console.error(`Failed for fee type ${feeTypeId}:`, itemErr);
+          errors.push(`${matchingSchedule.fee_type_name || feeTypeId}: ${msg}`);
         }
-
-        // Refresh assignments from backend so stats reflect DB truth
-        const fresh = await feesApi.listAssignments({ academic_year: Number(yearFilter) });
-        const freshData = listData(fresh);
-        setAssignments(freshData);
-      } catch (err) {
-        console.error('Failed to save assignment:', err);
-        const errorMessage = err instanceof Error ? err.message : 'Save failed';
-        showToast(errorMessage);
-        setSaving(false);
-        return;
-      } finally {
-        setSaving(false);
       }
+
+      // Refresh assignments from backend so stats reflect DB truth
+      const fresh = await feesApi.listAssignments({ academic_year: Number(yearFilter) });
+      const freshData = listData(fresh);
+      setAssignments(freshData);
+    } catch (err) {
+      console.error('Failed to save assignments:', err);
+      showToast(err instanceof Error ? err.message : 'Save failed');
+      setSaving(false);
+      return;
+    } finally {
+      setSaving(false);
     }
 
-    // Optimistically update local UI regardless
-    setOverrides(prev=>({...prev,[assignModal.student.id]:{group:modalGroup,annual:total}}));
+    if (errors.length > 0) {
+      showToast(`Partial save — ${errors.length} fee type(s) failed: ${errors[0]}`);
+      return;
+    }
+
+    // Only update UI after confirmed DB write — store net annual (after concession)
+    const concPctSave = parseConcessionPct(modalConcession);
+    const netTotal    = rows.reduce((s, r) => s + r.annual * (1 - concPctSave), 0);
+    setOverrides(prev=>({...prev,[assignModal.student.id]:{group:modalGroup,annual:netTotal,concession:modalConcession}}));
     setAssignModal(null);
     showToast(`${assignModal.isEdit?"Assignment updated":"Fees assigned"} for ${assignModal.student.name} — ${modalGroup}.`);
   };
@@ -513,18 +632,111 @@ export default function FeesAssignmentPanel() {
     showToast(`Payment plan switched to ${plan?.label} for ${changePlanModal.student.name}.`);
   };
 
-  const confirmBulkAssign = () => {
-    const targetIds = bulkClass==="all" ? CLASS_DATA.map(c=>c.id) : [bulkClass];
-    const rows = FEE_SCHEDULES[bulkGroup]??[];
-    const total= rows.reduce((s,r)=>s+r.annual,0);
-    const newOv: Record<string,Override>={};
-    for(const cls of CLASS_DATA){
-      if(!targetIds.includes(cls.id)) continue;
-      for(const st of cls.students) if(!isAssigned(st)) newOv[st.id]={group:bulkGroup,annual:total};
+  const confirmBulkAssign = async () => {
+    if (!yearFilter) {
+      showToast("Please select an academic year before bulk assigning.");
+      return;
     }
-    setOverrides(prev=>({...prev,...newOv}));
+
+    const targetIds = bulkClass === "all" ? CLASS_DATA.map(c => c.id) : [bulkClass];
+    const rows = FEE_SCHEDULES[bulkGroup] ?? [];
+    const total = rows.reduce((s, r) => s + r.annual, 0);
+
+    const grp = groups.find(g => g.name === bulkGroup);
+    const matchingSchedules = grp ? schedules.filter(s => String(s.fee_group) === String(grp.id)) : [];
+
+    if (matchingSchedules.length === 0) {
+      showToast(`No fee schedules found for "${bulkGroup}". Please create fee schedules for this group first.`);
+      return;
+    }
+
+    // If specific rows are checked, assign only those students.
+    // Otherwise, assign to ALL unassigned students in the target class(es).
+    const hasSelection = selected.size > 0;
+    const unassignedStudents: Student[] = [];
+    for (const cls of CLASS_DATA) {
+      if (!targetIds.includes(cls.id)) continue;
+      for (const st of cls.students) {
+        if (hasSelection && !selected.has(st.id)) continue; // skip non-selected rows when a selection exists
+        if (!isAssigned(st)) unassignedStudents.push(st);
+      }
+    }
+
+    if (unassignedStudents.length === 0) {
+      showToast(hasSelection
+        ? "All selected students are already assigned."
+        : `All students in ${bulkClass === "all" ? "all classes" : "this class"} are already assigned.`
+      );
+      return;
+    }
+
+    setSaving(true);
+    let successCount = 0;
+    const errors: string[] = [];
+
+    try {
+      for (const st of unassignedStudents) {
+        // Track fee_types already processed for this student in this run
+        // so duplicate schedules for the same fee_type don't create duplicate assignments.
+        const processedFeeTypes = new Set<number>();
+        for (const matchingSchedule of matchingSchedules) {
+          const feeTypeId = typeof matchingSchedule.fee_type === 'object' && matchingSchedule.fee_type !== null
+            ? (matchingSchedule.fee_type as any).id
+            : Number(matchingSchedule.fee_type);
+
+          if (processedFeeTypes.has(feeTypeId)) continue;
+          processedFeeTypes.add(feeTypeId);
+
+          const existingAsgn = assignments.find(
+            a => String(a.student) === String(st.id) &&
+                 String(a.fees_type) === String(feeTypeId)
+          );
+
+          if (existingAsgn) continue; // skip already-assigned
+
+          const payload = {
+            academic_year:     Number(yearFilter),
+            student:           Number(st.id),
+            fees_type:         feeTypeId,
+            due_date:          matchingSchedule.due_date,
+            amount:            matchingSchedule.amount,
+            discount_amount:   '0.00',
+            concession_amount: '0.00',
+          };
+
+          try {
+            await feesApi.createAssignment(payload);
+            successCount++;
+          } catch (itemErr: any) {
+            errors.push(`${st.name}: ${itemErr?.message || String(itemErr)}`);
+          }
+        }
+      }
+
+      // Refresh from backend
+      const fresh = await feesApi.listAssignments({ academic_year: Number(yearFilter) });
+      setAssignments(listData(fresh));
+
+      // Update local UI overrides for the successfully processed students
+      const newOv: Record<string, Override> = {};
+      for (const st of unassignedStudents) newOv[st.id] = { group: bulkGroup, annual: total };
+      setOverrides(prev => ({ ...prev, ...newOv }));
+    } catch (err) {
+      console.error('Bulk assign failed:', err);
+      showToast(err instanceof Error ? err.message : 'Bulk assign failed');
+      setSaving(false);
+      return;
+    } finally {
+      setSaving(false);
+    }
+
     setBulkModal(null);
-    showToast(`Bulk assigned ${Object.keys(newOv).length} students to ${bulkGroup}.`);
+    setSelected(new Set()); // clear row checkboxes after assign
+    if (errors.length > 0) {
+      showToast(`Bulk assign: ${successCount} succeeded, ${errors.length} failed — ${errors[0]}`);
+    } else {
+      showToast(`Bulk assigned ${unassignedStudents.length} student(s) to ${bulkGroup}.`);
+    }
   };
 
   const toggleExpand = (id:string)=>setExpanded(prev=>{const n=new Set(prev);n.has(id)?n.delete(id):n.add(id);return n;});
@@ -659,7 +871,19 @@ export default function FeesAssignmentPanel() {
                         const ov      = overrides[st.id];
                         const asgnd   = isAssigned(st);
                         const eCat    = effectiveCat(st);
-                        const annual  = ov ? ov.annual : ANNUAL_FEE[st.category as Category];
+                        // Annual total: use schedule amounts × inferred concession % so the
+                        // list always matches the Edit Assignment modal, even when some
+                        // concession_amounts haven't been persisted to DB yet.
+                        const annual  = (() => {
+                          if (!asgnd) return ANNUAL_FEE[st.category as Category] ?? null;
+                          if (ov) return ov.annual;
+                          const schedRows = FEE_SCHEDULES[eCat] ?? [];
+                          if (schedRows.length > 0) {
+                            const pct = STUDENT_CONCESSION_PCT[st.id] ?? 0;
+                            return schedRows.reduce((s, r) => s + r.annual * (1 - pct), 0);
+                          }
+                          return STUDENT_NET_ANNUAL[st.id] ?? ANNUAL_FEE[st.category as Category] ?? null;
+                        })();
                         const isSel   = selected.has(st.id);
                         return (
                           <tr key={st.id} className="fa-row" style={{borderBottom:ri<cls.students.length-1?"1px solid #E8E8EE":"none",background:isSel?"#F5F3FF":"#fff"}}>
@@ -794,10 +1018,22 @@ export default function FeesAssignmentPanel() {
         <ModalShell onClose={()=>setBulkModal(null)} maxWidth={600}>
           <ModalHeader
             title="Bulk Assign Fees"
-            subtitle={`Assign a fee group to all unassigned students in ${bulkClass==="all"?"All Classes":CLASS_DATA.find(c=>c.id===bulkClass)?.name??bulkClass}.`}
+            subtitle={
+              selected.size > 0
+                ? `Assign to ${selected.size} selected student${selected.size>1?"s":""} (unassigned only).`
+                : `Assign a fee group to all unassigned students in ${bulkClass==="all"?"All Classes":CLASS_DATA.find(c=>c.id===bulkClass)?.name??bulkClass}.`
+            }
             onClose={()=>setBulkModal(null)}
           />
           <div style={{padding:"14px 20px"}}>
+            {selected.size > 0 && (
+              <div style={{display:"flex",alignItems:"center",gap:8,background:"#EEF2FF",border:"1px solid #C7D2FE",borderRadius:8,padding:"9px 14px",marginBottom:14}}>
+                <span style={{fontSize:12,fontWeight:600,color:"#4338CA"}}>
+                  {selected.size} student{selected.size>1?"s":""} selected — only these will be assigned.
+                </span>
+                <button onClick={()=>setSelected(new Set())} style={{marginLeft:"auto",fontSize:11,color:"#6D4AFF",background:"none",border:"none",cursor:"pointer",fontWeight:600}}>Clear selection</button>
+              </div>
+            )}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
               <div>
                 <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:6}}>CLASS</div>
@@ -813,7 +1049,11 @@ export default function FeesAssignmentPanel() {
                 </select>
               </div>
             </div>
-            <p style={{margin:0,fontSize:12,color:"#5B5E72"}}>Applies to unassigned rows only. A plan-history entry is created for each student assigned.</p>
+            <p style={{margin:0,fontSize:12,color:"#5B5E72"}}>
+              {selected.size > 0
+                ? "Applies to the selected students only. Already-assigned students in the selection are skipped."
+                : "Applies to unassigned rows only. A plan-history entry is created for each student assigned."}
+            </p>
           </div>
           <ModalFooter>
             <button style={{...outlineBtn(),minWidth:90}} onClick={()=>setBulkModal(null)}>Cancel</button>

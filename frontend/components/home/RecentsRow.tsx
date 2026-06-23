@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { Clock } from 'lucide-react';
 import { MODULES, FLAT_INDEX, type ModuleRoute } from '@/lib/routes';
 import { getAccessToken } from '@/lib/auth';
-import { API_BASE_URL } from '@/lib/api';
 import { loadRecentsLS } from '@/lib/recentsStore';
 
 interface RecentItem {
@@ -44,7 +43,7 @@ export function RecentsRow({ flatIndex: flatIndexProp, modules: modulesProp }: P
 
     // Try to merge with API data
     const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/user/recents/?limit=8`, {
+    fetch(`/api/user/recents/?limit=8`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then(r => r.ok ? r.json() : null)

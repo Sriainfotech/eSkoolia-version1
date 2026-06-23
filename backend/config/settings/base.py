@@ -82,6 +82,10 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "change-me")
 # Feature flag to enable schema-based multi-tenancy (off by default)
 MULTI_TENANCY_ENABLED = os.getenv("MULTI_TENANCY_ENABLED", "False").lower() == "true"
 DEBUG = os.getenv("DJANGO_DEBUG", "False").lower() == "true"
+# REST API — never redirect POST/PUT/PATCH requests by appending a slash.
+# Django's APPEND_SLASH=True is designed for HTML sites; for a pure API it
+# turns a missing trailing-slash into a 500 RuntimeError on non-GET requests.
+APPEND_SLASH = False
 ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")]
 # Allow any VS Code / GitHub dev-tunnel host so port-forwarded testing works.
 ALLOWED_HOSTS += [".devtunnels.ms", ".githubpreview.dev"]

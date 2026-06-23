@@ -274,7 +274,6 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Collection',        path: '/fees/collection',     icon: CreditCard   },
       { label: 'Dues & Reminders',  path: '/fees/dues-reminders', icon: AlertCircle  },
       { label: 'Year-End',          path: '/fees/year-end',       icon: Calendar     },
-      { label: 'Enroll Student',    path: '/fees/enroll-student', icon: UserPlus     },
     ],
   },
   // HIDDEN - no backend yet

@@ -1,13 +1,17 @@
 from django.shortcuts import get_object_or_404
-from django.db.models import Sum, Q
+from django.db.models import Sum, Q, F, Value, ExpressionWrapper, DecimalField, Subquery, OuterRef
+from django.db.models.functions import Coalesce
+from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from decimal import Decimal
+from datetime import date
+import csv
 from django.utils import timezone
 
-from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule
-from .serializers import FeesGroupSerializer, FeesTypeSerializer, FeeAssignmentSerializer, PaymentSerializer, TermSettingsSerializer, FeeScheduleSerializer, ConcessionRuleSerializer, LateFeeRuleSerializer
+from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule, PaymentReconciliation, DueInteraction
+from .serializers import FeesGroupSerializer, FeesTypeSerializer, FeeAssignmentSerializer, PaymentSerializer, TermSettingsSerializer, FeeScheduleSerializer, ConcessionRuleSerializer, LateFeeRuleSerializer, PaymentReconciliationSerializer, DueInteractionSerializer
 from .services import FeeService, FeeServiceError
 from config.pagination import ApiPageNumberPagination
 from apps.core.models import AcademicYear
@@ -152,25 +156,54 @@ class FeesTypeDetailAPIView(BaseFeeAPIView):
 
 # --- FeeAssignment Views ---
 
+logger = __import__('logging').getLogger(__name__)
+
 class FeeAssignmentListCreateAPIView(BaseFeeAPIView):
     def get(self, request):
-        assignments = FeeAssignment.objects.filter(academic_year__school=request.user.school)
+        try:
+            assignments = (
+                FeeAssignment.objects
+                .filter(academic_year__school=request.user.school)
+                .select_related('fees_type', 'student', 'academic_year')
+                .prefetch_related('payments')
+            )
 
-        # Optional filters from query params
-        academic_year = request.query_params.get('academic_year')
-        if academic_year:
-            assignments = assignments.filter(academic_year_id=academic_year)
+            academic_year = request.query_params.get('academic_year')
+            if academic_year:
+                assignments = assignments.filter(academic_year_id=academic_year)
 
-        student = request.query_params.get('student')
-        if student:
-            assignments = assignments.filter(student_id=student)
+            student = request.query_params.get('student')
+            if student:
+                assignments = assignments.filter(student_id=student)
 
-        return self.get_paginated_response(assignments, FeeAssignmentSerializer, request)
+            return self.get_paginated_response(assignments, FeeAssignmentSerializer, request)
+        except Exception as exc:
+            logger.exception("FeeAssignment list failed for user %s: %s", request.user, exc)
+            raise
 
     def post(self, request):
+        # Upsert: check BEFORE full validation so edits with a null due_date
+        # (e.g. Half-Yearly schedules that have no date set) still reach the
+        # partial-update path instead of being rejected by the date validator.
+        ay_id = request.data.get('academic_year')
+        st_id = request.data.get('student')
+        ft_id = request.data.get('fees_type')
+        if ay_id and st_id and ft_id:
+            existing = FeeAssignment.objects.filter(
+                academic_year_id=ay_id,
+                student_id=st_id,
+                fees_type_id=ft_id,
+                academic_year__school=request.user.school,
+            ).first()
+            if existing:
+                patch_serializer = FeeAssignmentSerializer(existing, data=request.data, partial=True)
+                if patch_serializer.is_valid():
+                    patch_serializer.save()
+                    return Response(patch_serializer.data, status=status.HTTP_200_OK)
+                return Response(patch_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        # No existing assignment — full validation then create
         serializer = FeeAssignmentSerializer(data=request.data)
         if serializer.is_valid():
-            # Use the service layer for business logic
             assignment = FeeService.assign_fees(created_by=request.user, **serializer.validated_data)
             return Response(FeeAssignmentSerializer(assignment).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -210,8 +243,8 @@ class PaymentListCreateAPIView(BaseFeeAPIView):
     def post(self, request):
         serializer = PaymentSerializer(data=request.data)
         if serializer.is_valid():
-            FeeService.post_payment(collected_by=request.user, **serializer.validated_data)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            payment = FeeService.post_payment(collected_by=request.user, **serializer.validated_data)
+            return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class PaymentDetailAPIView(BaseFeeAPIView):
@@ -246,6 +279,7 @@ class FeeAssignmentSummaryAPIView(BaseFeeAPIView):
             "count": queryset.count(),
             "total_assigned": str(total_assigned),
             "total_discount": str(total_discount),
+            "total_concession": str(total_concession),
             "total_net": str(total_net),
             "total_paid": str(paid_total),
             "total_due": str(due_total),
@@ -704,3 +738,565 @@ class LateFeeRuleDetailAPIView(BaseFeeAPIView):
         rule.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+
+class PaymentReconciliationListCreateAPIView(BaseFeeAPIView):
+    def get(self, request):
+        qs = PaymentReconciliation.objects.filter(school=request.user.school)
+        return self.get_paginated_response(qs, PaymentReconciliationSerializer, request)
+
+    def post(self, request):
+        serializer = PaymentReconciliationSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save(school=request.user.school, created_by=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PaymentReconciliationDetailAPIView(BaseFeeAPIView):
+    def get_object(self, pk, user):
+        return get_object_or_404(PaymentReconciliation, pk=pk, school=user.school)
+
+    def patch(self, request, pk):
+        rec = self.get_object(pk, request.user)
+        serializer = PaymentReconciliationSerializer(rec, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        rec = self.get_object(pk, request.user)
+        rec.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ─── Dues & Reminders views ───────────────────────────────────────────────────
+
+def _due_assignments_qs(school):
+    """Return FeeAssignments that have an outstanding balance for the given school."""
+    today = date.today()
+    posted_sum = Subquery(
+        Payment.objects.filter(
+            assignment=OuterRef('pk'),
+            status='posted',
+        ).values('assignment').annotate(s=Sum('amount_paid')).values('s')
+    )
+    return (
+        FeeAssignment.objects
+        .filter(student__school=school, due_date__lt=today)
+        .annotate(
+            total_posted=Coalesce(posted_sum, Decimal('0.00')),
+        )
+        .annotate(
+            net_due_val=ExpressionWrapper(
+                F('amount') - F('discount_amount') - F('concession_amount') - F('total_posted'),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            )
+        )
+        .filter(net_due_val__gt=0)
+        .select_related('student', 'fees_type', 'student__current_class')
+    )
+
+
+class DuesSummaryAPIView(BaseFeeAPIView):
+    def get(self, request):
+        school = request.user.school
+        today = date.today()
+        qs = _due_assignments_qs(school)
+
+        total_overdue = qs.aggregate(total=Sum('net_due_val'))['total'] or Decimal('0.00')
+        students_with_dues = qs.values('student_id').distinct().count()
+
+        # Compute average days overdue — use values_list to avoid conflicts with annotations
+        due_dates = list(qs.values_list('due_date', flat=True))
+        days_list = [(today - d).days for d in due_dates if d]
+        avg_days = round(sum(days_list) / len(days_list)) if days_list else 0
+
+        # % collected = collected / total assigned (explicit output_field required)
+        all_assignments = FeeAssignment.objects.filter(student__school=school)
+        total_assigned = all_assignments.aggregate(
+            s=Sum(
+                ExpressionWrapper(
+                    F('amount') - F('discount_amount') - F('concession_amount'),
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                )
+            )
+        )['s'] or Decimal('0.00')
+        total_due_val = total_overdue
+        collected = total_assigned - total_due_val
+        pct_collected = round(float(collected) / float(total_assigned) * 100, 1) if total_assigned > 0 else 0.0
+
+        return Response({
+            'total_overdue_amount': str(total_overdue),
+            'students_with_dues': students_with_dues,
+            'avg_days_overdue': avg_days,
+            'pct_collected': pct_collected,
+        })
+
+
+class DuesByClassAPIView(BaseFeeAPIView):
+    def get(self, request):
+        school = request.user.school
+        today = date.today()
+        tier = request.query_params.get('tier')  # '1', '2', or '3'
+
+        qs = _due_assignments_qs(school)
+
+        # Apply tier filter
+        if tier == '1':
+            qs = qs.filter(due_date__gte=today - timezone.timedelta(days=15))
+        elif tier == '2':
+            qs = qs.filter(
+                due_date__lt=today - timezone.timedelta(days=15),
+                due_date__gte=today - timezone.timedelta(days=30),
+            )
+        elif tier == '3':
+            qs = qs.filter(due_date__lt=today - timezone.timedelta(days=30))
+
+        # Group by student
+        from collections import defaultdict
+        student_map = defaultdict(lambda: {'amount_due': Decimal('0.00'), 'min_due_date': None, 'asgn_ids': []})
+        for a in qs:
+            sid = a.student_id
+            student_map[sid]['amount_due'] += a.net_due_val
+            if student_map[sid]['min_due_date'] is None or a.due_date < student_map[sid]['min_due_date']:
+                student_map[sid]['min_due_date'] = a.due_date
+            student_map[sid]['obj'] = a.student
+            student_map[sid]['asgn_ids'].append(a.id)
+
+        # Fetch last interaction per student (cross-db compatible, no DISTINCT ON)
+        last_interactions = {}
+        for di in DueInteraction.objects.filter(
+            student_id__in=student_map.keys()
+        ).order_by('-created_at'):
+            if di.student_id not in last_interactions:
+                last_interactions[di.student_id] = di
+
+        result = []
+        for sid, data in student_map.items():
+            stu = data['obj']
+            days_overdue = (today - data['min_due_date']).days if data['min_due_date'] else 0
+
+            if days_overdue <= 15:
+                stu_status = 'Overdue'
+            elif days_overdue <= 30:
+                stu_status = 'Overdue'
+            elif days_overdue <= 60:
+                stu_status = 'Payment Watch'
+            elif days_overdue <= 90:
+                stu_status = 'Escalated'
+            else:
+                stu_status = 'Defaulter'
+
+            last_int = last_interactions.get(sid)
+            result.append({
+                'id': str(sid),
+                'name': stu.full_name if hasattr(stu, 'full_name') else f"{stu.first_name} {stu.last_name}".strip(),
+                'admNo': stu.admission_no or f'STU-{sid}',
+                'cls': stu.current_class.name if stu.current_class else '—',
+                'amount_due': str(data['amount_due']),
+                'days_overdue': days_overdue,
+                'last_reminder': last_int.created_at.date().isoformat() if last_int else None,
+                'status': stu_status,
+                'is_resolved': last_int.is_resolved if last_int else False,
+            })
+
+        # Sort by days_overdue descending
+        result.sort(key=lambda x: x['days_overdue'], reverse=True)
+
+        # Group by class and add class-level metadata
+        from collections import OrderedDict
+        from apps.students.models import Student as StudentModel
+        from apps.core.models import AcademicYear as AcYear
+
+        current_year = AcYear.objects.filter(school=school, is_current=True).first()
+        cls_groups = OrderedDict()
+        for item in result:
+            cls = item['cls']
+            if cls not in cls_groups:
+                cls_groups[cls] = []
+            cls_groups[cls].append(item)
+
+        grouped = []
+        for cls_name, students_list in cls_groups.items():
+            # Count total active students in this class
+            from apps.core.models import Class as ClassModel
+            cls_obj = ClassModel.objects.filter(school=school, name=cls_name).first()
+            if cls_obj:
+                total = StudentModel.objects.filter(school=school, current_class=cls_obj, status='active').count()
+                if current_year:
+                    assigned = FeeAssignment.objects.filter(
+                        student__school=school, student__current_class=cls_obj, academic_year=current_year
+                    ).values('student').distinct().count()
+                else:
+                    assigned = len(students_list)
+            else:
+                total = len(students_list)
+                assigned = len(students_list)
+
+            grouped.append({
+                'cls': cls_name,
+                'total_students': total,
+                'assigned_students': assigned,
+                'students': students_list,
+            })
+
+        grouped.sort(key=lambda x: x['cls'])
+        return Response(grouped)
+
+
+class DueInteractionListCreateAPIView(BaseFeeAPIView):
+    def get(self, request):
+        school = request.user.school
+        student_id = request.query_params.get('student')
+        qs = DueInteraction.objects.filter(student__school=school)
+        if student_id:
+            qs = qs.filter(student_id=student_id)
+        serializer = DueInteractionSerializer(qs.order_by('-created_at'), many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = DueInteractionSerializer(data=request.data, context={'request': request})
+        if serializer.is_valid():
+            serializer.save(created_by=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class DuesResolveAPIView(BaseFeeAPIView):
+    def post(self, request):
+        student_id = request.data.get('student_id')
+        if not student_id:
+            return Response({'error': 'student_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        school = request.user.school
+        # Verify student belongs to school
+        from apps.students.models import Student
+        student = get_object_or_404(Student, id=student_id, school=school)
+        interaction = DueInteraction.objects.create(
+            student=student,
+            interaction_type='resolved',
+            note=request.data.get('note', 'Marked as resolved'),
+            is_resolved=True,
+            created_by=request.user,
+        )
+        return Response(DueInteractionSerializer(interaction).data, status=status.HTTP_201_CREATED)
+
+
+class DuesSendReminderAPIView(BaseFeeAPIView):
+    def post(self, request):
+        student_ids = request.data.get('student_ids', [])
+        message = request.data.get('message', '')
+        if not student_ids:
+            return Response({'error': 'student_ids is required'}, status=status.HTTP_400_BAD_REQUEST)
+        school = request.user.school
+        from apps.students.models import Student
+        students = Student.objects.filter(id__in=student_ids, school=school)
+        created = []
+        for student in students:
+            interaction = DueInteraction.objects.create(
+                student=student,
+                interaction_type='reminder',
+                note=message or 'Reminder sent',
+                created_by=request.user,
+            )
+            created.append(interaction.id)
+        return Response({'sent': len(created), 'interaction_ids': created})
+
+
+class DuesExportCSVAPIView(BaseFeeAPIView):
+    def get(self, request):
+        school = request.user.school
+        today = date.today()
+        qs = _due_assignments_qs(school)
+
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="dues-report.csv"'
+
+        writer = csv.writer(response)
+        writer.writerow(['Student Name', 'Admission No', 'Class', 'Fee Type', 'Due Date', 'Days Overdue', 'Amount Due'])
+
+        for a in qs.select_related('fees_type'):
+            stu = a.student
+            days_overdue = (today - a.due_date).days if a.due_date else 0
+            writer.writerow([
+                stu.full_name if hasattr(stu, 'full_name') else f"{stu.first_name} {stu.last_name}".strip(),
+                stu.admission_no or f'STU-{stu.id}',
+                stu.current_class.name if stu.current_class else '—',
+                a.fees_type.name if a.fees_type else '—',
+                a.due_date.isoformat() if a.due_date else '—',
+                days_overdue,
+                str(a.net_due_val),
+            ])
+
+        return response
+
+
+class YearEndReportCSVAPIView(BaseFeeAPIView):
+    """Generate CSV reports for the Year-End page."""
+    def get(self, request):
+        school = request.user.school
+        today  = date.today()
+        report_type = request.query_params.get('report_type', 'fee_collection_summary')
+        filename_map = {
+            'fee_collection_summary':    'fee-collection-summary',
+            'class_wise_report':         'class-wise-report',
+            'outstanding_dues':          'outstanding-dues',
+            'concession_report':         'concession-report',
+            'payment_method_breakdown':  'payment-method-breakdown',
+        }
+        filename = filename_map.get(report_type, report_type)
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{filename}.csv"'
+        writer = csv.writer(response)
+
+        if report_type == 'fee_collection_summary':
+            writer.writerow(['Fee Type', 'Total Assigned (₹)', 'Total Collected (₹)', 'Total Outstanding (₹)', 'No. of Students'])
+            qs = (FeeAssignment.objects
+                  .filter(academic_year__school=school)
+                  .select_related('fees_type')
+                  .prefetch_related('payments'))
+            fee_map: dict = {}
+            for a in qs:
+                ft = a.fees_type.name if a.fees_type else '—'
+                paid = sum(p.amount_paid for p in a.payments.all() if p.status == 'posted')
+                net  = a.amount - a.discount_amount - a.concession_amount
+                due  = max(Decimal('0.00'), net - paid)
+                if ft not in fee_map:
+                    fee_map[ft] = {'assigned': Decimal('0'), 'paid': Decimal('0'), 'due': Decimal('0'), 'students': set()}
+                fee_map[ft]['assigned'] += a.amount
+                fee_map[ft]['paid']     += paid
+                fee_map[ft]['due']      += due
+                fee_map[ft]['students'].add(a.student_id)
+            for ft_name, d in sorted(fee_map.items()):
+                writer.writerow([ft_name, str(d['assigned']), str(d['paid']), str(d['due']), len(d['students'])])
+
+        elif report_type == 'class_wise_report':
+            writer.writerow(['Class', 'No. of Students', 'Total Assigned (₹)', 'Total Collected (₹)', 'Total Outstanding (₹)'])
+            qs = (FeeAssignment.objects
+                  .filter(academic_year__school=school)
+                  .select_related('student__current_class')
+                  .prefetch_related('payments'))
+            cls_map: dict = {}
+            for a in qs:
+                cls = a.student.current_class.name if a.student.current_class else '—'
+                paid = sum(p.amount_paid for p in a.payments.all() if p.status == 'posted')
+                net  = a.amount - a.discount_amount - a.concession_amount
+                due  = max(Decimal('0.00'), net - paid)
+                if cls not in cls_map:
+                    cls_map[cls] = {'assigned': Decimal('0'), 'paid': Decimal('0'), 'due': Decimal('0'), 'students': set()}
+                cls_map[cls]['assigned'] += a.amount
+                cls_map[cls]['paid']     += paid
+                cls_map[cls]['due']      += due
+                cls_map[cls]['students'].add(a.student_id)
+            for cls_name, d in sorted(cls_map.items()):
+                writer.writerow([cls_name, len(d['students']), str(d['assigned']), str(d['paid']), str(d['due'])])
+
+        elif report_type == 'outstanding_dues':
+            writer.writerow(['Student Name', 'Admission No', 'Class', 'Fee Type', 'Due Date', 'Days Overdue', 'Amount Due (₹)'])
+            qs = _due_assignments_qs(school)
+            for a in qs.select_related('fees_type', 'student__current_class'):
+                stu = a.student
+                days_overdue = (today - a.due_date).days if a.due_date else 0
+                writer.writerow([
+                    stu.full_name if hasattr(stu, 'full_name') else f"{stu.first_name} {stu.last_name}".strip(),
+                    stu.admission_no or f'STU-{stu.id}',
+                    stu.current_class.name if stu.current_class else '—',
+                    a.fees_type.name if a.fees_type else '—',
+                    a.due_date.isoformat() if a.due_date else '—',
+                    days_overdue,
+                    str(a.net_due_val),
+                ])
+
+        elif report_type == 'concession_report':
+            writer.writerow(['Student Name', 'Admission No', 'Class', 'Fee Type', 'Original Amount (₹)', 'Discount (₹)', 'Concession (₹)', 'Net Amount (₹)'])
+            qs = (FeeAssignment.objects
+                  .filter(academic_year__school=school)
+                  .exclude(discount_amount=Decimal('0.00'), concession_amount=Decimal('0.00'))
+                  .select_related('fees_type', 'student__current_class')
+                  .order_by('student__first_name'))
+            for a in qs:
+                stu = a.student
+                writer.writerow([
+                    stu.full_name if hasattr(stu, 'full_name') else f"{stu.first_name} {stu.last_name}".strip(),
+                    stu.admission_no or f'STU-{stu.id}',
+                    stu.current_class.name if stu.current_class else '—',
+                    a.fees_type.name if a.fees_type else '—',
+                    str(a.amount),
+                    str(a.discount_amount),
+                    str(a.concession_amount),
+                    str(a.amount - a.discount_amount - a.concession_amount),
+                ])
+
+        elif report_type == 'payment_method_breakdown':
+            writer.writerow(['Payment Method', 'No. of Transactions', 'Total Amount (₹)'])
+            qs = Payment.objects.filter(
+                assignment__academic_year__school=school,
+                status='posted'
+            )
+            method_map: dict = {}
+            method_display = dict(Payment.METHOD_CHOICES)
+            for p in qs:
+                m = method_display.get(p.method, p.method)
+                if m not in method_map:
+                    method_map[m] = {'count': 0, 'total': Decimal('0')}
+                method_map[m]['count'] += 1
+                method_map[m]['total'] += p.amount_paid
+            for method, d in sorted(method_map.items()):
+                writer.writerow([method, d['count'], str(d['total'])])
+
+        return response
+
+
+
+class YearEndGroupAmountsAPIView(BaseFeeAPIView):
+    """
+    GET  ?group_id=<id>  — fee types for that group with current amounts.
+    POST                  — stage new amounts for rollover (read-only validation; does not mutate live data).
+    """
+
+    def get(self, request):
+        group_id = request.query_params.get('group_id')
+        if not group_id:
+            return Response({'error': 'group_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        school = request.user.school
+        group = get_object_or_404(FeesGroup, pk=group_id, academic_year__school=school)
+
+        # ── Build name variants (handles "Day Scholar Fee" ↔ "Day Scholar" mismatch) ──
+        raw = group.name.strip()
+        base = raw
+        for suffix in (' fees', ' fee'):
+            if raw.lower().endswith(suffix):
+                base = raw[: len(raw) - len(suffix)].strip()
+                break
+
+        group_name_q = Q(name__iexact=raw)
+        if base != raw:
+            group_name_q |= Q(name__iexact=base)
+            group_name_q |= Q(name__iexact=base + ' Fee')
+            group_name_q |= Q(name__iexact=base + ' Fees')
+
+        # ── Find all relevant group IDs (same year, name variants) ──
+        relevant_group_ids = list(
+            FeesGroup.objects
+            .filter(group_name_q, academic_year=group.academic_year)
+            .values_list('id', flat=True)
+        )
+
+        # ── Get fee types exactly as Fee Configuration does: via group-specific schedules ──
+        # This guarantees the modal matches Fee Configuration — only fee types that have an
+        # active schedule for one of these groups are shown (universal/ungrouped schedules excluded).
+        ft_ids = list(
+            FeeSchedule.objects
+            .filter(fee_group_id__in=relevant_group_ids, is_deleted=False)
+            .values_list('fee_type_id', flat=True)
+            .distinct()
+        )
+
+        fee_types = list(
+            FeesType.objects
+            .filter(id__in=ft_ids)
+            .order_by('name')
+        )
+
+        result = []
+        for ft in fee_types:
+            # Prefer group-specific schedule; fall back to group-agnostic schedule
+            schedules = (
+                FeeSchedule.objects
+                .filter(fee_type=ft, fee_group=group, is_deleted=False)
+                .order_by('due_date')
+            )
+            if not schedules.exists():
+                schedules = (
+                    FeeSchedule.objects
+                    .filter(fee_type=ft, fee_group__isnull=True, is_deleted=False)
+                    .order_by('due_date')
+                )
+            if not schedules.exists():
+                # last resort: any non-deleted schedule for this fee type
+                schedules = (
+                    FeeSchedule.objects
+                    .filter(fee_type=ft, is_deleted=False)
+                    .order_by('due_date')
+                )
+
+            if schedules.exists():
+                if ft.default_structure == 'term_wise':
+                    s = schedules.first()
+                    if s.term_breakdown:
+                        parts = []
+                        for t in s.term_breakdown:
+                            try:
+                                parts.append(Decimal(str(t.get('amount', 0))))
+                            except Exception:
+                                pass
+                        if parts:
+                            total     = sum(parts)
+                            breakdown = ' + '.join([f'₹{int(p):,}' for p in parts]) + ' (terms)'
+                        else:
+                            total     = s.amount
+                            breakdown = f'₹{int(total):,} (term-wise)'
+                    elif schedules.count() > 1:
+                        total     = sum(sc.amount for sc in schedules)
+                        breakdown = ' + '.join([f'₹{int(sc.amount):,}' for sc in schedules]) + ' (terms)'
+                    else:
+                        total     = s.amount
+                        breakdown = f'₹{int(total):,} (term-wise)'
+                    badge = 'term_wise'
+                else:
+                    total = sum(s.amount for s in schedules)
+                    s     = schedules.first()
+                    freq  = (s.collection_frequency or 'custom').replace('_', '-')
+                    breakdown = f'₹{int(total):,} ({freq})'
+                    badge     = s.collection_frequency or 'custom'
+            else:
+                # No schedule at all — use base amount stored on the fee type
+                total     = ft.amount or Decimal('0')
+                breakdown = f'₹{int(total):,} (custom)'
+                badge     = ft.default_structure or 'custom'
+
+            result.append({
+                'id':            ft.id,
+                'name':          ft.name,
+                'breakdown':     breakdown,
+                'current_total': str(total),
+                'schedule_type': badge,
+                'new_amount':    str(total),
+                'is_deleted':    ft.is_deleted,
+            })
+
+        return Response({
+            'group_id':   group.id,
+            'group_name': group.name,
+            'fee_types':  result,
+        })
+
+    def post(self, request):
+        group_id = request.data.get('group_id')
+        amounts  = request.data.get('amounts', [])
+
+        if not group_id:
+            return Response({'error': 'group_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        get_object_or_404(FeesGroup, pk=group_id)
+
+        updated, errors = [], []
+        for item in amounts:
+            try:
+                ft      = FeesType.objects.get(pk=item['fee_type_id'])
+                new_amt = Decimal(str(item.get('new_amount', '0')))
+                if new_amt < 0:
+                    errors.append(f'{ft.name}: amount cannot be negative')
+                    continue
+                updated.append({'fee_type_id': ft.id, 'name': ft.name, 'new_amount': str(new_amt)})
+            except (FeesType.DoesNotExist, KeyError, Exception):
+                errors.append(f'fee_type_id {item.get("fee_type_id")} not found or invalid')
+
+        return Response({
+            'status': 'staged',
+            'group_id': group_id,
+            'updated_count': len(updated),
+            'errors': errors,
+            'message': f'New amounts staged for {len(updated)} fee type(s). Will be applied when rollover executes.',
+        })

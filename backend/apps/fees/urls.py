@@ -21,6 +21,16 @@ from .views import (
     ConcessionRuleDetailAPIView,
     LateFeeRuleListCreateAPIView,
     LateFeeRuleDetailAPIView,
+    PaymentReconciliationListCreateAPIView,
+    PaymentReconciliationDetailAPIView,
+    DuesSummaryAPIView,
+    DuesByClassAPIView,
+    DueInteractionListCreateAPIView,
+    DuesResolveAPIView,
+    DuesSendReminderAPIView,
+    DuesExportCSVAPIView,
+    YearEndReportCSVAPIView,
+    YearEndGroupAmountsAPIView,
 )
 
 app_name = 'fees'
@@ -66,4 +76,20 @@ urlpatterns = [
     # Custom Payment Actions
     path('payments/<int:pk>/receipt/', PaymentReceiptAPIView.as_view(), name='payment-receipt'),
     path('payments/<int:pk>/transition/', PaymentTransitionAPIView.as_view(), name='payment-transition'),
+
+    # Payment Reconciliation
+    path('reconciliations/', PaymentReconciliationListCreateAPIView.as_view(), name='reconciliation-list-create'),
+    path('reconciliations/<int:pk>/', PaymentReconciliationDetailAPIView.as_view(), name='reconciliation-detail'),
+
+    # Dues & Reminders
+    path('dues/summary/', DuesSummaryAPIView.as_view(), name='dues-summary'),
+    path('dues/by-class/', DuesByClassAPIView.as_view(), name='dues-by-class'),
+    path('dues/interactions/', DueInteractionListCreateAPIView.as_view(), name='dues-interactions'),
+    path('dues/resolve/', DuesResolveAPIView.as_view(), name='dues-resolve'),
+    path('dues/send-reminder/', DuesSendReminderAPIView.as_view(), name='dues-send-reminder'),
+    path('dues/export-csv/', DuesExportCSVAPIView.as_view(), name='dues-export-csv'),
+
+    # Year-End
+    path('year-end/report/', YearEndReportCSVAPIView.as_view(), name='year-end-report'),
+    path('year-end/group-amounts/', YearEndGroupAmountsAPIView.as_view(), name='year-end-group-amounts'),
 ]
