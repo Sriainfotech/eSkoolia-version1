@@ -5076,3 +5076,7 @@ Login at localhost:3000
 9. Reverted `frontend/app/login/page.tsx` back to original — `ESKOOLIA_LOGO` and hardcoded `src` both restored to `/image.png` as requested.
 10. Fixed TypeScript build error in `frontend/components/widgets/pulse/AttendanceSnapshot.tsx` — changed type annotation from `AttendanceSummary` to `AttendanceSummary | null` to match the ternary that can return null.
 11. Fixed second TypeScript build error in `frontend/components/widgets/pulse/AttendanceSnapshot.tsx` — mapped `section_id` (snake_case from backend) to `sectionId` (camelCase expected by `AttendanceSummary` type) inside the `pendingClasses` transform. Build now passes cleanly.
+
+
+24/06/2026
+Add logo 

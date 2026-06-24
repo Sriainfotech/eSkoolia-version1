@@ -1,5 +1,5 @@
 function deriveApiBaseUrl(): string {
-  if (typeof window === "undefined") return "http://127.0.0.1:8000";
+  if (typeof window === "undefined") return "http://127.0.0.1:8001";
   const { hostname, protocol } = window.location;
   // VS Code / GitHub dev tunnels: replace "-3000." with "-8000." in hostname.
   // e.g. https://39k3c0bf-3000.inc1.devtunnels.ms  ->  https://39k3c0bf-8000.inc1.devtunnels.ms
