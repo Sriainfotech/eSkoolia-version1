@@ -100,10 +100,49 @@ class PermissionScopedViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to perform this action.")
 
 
+# class AcademicYearViewSet(TenantQueryMixin, viewsets.ModelViewSet):
+#     model = AcademicYear
+#     serializer_class = AcademicYearSerializer
+#     permission_classes = [permissions.IsAuthenticated]
+
+#     def list(self, request, *args, **kwargs):
+#         print("=" * 50)
+#         print("HOST:", request.get_host())
+#         print("USER:", request.user)
+#         print("SCHOOL_ID:", getattr(request.user, "school_id", None))
+#         print("SCHOOL:", getattr(request.user, "school", None))
+#         print("TENANT:", getattr(request, "tenant", None))
+#         print("=" * 50)
+#         return super().list(request, *args, **kwargs)
+
 class AcademicYearViewSet(TenantQueryMixin, viewsets.ModelViewSet):
     model = AcademicYear
     serializer_class = AcademicYearSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def list(self, request, *args, **kwargs):
+        print("=" * 50)
+        print("ACADEMIC YEAR LIST HIT")
+        print("HOST:", request.get_host())
+        print("USER:", request.user)
+        print("SCHOOL_ID:", getattr(request.user, "school_id", None))
+        print("SCHOOL:", getattr(request.user, "school", None))
+        print("TENANT:", getattr(request, "tenant", None))
+        print("=" * 50)
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        print("=" * 50)
+        print("ACADEMIC YEAR CREATE HIT")
+        print("HOST:", request.get_host())
+        print("USER:", request.user)
+        print("SCHOOL_ID:", getattr(request.user, "school_id", None))
+        print("SCHOOL:", getattr(request.user, "school", None))
+        print("TENANT:", getattr(request, "tenant", None))
+        print("REQUEST DATA:", request.data)
+        print("=" * 50)
+        return super().create(request, *args, **kwargs)
+
 
 
 class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
