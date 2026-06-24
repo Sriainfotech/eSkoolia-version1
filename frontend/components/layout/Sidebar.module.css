@@ -22,13 +22,21 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 12px;
 }
 
 .brandLogo {
-  height: 56px;
+  height: 48px;
   width: auto;
   display: block;
   object-fit: contain;
+}
+
+.brandText {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1e293b;
+  letter-spacing: -0.02em;
 }
 
 .nav {
