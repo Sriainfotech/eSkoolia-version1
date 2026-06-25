@@ -5087,6 +5087,8 @@ Login at localhost:3000
    - Fix 2: `provisioning.py` `create_tenant_domain()` — store `f"{subdomain}.eskoolia.com"` (full hostname) instead of bare subdomain. Existing mis-provisioned schools need a one-off Domain record data migration.
    - Fix 3: Set `api_access=True` in `SchoolTenant` during provisioning so API calls are not blocked by middleware even after domain fix.
 5. Created multi-tenant 404 incident report document summarising root cause, request flow comparison (working vs broken), conflicting code, and the three required fixes.
-6. Added timing debug prints inside `provision_tenant()` in `backend/apps/tenancy/provisioning.py` — logs elapsed time for each major step (schema creation, tenant migrations, seeding defaults) using `time.time()` to identify provisioning bottlenecks.
+6. Expanded provisioning debug instrumentation in `backend/apps/tenancy/provisioning.py`:
+   - `run_tenant_migrations()` — preserved original implementation as commented-out block for reference; active version now prints `STARTING MIGRATIONS FOR SCHEMA` and `MIGRATIONS COMPLETED IN X.XX SECONDS` with `=` separators; also changed `logger.error()` to `logger.exception()` so full tracebacks are logged on failure.
+   - `provision_tenant()` — replaced rough placeholder debug prints with per-step timing blocks for Step 3 (create schema), Step 4 (run migrations), and Step 5 (seed defaults); each step prints start, elapsed seconds, and separator lines; added `from datetime import datetime` and `start_time` capture for overall provision duration tracking.
 7. Updated `backend/_provision_mpp.py` — changed target `tenant_id` from `TNT_4A7D027C` to `TNT_57379291` for manual provisioning testing against a specific school tenant.
 8. Fixed bug in `backend/apps/tenancy/management/commands/migrate_school_to_tenant.py` — changed `audit.tables` to `audit.details` in the summary output (`.tables` attribute does not exist on the audit object; `.details` is correct). 
