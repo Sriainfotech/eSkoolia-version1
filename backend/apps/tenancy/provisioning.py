@@ -130,12 +130,52 @@ def create_postgres_schema(schema_name):
 #         logger.error(f"Failed to run migrations for schema {schema_name}: {exc}")
 #         raise
 
-def run_tenant_migrations(schema_name):
-    """Run Django migrations inside the tenant schema.
+# def run_tenant_migrations(schema_name):
+#     """Run Django migrations inside the tenant schema.
 
-    Uses django-tenants schema_context() to run migrations in the target schema.
-    """
+#     Uses django-tenants schema_context() to run migrations in the target schema.
+#     """
+#     import time
+
+#     try:
+#         from django_tenants.utils import schema_context
+#         from django.core.management import call_command
+#         from io import StringIO
+
+#         output = StringIO()
+
+#         print("=" * 80)
+#         print(f"STARTING MIGRATIONS FOR SCHEMA: {schema_name}")
+
+#         start = time.time()
+
+#         with schema_context(schema_name):
+#             call_command(
+#                 "migrate",
+#                 verbosity=2,
+#                 interactive=False,
+#                 stdout=output,
+#                 stderr=output,
+#             )
+
+#         elapsed = time.time() - start
+
+#         print(f"MIGRATIONS COMPLETED IN {elapsed:.2f} SECONDS")
+#         print("=" * 80)
+
+#         migration_output = output.getvalue()
+#         logger.info(f"Migrations completed for schema {schema_name}\n{migration_output}")
+
+#         return True
+
+#     except Exception as exc:
+#         logger.exception(f"Failed to run migrations for schema {schema_name}")
+#         raise
+
+def run_tenant_migrations(schema_name):
+    """Run Django migrations inside the tenant schema."""
     import time
+    import traceback
 
     try:
         from django_tenants.utils import schema_context
@@ -152,7 +192,7 @@ def run_tenant_migrations(schema_name):
         with schema_context(schema_name):
             call_command(
                 "migrate",
-                verbosity=2,
+                verbosity=3,   # Changed from 2 to 3
                 interactive=False,
                 stdout=output,
                 stderr=output,
@@ -164,14 +204,31 @@ def run_tenant_migrations(schema_name):
         print("=" * 80)
 
         migration_output = output.getvalue()
-        logger.info(f"Migrations completed for schema {schema_name}\n{migration_output}")
+
+        print("========== MIGRATION OUTPUT ==========")
+        print(migration_output)
+        print("======================================")
+
+        logger.info(
+            f"Migrations completed for schema {schema_name}\n{migration_output}"
+        )
 
         return True
 
-    except Exception as exc:
-        logger.exception(f"Failed to run migrations for schema {schema_name}")
-        raise
+    except Exception:
+        print("=" * 80)
+        print(f"MIGRATION FAILED FOR SCHEMA: {schema_name}")
+        print("OUTPUT:")
+        print(output.getvalue())
+        print("TRACEBACK:")
+        traceback.print_exc()
+        print("=" * 80)
 
+        logger.exception(
+            f"Failed to run migrations for schema {schema_name}\n{output.getvalue()}"
+        )
+
+        raise
 def seed_tenant_defaults(schema_name):
     """Seed default data into the tenant schema.
     

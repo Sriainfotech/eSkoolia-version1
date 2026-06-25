@@ -5091,4 +5091,9 @@ Login at localhost:3000
    - `run_tenant_migrations()` — preserved original implementation as commented-out block for reference; active version now prints `STARTING MIGRATIONS FOR SCHEMA` and `MIGRATIONS COMPLETED IN X.XX SECONDS` with `=` separators; also changed `logger.error()` to `logger.exception()` so full tracebacks are logged on failure.
    - `provision_tenant()` — replaced rough placeholder debug prints with per-step timing blocks for Step 3 (create schema), Step 4 (run migrations), and Step 5 (seed defaults); each step prints start, elapsed seconds, and separator lines; added `from datetime import datetime` and `start_time` capture for overall provision duration tracking.
 7. Updated `backend/_provision_mpp.py` — changed target `tenant_id` from `TNT_4A7D027C` to `TNT_57379291` for manual provisioning testing against a specific school tenant.
-8. Fixed bug in `backend/apps/tenancy/management/commands/migrate_school_to_tenant.py` — changed `audit.tables` to `audit.details` in the summary output (`.tables` attribute does not exist on the audit object; `.details` is correct). 
+8. Fixed bug in `backend/apps/tenancy/management/commands/migrate_school_to_tenant.py` — changed `audit.tables` to `audit.details` in the summary output (`.tables` attribute does not exist on the audit object; `.details` is correct).
+9. Further updated `run_tenant_migrations()` in `backend/apps/tenancy/provisioning.py`:
+   - Previous instrumented version commented out and preserved as reference block.
+   - New active version adds `import traceback` and increases Django migrate verbosity from `2` to `3` for maximum output.
+   - On success: prints full migration output to stdout via `========== MIGRATION OUTPUT ==========` block (in addition to logger).
+   - On failure: prints schema name, all captured stdout/stderr output collected so far, and full Python traceback via `traceback.print_exc()` before re-raising — makes provisioning failures fully visible in server logs without needing to dig into Django error handling. 
