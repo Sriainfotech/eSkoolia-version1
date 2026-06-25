@@ -218,6 +218,22 @@ def provision_tenant(
     actor_user=None,
     actor_ip=None,
 ):
+    import time
+
+    start = time.time()
+    print("Creating schema...")
+    create_postgres_schema(...)
+    print("Done:", time.time() - start)
+
+    start = time.time()
+    print("Running migrations...")
+    run_tenant_migrations(...)
+    print("Done:", time.time() - start)
+
+    start = time.time()
+    print("Seeding defaults...")
+    seed_tenant_defaults(...)
+    print("Done:", time.time() - start)
     """Main provisioning function.
     
     Orchestrates the full tenant creation flow:

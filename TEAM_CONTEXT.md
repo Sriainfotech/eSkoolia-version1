@@ -5078,5 +5078,15 @@ Login at localhost:3000
 11. Fixed second TypeScript build error in `frontend/components/widgets/pulse/AttendanceSnapshot.tsx` — mapped `section_id` (snake_case from backend) to `sectionId` (camelCase expected by `AttendanceSummary` type) inside the `pendingClasses` transform. Build now passes cleanly.
 
 
-24/06/2026
-Add logo 
+24/06/2026 (Teerdaveni)
+1. Added temporary debug print statements to `AcademicYearViewSet.list()` in `backend/apps/core/views.py` to log HOST, USER, SCHOOL_ID, SCHOOL, and TENANT on every GET /api/v1/core/academic-years/ request — helps diagnose which tenant context is active during the 404 investigation.
+2. Performed read-only root-cause analysis of multi-tenant 404 issue affecting newly onboarded schools (POST/GET APIs returning 404 while Default School and ZPHS work fine).
+3. Root cause identified: `create_tenant_domain()` in `backend/apps/tenancy/provisioning.py` (line 202) stores bare subdomain (e.g. `"newschool"`) but the production resolver in `backend/apps/tenancy/resolvers.py` (line 75) queries `Domain.objects.get(domain=host)` with the full hostname (e.g. `"newschool.eskoolia.com"`) → `DoesNotExist` → `tenant=None` → no schema switch → `Http404`. Local resolver works because it uses `Q(domain=subdomain) | Q(domain=f"{subdomain}.eskoolia.com")` (bare OR full match). Default School/ZPHS work because their Domain records already contain full hostnames.
+4. Three fixes identified (not yet applied — analysis only):
+   - Fix 1: `resolvers.py` — add `Q(domain=subdomain)` bare-subdomain fallback for `.eskoolia.com` requests.
+   - Fix 2: `provisioning.py` `create_tenant_domain()` — store `f"{subdomain}.eskoolia.com"` (full hostname) instead of bare subdomain. Existing mis-provisioned schools need a one-off Domain record data migration.
+   - Fix 3: Set `api_access=True` in `SchoolTenant` during provisioning so API calls are not blocked by middleware even after domain fix.
+5. Created multi-tenant 404 incident report document summarising root cause, request flow comparison (working vs broken), conflicting code, and the three required fixes.
+6. Added timing debug prints inside `provision_tenant()` in `backend/apps/tenancy/provisioning.py` — logs elapsed time for each major step (schema creation, tenant migrations, seeding defaults) using `time.time()` to identify provisioning bottlenecks.
+7. Updated `backend/_provision_mpp.py` — changed target `tenant_id` from `TNT_4A7D027C` to `TNT_57379291` for manual provisioning testing against a specific school tenant.
+8. Fixed bug in `backend/apps/tenancy/management/commands/migrate_school_to_tenant.py` — changed `audit.tables` to `audit.details` in the summary output (`.tables` attribute does not exist on the audit object; `.details` is correct). 

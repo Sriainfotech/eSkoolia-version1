@@ -48,4 +48,4 @@ class Command(BaseCommand):
         audit = migration_framework.migrate_school_to_tenant(school_id=school_id, tenant_id=tenant_id, schema_name=schema_name, dry_run=dry_run, actor=actor)
 
         self.stdout.write(self.style.SUCCESS(f"Migration audit id: {audit.id} status={audit.status}"))
-        self.stdout.write(self.style.SUCCESS(f"Tables summary: {audit.tables}"))
+        self.stdout.write(self.style.SUCCESS(f"Tables summary: {audit.details}"))
