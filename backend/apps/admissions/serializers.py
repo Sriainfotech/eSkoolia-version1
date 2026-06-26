@@ -668,23 +668,13 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Store school reference for validation
-        request = self.context.get("request")
-        print(f"DEBUG: ComplaintEntrySerializer.__init__ - request: {request}")
-        print(f"DEBUG: ComplaintEntrySerializer.__init__ - context keys: {list(self.context.keys())}")
-        
         self._school = None
+        request = self.context.get("request")
         if request:
             user = getattr(request, "user", None)
-            print(f"DEBUG: ComplaintEntrySerializer.__init__ - request.user: {user}")
             school_from_request = getattr(request, "school", None)
             school_from_user = user.school if user else None
-            print(f"DEBUG: ComplaintEntrySerializer.__init__ - school_from_request: {school_from_request}")
-            print(f"DEBUG: ComplaintEntrySerializer.__init__ - school_from_user: {school_from_user}")
             self._school = school_from_request or school_from_user
-            print(f"DEBUG: ComplaintEntrySerializer.__init__ - self._school: {self._school}")
-        else:
-            print(f"DEBUG: ComplaintEntrySerializer.__init__ - NO REQUEST IN CONTEXT")
 
     def get_created_by_name(self, obj):
         if obj.created_by:
@@ -697,22 +687,13 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
         return None
 
     def validate_complaint_type(self, value):
-        print(f"DEBUG: validate_complaint_type() called with value: {value} (type: {type(value)})")
-        # Complaint type is optional
         if value is None or value == "" or value == "null":
-            print(f"DEBUG: validate_complaint_type() - returning None (empty)")
             return None
-        # If it's already an object, extract the id
         if isinstance(value, ComplaintType):
-            print(f"DEBUG: validate_complaint_type() - extracting ID from object: {value.id}")
             return value.id
-        # Otherwise treat as integer
         try:
-            result = int(value)
-            print(f"DEBUG: validate_complaint_type() - returning int: {result}")
-            return result
+            return int(value)
         except (ValueError, TypeError) as e:
-            print(f"DEBUG: validate_complaint_type() - ERROR converting to int: {e}")
             raise serializers.ValidationError(f"Complaint Type must be a valid number: {str(e)}")
 
     def validate_complaint_source(self, value):
@@ -803,87 +784,48 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
         return description
 
     def validate(self, attrs):
-        print(f"\nDEBUG: ComplaintEntrySerializer.validate() - START")
-        print(f"DEBUG: attrs keys: {list(attrs.keys())}")
-        print(f"DEBUG: attrs: {attrs}")
-        print(f"DEBUG: self._school: {self._school}")
-        
         errors = {}
-        
-        # Validate file upload
+
         upload = attrs.get("file_upload")
         if upload is not None:
-            print(f"DEBUG: Validating file upload: {upload}")
             filename = str(getattr(upload, "name", "") or "").lower()
             extension = "." + filename.rsplit(".", 1)[1] if "." in filename else ""
             if extension not in ALLOWED_COMPLAINT_FILE_EXTENSIONS:
                 errors["file_upload"] = "Invalid file type. Allowed: PDF, DOC, DOCX, JPG, JPEG, PNG."
             elif getattr(upload, "size", 0) > MAX_COMPLAINT_FILE_SIZE:
                 errors["file_upload"] = "File size exceeds 5MB limit."
-        
-        # Validate FK permissions - must belong to user's school
+
         if self._school:
             complaint_type_id = attrs.get("complaint_type")
-            print(f"DEBUG: complaint_type_id from attrs: {complaint_type_id} (type: {type(complaint_type_id)})")
             if complaint_type_id and complaint_type_id != "null":
-                # Extract ID if it's an object
                 ct_id = complaint_type_id.id if isinstance(complaint_type_id, ComplaintType) else complaint_type_id
                 try:
-                    ct_id = int(ct_id)
-                    print(f"DEBUG: Checking ComplaintType exists with id={ct_id}, school={self._school.id}")
-                    ct_exists = ComplaintType.objects.filter(id=ct_id, school=self._school, is_active=True).exists()
-                    print(f"DEBUG: ComplaintType exists: {ct_exists}")
-                    if not ct_exists:
-                        print(f"DEBUG: ComplaintType NOT FOUND - listing all for this school:")
-                        all_cts = ComplaintType.objects.filter(school=self._school)
-                        print(f"DEBUG: All types: {[(ct.id, ct.name, ct.is_active) for ct in all_cts]}")
+                    if not ComplaintType.objects.filter(id=int(ct_id), school=self._school, is_active=True).exists():
                         errors["complaint_type"] = "Invalid Complaint Type for your school."
                 except (ValueError, TypeError) as e:
-                    print(f"DEBUG: Error converting complaint_type to int: {e}")
                     errors["complaint_type"] = f"Complaint Type must be a valid number: {str(e)}"
-            
+
             complaint_source_id = attrs.get("complaint_source")
-            print(f"DEBUG: complaint_source_id from attrs: {complaint_source_id} (type: {type(complaint_source_id)})")
             if complaint_source_id and complaint_source_id != "null":
-                # Extract ID if it's an object
                 cs_id = complaint_source_id.id if isinstance(complaint_source_id, ComplaintSource) else complaint_source_id
                 try:
-                    cs_id = int(cs_id)
-                    print(f"DEBUG: Checking ComplaintSource exists with id={cs_id}, school={self._school.id}")
-                    cs_exists = ComplaintSource.objects.filter(id=cs_id, school=self._school, is_active=True).exists()
-                    print(f"DEBUG: ComplaintSource exists: {cs_exists}")
-                    if not cs_exists:
-                        print(f"DEBUG: ComplaintSource NOT FOUND - listing all for this school:")
-                        all_css = ComplaintSource.objects.filter(school=self._school)
-                        print(f"DEBUG: All sources: {[(cs.id, cs.name, cs.is_active) for cs in all_css]}")
+                    if not ComplaintSource.objects.filter(id=int(cs_id), school=self._school, is_active=True).exists():
                         errors["complaint_source"] = "Invalid Complaint Source for your school."
                 except (ValueError, TypeError) as e:
-                    print(f"DEBUG: Error converting complaint_source to int: {e}")
                     errors["complaint_source"] = f"Complaint Source must be a valid number: {str(e)}"
-            
+
             assigned_to_id = attrs.get("assigned_to")
-            print(f"DEBUG: assigned_to_id from attrs: {assigned_to_id} (type: {type(assigned_to_id)})")
             if assigned_to_id and assigned_to_id != "null":
-                # Extract ID if it's an object
                 at_id = assigned_to_id.id if isinstance(assigned_to_id, User) else assigned_to_id
                 try:
-                    at_id = int(at_id)
-                    print(f"DEBUG: Checking User exists with id={at_id}, school={self._school.id}")
-                    user_exists = User.objects.filter(id=at_id, school=self._school, is_active=True).exists()
-                    print(f"DEBUG: User exists: {user_exists}")
-                    if not user_exists:
+                    if not User.objects.filter(id=int(at_id), school=self._school, is_active=True).exists():
                         errors["assigned_to"] = "Invalid staff member for your school."
                 except (ValueError, TypeError) as e:
-                    print(f"DEBUG: Error converting assigned_to to int: {e}")
                     errors["assigned_to"] = f"Assigned to must be a valid number: {str(e)}"
-        else:
-            print(f"DEBUG: No school context, skipping FK validation")
-        
+
         if errors:
-            print(f"DEBUG: Validation errors found: {errors}")
             raise serializers.ValidationError(errors)
-        
-        print(f"DEBUG: ComplaintEntrySerializer.validate() - SUCCESS")
+
         return super().validate(attrs)
 
     def get_file_url(self, obj):
@@ -908,131 +850,54 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
         return ret
 
     def create(self, validated_data):
-        import sys
-        print(f"\nDEBUG: ComplaintEntrySerializer.create() - START")
-        print(f"DEBUG: validated_data keys: {list(validated_data.keys())}")
-        print(f"DEBUG: validated_data: {validated_data}")
-        sys.stdout.flush()
-        
         upload = validated_data.pop("file_upload", None)
         if upload is not None:
             validated_data["file"] = upload
-        request = self.context.get("request")
-        if request and getattr(request, "user", None):
-            validated_data["created_by"] = request.user
-        
-        print(f"DEBUG: Before FK conversion - complaint_type: {validated_data.get('complaint_type')} (type: {type(validated_data.get('complaint_type'))})")
-        print(f"DEBUG: Before FK conversion - complaint_source: {validated_data.get('complaint_source')} (type: {type(validated_data.get('complaint_source'))})")
-        sys.stdout.flush()
-        
-        # Convert FK integer IDs to model objects
+
         if "complaint_type" in validated_data and validated_data["complaint_type"]:
-            print(f"DEBUG: Converting complaint_type {validated_data['complaint_type']} to object")
-            sys.stdout.flush()
             try:
-                complaint_type_id = int(validated_data["complaint_type"])
-                ct_obj = ComplaintType.objects.get(id=complaint_type_id)
-                print(f"DEBUG: Got ComplaintType object: {ct_obj}")
-                validated_data["complaint_type"] = ct_obj
-                sys.stdout.flush()
-            except (ComplaintType.DoesNotExist, ValueError, TypeError) as e:
-                print(f"DEBUG: Error converting complaint_type: {e}")
-                sys.stdout.flush()
+                validated_data["complaint_type"] = ComplaintType.objects.get(id=int(validated_data["complaint_type"]))
+            except (ComplaintType.DoesNotExist, ValueError, TypeError):
                 pass
-        
+
         if "complaint_source" in validated_data and validated_data["complaint_source"]:
-            print(f"DEBUG: Converting complaint_source {validated_data['complaint_source']} to object")
-            sys.stdout.flush()
             try:
-                complaint_source_id = int(validated_data["complaint_source"])
-                cs_obj = ComplaintSource.objects.get(id=complaint_source_id)
-                print(f"DEBUG: Got ComplaintSource object: {cs_obj}")
-                validated_data["complaint_source"] = cs_obj
-                sys.stdout.flush()
-            except (ComplaintSource.DoesNotExist, ValueError, TypeError) as e:
-                print(f"DEBUG: Error converting complaint_source: {e}")
-                sys.stdout.flush()
+                validated_data["complaint_source"] = ComplaintSource.objects.get(id=int(validated_data["complaint_source"]))
+            except (ComplaintSource.DoesNotExist, ValueError, TypeError):
                 pass
-        
+
         if "assigned_to" in validated_data and validated_data.get("assigned_to"):
-            print(f"DEBUG: Converting assigned_to {validated_data['assigned_to']} to object")
-            sys.stdout.flush()
             try:
-                assigned_to_id = int(validated_data["assigned_to"])
-                user_obj = User.objects.get(id=assigned_to_id)
-                print(f"DEBUG: Got User object: {user_obj}")
-                validated_data["assigned_to"] = user_obj
-                sys.stdout.flush()
-            except (User.DoesNotExist, ValueError, TypeError) as e:
-                print(f"DEBUG: Error converting assigned_to: {e}")
-                sys.stdout.flush()
+                validated_data["assigned_to"] = User.objects.get(id=int(validated_data["assigned_to"]))
+            except (User.DoesNotExist, ValueError, TypeError):
                 validated_data["assigned_to"] = None
-        
-        print(f"DEBUG: After FK conversion - complaint_type: {validated_data.get('complaint_type')} (type: {type(validated_data.get('complaint_type'))})")
-        print(f"DEBUG: After FK conversion - complaint_source: {validated_data.get('complaint_source')} (type: {type(validated_data.get('complaint_source'))})")
-        print(f"DEBUG: Calling super().create()")
-        print(f"DEBUG: validated_data BEFORE super().create(): {validated_data}")
-        sys.stdout.flush()
-        
-        # Manually create the object bypassing ModelSerializer.create() to avoid field conversion issues
-        model = self.Meta.model
-        print(f"DEBUG: Model class: {model}")
-        print(f"DEBUG: Creating model with: {validated_data}")
-        sys.stdout.flush()
-        
-        result = model.objects.create(**validated_data)
-        
-        print(f"DEBUG: model.objects.create() completed")
-        print(f"DEBUG: Instance created with id: {result.id}")
-        print(f"DEBUG: Instance.complaint_type: {result.complaint_type}")
-        print(f"DEBUG: Instance.complaint_source: {result.complaint_source}")
-        sys.stdout.flush()
-        return result
+
+        return self.Meta.model.objects.create(**validated_data)
 
     def update(self, instance, validated_data):
-        import sys
-        print(f"\nDEBUG: ComplaintEntrySerializer.update() - START")
-        print(f"DEBUG: instance id: {instance.id}")
-        print(f"DEBUG: validated_data: {validated_data}")
-        sys.stdout.flush()
-        
         upload = validated_data.pop("file_upload", None)
         if upload is not None:
             validated_data["file"] = upload
-        
-        # Convert FK integer IDs to model objects
+
         if "complaint_type" in validated_data and validated_data["complaint_type"]:
             try:
-                complaint_type_id = int(validated_data["complaint_type"])
-                validated_data["complaint_type"] = ComplaintType.objects.get(id=complaint_type_id)
-                print(f"DEBUG: Converted complaint_type to: {validated_data['complaint_type']}")
-            except (ComplaintType.DoesNotExist, ValueError, TypeError) as e:
-                print(f"DEBUG: Error converting complaint_type: {e}")
-            sys.stdout.flush()
-        
+                validated_data["complaint_type"] = ComplaintType.objects.get(id=int(validated_data["complaint_type"]))
+            except (ComplaintType.DoesNotExist, ValueError, TypeError):
+                pass
+
         if "complaint_source" in validated_data and validated_data["complaint_source"]:
             try:
-                complaint_source_id = int(validated_data["complaint_source"])
-                validated_data["complaint_source"] = ComplaintSource.objects.get(id=complaint_source_id)
-                print(f"DEBUG: Converted complaint_source to: {validated_data['complaint_source']}")
-            except (ComplaintSource.DoesNotExist, ValueError, TypeError) as e:
-                print(f"DEBUG: Error converting complaint_source: {e}")
-            sys.stdout.flush()
-        
+                validated_data["complaint_source"] = ComplaintSource.objects.get(id=int(validated_data["complaint_source"]))
+            except (ComplaintSource.DoesNotExist, ValueError, TypeError):
+                pass
+
         if "assigned_to" in validated_data and validated_data.get("assigned_to"):
             try:
-                assigned_to_id = int(validated_data["assigned_to"])
-                validated_data["assigned_to"] = User.objects.get(id=assigned_to_id)
-                print(f"DEBUG: Converted assigned_to to: {validated_data['assigned_to']}")
-            except (User.DoesNotExist, ValueError, TypeError) as e:
-                print(f"DEBUG: Error converting assigned_to: {e}")
+                validated_data["assigned_to"] = User.objects.get(id=int(validated_data["assigned_to"]))
+            except (User.DoesNotExist, ValueError, TypeError):
                 validated_data["assigned_to"] = None
-            sys.stdout.flush()
-        
-        result = super().update(instance, validated_data)
-        print(f"DEBUG: super().update() completed")
-        sys.stdout.flush()
-        return result
+
+        return super().update(instance, validated_data)
 
 
 class PostalReceiveEntrySerializer(serializers.ModelSerializer):
@@ -1371,10 +1236,8 @@ class PhoneCallLogEntrySerializer(serializers.ModelSerializer):
             errors["date"] = "From Date cannot be in the future."
 
         if to_date:
-            if to_date > timezone.localdate():
-                errors["next_follow_up_date"] = "To Date cannot be in the future."
-            elif from_date and to_date < from_date:
-                errors["next_follow_up_date"] = "To Date cannot be before From Date."
+            if from_date and to_date < from_date:
+                errors["next_follow_up_date"] = "Follow-up date cannot be before the call date."
 
         if call_duration:
             if len(call_duration) > 8:

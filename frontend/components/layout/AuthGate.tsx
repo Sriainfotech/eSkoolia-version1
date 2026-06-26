@@ -4,6 +4,7 @@ import { ReactNode, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { API_BASE_URL } from "@/lib/api";
 import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from "@/lib/auth";
+import { refreshAccessToken } from "@/lib/api-auth";
 
 type AuthGateProps = { children: ReactNode };
 
@@ -133,9 +134,18 @@ export default function AuthGate({ children }: AuthGateProps) {
 
           // ── Real mode: call /me and apply portal routing ───────────────
           try {
-            const meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me/`, {
+            let meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me/`, {
               headers: { Authorization: `Bearer ${access}` },
             });
+            // Token expired — delegate to shared mutex-guarded refresh so concurrent
+            // page hooks all piggy-back on one refresh call instead of racing.
+            if (meRes.status === 401 && refresh) {
+              const newAccess = await refreshAccessToken();
+              if (!newAccess) return; // _doRefresh already cleared tokens + redirected
+              meRes = await fetch(`${API_BASE_URL}/api/v1/auth/me/`, {
+                headers: { Authorization: `Bearer ${newAccess}` },
+              });
+            }
             if (meRes.ok) {
               const me = await meRes.json() as MeShape;
               if (me.must_change_password) {
@@ -168,14 +178,14 @@ export default function AuthGate({ children }: AuthGateProps) {
         return;
       }
 
-      const data = (await response.json()) as { access?: string };
+      const data = (await response.json()) as { access?: string; refresh?: string };
       if (!data.access) {
         clearAuthTokens();
         router.replace(`/login?next=${encodeURIComponent(pathname || "/dashboard")}`);
         return;
       }
 
-      setAuthTokens(data.access, refresh);
+      setAuthTokens(data.access, data.refresh ?? refresh);
 
       // Re-run all portal checks with the newly minted access token
       if (pathname !== '/change-password') {
@@ -193,6 +203,7 @@ export default function AuthGate({ children }: AuthGateProps) {
           }
         } catch { /* non-blocking */ }
       }
+      // (token was just refreshed — no need for a secondary refresh here)
 
       setReady(true);
     };

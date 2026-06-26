@@ -9,7 +9,7 @@ const nextConfig = {
   reactStrictMode: true,
   basePath: "",
   // Allow Next.js dev server to serve _next/* assets to eskoolia subdomains
-  allowedDevOrigins: ["*.eskoolia.local"],
+  allowedDevOrigins: ["*.eskoolia.local", "192.168.1.40"],
   eslint: {
     ignoreDuringBuilds: true,
   },

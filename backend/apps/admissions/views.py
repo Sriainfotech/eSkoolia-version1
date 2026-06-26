@@ -90,57 +90,19 @@ class AdminSectionRBACMixin:
         return self.permission_codes.get("*")
 
     def initial(self, request, *args, **kwargs):
-        import sys
-        print(f"\nDEBUG: AdminSectionRBACMixin.initial() - START")
-        print(f"DEBUG: Request: {request.method} {request.path}")
-        sys.stdout.flush()
-        
-        try:
-            print(f"DEBUG: Calling super().initial()")
-            sys.stdout.flush()
-            super().initial(request, *args, **kwargs)
-            print(f"DEBUG: super().initial() completed successfully")
-            sys.stdout.flush()
-        except Exception as e:
-            print(f"DEBUG: EXCEPTION in super().initial(): {e}")
-            import traceback
-            traceback.print_exc()
-            sys.stdout.flush()
-            raise
-        
+        super().initial(request, *args, **kwargs)
+
         code = self._get_permission_code()
-        print(f"DEBUG: Permission code: {code}")
-        sys.stdout.flush()
-        
-        # Enforce permission checks for all admin section operations (fail-safe)
-        # If no permission code is configured, deny access by default
         if code is None:
-            print(f"DEBUG: Permission code is None, raising PermissionDenied")
-            sys.stdout.flush()
             raise PermissionDenied("This action requires specific permissions that are not configured.")
 
         user = request.user
-        print(f"DEBUG: User: {user}, is_superuser: {user.is_superuser}")
-        sys.stdout.flush()
-        
         if user.is_superuser:
-            print(f"DEBUG: User is superuser, returning")
-            sys.stdout.flush()
             return
 
-        print(f"DEBUG: Checking permission code: {code}")
-        sys.stdout.flush()
         has_perm = hasattr(user, "has_permission_code") and user.has_permission_code(code)
-        print(f"DEBUG: has_permission_code: {has_perm}")
-        sys.stdout.flush()
-        
         if not has_perm:
-            print(f"DEBUG: User does not have permission, raising PermissionDenied")
-            sys.stdout.flush()
             raise PermissionDenied("You do not have permission to perform this action.")
-        
-        print(f"DEBUG: AdminSectionRBACMixin.initial() - SUCCESS")
-        sys.stdout.flush()
 
 
 class DuplicateSafeWriteMixin:
@@ -984,106 +946,16 @@ class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
         serializer.save(school=school, created_by=user)
 
     def create(self, request, *args, **kwargs):
-        import sys
-        import logging
-        logger = logging.getLogger(__name__)
-        
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            field_errors = self._normalize_field_errors(serializer.errors)
+            return self._validation_response(field_errors, self._first_error_message(field_errors))
         try:
-            print(f"\n{'='*60}")
-            print(f"DEBUG: ComplaintEntryViewSet.create() - START")
-            sys.stdout.flush()
-            
-            print(f"DEBUG: Request method: {request.method}")
-            print(f"DEBUG: Content-Type: {request.content_type}")
-            print(f"DEBUG: Request data: {request.data}")
-            print(f"DEBUG: Request data type: {type(request.data)}")
-            print(f"DEBUG: Request user: {request.user}")
-            sys.stdout.flush()
-            
-            try:
-                school = getattr(request.user, 'school', None)
-                print(f"DEBUG: Request user school: {school}")
-                sys.stdout.flush()
-            except Exception as e:
-                print(f"DEBUG: Error getting school: {e}")
-                sys.stdout.flush()
-            
-            try:
-                serializer = self.get_serializer(data=request.data)
-                print(f"DEBUG: Serializer created successfully")
-                sys.stdout.flush()
-            except Exception as e:
-                print(f"DEBUG: ERROR creating serializer: {e}")
-                import traceback
-                traceback.print_exc()
-                sys.stdout.flush()
-                raise
-            
-            try:
-                print(f"DEBUG: Serializer class: {serializer.__class__.__name__}")
-                print(f"DEBUG: Serializer fields: {list(serializer.fields.keys())}")
-                print(f"DEBUG: Serializer initial_data keys: {list(serializer.initial_data.keys())}")
-                sys.stdout.flush()
-            except Exception as e:
-                print(f"DEBUG: ERROR accessing serializer properties: {e}")
-                import traceback
-                traceback.print_exc()
-                sys.stdout.flush()
-            
-            try:
-                is_valid = serializer.is_valid()
-                print(f"DEBUG: Serializer is_valid: {is_valid}")
-                sys.stdout.flush()
-            except Exception as e:
-                print(f"DEBUG: ERROR calling is_valid(): {e}")
-                import traceback
-                traceback.print_exc()
-                sys.stdout.flush()
-                raise
-            
-            if not is_valid:
-                print(f"DEBUG: Serializer errors: {serializer.errors}")
-                sys.stdout.flush()
-                logger.error(f"Serializer validation failed: {serializer.errors}")
-                field_errors = self._normalize_field_errors(serializer.errors)
-                print(f"DEBUG: Normalized field_errors: {field_errors}")
-                sys.stdout.flush()
-                return self._validation_response(field_errors, self._first_error_message(field_errors))
-            
-            print(f"DEBUG: Serializer validated_data keys: {list(serializer.validated_data.keys())}")
-            sys.stdout.flush()
-            
-            try:
-                self.perform_create(serializer)
-                print(f"DEBUG: perform_create() completed, instance id: {serializer.instance.id}")
-                sys.stdout.flush()
-            except IntegrityError as exc:
-                print(f"DEBUG: IntegrityError: {exc}")
-                sys.stdout.flush()
-                return self._integrity_response(exc)
-            
-            output = self.get_serializer(serializer.instance)
-            print(f"DEBUG: Output serializer created successfully")
-            sys.stdout.flush()
-            print(f"DEBUG: ComplaintEntryViewSet.create() - SUCCESS")
-            print(f"{'='*60}\n")
-            sys.stdout.flush()
-            return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
-        except Exception as e:
-            # Log the error for debugging
-            import traceback
-            print(f"\nDEBUG: EXCEPTION in ComplaintEntryViewSet.create: {e}")
-            print(f"DEBUG: Exception type: {type(e).__name__}")
-            print(f"DEBUG: Exception module: {type(e).__module__}")
-            traceback.print_exc()
-            sys.stdout.flush()
-            logger.exception(f"Exception in create: {e}")
-            print(f"{'='*60}\n")
-            sys.stdout.flush()
-            return self._validation_response(
-                {"error": [str(e)]}, 
-                f"Failed to process request: {str(e)}"
-            )
+            self.perform_create(serializer)
+        except IntegrityError as exc:
+            return self._integrity_response(exc)
+        output = self.get_serializer(serializer.instance)
+        return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
@@ -1202,7 +1074,9 @@ class PostalDispatchEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
 
 class PhoneCallLogEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = PhoneCallLogEntrySerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     create_success_message = "Phone call log added successfully"
     update_success_message = "Record updated successfully"
     permission_codes = {

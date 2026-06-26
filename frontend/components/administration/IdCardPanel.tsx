@@ -136,6 +136,13 @@ export function IdCardPanel() {
   const [logoUrl, setLogoUrl] = useState("");
   const [signatureUrl, setSignatureUrl] = useState("");
 
+  const [bgPreview, setBgPreview] = useState<string | null>(null);
+  const [profilePreview, setProfilePreview] = useState<string | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string | null>(null);
+  const [signaturePreview, setSignaturePreview] = useState<string | null>(null);
+  const [uploadErrors, setUploadErrors] = useState<Record<string, string>>({});
+  const [saveFeedback, setSaveFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
   const load = async () => {
     try {
       setLoading(true);
@@ -145,19 +152,10 @@ export function IdCardPanel() {
 
       let loadedRoles: RoleOption[] = [];
       try {
-        const roleData = await apiGet<ApiList<RoleOption>>("/api/v1/access-control/roles/");
-        loadedRoles = listData(roleData);
+        const generateSetup = await apiGet<GenerateSetupResponse>("/api/v1/admissions/id-card-templates/generate-setup/");
+        loadedRoles = generateSetup.roles || [];
       } catch {
         loadedRoles = [];
-      }
-
-      if (loadedRoles.length === 0) {
-        try {
-          const generateSetup = await apiGet<GenerateSetupResponse>("/api/v1/admissions/id-card-templates/generate-setup/");
-          loadedRoles = generateSetup.roles || [];
-        } catch {
-          loadedRoles = [];
-        }
       }
 
       setRoles(loadedRoles);
@@ -171,6 +169,7 @@ export function IdCardPanel() {
   useEffect(() => {
     void load();
   }, []);
+
 
   const reset = () => {
     setEditingId(null);
@@ -186,9 +185,67 @@ export function IdCardPanel() {
     setProfileUrl("");
     setLogoUrl("");
     setSignatureUrl("");
+    setBgPreview(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setProfilePreview(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setLogoPreview(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setSignaturePreview(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
     setRolesDropdownOpen(false);
     setFieldErrors({});
+    setUploadErrors({});
+    setSaveFeedback(null);
     setTitleError("");
+  };
+
+  const handleImageUpload = (
+    field: string,
+    file: File | null,
+    maxSizeMB: number,
+    acceptedTypes: string[],
+    setFile: (f: File | null) => void,
+    setPreview: (fn: (prev: string | null) => string | null) => void
+  ) => {
+    setUploadErrors(prev => ({ ...prev, [field]: "" }));
+
+    if (!file) {
+      setFile(null);
+      setPreview(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+      return;
+    }
+
+    console.log(`[IdCard Upload] Field: "${field}"`);
+    console.log(`[IdCard Upload] onChange fired ✓`);
+    console.log(`[IdCard Upload] File name: ${file.name}`);
+    console.log(`[IdCard Upload] File type: ${file.type}`);
+    console.log(`[IdCard Upload] File size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+
+    const normalizedType = file.type.toLowerCase();
+    if (!acceptedTypes.includes(normalizedType)) {
+      console.warn(`[IdCard Upload] REJECTED — invalid type: "${file.type}"`);
+      setUploadErrors(prev => ({
+        ...prev,
+        [field]: `Unsupported format. Accepted: ${acceptedTypes.map(t => t.split("/")[1].toUpperCase()).join(", ")}.`,
+      }));
+      return;
+    }
+
+    const maxBytes = maxSizeMB * 1024 * 1024;
+    if (file.size > maxBytes) {
+      console.warn(`[IdCard Upload] REJECTED — size ${(file.size / 1024 / 1024).toFixed(2)}MB exceeds ${maxSizeMB}MB limit`);
+      setUploadErrors(prev => ({ ...prev, [field]: `File too large. Maximum allowed size is ${maxSizeMB}MB.` }));
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    console.log(`[IdCard Upload] URL.createObjectURL() → ${url}`);
+
+    const reader = new FileReader();
+    reader.onload = () => console.log(`[IdCard Upload] FileReader OK ✓ — "${file.name}" is readable`);
+    reader.onerror = () => console.error(`[IdCard Upload] FileReader FAILED ✗ — "${file.name}" could not be read`);
+    reader.readAsDataURL(file);
+
+    setFile(file);
+    setPreview(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
+    console.log(`[IdCard Upload] State updated ✓ — preview set for "${field}"`);
   };
 
   const edit = (row: IdCardRow) => {
@@ -207,6 +264,7 @@ export function IdCardPanel() {
     setSignatureUrl(row.signature_url || "");
     setRolesDropdownOpen(false);
     setFieldErrors({});
+    setUploadErrors({});
     setTitleError("");
   };
 
@@ -289,21 +347,30 @@ export function IdCardPanel() {
 
     try {
       setSaving(true);
+      setSaveFeedback(null);
       setError("");
       setSuccess("");
       setFieldErrors({});
       setTitleError("");
+      console.log(`[IdCard Save] Sending ${editingId ? "PATCH" : "POST"} — title="${title.trim()}", layout="${layout}", roles=${JSON.stringify(parseRoleIds())}, files: bg=${!!backgroundUpload}, bgBack=${!!profileUpload}, logo=${!!logoUpload}, sig=${!!signatureUpload}`);
       if (editingId) {
         await apiForm(`/api/v1/admissions/id-card-templates/${editingId}/`, "PATCH", formData);
+        console.log("[IdCard Save] ✓ PATCH success — ID card updated");
         setSuccess("ID card updated successfully.");
+        setSaveFeedback({ type: "success", text: "ID card updated successfully." });
       } else {
         await apiForm("/api/v1/admissions/id-card-templates/", "POST", formData);
+        console.log("[IdCard Save] ✓ POST success — ID card created");
         setSuccess("ID card saved successfully.");
+        setSaveFeedback({ type: "success", text: "ID card saved successfully." });
       }
       reset();
       await load();
     } catch (err: unknown) {
       const apiFieldErrors = readApiFieldErrors(err);
+      const errMsg = apiFieldErrors?.main || getErrorMessage(err, editingId ? "Unable to update ID card." : "Unable to save ID card.");
+      console.error("[IdCard Save] ✗ FAILED —", errMsg, err);
+      setSaveFeedback({ type: "error", text: errMsg });
       if (apiFieldErrors) {
         if (apiFieldErrors.title) {
           setTitleError(apiFieldErrors.title);
@@ -311,7 +378,7 @@ export function IdCardPanel() {
         setFieldErrors(apiFieldErrors);
         setError(apiFieldErrors.main || "Please fix the errors below.");
       } else {
-        setError(getErrorMessage(err, editingId ? "Unable to update ID card." : "Unable to save ID card."));
+        setError(errMsg);
       }
     } finally {
       setSaving(false);
@@ -605,6 +672,26 @@ export function IdCardPanel() {
         .idcard-form .file-upload-label strong {
           color: #4c6ef5;
         }
+        .idcard-form .file-preview-img {
+          max-height: 80px;
+          max-width: 100%;
+          border-radius: 6px;
+          object-fit: contain;
+          display: block;
+          margin: 0 auto 4px;
+        }
+        .idcard-form .file-preview-name {
+          font-size: 12px;
+          color: #374151;
+          text-align: center;
+          word-break: break-all;
+        }
+        .idcard-form .file-preview-replace {
+          font-size: 11px;
+          color: #6b7280;
+          text-align: center;
+          margin-top: 2px;
+        }
         .roles-empty-notice {
           padding: 12px;
           background: #fef3c7;
@@ -631,6 +718,22 @@ export function IdCardPanel() {
           background: #f3f4f6;
           color: #6b7280;
           border-color: #e5e7eb;
+        }
+        .idcard-form .upload-error {
+          color: #dc2626;
+          font-size: 12px;
+          margin-top: 4px;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+        .idcard-form .upload-error::before {
+          content: "⚠";
+          font-size: 11px;
+        }
+        .idcard-form .file-upload-area.has-error {
+          border-color: #dc2626;
+          background: #fef2f2;
         }
         .idcard-form .form-actions {
           display: flex;
@@ -825,79 +928,129 @@ export function IdCardPanel() {
 
                 <div className="form-group">
                   <label className="field-label" htmlFor="bgFront">Background Image (Front)</label>
-                  <div className="file-upload-area">
+                  <div className={`file-upload-area${uploadErrors.bgFront ? " has-error" : ""}`}>
                     <input
                       type="file"
                       id="bgFront"
                       name="backgroundFront"
                       accept="image/png,image/jpeg,image/jpg"
                       aria-describedby="bgFrontHelper"
-                      onChange={(e) => setBackgroundUpload(e.target.files?.[0] || null)}
+                      onChange={(e) => handleImageUpload("bgFront", e.target.files?.[0] || null, 2, ["image/jpeg", "image/jpg", "image/png"], setBackgroundUpload, setBgPreview)}
                     />
-                    <div className="file-upload-label"><strong>Click to upload</strong> or drag and drop<br />PNG, JPG (max 2MB)</div>
+                    {bgPreview ? (
+                      <>
+                        <img src={bgPreview} alt="Preview" className="file-preview-img" />
+                        <div className="file-preview-name">{backgroundUpload?.name}</div>
+                      </>
+                    ) : backgroundUrl ? (
+                      <>
+                        <img src={backgroundUrl} alt="Current background" className="file-preview-img" />
+                        <div className="file-preview-replace">Current image · click to replace</div>
+                      </>
+                    ) : (
+                      <div className="file-upload-label"><strong>Click to upload</strong> or drag and drop<br />PNG, JPG (max 2MB)</div>
+                    )}
                   </div>
                   <span className="helper-text" id="bgFrontHelper">Upload the front background image for the ID card (recommended: 1000x600px for horizontal).</span>
+                  {uploadErrors.bgFront && <div className="upload-error">{uploadErrors.bgFront}</div>}
                 </div>
 
                 <div className="form-group">
                   <label className="field-label" htmlFor="bgBack">Background Image (Back)</label>
-                  <div className="file-upload-area">
+                  <div className={`file-upload-area${uploadErrors.bgBack ? " has-error" : ""}`}>
                     <input
                       type="file"
                       id="bgBack"
                       name="backgroundBack"
                       accept="image/png,image/jpeg,image/jpg"
                       aria-describedby="bgBackHelper"
-                      onChange={(e) => setProfileUpload(e.target.files?.[0] || null)}
+                      onChange={(e) => handleImageUpload("bgBack", e.target.files?.[0] || null, 2, ["image/jpeg", "image/jpg", "image/png"], setProfileUpload, setProfilePreview)}
                     />
-                    <div className="file-upload-label"><strong>Click to upload</strong> or drag and drop<br />PNG, JPG (max 2MB)</div>
+                    {profilePreview ? (
+                      <>
+                        <img src={profilePreview} alt="Preview" className="file-preview-img" />
+                        <div className="file-preview-name">{profileUpload?.name}</div>
+                      </>
+                    ) : profileUrl ? (
+                      <>
+                        <img src={profileUrl} alt="Current background back" className="file-preview-img" />
+                        <div className="file-preview-replace">Current image · click to replace</div>
+                      </>
+                    ) : (
+                      <div className="file-upload-label"><strong>Click to upload</strong> or drag and drop<br />PNG, JPG (max 2MB)</div>
+                    )}
                   </div>
                   <span className="helper-text" id="bgBackHelper">Upload the back background image for the ID card.</span>
+                  {uploadErrors.bgBack && <div className="upload-error">{uploadErrors.bgBack}</div>}
                 </div>
 
                 <div className="form-group">
                   <label className="field-label" htmlFor="idcardLogo">School Logo</label>
-                  <div className="file-upload-area">
+                  <div className={`file-upload-area${uploadErrors.logo ? " has-error" : ""}`}>
                     <input
                       type="file"
                       id="idcardLogo"
                       name="logo"
                       accept="image/png,image/jpeg,image/jpg,image/svg+xml"
                       aria-describedby="logoHelper"
-                      onChange={(e) => setLogoUpload(e.target.files?.[0] || null)}
+                      onChange={(e) => handleImageUpload("logo", e.target.files?.[0] || null, 1, ["image/jpeg", "image/jpg", "image/png", "image/svg+xml"], setLogoUpload, setLogoPreview)}
                     />
-                    <div className="file-upload-label"><strong>Click to upload</strong> or drag and drop<br />PNG, JPG, SVG (max 1MB)</div>
+                    {logoPreview ? (
+                      <>
+                        <img src={logoPreview} alt="Preview" className="file-preview-img" />
+                        <div className="file-preview-name">{logoUpload?.name}</div>
+                      </>
+                    ) : logoUrl ? (
+                      <>
+                        <img src={logoUrl} alt="Current logo" className="file-preview-img" />
+                        <div className="file-preview-replace">Current image · click to replace</div>
+                      </>
+                    ) : (
+                      <div className="file-upload-label"><strong>Click to upload</strong> or drag and drop<br />PNG, JPG, SVG (max 1MB)</div>
+                    )}
                   </div>
                   <span className="helper-text" id="logoHelper">Upload the school logo to display on the ID card.</span>
+                  {uploadErrors.logo && <div className="upload-error">{uploadErrors.logo}</div>}
                 </div>
 
                 <div className="form-group">
                   <label className="field-label" htmlFor="idcardSignature">Signature Image</label>
-                  <div className="file-upload-area">
+                  <div className={`file-upload-area${uploadErrors.signature ? " has-error" : ""}`}>
                     <input
                       type="file"
                       id="idcardSignature"
                       name="signature"
                       accept="image/png,image/jpeg,image/jpg"
                       aria-describedby="sigHelper"
-                      onChange={(e) => setSignatureUpload(e.target.files?.[0] || null)}
+                      onChange={(e) => handleImageUpload("signature", e.target.files?.[0] || null, 1, ["image/jpeg", "image/jpg", "image/png"], setSignatureUpload, setSignaturePreview)}
                     />
-                    <div className="file-upload-label"><strong>Click to upload</strong> or drag and drop<br />PNG, JPG (max 1MB)</div>
+                    {signaturePreview ? (
+                      <>
+                        <img src={signaturePreview} alt="Preview" className="file-preview-img" />
+                        <div className="file-preview-name">{signatureUpload?.name}</div>
+                      </>
+                    ) : signatureUrl ? (
+                      <>
+                        <img src={signatureUrl} alt="Current signature" className="file-preview-img" />
+                        <div className="file-preview-replace">Current image · click to replace</div>
+                      </>
+                    ) : (
+                      <div className="file-upload-label"><strong>Click to upload</strong> or drag and drop<br />PNG, JPG (max 1MB)</div>
+                    )}
                   </div>
                   <span className="helper-text" id="sigHelper">Upload the authorized signature image for the ID card.</span>
-                </div>
-
-                <div style={{ fontSize: 12, color: "var(--text-muted)", display: "grid", gap: 4 }}>
-                  {backgroundUrl ? <a href={backgroundUrl} target="_blank" rel="noreferrer">Background file</a> : null}
-                  {profileUrl ? <a href={profileUrl} target="_blank" rel="noreferrer">Profile image</a> : null}
-                  {logoUrl ? <a href={logoUrl} target="_blank" rel="noreferrer">Logo</a> : null}
-                  {signatureUrl ? <a href={signatureUrl} target="_blank" rel="noreferrer">Signature</a> : null}
+                  {uploadErrors.signature && <div className="upload-error">{uploadErrors.signature}</div>}
                 </div>
 
                 <div className="form-actions">
                   <button type="submit" disabled={saving} className="btn-submit">{saving ? "Saving..." : editingId ? "Update" : "Save"}</button>
                   {editingId ? <button type="button" onClick={reset} className="btn-cancel">Cancel</button> : null}
                 </div>
+                {saveFeedback && (
+                  <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 6, fontSize: 13, fontWeight: 600, background: saveFeedback.type === "success" ? "#dcfce7" : "#fee2e2", color: saveFeedback.type === "success" ? "#166534" : "#991b1b", border: `1px solid ${saveFeedback.type === "success" ? "#86efac" : "#fca5a5"}` }}>
+                    {saveFeedback.type === "success" ? "✓ " : "✗ "}{saveFeedback.text}
+                  </div>
+                )}
               </form>
             </div>
 

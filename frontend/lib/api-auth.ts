@@ -203,7 +203,19 @@ async function requestWithRefreshResponse(path: string, options?: RequestInit): 
   return response;
 }
 
-async function refreshAccessToken(): Promise<string | null> {
+// Prevents concurrent refresh attempts when multiple hooks hit 401 simultaneously.
+// The HR Onboarding page fires 10+ concurrent hooks; without this lock all 10 call
+// refreshAccessToken() at once — any failure in a secondary call triggers
+// clearAuthTokens() + window.location redirect → spurious logout.
+let _refreshLock: Promise<string | null> | null = null;
+
+export async function refreshAccessToken(): Promise<string | null> {
+  if (_refreshLock) return _refreshLock;
+  _refreshLock = _doRefresh().finally(() => { _refreshLock = null; });
+  return _refreshLock;
+}
+
+async function _doRefresh(): Promise<string | null> {
   const refresh = getRefreshToken();
   if (!refresh) return null;
 
@@ -221,7 +233,7 @@ async function refreshAccessToken(): Promise<string | null> {
     return null;
   }
 
-  const data = (await res.json()) as { access?: string };
+  const data = (await res.json()) as { access?: string; refresh?: string };
   if (!data.access) {
     clearAuthTokens();
     if (typeof window !== "undefined") {
@@ -230,7 +242,7 @@ async function refreshAccessToken(): Promise<string | null> {
     return null;
   }
 
-  setAuthTokens(data.access, refresh);
+  setAuthTokens(data.access, data.refresh ?? refresh);
   return data.access;
 }
 
