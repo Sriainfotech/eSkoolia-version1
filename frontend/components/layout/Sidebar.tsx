@@ -170,7 +170,8 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: { mobileOpen?: bo
       <aside className={`${styles.aside}${mobileOpen ? ` ${styles.asideMobileOpen}` : ''}`}>
       <a href="/dashboard" className={styles.brandLink}>
         <div className={styles.brand}>
-          <img src="/mascot-icon.png?v=2" alt="Eskoolia" className={styles.brandLogo} />
+          <img src="/image1.png" alt="Eskoolia" className={styles.brandLogo} />
+          <span className={styles.brandText}>Eskoolia</span>
         </div>
       </a>
       <div className={styles.nav}>

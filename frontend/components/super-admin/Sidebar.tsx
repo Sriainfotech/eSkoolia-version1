@@ -112,7 +112,10 @@ export default function SuperAdminSidebar({ collapsed = false, onToggleCollapse 
         <button onClick={() => setShowMobileMenu(!showMobileMenu)} className="p-2 rounded-lg hover:bg-[var(--bg-2)] transition">
           {showMobileMenu ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
         </button>
-        <h1 className="ml-4 text-xl font-bold tracking-tight text-[var(--ink-1)]">Eskoolia Console</h1>
+        <div className="ml-4 flex items-center gap-2">
+          <img src="/image1.png" alt="School ERP" className="h-8 w-auto object-contain" />
+          <h1 className="text-xl font-bold tracking-tight text-[var(--ink-1)]">School ERP</h1>
+        </div>
       </div>
 
       {/* Mobile Menu Overlay */}
@@ -131,7 +134,12 @@ export default function SuperAdminSidebar({ collapsed = false, onToggleCollapse 
       >
         {/* Logo / Branding */}
         <div className="flex h-16 items-center justify-between border-b border-[var(--bd)] px-4">
-          {!isCollapsed && <h1 className="text-xl font-bold tracking-tight text-[var(--ink-1)]">Eskoolia</h1>}
+          {!isCollapsed && (
+            <div className="flex items-center gap-2">
+              <img src="/image1.png" alt="School ERP" className="h-8 w-auto object-contain" />
+              <h1 className="text-xl font-bold tracking-tight text-[var(--ink-1)]">School ERP</h1>
+            </div>
+          )}
           <button
             onClick={handleToggleCollapse}
             className="hidden rounded-lg p-2 transition-colors hover:bg-[var(--bg-2)] md:flex"

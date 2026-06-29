@@ -102,98 +102,178 @@ def create_postgres_schema(schema_name):
         raise
 
 
+# def run_tenant_migrations(schema_name):
+#     """Run Django migrations inside the tenant schema.
+    
+#     Uses django-tenants schema_context() to run migrations in the target schema.
+#     """
+#     try:
+#         from django_tenants.utils import schema_context
+#         from django.core.management import call_command
+#         from io import StringIO
+        
+#         output = StringIO()
+        
+#         with schema_context(schema_name):
+#             call_command(
+#                 "migrate",
+#                 verbosity=2,
+#                 interactive=False,
+#                 stdout=output,
+#                 stderr=output,
+#             )
+        
+#         migration_output = output.getvalue()
+#         logger.info(f"Migrations completed for schema {schema_name}\n{migration_output}")
+#         return True
+#     except Exception as exc:
+#         logger.error(f"Failed to run migrations for schema {schema_name}: {exc}")
+#         raise
+
+# def run_tenant_migrations(schema_name):
+#     """Run Django migrations inside the tenant schema.
+
+#     Uses django-tenants schema_context() to run migrations in the target schema.
+#     """
+#     import time
+
+#     try:
+#         from django_tenants.utils import schema_context
+#         from django.core.management import call_command
+#         from io import StringIO
+
+#         output = StringIO()
+
+#         print("=" * 80)
+#         print(f"STARTING MIGRATIONS FOR SCHEMA: {schema_name}")
+
+#         start = time.time()
+
+#         with schema_context(schema_name):
+#             call_command(
+#                 "migrate",
+#                 verbosity=2,
+#                 interactive=False,
+#                 stdout=output,
+#                 stderr=output,
+#             )
+
+#         elapsed = time.time() - start
+
+#         print(f"MIGRATIONS COMPLETED IN {elapsed:.2f} SECONDS")
+#         print("=" * 80)
+
+#         migration_output = output.getvalue()
+#         logger.info(f"Migrations completed for schema {schema_name}\n{migration_output}")
+
+#         return True
+
+#     except Exception as exc:
+#         logger.exception(f"Failed to run migrations for schema {schema_name}")
+#         raise
+
 def run_tenant_migrations(schema_name):
     """Run Django migrations inside the tenant schema.
-    
-    Uses django-tenants schema_context() to run migrations in the target schema.
+
+    Uses SET search_path (same as TenantMainMiddleware) instead of
+    django_tenants.schema_context, which requires the django-tenants DB
+    backend that this project does not configure.
     """
+    from django.core.management import call_command
+    from io import StringIO
+
+    output = StringIO()
     try:
-        from django_tenants.utils import schema_context
-        from django.core.management import call_command
-        from io import StringIO
-        
-        output = StringIO()
-        
-        with schema_context(schema_name):
-            call_command(
-                "migrate",
-                verbosity=2,
-                interactive=False,
-                stdout=output,
-                stderr=output,
-            )
-        
+        with connection.cursor() as cursor:
+            cursor.execute(f"SET search_path = {schema_name}, public")
+
+        call_command(
+            "migrate",
+            verbosity=1,
+            interactive=False,
+            stdout=output,
+            stderr=output,
+        )
+
         migration_output = output.getvalue()
         logger.info(f"Migrations completed for schema {schema_name}\n{migration_output}")
         return True
+
     except Exception as exc:
-        logger.error(f"Failed to run migrations for schema {schema_name}: {exc}")
+        logger.exception(f"Failed to run migrations for schema {schema_name}\n{output.getvalue()}")
         raise
 
-
+    finally:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET search_path = public")
+        except Exception:
+            pass
 def seed_tenant_defaults(schema_name):
     """Seed default data into the tenant schema.
-    
-    This creates:
-    - Default academic year
-    - Default departments
-    - Default RBAC roles
-    - Default permissions
-    - Default settings
-    
-    All seeding happens inside the tenant schema via schema_context().
+
+    Uses SET search_path (same as run_tenant_migrations) instead of
+    django_tenants.schema_context which requires the django-tenants DB backend.
     """
     try:
-        from django_tenants.utils import schema_context
-        
-        with schema_context(schema_name):
-            # Seed academic year
-            try:
-                from apps.academics.models import AcademicYear
-                current_year = datetime.now().year
-                AcademicYear.objects.get_or_create(
-                    name=f"{current_year}/{current_year + 1}",
-                    defaults={
-                        "year_start": f"{current_year}-01-01",
-                        "year_end": f"{current_year + 1}-12-31",
-                        "is_active": True,
-                    },
+        with connection.cursor() as cursor:
+            cursor.execute(f"SET search_path = {schema_name}, public")
+
+        # Seed academic year
+        try:
+            from apps.academics.models import AcademicYear
+            current_year = datetime.now().year
+            AcademicYear.objects.get_or_create(
+                name=f"{current_year}/{current_year + 1}",
+                defaults={
+                    "year_start": f"{current_year}-01-01",
+                    "year_end": f"{current_year + 1}-12-31",
+                    "is_active": True,
+                },
+            )
+            logger.info(f"Seeded academic year in {schema_name}")
+        except Exception as exc:
+            logger.warning(f"Failed to seed academic year in {schema_name}: {exc}")
+
+        # Seed default RBAC roles
+        try:
+            from apps.access_control.models import Role
+            default_roles = ["Administrator", "Teacher", "Student", "Parent"]
+            for role_name in default_roles:
+                Role.objects.get_or_create(
+                    name=role_name,
+                    defaults={"description": f"Default {role_name} role"},
                 )
-                logger.info(f"Seeded academic year in {schema_name}")
-            except Exception as exc:
-                logger.warning(f"Failed to seed academic year in {schema_name}: {exc}")
-            
-            # Seed default RBAC roles
-            try:
-                from apps.access_control.models import Role
-                default_roles = ["Administrator", "Teacher", "Student", "Parent"]
-                for role_name in default_roles:
-                    Role.objects.get_or_create(
-                        name=role_name,
-                        defaults={"description": f"Default {role_name} role"},
-                    )
-                logger.info(f"Seeded default roles in {schema_name}")
-            except Exception as exc:
-                logger.warning(f"Failed to seed roles in {schema_name}: {exc}")
-            
-            # Seed default departments (HR)
-            try:
-                from apps.hr.models import Department
-                default_depts = ["Administration", "Academic", "Support"]
-                for dept_name in default_depts:
-                    Department.objects.get_or_create(
-                        name=dept_name,
-                        defaults={"description": f"Default {dept_name} department"},
-                    )
-                logger.info(f"Seeded default departments in {schema_name}")
-            except Exception as exc:
-                logger.warning(f"Failed to seed departments in {schema_name}: {exc}")
-        
+            logger.info(f"Seeded default roles in {schema_name}")
+        except Exception as exc:
+            logger.warning(f"Failed to seed roles in {schema_name}: {exc}")
+
+        # Seed default departments (HR)
+        try:
+            from apps.hr.models import Department
+            default_depts = ["Administration", "Academic", "Support"]
+            for dept_name in default_depts:
+                Department.objects.get_or_create(
+                    name=dept_name,
+                    defaults={"description": f"Default {dept_name} department"},
+                )
+            logger.info(f"Seeded default departments in {schema_name}")
+        except Exception as exc:
+            logger.warning(f"Failed to seed departments in {schema_name}: {exc}")
+
         logger.info(f"Default data seeding completed for schema {schema_name}")
         return True
+
     except Exception as exc:
         logger.error(f"Failed to seed defaults in schema {schema_name}: {exc}")
         raise
+
+    finally:
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET search_path = public")
+        except Exception:
+            pass
 
 
 def create_tenant_domain(tenant, subdomain):
@@ -218,6 +298,11 @@ def provision_tenant(
     actor_user=None,
     actor_ip=None,
 ):
+    import time
+    from datetime import datetime   
+    start = time.time()
+    start_time = datetime.now()
+
     """Main provisioning function.
     
     Orchestrates the full tenant creation flow:
@@ -291,7 +376,16 @@ def provision_tenant(
         )
         
         # Step 3: Create PostgreSQL schema
+        # create_postgres_schema(schema_name)
+        # Step 3: Create PostgreSQL schema
+        step_start = time.time()
+        print("=" * 80)
+        print(f"STEP 3: Creating PostgreSQL schema -> {schema_name}")
+
         create_postgres_schema(schema_name)
+
+        print(f"STEP 3 completed in {time.time() - step_start:.2f} seconds")
+        print("=" * 80)
         
         log_audit(
             action="schema_created",
@@ -304,7 +398,16 @@ def provision_tenant(
         )
         
         # Step 4: Run migrations
+        # run_tenant_migrations(schema_name)
+        # Step 4: Run migrations
+        step_start = time.time()
+        print("=" * 80)
+        print(f"STEP 4: Running tenant migrations -> {schema_name}")
+
         run_tenant_migrations(schema_name)
+
+        print(f"STEP 4 completed in {time.time() - step_start:.2f} seconds")
+        print("=" * 80)
         
         log_audit(
             action="migrations_ran",
@@ -316,7 +419,16 @@ def provision_tenant(
         )
         
         # Step 5: Seed defaults
+        # seed_tenant_defaults(schema_name)
+        # Step 5: Seed defaults
+        step_start = time.time()
+        print("=" * 80)
+        print(f"STEP 5: Seeding default data -> {schema_name}")
+
         seed_tenant_defaults(schema_name)
+
+        print(f"STEP 5 completed in {time.time() - step_start:.2f} seconds")
+        print("=" * 80)
         
         log_audit(
             action="seeding_completed",

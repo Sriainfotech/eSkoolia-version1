@@ -6,7 +6,7 @@ django.setup()
 
 from apps.tenancy.models import SchoolTenant
 
-tenant = SchoolTenant.objects.get(tenant_id='TNT_4A7D027C')
+tenant = SchoolTenant.objects.get(tenant_id='TNT_57379291')
 print(f'Tenant: {tenant.name}  schema={tenant.schema_name}  status={tenant.status}')
 
 # Create the schema by calling create_schema (provided by django-tenants TenantMixin)
