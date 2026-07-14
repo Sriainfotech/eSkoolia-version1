@@ -5132,3 +5132,12 @@ Login at localhost:3000
 **18 endpoints return 404 (not yet implemented):** Core timetable/events, Attendance teacher view, Fees fee-types/structures/categories, Exams schedule/exam-types, Finance income/expenses/accounts, HR leaves, Behaviour categories, Reports attendance, Communication notices/circulars, Teacher Portal dashboard, Parent Portal dashboard.
 
 **Overall API health: 6/10 | Production readiness: 4.5/10**
+
+
+13/07/2026 (Srinivas / AIRA Session — Env Revert)
+
+### Local Testing .env Changes Reverted
+
+1. `frontend/.env` — removed `NEXT_PUBLIC_API_URL=http://127.0.0.1:8765` (was added for local machine testing), reverted `NEXT_PUBLIC_BACKEND_PORT` from `8765` → `8000`, reverted `NEXT_PUBLIC_BASE_DOMAIN` from `eskoolia.local` → `eskoolia.com`.
+2. `backend/.env` — removed `192.168.1.40` and `localtesting.eskoolia.local` from `DJANGO_ALLOWED_HOSTS`; restored to `127.0.0.1,localhost` only.
+3. Both `.env` files are gitignored — these changes are local only, not pushed to repo.
