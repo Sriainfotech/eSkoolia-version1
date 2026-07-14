@@ -150,9 +150,7 @@ class RoleViewSet(StandardizedAccessControlResponseMixin, viewsets.ModelViewSet)
         user = self.request.user
         minimal = self.action == "list" and self.request.query_params.get("minimal") == "1"
         queryset = Role.objects.all() if minimal else Role.objects.prefetch_related("permissions")
-        if user.is_superuser:
-            pass
-        elif user.school_id:
+        if user.school_id:
             queryset = queryset.filter(school_id=user.school_id)
         else:
             queryset = queryset.filter(school__isnull=True)
@@ -455,8 +453,6 @@ class UserRoleViewSet(viewsets.ModelViewSet):
         if role_id:
             queryset = queryset.filter(role_id=role_id)
 
-        if user.is_superuser:
-            return queryset
         if user.school_id:
             return queryset.filter(role__school_id=user.school_id)
         return queryset.none()
@@ -467,8 +463,6 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
 
     def _roles_queryset(self, request):
         qs = Role.objects.order_by("name")
-        if request.user.is_superuser:
-            return qs
         if request.user.school_id:
             return qs.filter(Q(school_id=request.user.school_id) | Q(school__isnull=True))
         return Role.objects.none()
@@ -476,7 +470,7 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
     def list(self, request):
         classes_qs = Class.objects.order_by("numeric_order", "name")
         sections_qs = Section.objects.select_related("school_class").order_by("name")
-        if not request.user.is_superuser and request.user.school_id:
+        if request.user.school_id:
             classes_qs = classes_qs.filter(school_id=request.user.school_id)
             sections_qs = sections_qs.filter(school_class__school_id=request.user.school_id)
 
@@ -509,7 +503,7 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
             return Response({"detail": "Parent role is managed under student rows in this screen."}, status=status.HTTP_400_BAD_REQUEST)
 
         user_role_qs = UserRole.objects.select_related("user", "role").filter(role_id=role.id)
-        if not request.user.is_superuser and request.user.school_id:
+        if request.user.school_id:
             user_role_qs = user_role_qs.filter(Q(role__school_id=request.user.school_id) | Q(role__school__isnull=True))
 
         linked_student_by_username = {}
@@ -519,7 +513,7 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
                 return Response({"detail": "class query param is required for student role."}, status=status.HTTP_400_BAD_REQUEST)
 
             students_qs = Student.objects.select_related("current_class", "current_section", "guardian")
-            if not request.user.is_superuser and request.user.school_id:
+            if request.user.school_id:
                 students_qs = students_qs.filter(school_id=request.user.school_id)
             students_qs = students_qs.filter(current_class_id=class_id)
             if section_id:
@@ -549,7 +543,7 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
             parent_users_by_phone = {}
             if parent_role:
                 parent_user_roles = UserRole.objects.select_related("user", "role").filter(role_id=parent_role.id)
-                if not request.user.is_superuser and request.user.school_id:
+                if request.user.school_id:
                     parent_user_roles = parent_user_roles.filter(
                         Q(role__school_id=request.user.school_id) | Q(role__school__isnull=True)
                     )
@@ -566,7 +560,7 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
             }
             admission_usernames = [str(v) for v in students_qs.values_list("admission_no", flat=True) if v]
             fallback_users = User.objects.filter(username__in=admission_usernames)
-            if not request.user.is_superuser and request.user.school_id:
+            if request.user.school_id:
                 fallback_users = fallback_users.filter(school_id=request.user.school_id)
             for user in fallback_users:
                 student_user_by_username.setdefault(user.username, user)
@@ -710,7 +704,7 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
         if not user:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if not request.user.is_superuser and request.user.school_id and user.school_id != request.user.school_id:
+        if request.user.school_id and user.school_id != request.user.school_id:
             return Response({"detail": "User does not belong to your school."}, status=status.HTTP_403_FORBIDDEN)
 
         user.access_status = enabled
@@ -729,7 +723,7 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
         if not user:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if not request.user.is_superuser and request.user.school_id and user.school_id != request.user.school_id:
+        if request.user.school_id and user.school_id != request.user.school_id:
             return Response({"detail": "User does not belong to your school."}, status=status.HTTP_403_FORBIDDEN)
 
         user.set_password(str(new_password))
@@ -749,8 +743,6 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
 
     def _role_queryset(self, request):
         qs = Role.objects.order_by("name")
-        if request.user.is_superuser:
-            return qs
         if request.user.school_id:
             return qs.filter(Q(school_id=request.user.school_id) | Q(school__isnull=True))
         return Role.objects.none()
@@ -759,7 +751,7 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
         class_id = request.query_params.get("class") or request.query_params.get("class_id")
         classes_qs = Class.objects.order_by("numeric_order", "name")
         sections_qs = Section.objects.select_related("school_class").order_by("name")
-        if not request.user.is_superuser and request.user.school_id:
+        if request.user.school_id:
             classes_qs = classes_qs.filter(school_id=request.user.school_id)
             sections_qs = sections_qs.filter(school_class__school_id=request.user.school_id)
         if class_id:
@@ -781,7 +773,7 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
             return Response({"users": []}, status=status.HTTP_200_OK)
 
         students_qs = Student.objects.select_related("current_class", "current_section", "guardian")
-        if not request.user.is_superuser and request.user.school_id:
+        if request.user.school_id:
             students_qs = students_qs.filter(school_id=request.user.school_id)
         if class_id:
             multi_records = StudentMultiClassRecord.objects.filter(school_class_id=class_id)
@@ -827,7 +819,7 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
         student_user_by_username = {}
         if student_role:
             student_user_roles = UserRole.objects.select_related("user", "role").filter(role_id=student_role.id)
-            if not request.user.is_superuser and request.user.school_id:
+            if request.user.school_id:
                 student_user_roles = student_user_roles.filter(
                     Q(role__school_id=request.user.school_id) | Q(role__school__isnull=True)
                 )
@@ -837,7 +829,7 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
         # PHP parity fallback: link by username even if role mapping rows are missing.
         admission_usernames = [str(v) for v in students_qs.values_list("admission_no", flat=True) if v]
         student_users_fallback = User.objects.filter(username__in=admission_usernames)
-        if not request.user.is_superuser and request.user.school_id:
+        if request.user.school_id:
             student_users_fallback = student_users_fallback.filter(school_id=request.user.school_id)
         for user in student_users_fallback:
             student_user_by_username.setdefault(user.username, user)
@@ -845,7 +837,7 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
         parent_user_by_phone = {}
         if parent_role:
             parent_user_roles = UserRole.objects.select_related("user", "role").filter(role_id=parent_role.id)
-            if not request.user.is_superuser and request.user.school_id:
+            if request.user.school_id:
                 parent_user_roles = parent_user_roles.filter(
                     Q(role__school_id=request.user.school_id) | Q(role__school__isnull=True)
                 )
@@ -856,7 +848,7 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
 
         # Fallback: map parent by phone from all users when parent-role rows are unavailable.
         all_users_by_phone = User.objects.exclude(phone="")
-        if not request.user.is_superuser and request.user.school_id:
+        if request.user.school_id:
             all_users_by_phone = all_users_by_phone.filter(school_id=request.user.school_id)
         for user in all_users_by_phone:
             normalized = _normalize_phone(getattr(user, "phone", ""))
@@ -906,7 +898,7 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
         if not user:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if not request.user.is_superuser and request.user.school_id and user.school_id != request.user.school_id:
+        if request.user.school_id and user.school_id != request.user.school_id:
             return Response({"detail": "User does not belong to your school."}, status=status.HTTP_403_FORBIDDEN)
 
         user.due_fees_login_blocked = blocked
@@ -927,8 +919,6 @@ class LoginPermissionViewSet(viewsets.ViewSet):
 
     def _roles_qs(self, request):
         qs = Role.objects.order_by("name")
-        if request.user.is_superuser:
-            return qs
         if request.user.school_id:
             return qs.filter(Q(school_id=request.user.school_id) | Q(school__isnull=True))
         return Role.objects.none()
@@ -959,7 +949,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
     def _meta_response(self, request):
         classes_qs = Class.objects.order_by("numeric_order", "name")
         sections_qs = Section.objects.select_related("school_class").order_by("name")
-        if not request.user.is_superuser and request.user.school_id:
+        if request.user.school_id:
             classes_qs = classes_qs.filter(school_id=request.user.school_id)
             sections_qs = sections_qs.filter(school_class__school_id=request.user.school_id)
 
@@ -1007,7 +997,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
             students_qs = Student.objects.select_related(
                 "current_class", "current_section"
             ).filter(is_deleted=False)
-            if not request.user.is_superuser and request.user.school_id:
+            if request.user.school_id:
                 students_qs = students_qs.filter(school_id=request.user.school_id)
             # Class and section are optional filters
             if class_id:
@@ -1026,7 +1016,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
             existing_users = {}
             if admission_nos:
                 qs_users = User.objects.filter(username__in=admission_nos)
-                if not request.user.is_superuser and request.user.school_id:
+                if request.user.school_id:
                     qs_users = qs_users.filter(school_id=request.user.school_id)
                 existing_users = {u.username: u for u in qs_users}
 
@@ -1071,7 +1061,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
         # ── Non-student path ──────────────────────────────────────────────────
         else:
             user_role_qs = UserRole.objects.select_related("user", "role").filter(role_id=role.id)
-            if not request.user.is_superuser and request.user.school_id:
+            if request.user.school_id:
                 user_role_qs = user_role_qs.filter(
                     Q(role__school_id=request.user.school_id) | Q(role__school__isnull=True)
                 )
@@ -1154,7 +1144,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
         user_obj = User.objects.filter(id=user_id).first()
         if not user_obj:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not request.user.is_superuser and request.user.school_id and user_obj.school_id != request.user.school_id:
+        if request.user.school_id and user_obj.school_id != request.user.school_id:
             return Response({"detail": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
 
         user_obj.access_status = login_access
@@ -1173,7 +1163,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
         user_obj = User.objects.filter(id=user_id).first()
         if not user_obj:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not request.user.is_superuser and request.user.school_id and user_obj.school_id != request.user.school_id:
+        if request.user.school_id and user_obj.school_id != request.user.school_id:
             return Response({"detail": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
 
         alphabet = _string.ascii_letters + _string.digits
@@ -1204,7 +1194,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
             if role:
                 user_ids_qs = UserRole.objects.filter(role_id=role.id).values_list("user_id", flat=True).distinct()
                 target_qs = User.objects.filter(id__in=user_ids_qs)
-                if not request.user.is_superuser and request.user.school_id:
+                if request.user.school_id:
                     target_qs = target_qs.filter(school_id=request.user.school_id)
                 if search:
                     target_qs = target_qs.filter(
@@ -1217,7 +1207,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
         elif ids:
             safe_ids = [int(i) for i in ids if str(i).lstrip("-").isdigit()]
             qs = User.objects.filter(id__in=safe_ids)
-            if not request.user.is_superuser and request.user.school_id:
+            if request.user.school_id:
                 qs = qs.filter(school_id=request.user.school_id)
             affected = qs.update(access_status=login_access)
             return Response({"affected": affected}, status=status.HTTP_200_OK)
@@ -1246,7 +1236,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
                     UserRole.objects.filter(role_id=role.id).values_list("user_id", flat=True).distinct()
                 )
                 target_qs = User.objects.filter(id__in=user_ids)
-                if not request.user.is_superuser and request.user.school_id:
+                if request.user.school_id:
                     target_qs = target_qs.filter(school_id=request.user.school_id)
                 if search:
                     target_qs = target_qs.filter(
@@ -1263,7 +1253,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
         elif ids:
             safe_ids = [int(i) for i in ids if str(i).lstrip("-").isdigit()]
             qs = User.objects.filter(id__in=safe_ids)
-            if not request.user.is_superuser and request.user.school_id:
+            if request.user.school_id:
                 qs = qs.filter(school_id=request.user.school_id)
             count = 0
             for u in qs:
@@ -1286,7 +1276,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
         user_obj = User.objects.filter(id=user_id).first()
         if not user_obj:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        if not request.user.is_superuser and request.user.school_id and user_obj.school_id != request.user.school_id:
+        if request.user.school_id and user_obj.school_id != request.user.school_id:
             return Response({"detail": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
         if user_obj.last_login:
             return Response(

@@ -89,14 +89,19 @@ class FeesType(models.Model):
         if not re.match(r'^[0-9]{4}-[A-Z0-9]+$', code):
             raise ValidationError({'gl_code': 'Invalid GL Code format. Use XXXX-CODE (e.g., 4001-TUITION).'})
 
-        qs = FeesType.objects.filter(is_deleted=False, gl_code=code)
+        school_id = self.academic_year.school_id if self.academic_year_id else None
+        qs = FeesType.objects.filter(is_deleted=False, gl_code=code, academic_year__school_id=school_id)
         if self.pk:
             qs = qs.exclude(pk=self.pk)
         if qs.exists():
             raise ValidationError({'gl_code': 'A Fee Type with this GL Code already exists.'})
 
         account_number = code.split('-')[0]
-        account_qs = FeesType.objects.filter(is_deleted=False, gl_code__startswith=f"{account_number}-")
+        account_qs = FeesType.objects.filter(
+            is_deleted=False,
+            gl_code__startswith=f"{account_number}-",
+            academic_year__school_id=school_id,
+        )
         if self.pk:
             account_qs = account_qs.exclude(pk=self.pk)
         if account_qs.exists():

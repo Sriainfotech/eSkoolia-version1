@@ -1023,6 +1023,12 @@ export function AdmissionsCommandCenter() {
                       {sources.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </select>
                   </PopField>
+                  <PopField label="Reference">
+                    <select value={drawerForm.reference} onChange={(e) => setDf("reference", e.target.value)} style={inp()}>
+                      <option value="">Select Reference</option>
+                      {references.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                    </select>
+                  </PopField>
                   <PopField label="Next Follow-up *" error={drawerErrors.next_follow_up_date}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                       <input value={drawerForm.next_follow_up_date} onChange={(e) => setDf("next_follow_up_date", e.target.value)} style={inp(Boolean(drawerErrors.next_follow_up_date))} type="date" />

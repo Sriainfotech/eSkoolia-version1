@@ -152,7 +152,7 @@ function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange
         </div>
       </div>
       <p style={{ margin:"12px 0 0", fontSize:11.5, color:"#A0A3B8", lineHeight:1.6, fontStyle:"italic" }}>
-        Each fee type's payment schedule is set in Fee Configuration. To customise a schedule for this student, use the Enroll Student tab → Step 11.
+        Each fee type&apos;s payment schedule is set in Fee Configuration. To customise a schedule for this student, use the Enroll Student tab → Step 11.
       </p>
     </div>
   );

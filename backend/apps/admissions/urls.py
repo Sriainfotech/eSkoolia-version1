@@ -47,7 +47,9 @@ urlpatterns = [
 	path("consent/", ConsentLogView.as_view(), name="consent-log"),
 	path("analytics/overview/", AnalyticsOverviewView.as_view(), name="analytics-overview"),
 	path("complaint-types/", ComplaintTypeListView.as_view(), name="complaint-type-list"),
+	path("complaint-types/<int:pk>/", ComplaintTypeListView.as_view(), name="complaint-type-detail"),
 	path("complaint-sources/", ComplaintSourceListView.as_view(), name="complaint-source-list"),
+	path("complaint-sources/<int:pk>/", ComplaintSourceListView.as_view(), name="complaint-source-detail"),
 	path("staff-lookup/", StaffLookupListView.as_view(), name="staff-lookup-list"),
 	*router.urls,
 ]

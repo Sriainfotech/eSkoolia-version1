@@ -99,7 +99,7 @@ export default function NoticesPage() {
             </em>
           </h1>
           <p style={{ margin: 0, fontSize: 13, color: "var(--ink-2)", marginTop: 10, lineHeight: 1.55 }}>
-            Announcements and circulars from your child's school.
+            Announcements and circulars from your child&apos;s school.
           </p>
         </div>
         {notices.length > 0 && (

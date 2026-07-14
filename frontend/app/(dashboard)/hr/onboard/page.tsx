@@ -12,6 +12,7 @@ import {
   HrField, HrInput, HrSelect, HrDropdown, useHrToast,
 } from "@/components/hr/HrUi";
 import SearchableSelect from "@/components/hr/SearchableSelect";
+import { BackButton } from "@/components/common/BackButton";
 import {
   useAllDepartments, useDesignations, useStaffList, createStaff, updateStaff,
   useMasterLanguages, useMasterReligions, useMasterCountries, useMasterEmploymentTypes,
@@ -20,6 +21,7 @@ import {
   useStaffDocuments,
 } from "@/hooks/useHrApi";
 import type { OnboardDraft } from "@/hooks/useHrApi";
+import { HrApiError } from "@/hooks/useHrApi";
 import { apiRequestWithRefreshResponse } from "@/lib/api-auth";
 import type { Staff, StaffDocument } from "@/types/hr";
 import { isValidEmail, isValidPhoneDigits, isValidPin, hasAlphanumeric, isGibberishAddress, isGibberishPlaceName, isValidIndianMobile, isValidPersonName, PERSON_NAME_ERR, isValidBankAccountName, BANK_ACCOUNT_NAME_ERR } from "@/lib/hrValidation";
@@ -435,6 +437,33 @@ function StepIdentity({
       ? PERSON_NAME_ERR
       : null;
 
+  // Auto-generate the Staff Code as soon as a first name is entered, mirroring
+  // the student admission-number flow. One-shot per mount, guarded by a ref so
+  // retyping the name doesn't refire the request; skipped once staff_no is set
+  // (e.g. resuming a draft that already has one).
+  const staffNoRequestedRef = useRef(false);
+  const [staffNoLoading, setStaffNoLoading] = useState(false);
+  useEffect(() => {
+    if (staffNoRequestedRef.current) return;
+    if (!f.first_name?.trim()) return;
+    if (f.staff_no && String(f.staff_no).trim()) return;
+    staffNoRequestedRef.current = true;
+    setStaffNoLoading(true);
+    (async () => {
+      try {
+        const res = await apiRequestWithRefreshResponse("/api/v1/hr/staff/next-staff-no/", { silent401: true });
+        if (res.ok) {
+          const j = (await res.json()) as { staff_no?: string };
+          if (j?.staff_no) set("staff_no", j.staff_no);
+        }
+      } catch {
+        // Silent — backend still auto-allocates a staff_no at submit time if this never resolves.
+      } finally {
+        setStaffNoLoading(false);
+      }
+    })();
+  }, [f.first_name, f.staff_no, set]);
+
   return (
     <div className="flex flex-col gap-8">
       {/* Photo upload */}
@@ -492,7 +521,7 @@ function StepIdentity({
       <div className="grid grid-cols-3 gap-6">
         <HrField label="Staff Code" required>
           <HrInput
-            value="Auto generated"
+            value={f.staff_no ? f.staff_no : staffNoLoading ? "Generating…" : "Auto generated on save"}
             readOnly
             className="bg-[#F1F5F9] cursor-not-allowed !text-[#94A3B8]"
           />
@@ -1759,10 +1788,29 @@ function StepGovId({ f, set, showErrors }: { f: FormData; set: (k: string, v: st
           </div>
         </div>
 
-        {/* Row B — Auto-populated: Bank Name + Branch */}
+        {/* Row B — Bank Name + Branch: auto-filled on a successful IFSC lookup,
+            editable manually when the lookup hasn't succeeded (e.g. IFSC service
+            unavailable) so a valid IFSC code isn't blocked by an unrelated outage. */}
         <div className="grid grid-cols-2 gap-6">
-          <AutoField label="Bank Name" value={f.bank_name ?? ""} required />
-          <AutoField label="Branch"    value={f.bank_branch ?? ""} />
+          {bankLocked ? (
+            <AutoField label="Bank Name" value={f.bank_name ?? ""} required />
+          ) : (
+            <div className="flex flex-col gap-[9px]">
+              <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">
+                Bank Name <span className="text-[var(--red)]">*</span>
+              </label>
+              <HrInput value={f.bank_name ?? ""} onChange={(e) => set("bank_name", e.target.value)} placeholder="Enter bank name" />
+              {ifscStatus === "error" && <p className="text-[11px] text-[var(--muted)]">IFSC lookup unavailable — enter bank details manually.</p>}
+            </div>
+          )}
+          {bankLocked ? (
+            <AutoField label="Branch" value={f.bank_branch ?? ""} />
+          ) : (
+            <div className="flex flex-col gap-[9px]">
+              <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">Branch</label>
+              <HrInput value={f.bank_branch ?? ""} onChange={(e) => set("bank_branch", e.target.value)} placeholder="Enter branch name" />
+            </div>
+          )}
         </div>
 
         {/* Row C — Auto-populated: City + State */}
@@ -3031,7 +3079,7 @@ function StepDocuments({
   useEffect(() => {
     void (async () => {
       try {
-        const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/", { method: "GET" });
+        const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/", { method: "GET", silent401: true });
         if (res.ok) {
           const json = (await res.json()) as { data: OnboardDocRecord[] };
           const map: Record<string, OnboardDocRecord> = {};
@@ -3102,6 +3150,7 @@ function StepDocuments({
       const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/upload/", {
         method: "POST",
         body: fd,
+        silent401: true,
       });
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({})) as Record<string, unknown>;
@@ -3126,7 +3175,7 @@ function StepDocuments({
       return;
     }
     try {
-      await apiRequestWithRefreshResponse(`/api/v1/hr/onboard/documents/${record.id}/`, { method: "DELETE" });
+      await apiRequestWithRefreshResponse(`/api/v1/hr/onboard/documents/${record.id}/`, { method: "DELETE", silent401: true });
       setUploads((p) => {
         const next = { ...p };
         delete next[doc.key];
@@ -3153,7 +3202,7 @@ function StepDocuments({
       }
       const res = await apiRequestWithRefreshResponse(
         `/api/v1/hr/onboard/documents/${record.id}/preview/`,
-        { method: "GET" },
+        { method: "GET", silent401: true },
       );
       if (!res.ok) { toast("Preview not available.", "error"); return; }
       const blob = await res.blob();
@@ -3412,6 +3461,11 @@ type OnboardProps = {
   isPopup?: boolean;
 };
 
+// Local safety-net snapshot key — protects unsaved wizard progress against an
+// accidental refresh/tab close. Separate from the backend "Save draft" feature,
+// which is an explicit, named, cross-device save the user triggers deliberately.
+const HR_ONBOARD_LOCAL_DRAFT_KEY = "hr_onboard_local_draft_v1";
+
 export default function HrOnboardPage(props: any) {
   const isPopup = "isPopup" in props ? props.isPopup : false;
   const popupStaffId = "popupStaffId" in props ? props.popupStaffId : null;
@@ -3442,6 +3496,11 @@ export default function HrOnboardPage(props: any) {
   const [blankFormDownloading, setBlankFormDownloading] = useState(false);
   // Filled form PDF state
   const [filledFormDownloading, setFilledFormDownloading] = useState(false);
+  // Navigate-away guard state (mirrors the student enrollment flow's unsaved-changes prompt)
+  const [unsavedNavModalOpen,  setUnsavedNavModalOpen]  = useState(false);
+  const [discardConfirmOpen,   setDiscardConfirmOpen]   = useState(false);
+  const pendingNavRef = useRef<(() => void) | null>(null);
+  const suppressNavGuardRef = useRef(false);
   const photoInputRef    = useRef<HTMLInputElement>(null);
   const cameraVideoRef   = useRef<HTMLVideoElement>(null);
   const nomValidatorRef  = useRef<() => string | null>(() => null);
@@ -3492,10 +3551,9 @@ export default function HrOnboardPage(props: any) {
           setEditingStaffId(id);
           (async () => {
             try {
-              const resp = await apiRequestWithRefreshResponse(`/api/v1/hr/staff/${id}/`);
+              const resp = await apiRequestWithRefreshResponse(`/api/v1/hr/staff/${id}/`, { silent401: true });
               if (resp.ok) {
                 const json = await resp.json();
-                console.log("🔍 Backend staff response:", json); // DEBUG: check what backend returns
                 // Reset the form state for edit mode, then map backend keys to frontend form keys.
                 const mapped: Record<string, any> = { ...(json || {}) };
                 if (!Object.prototype.hasOwnProperty.call(mapped, "status")) mapped.status = "active";
@@ -3601,9 +3659,17 @@ export default function HrOnboardPage(props: any) {
                 if (json?.staff_no && !mapped.staff_no) mapped.staff_no = json.staff_no;
                 if (json?.id && !mapped.id) mapped.id = json.id;
 
-                console.log("✅ Mapped form data:", mapped); // DEBUG: check what gets mapped
-                console.log("🔍 Gender in mapped:", mapped.gender); // DEBUG: verify gender
-                console.log("🔍 Preferred Communication in mapped:", mapped.preferred_communication); // DEBUG: verify preferred_communication
+                // Strip backend-only/derived fields that have no UI control. Keeping
+                // them in form state round-trips backend-shaped data (a nested dict
+                // for custom_field, a pre-normalized array for other_document) back
+                // out on submit, where it collides with the frontend's own string/array
+                // conversion and fails validation ("Value must be valid JSON.",
+                // "Not a valid string."). All useful nested values were already pulled
+                // out into flat fields above; other_document is reconstructed fresh
+                // from the onboarding-documents endpoint at submit time regardless.
+                delete mapped.custom_field;
+                delete mapped.other_document;
+
                 setForm(mapped);
                 setHighestStep(1);
               } else {
@@ -3647,6 +3713,91 @@ export default function HrOnboardPage(props: any) {
       cameraVideoRef.current.srcObject = cameraStream;
     }
   }, [showCameraModal, cameraStream]);
+
+  // Restore in-progress form from a local snapshot after an accidental refresh —
+  // only for a fresh "add new staff" visit; an explicit staff_id load (handled in
+  // the query-param effect above) always takes priority over this local safety net.
+  useEffect(() => {
+    if (isPopup || typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("staff_id")) return;
+    try {
+      const raw = window.localStorage.getItem(HR_ONBOARD_LOCAL_DRAFT_KEY);
+      if (!raw) return;
+      const snapshot = JSON.parse(raw) as { form?: FormData; step?: number; highestStep?: number };
+      if (snapshot.form && Object.keys(snapshot.form).length > 1) {
+        setForm(snapshot.form);
+        if (snapshot.step) setStep(snapshot.step);
+        if (snapshot.highestStep) setHighestStep(snapshot.highestStep);
+        toast("Restored your unsaved progress from before the page reloaded.", "info");
+      }
+    } catch {
+      // corrupt/unavailable snapshot — ignore, user starts fresh
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Continuously snapshot the in-progress form to localStorage so an accidental
+  // refresh or browser crash doesn't wipe out unsaved onboarding progress. This
+  // is separate from (and lighter-weight than) the explicit backend "Save draft".
+  useEffect(() => {
+    if (isPopup || typeof window === "undefined" || editingStaffId) return;
+    try {
+      window.localStorage.setItem(
+        HR_ONBOARD_LOCAL_DRAFT_KEY,
+        JSON.stringify({ form, step, highestStep }),
+      );
+    } catch {
+      // storage unavailable/full — local snapshot is best-effort only
+    }
+  }, [form, step, highestStep, isPopup, editingStaffId]);
+
+  // True once the user has entered anything beyond the default blank form
+  // (which is just `{ status: "active" }`) or picked a photo.
+  const isFormDirty = Object.keys(form).length > 1 || !!photoFile;
+
+  const resetFormToBlank = () => {
+    try { window.localStorage.removeItem(HR_ONBOARD_LOCAL_DRAFT_KEY); } catch { /* ignore */ }
+    setForm({ status: "active" });
+    setStep(1);
+    setPhotoPreview(null);
+    setPhotoFile(null);
+    setDraftId(null);
+    setHighestStep(1);
+    setShowErrors(false);
+  };
+
+  // Browser-level guard: warn on tab close / refresh while the form has unsaved content.
+  // suppressNavGuardRef is flipped just before the post-submit redirect below, since that
+  // redirect happens synchronously (window.location.href) before React can re-render and
+  // clear isFormDirty — without it, a successful submit would still trigger this dialog.
+  useEffect(() => {
+    if (isPopup || typeof window === "undefined" || !isFormDirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (suppressNavGuardRef.current) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isFormDirty, isPopup]);
+
+  // App-level guard: the shared BackButton checks window.__navGuard before navigating,
+  // so an in-app "Back" click also gets the same unsaved-changes prompt.
+  useEffect(() => {
+    if (isPopup || typeof window === "undefined") return;
+    const w = window as unknown as { __navGuard?: (proceed: () => void) => boolean };
+    if (!isFormDirty) {
+      delete w.__navGuard;
+      return;
+    }
+    w.__navGuard = (proceed: () => void) => {
+      pendingNavRef.current = proceed;
+      setUnsavedNavModalOpen(true);
+      return true; // block default navigation until the user chooses
+    };
+    return () => { delete w.__navGuard; };
+  }, [isFormDirty, isPopup]);
 
   // DOB limits: must be ≥ 18 years old, cannot be a future date
   const maxDobDate = (() => {
@@ -3887,7 +4038,7 @@ export default function HrOnboardPage(props: any) {
     }, "image/jpeg", 0.92);
   };
 
-  const handleSaveDraft = async () => {
+  const handleSaveDraft = async (onSuccess?: () => void) => {
     const firstName = (form.first_name ?? "").trim();
     if (!firstName) {
       toast("Please enter the staff member's first name before saving a draft.", "error");
@@ -3903,11 +4054,31 @@ export default function HrOnboardPage(props: any) {
       setDraftId(saved.id);
       await refetchDrafts();
       toast(`Draft "${saved.draft_name}" saved at Step ${step}.`, "success");
+      onSuccess?.();
     } catch (e) {
       toast(e instanceof Error ? e.message : "Failed to save draft.", "error");
     } finally {
       setDraftSaving(false);
     }
+  };
+
+  const runPendingNav = () => {
+    const proceed = pendingNavRef.current;
+    pendingNavRef.current = null;
+    proceed?.();
+  };
+
+  const saveDraftAndLeave = () => {
+    void handleSaveDraft(() => {
+      setUnsavedNavModalOpen(false);
+      runPendingNav();
+    });
+  };
+
+  const discardAndLeave = () => {
+    resetFormToBlank();
+    setUnsavedNavModalOpen(false);
+    runPendingNav();
   };
 
   const handleLoadDraft = (draft: OnboardDraft) => {
@@ -3970,8 +4141,24 @@ export default function HrOnboardPage(props: any) {
   };
 
   const handleSubmit = async () => {
-    if (!form.first_name || !form.last_name || !form.department || !form.designation || !form.joining_date) {
-      toast("Fill in required fields: Name, Department, Designation, Joining Date", "error");
+    // Primary check for the fields every wizard entry point reaches (name/department/etc).
+    // These extra checks close the gap for later-step required fields (photo, bank, salary)
+    // that a resumed draft or out-of-order step navigation could otherwise skip past —
+    // previously such a submit fell straight through to the backend and surfaced only as
+    // an unlabeled raw error.
+    const missingLabels: string[] = [];
+    if (!form.first_name) missingLabels.push("First Name");
+    if (!form.last_name) missingLabels.push("Last Name");
+    if (!form.department) missingLabels.push("Department");
+    if (!form.designation) missingLabels.push("Designation");
+    if (!form.joining_date) missingLabels.push("Joining Date");
+    if (!editingStaffId && !photoFile) missingLabels.push("Staff Photo");
+    if (!form.bank_account_name?.trim()) missingLabels.push("Bank Account Holder Name");
+    if (!form.bank_account_no?.trim()) missingLabels.push("Bank Account Number");
+    if (!form.bank_name?.trim()) missingLabels.push("Bank Name");
+    if (!form.basic_salary_input?.trim()) missingLabels.push("Basic Salary");
+    if (missingLabels.length > 0) {
+      toast(`Fill in required fields: ${missingLabels.join(", ")}`, "error");
       return;
     }
     setSaving(true);
@@ -3980,7 +4167,7 @@ export default function HrOnboardPage(props: any) {
       let staffNo = (form as Record<string, unknown>).staff_no as string | undefined;
       if (!staffNo || !String(staffNo).trim()) {
         try {
-          const res = await apiRequestWithRefreshResponse("/api/v1/hr/staff/next-staff-no/");
+          const res = await apiRequestWithRefreshResponse("/api/v1/hr/staff/next-staff-no/", { silent401: true });
           if (res.ok) {
             const j = (await res.json()) as { staff_no?: string };
             staffNo = j?.staff_no ?? "";
@@ -4000,6 +4187,11 @@ export default function HrOnboardPage(props: any) {
       const { joining_date, mobile, personal_email, official_email, employment_type, blood_group_input, ...rest } = fAny;
       void employment_type; // mapped to contract_type below
 
+      // "" (empty/unset "No. of Children") fails DRF's IntegerField with
+      // "A valid integer is required." — null is the correct empty representation.
+      const numChildrenRaw = String(fAny.num_children ?? "").trim();
+      const numChildren = numChildrenRaw ? Number(numChildrenRaw) : null;
+
       const payload: Record<string, unknown> = {
         ...rest,
         staff_no: staffNo,
@@ -4018,20 +4210,25 @@ export default function HrOnboardPage(props: any) {
         gender: lower(form.gender),
         marital_status: lower(form.marital_status),
         basic_salary: form.basic_salary_input ? Number(form.basic_salary_input) : 0,
+        num_children: numChildren,
       };
 
       // Pull uploaded onboarding docs and surface signature filename via other_document,
       // which the backend requires as the "Signature upload".
       try {
-        const docsRes = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/");
+        const docsRes = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/", { silent401: true });
         if (docsRes.ok) {
           const docsJson = (await docsRes.json()) as { data?: { doc_key: string; file_name: string }[] };
           const sig = (docsJson.data ?? []).find((d) => d.doc_key === "signature");
           if (sig?.file_name) {
             payload.other_document = [sig.file_name];
           }
+        } else {
+          toast("Could not verify uploaded signature — please confirm it was uploaded before submitting.", "error");
         }
-      } catch { /* if fetch fails, backend will surface the missing-signature error */ }
+      } catch {
+        toast("Could not verify uploaded signature — please confirm it was uploaded before submitting.", "error");
+      }
 
       if (editingStaffId) {
         await updateStaff(editingStaffId, payload as Partial<Staff>, photoFile ?? undefined);
@@ -4040,6 +4237,8 @@ export default function HrOnboardPage(props: any) {
         await createStaff(payload as Partial<Staff>, photoFile ?? undefined);
         toast("Staff onboarded successfully!");
       }
+      try { window.localStorage.removeItem(HR_ONBOARD_LOCAL_DRAFT_KEY); } catch { /* ignore */ }
+      suppressNavGuardRef.current = true;
 
       if (onClose) {
         onClose();
@@ -4047,7 +4246,13 @@ export default function HrOnboardPage(props: any) {
         window.location.href = "/hr/directory";
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to save staff. Please check the form.";
+      let msg = err instanceof Error ? err.message : "Failed to save staff. Please check the form.";
+      if (err instanceof HrApiError && err.errors) {
+        const fieldNames = Object.keys(err.errors);
+        if (fieldNames.length > 0) {
+          msg = `${msg} (${fieldNames.join(", ")})`;
+        }
+      }
       toast(msg, "error");
     } finally {
       setSaving(false);
@@ -4080,7 +4285,7 @@ export default function HrOnboardPage(props: any) {
         </p>
         <div className="flex justify-center gap-3">
           <button
-            onClick={() => { setForm({ status: "active" }); setStep(1); setDone(false); setPhotoPreview(null); setPhotoFile(null); setDraftId(null); setHighestStep(1); setShowErrors(false); }}
+            onClick={() => { try { window.localStorage.removeItem(HR_ONBOARD_LOCAL_DRAFT_KEY); } catch { /* ignore */ } setForm({ status: "active" }); setStep(1); setDone(false); setPhotoPreview(null); setPhotoFile(null); setDraftId(null); setHighestStep(1); setShowErrors(false); }}
             className="px-5 py-2 rounded-[10px] text-[13px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
           >
             Onboard another
@@ -4167,6 +4372,77 @@ export default function HrOnboardPage(props: any) {
         </div>
       )}
 
+      {/* Discard confirmation modal */}
+      {discardConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60"
+          onClick={(e) => { if (e.target === e.currentTarget) setDiscardConfirmOpen(false); }}
+        >
+          <div className="bg-white rounded-[16px] p-6 w-[420px] max-w-[95vw] flex flex-col gap-3 shadow-2xl">
+            <h3 className="text-[16px] font-[700] text-[#15172A]">Discard this staff onboarding?</h3>
+            <p className="text-[13px] text-[#5B5E72] m-0">
+              Everything you&apos;ve entered will be cleared and can&apos;t be recovered. Consider &quot;Save draft&quot; instead if you want to finish later.
+            </p>
+            <div className="flex gap-3 justify-end mt-2">
+              <button
+                type="button"
+                onClick={() => setDiscardConfirmOpen(false)}
+                className="px-4 py-2 rounded-[8px] text-[13px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => { resetFormToBlank(); setDiscardConfirmOpen(false); }}
+                className="px-4 py-2 rounded-[8px] text-[13px] font-[700] text-white bg-[#EF4444] hover:bg-[#DC2626]"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Unsaved-changes navigate-away modal (triggered by window.__navGuard) */}
+      {unsavedNavModalOpen && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60"
+          onClick={(e) => { if (e.target === e.currentTarget) { setUnsavedNavModalOpen(false); pendingNavRef.current = null; } }}
+        >
+          <div className="bg-white rounded-[16px] p-6 w-[440px] max-w-[95vw] flex flex-col gap-3 shadow-2xl">
+            <h3 className="text-[16px] font-[700] text-[#15172A]">You have unsaved changes</h3>
+            <p className="text-[13px] text-[#5B5E72] m-0">
+              Save this staff member as a draft so you can finish later, or discard everything you&apos;ve entered.
+            </p>
+            <div className="flex flex-col gap-2 mt-2">
+              <button
+                type="button"
+                onClick={saveDraftAndLeave}
+                disabled={draftSaving}
+                className="px-4 py-2 rounded-[8px] text-[13px] font-[700] text-white disabled:opacity-60"
+                style={{ background: "var(--brand)" }}
+              >
+                {draftSaving ? "Saving…" : "💾 Save as draft & leave"}
+              </button>
+              <button
+                type="button"
+                onClick={discardAndLeave}
+                className="px-4 py-2 rounded-[8px] text-[13px] font-[700] text-[#EF4444] border border-[#FCA5A5] bg-white hover:bg-red-50"
+              >
+                🗑 Discard & leave
+              </button>
+              <button
+                type="button"
+                onClick={() => { setUnsavedNavModalOpen(false); pendingNavRef.current = null; }}
+                className="px-4 py-2 rounded-[8px] text-[13px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              >
+                Cancel — stay on this page
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Drafts list modal */}
       {showDraftsModal && (
         <div
@@ -4239,6 +4515,7 @@ export default function HrOnboardPage(props: any) {
       {/* Page header */}
       <div className="flex items-start justify-between mb-4">
         <div>
+          {!isPopup && <div className="mb-2"><BackButton label="Back" /></div>}
           <h1 className="text-[28px] font-[900] text-[#15172A] m-0 leading-tight">
             Onboard a{" "}
             <em className="not-italic font-[400]" style={{ fontFamily: "var(--serif)", color: "var(--brand)" }}>
@@ -4431,17 +4708,19 @@ export default function HrOnboardPage(props: any) {
           <div className="h-full transition-all duration-500" style={{ width: `${progress}%`, background: "var(--brand)" }} />
         </div>
         {/* Footer row */}
-        <div className="flex items-center justify-between px-8 py-[10px]">
+        <div className="flex items-center justify-between px-8 py-[10px] gap-3">
           <span className="text-[12.5px] font-[700] text-[#475569] shrink-0">Step {step} / {TOTAL}</span>
-          <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Secondary/utility actions — free to wrap on narrow viewports without
+              ever pushing Back/Next off-screen (they live in their own pinned group). */}
+          <div className="flex items-center gap-2 flex-wrap justify-end flex-1 min-w-0">
             <button
-              onClick={() => { setForm({ status: "active" }); setStep(1); setPhotoPreview(null); setPhotoFile(null); setDraftId(null); setHighestStep(1); setShowErrors(false); }}
+              onClick={() => { if (isFormDirty) setDiscardConfirmOpen(true); else resetFormToBlank(); }}
               className="px-3 py-1.5 text-[12.5px] font-[600] text-[#EF4444] hover:bg-red-50 rounded-[8px] transition-colors"
             >
               Discard
             </button>
             <button
-              onClick={handleSaveDraft}
+              onClick={() => void handleSaveDraft()}
               disabled={draftSaving}
               className="px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc] disabled:opacity-60 disabled:cursor-not-allowed"
             >
@@ -4472,6 +4751,9 @@ export default function HrOnboardPage(props: any) {
             >
               <Printer size={11} /> Print / PDF
             </button>
+          </div>
+          {/* Primary step navigation — always visible together, never wraps away. */}
+          <div className="flex items-center gap-2 shrink-0">
             {step > 1 && (
               <button
                 onClick={goPrev}

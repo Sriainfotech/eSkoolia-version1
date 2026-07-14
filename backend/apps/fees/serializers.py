@@ -200,6 +200,22 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at', 'created_by', 'status', 'total_paid', 'net_due', 'fees_type_name']
 
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user is not None:
+            school_id = getattr(user, 'school_id', None)
+            academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
+            student = attrs.get('student') or getattr(self.instance, 'student', None)
+            fees_type = attrs.get('fees_type') or getattr(self.instance, 'fees_type', None)
+            if academic_year is not None and academic_year.school_id != school_id:
+                raise serializers.ValidationError({'academic_year': 'Academic year not found.'})
+            if student is not None and student.school_id != school_id:
+                raise serializers.ValidationError({'student': 'Student not found.'})
+            if fees_type is not None and fees_type.academic_year.school_id != school_id:
+                raise serializers.ValidationError({'fees_type': 'Fee type not found.'})
+        return attrs
+
     def get_total_paid(self, obj):
         # Use prefetch cache when available to avoid N+1 queries
         if hasattr(obj, '_prefetched_objects_cache') and 'payments' in obj._prefetched_objects_cache:
@@ -232,6 +248,16 @@ class PaymentSerializer(serializers.ModelSerializer):
         # status is computed from payment method by the service layer.
         # Never let the client override these — it would break FeeService.post_payment().
         read_only_fields = ['student', 'status', 'collected_by', 'created_at']
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user is not None:
+            school_id = getattr(user, 'school_id', None)
+            assignment = attrs.get('assignment') or getattr(self.instance, 'assignment', None)
+            if assignment is not None and assignment.student.school_id != school_id:
+                raise serializers.ValidationError({'assignment': 'Fee assignment not found.'})
+        return attrs
 
 class TermSettingsSerializer(serializers.ModelSerializer):
     academic_year_name = serializers.CharField(source='academic_year.name', read_only=True)

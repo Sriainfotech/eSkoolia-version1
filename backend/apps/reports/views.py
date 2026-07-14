@@ -62,8 +62,6 @@ class BaseReportAPIView(APIView):
     cache_timeout_seconds = 120
 
     def get_school_id(self, request):
-        if request.user.is_superuser and "school_id" in request.query_params:
-            return int(request.query_params["school_id"])
         if request.user.school_id:
             return request.user.school_id
         school = getattr(request, "school", None)

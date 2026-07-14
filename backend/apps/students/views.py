@@ -90,8 +90,6 @@ class TenantScopedModelViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = self.model.objects.all()
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -360,7 +358,7 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
 
     def _school_id(self):
         user = self.request.user
-        return None if user.is_superuser else getattr(user, "school_id", None)
+        return getattr(user, "school_id", None)
 
     def get_queryset(self):
         user = self.request.user
@@ -368,9 +366,7 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
         search = str(self.request.query_params.get("search") or "").strip()
         sort_by = str(self.request.query_params.get("sort_by") or "name").strip().lower()
 
-        if user.is_superuser:
-            qs = qs.annotate(students_count=Count("students", distinct=True))
-        elif user.school_id:
+        if user.school_id:
             qs = qs.filter(school_id=user.school_id).annotate(students_count=Count("students", distinct=True))
         else:
             return qs.none()
@@ -914,9 +910,7 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        students_qs = Student.objects.filter(id__in=valid_ids)
-        if not request.user.is_superuser:
-            students_qs = students_qs.filter(school_id=request.user.school_id)
+        students_qs = Student.objects.filter(id__in=valid_ids, school_id=request.user.school_id)
 
         updated = students_qs.update(student_group=group)
         return Response(
@@ -1177,9 +1171,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         from apps.core.models import AcademicYear, Class, Section
 
         if class_id:
-            class_qs = Class.objects.filter(id=int(class_id))
-            if not user.is_superuser:
-                class_qs = class_qs.filter(school_id=user.school_id)
+            class_qs = Class.objects.filter(id=int(class_id), school_id=user.school_id)
             if not class_qs.exists():
                 raise ValidationError({"current_class": "Selected class is not available."})
 
@@ -1187,15 +1179,12 @@ class StudentViewSet(TenantScopedModelViewSet):
             section_qs = Section.objects.filter(id=int(section_id))
             if class_id:
                 section_qs = section_qs.filter(school_class_id=int(class_id))
-            if not user.is_superuser:
-                section_qs = section_qs.filter(school_class__school_id=user.school_id)
+            section_qs = section_qs.filter(school_class__school_id=user.school_id)
             if not section_qs.exists():
                 raise ValidationError({"current_section": "Selected section is not available."})
 
         if academic_year_id:
-            year_qs = AcademicYear.objects.filter(id=int(academic_year_id))
-            if not user.is_superuser:
-                year_qs = year_qs.filter(school_id=user.school_id)
+            year_qs = AcademicYear.objects.filter(id=int(academic_year_id), school_id=user.school_id)
             if not year_qs.exists():
                 raise ValidationError({"academic_year": "Selected academic year is not available."})
 
@@ -1225,8 +1214,6 @@ class StudentViewSet(TenantScopedModelViewSet):
                 q |= Q(first_name__icontains=parts[-1]) & Q(last_name__icontains=parts[0])
             qs = qs.filter(q)
 
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -1559,24 +1546,23 @@ class StudentViewSet(TenantScopedModelViewSet):
 
         user = request.user
         qs = Student.objects.all()
-        if not user.is_superuser:
-            if not user.school_id:
-                return Response(
-                    {
-                        "success": True,
-                        "message": "Summary retrieved successfully",
-                        "data": {
-                            "total_count": 0,
-                            "active_count": 0,
-                            "inactive_count": 0,
-                            "archived_count": 0,
-                            "new_count": 0,
-                            "docs_pending_count": 0,
-                        },
+        if not user.school_id:
+            return Response(
+                {
+                    "success": True,
+                    "message": "Summary retrieved successfully",
+                    "data": {
+                        "total_count": 0,
+                        "active_count": 0,
+                        "inactive_count": 0,
+                        "archived_count": 0,
+                        "new_count": 0,
+                        "docs_pending_count": 0,
                     },
-                    status=status.HTTP_200_OK,
-                )
-            qs = qs.filter(school_id=user.school_id)
+                },
+                status=status.HTTP_200_OK,
+            )
+        qs = qs.filter(school_id=user.school_id)
 
         search = (request.query_params.get("search") or "").strip()
         class_id = request.query_params.get("class") or request.query_params.get("current_class")
@@ -1903,7 +1889,7 @@ class StudentViewSet(TenantScopedModelViewSet):
 
         user = request.user
         sections_qs = Section.objects.filter(school_class_id=int(class_id))
-        if not user.is_superuser and getattr(user, "school_id", None):
+        if getattr(user, "school_id", None):
             sections_qs = sections_qs.filter(school_class__school_id=user.school_id)
 
         result = []
@@ -1983,7 +1969,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         data = serializer.validated_data
 
         school_id = request.user.school_id
-        if not school_id and not request.user.is_superuser:
+        if not school_id:
             raise ValidationError("User school context is required.")
 
         target_class_id = data["to_class"]
@@ -1993,9 +1979,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         from apps.core.models import AcademicYear, Class, Section
 
         # Validate target class/section/year belongs to same school for tenant safety
-        class_qs = Class.objects.filter(id=target_class_id)
-        if not request.user.is_superuser:
-            class_qs = class_qs.filter(school_id=school_id)
+        class_qs = Class.objects.filter(id=target_class_id, school_id=school_id)
         target_class = class_qs.first()
         if not target_class:
             raise ValidationError("Target class not found in your school.")
@@ -2006,15 +1990,11 @@ class StudentViewSet(TenantScopedModelViewSet):
                 raise ValidationError("Target section not found under target class.")
 
         if target_year_id:
-            year_qs = AcademicYear.objects.filter(id=target_year_id)
-            if not request.user.is_superuser:
-                year_qs = year_qs.filter(school_id=school_id)
+            year_qs = AcademicYear.objects.filter(id=target_year_id, school_id=school_id)
             if not year_qs.exists():
                 raise ValidationError("Target academic year not found in your school.")
 
-        students_qs = Student.objects.filter(id__in=data["student_ids"])
-        if not request.user.is_superuser:
-            students_qs = students_qs.filter(school_id=school_id)
+        students_qs = Student.objects.filter(id__in=data["student_ids"], school_id=school_id)
         students = list(students_qs)
 
         if not students:
@@ -2102,7 +2082,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         from apps.core.models import Class, Section
 
         school_id = request.user.school_id
-        if not school_id and not request.user.is_superuser:
+        if not school_id:
             return Response({"error": "School context required."}, status=status.HTTP_403_FORBIDDEN)
 
         dry_run = str(request.data.get("dry_run", "false")).lower() in ("1", "true", "yes")
@@ -2243,8 +2223,7 @@ class StudentViewSet(TenantScopedModelViewSet):
 
     def _get_student_for_record_action(self, request, pk):
         qs = Student.objects.select_related("school")
-        if not request.user.is_superuser:
-            qs = qs.filter(school_id=request.user.school_id)
+        qs = qs.filter(school_id=request.user.school_id)
         return qs.filter(pk=pk).first()
 
     @action(detail=True, methods=["post"], url_path="soft-delete")
@@ -2439,9 +2418,7 @@ class StudentViewSet(TenantScopedModelViewSet):
     def subject_assignment_stats(self, request):
         """Return KPI counts for the Multi Subject Assignment page."""
         user = request.user
-        base_qs = Student.objects.filter(is_deleted=False)
-        if not user.is_superuser:
-            base_qs = base_qs.filter(school_id=user.school_id)
+        base_qs = Student.objects.filter(is_deleted=False, school_id=user.school_id)
 
         enrolled = base_qs.count()
         # Each student gets annotated with how many *optional* subject
@@ -2501,7 +2478,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         from apps.core.models import Class
 
         user = request.user
-        school_id = None if user.is_superuser else user.school_id
+        school_id = user.school_id
 
         # Pagination params (per-section)
         try:
@@ -2571,7 +2548,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         page (default 1), page_size (default 10, max 200).
         """
         user = request.user
-        school_id = None if user.is_superuser else user.school_id
+        school_id = user.school_id
 
         try:
             class_id = int(request.query_params.get("class_id") or 0)
@@ -2687,8 +2664,6 @@ class StudentDocumentViewSet(TenantScopedModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = StudentDocument.objects.select_related("student__school")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
@@ -2763,7 +2738,7 @@ class StudentDocumentViewSet(TenantScopedModelViewSet):
                 )
             
             # Check permission
-            if not request.user.is_superuser and student.school_id != request.user.school_id:
+            if student.school_id != request.user.school_id:
                 logger.warning(f"Permission denied: user school {request.user.school_id} != student school {student.school_id}")
                 raise PermissionDenied("You don't have permission to upload documents for this student.")
             
@@ -2814,8 +2789,6 @@ class StudentTransferHistoryViewSet(TenantScopedModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = StudentTransferHistory.objects.select_related("student__school", "from_school", "to_school")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
@@ -2845,8 +2818,6 @@ class PromotionBatchViewSet(TenantScopedModelViewSet):
         qs = PromotionBatch.objects.select_related(
             "school", "academic_year", "target_year", "created_by", "confirmed_by",
         ).prefetch_related(Prefetch("records", queryset=records_qs))
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -2943,9 +2914,7 @@ class PromotionBatchViewSet(TenantScopedModelViewSet):
         from apps.core.models import AcademicYear
 
         school_id = request.user.school_id
-        year_qs = AcademicYear.objects.filter(name=year_name)
-        if not request.user.is_superuser:
-            year_qs = year_qs.filter(school_id=school_id)
+        year_qs = AcademicYear.objects.filter(name=year_name, school_id=school_id)
         year = year_qs.first()
         if not year:
             return Response({"error": "Academic year not found"}, status=status.HTTP_404_NOT_FOUND)
@@ -3258,8 +3227,6 @@ class PromotionAuditLogViewSet(TenantScopedModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = PromotionAuditLog.objects.select_related("batch", "performed_by", "record", "batch__school")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(batch__school_id=user.school_id)
         return qs.none()
@@ -3281,8 +3248,6 @@ class StudentPromotionHistoryViewSet(TenantScopedModelViewSet):
             "to_academic_year",
             "promoted_by",
         )
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
@@ -3303,8 +3268,6 @@ class StudentMultiClassRecordViewSet(TenantScopedModelViewSet):
         if student_id:
             qs = qs.filter(student_id=student_id)
 
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
@@ -3335,9 +3298,7 @@ class StudentMultiClassRecordViewSet(TenantScopedModelViewSet):
 
         student_id = data["student_id"]
         user = request.user
-        student_qs = Student.objects.filter(id=student_id)
-        if not user.is_superuser:
-            student_qs = student_qs.filter(school_id=user.school_id)
+        student_qs = Student.objects.filter(id=student_id, school_id=user.school_id)
         student = student_qs.first()
         if not student:
             raise ValidationError("Student not found in your school.")
@@ -3360,9 +3321,7 @@ class StudentMultiClassRecordViewSet(TenantScopedModelViewSet):
 
                 from apps.core.models import Class, Section
 
-                class_qs = Class.objects.filter(id=school_class_id)
-                if not user.is_superuser:
-                    class_qs = class_qs.filter(school_id=student.school_id)
+                class_qs = Class.objects.filter(id=school_class_id, school_id=student.school_id)
                 if not class_qs.exists():
                     raise ValidationError("One or more classes are invalid for this student school.")
 
@@ -3430,8 +3389,6 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
             qs = qs.filter(section_id=section_id)
         if academic_year_id:
             qs = qs.filter(academic_year_id=academic_year_id)
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
@@ -3453,9 +3410,9 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
         )
 
     def _resolve_students(self, *, student_ids, class_id, section_id, user):
-        queryset = Student.objects.filter(id__in=student_ids, current_class_id=class_id, current_section_id=section_id)
-        if not user.is_superuser:
-            queryset = queryset.filter(school_id=user.school_id)
+        queryset = Student.objects.filter(
+            id__in=student_ids, current_class_id=class_id, current_section_id=section_id, school_id=user.school_id
+        )
         return list(queryset)
 
     def _create_assignments(self, *, students, subject_ids, academic_year_id, class_id, section_id, is_optional, user):
@@ -3535,9 +3492,9 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
                 user=request.user,
             )
         else:
-            students_qs = Student.objects.filter(current_class_id=data["school_class"], current_section_id=data["section"])
-            if not request.user.is_superuser:
-                students_qs = students_qs.filter(school_id=request.user.school_id)
+            students_qs = Student.objects.filter(
+                current_class_id=data["school_class"], current_section_id=data["section"], school_id=request.user.school_id
+            )
             students = list(students_qs)
 
         if not students:
@@ -3577,7 +3534,7 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
 
             user = request.user
             student_qs = Student.objects.filter(id=student_id)
-            if not user.is_superuser and getattr(user, "school_id", None):
+            if getattr(user, "school_id", None):
                 student_qs = student_qs.filter(school_id=user.school_id)
             student = student_qs.select_related("current_class", "current_section").first()
             if not student:
@@ -3698,8 +3655,6 @@ class StudentRecordAuditViewSet(TenantScopedModelViewSet):
                 | Q(note__icontains=search)
             )
 
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()

@@ -35,8 +35,6 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
-        if user.is_superuser:
-            return queryset
         if user.school_id:
             return queryset.filter(school_id=user.school_id)
         return queryset.none()
@@ -44,7 +42,7 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         school = user.school or getattr(self.request, "school", None)
-        if not school and not user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
         serializer.save(school=school)
 
@@ -96,7 +94,7 @@ class BookIssueViewSet(SchoolScopedModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         school = user.school or getattr(self.request, "school", None)
-        if not school and not user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
 
         issue = serializer.save(school=school, issued_by=user)

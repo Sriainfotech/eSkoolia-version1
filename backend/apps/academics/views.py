@@ -78,8 +78,6 @@ class TenantScopedModelViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = self.model.objects.all()
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -578,8 +576,6 @@ class OptionalSubjectAssignmentViewSet(TenantScopedModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = OptionalSubjectAssignment.objects.select_related("student__school", "subject", "academic_year")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(student__school_id=user.school_id)
         return qs.none()
@@ -612,9 +608,7 @@ class HomeworkViewSet(TenantScopedModelViewSet):
             "created_by",
             "evaluated_by",
         ).prefetch_related("evaluations")
-        if user.is_superuser:
-            base_qs = qs
-        elif user.school_id:
+        if user.school_id:
             base_qs = qs.filter(school_id=user.school_id)
         else:
             base_qs = qs.none()
@@ -696,9 +690,7 @@ class HomeworkSubmissionViewSet(TenantScopedModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = HomeworkSubmission.objects.select_related("homework__school", "student", "created_by")
-        if user.is_superuser:
-            base_qs = qs
-        elif user.school_id:
+        if user.school_id:
             base_qs = qs.filter(homework__school_id=user.school_id)
         else:
             base_qs = qs.none()
@@ -724,9 +716,7 @@ class UploadedContentViewSet(TenantScopedModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = UploadedContent.objects.select_related("school", "academic_year", "class_id_ref", "section_id_ref", "created_by")
-        if user.is_superuser:
-            base_qs = qs
-        elif user.school_id:
+        if user.school_id:
             base_qs = qs.filter(school_id=user.school_id)
         else:
             base_qs = qs.none()
@@ -1076,11 +1066,10 @@ class LessonTopicDetailViewSet(TenantScopedModelViewSet):
             "topic__school", "topic__school_class", "topic__section", "topic__subject", "lesson"
         )
         user = self.request.user
-        if not user.is_superuser:
-            if user.school_id:
-                queryset = queryset.filter(topic__school_id=user.school_id)
-            else:
-                queryset = queryset.none()
+        if user.school_id:
+            queryset = queryset.filter(topic__school_id=user.school_id)
+        else:
+            queryset = queryset.none()
         topic_id = self.request.query_params.get("topic_id") or self.request.query_params.get("topic")
         lesson_id = self.request.query_params.get("lesson_id") or self.request.query_params.get("lesson")
         if topic_id:
@@ -1297,11 +1286,9 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
     def teachers(self, request):
         user = request.user
         queryset = User.objects.filter(is_active=True, access_status=True)
-        school_id = None
-        if not user.is_superuser:
-            if not user.school_id:
-                return Response([])
-            school_id = user.school_id
+        if not user.school_id:
+            return Response([])
+        school_id = user.school_id
 
         # Resolve teacher users from explicit teacher role mapping and staff directory.
         teacher_role_names = {"teacher", "active teacher", "class teacher", "subject teacher", "assistant teacher"}
@@ -1436,14 +1423,12 @@ class StaffTeachersView(viewsets.ViewSet):
     def list(self, request):
         user = request.user
         school_id = getattr(user, "school_id", None)
-        if not school_id and not user.is_superuser:
+        if not school_id:
             return Response([], status=status.HTTP_200_OK)
 
         qs = Staff.objects.select_related("user", "department", "designation").filter(
-            status=Staff.STATUS_ACTIVE
+            status=Staff.STATUS_ACTIVE, school_id=school_id
         )
-        if school_id:
-            qs = qs.filter(school_id=school_id)
 
         # filter to teaching staff only — designation contains "teacher" or dept is Academic
         qs = qs.filter(
@@ -1696,33 +1681,85 @@ class StaffSubjectAssignmentsView(viewsets.ViewSet):
         if class_id_filter:
             catalog_qs = catalog_qs.filter(school_class_id=class_id_filter)
 
-        # Step 3: Auto-create ClassSubjectAssignment records from catalog entries if they don't exist
-        # This ensures every section has assignment records for all catalog subjects
-        for section in sections_qs:
-            catalog_for_class = catalog_qs.filter(school_class_id=section.school_class_id)
-            for entry in catalog_for_class:
-                # Find or create Subject in core.Subject based on catalog entry
-                subject, _ = CoreSubject.objects.get_or_create(
+        # Step 3: Auto-create ClassSubjectAssignment records from catalog entries if they don't exist.
+        # Batched instead of a per-(section, catalog-entry) get_or_create loop — that was O(sections
+        # * catalog rows) queries and made this read endpoint time out on real school-scale data.
+        catalog_entries = list(catalog_qs)
+        sections = list(sections_qs)
+        if catalog_entries and sections:
+            # Resolve/create the core.Subject rows for every catalog entry name, one query each way.
+            catalog_names = {entry.name for entry in catalog_entries}
+            existing_subjects = {
+                s.name: s
+                for s in CoreSubject.objects.filter(school_id=school_id, name__in=catalog_names)
+            }
+            missing_subjects = [
+                CoreSubject(
                     school_id=school_id,
                     name=entry.name,
-                    defaults={
-                        "code": entry.code or "",
-                        "subject_type": "optional" if entry.subject_type == ClassSubjectEntry.TYPE_OPTIONAL else "compulsory",
-                    },
+                    code=entry.code or "",
+                    subject_type="optional" if entry.subject_type == ClassSubjectEntry.TYPE_OPTIONAL else "compulsory",
                 )
-                
-                # Create or get assignment for this section + subject (with teacher=null initially)
-                ClassSubjectAssignment.objects.get_or_create(
-                    school_id=school_id,
-                    academic_year_id=academic_year_id if academic_year_id else None,
-                    school_class_id=section.school_class_id,
-                    section_id=section.id,
-                    subject_id=subject.id,
-                    defaults={
-                        "is_optional": entry.subject_type == ClassSubjectEntry.TYPE_OPTIONAL,
-                        "active_status": True,
-                    },
+                for entry in catalog_entries
+                if entry.name not in existing_subjects
+            ]
+            if missing_subjects:
+                # Dedupe by name before bulk_create (multiple catalog entries can share a name).
+                seen_names = set()
+                deduped = []
+                for subj in missing_subjects:
+                    if subj.name in seen_names:
+                        continue
+                    seen_names.add(subj.name)
+                    deduped.append(subj)
+                CoreSubject.objects.bulk_create(deduped, ignore_conflicts=True)
+                existing_subjects.update(
+                    {
+                        s.name: s
+                        for s in CoreSubject.objects.filter(school_id=school_id, name__in=catalog_names)
+                    }
                 )
+
+            entries_by_class: dict[int, list] = {}
+            for entry in catalog_entries:
+                entries_by_class.setdefault(entry.school_class_id, []).append(entry)
+
+            desired = []  # (school_class_id, section_id, subject_id) -> entry
+            desired_map = {}
+            for section in sections:
+                for entry in entries_by_class.get(section.school_class_id, []):
+                    subject = existing_subjects.get(entry.name)
+                    if not subject:
+                        continue
+                    key = (section.school_class_id, section.id, subject.id)
+                    desired_map[key] = entry
+                    desired.append(key)
+
+            if desired:
+                existing_assignments = set(
+                    ClassSubjectAssignment.objects.filter(
+                        school_id=school_id,
+                        academic_year_id=academic_year_id if academic_year_id else None,
+                        school_class_id__in={k[0] for k in desired},
+                        section_id__in={k[1] for k in desired},
+                        subject_id__in={k[2] for k in desired},
+                    ).values_list("school_class_id", "section_id", "subject_id")
+                )
+                to_create = [
+                    ClassSubjectAssignment(
+                        school_id=school_id,
+                        academic_year_id=academic_year_id if academic_year_id else None,
+                        school_class_id=key[0],
+                        section_id=key[1],
+                        subject_id=key[2],
+                        is_optional=desired_map[key].subject_type == ClassSubjectEntry.TYPE_OPTIONAL,
+                        active_status=True,
+                    )
+                    for key in desired
+                    if key not in existing_assignments
+                ]
+                if to_create:
+                    ClassSubjectAssignment.objects.bulk_create(to_create, ignore_conflicts=True)
 
         # Step 4: Fetch all assignments (now includes auto-created ones from catalog)
         assignments_qs = ClassSubjectAssignment.objects.select_related(

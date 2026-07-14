@@ -38,7 +38,7 @@ class SubjectAttendanceTenantMixin:
             raise PermissionDenied("You do not have permission to perform this action.")
 
     def school_filter(self, request):
-        return {} if request.user.is_superuser else {"school_id": request.user.school_id}
+        return {"school_id": request.user.school_id}
 
     def _validate_positive_id(self, value, field_name):
         if value is None:
@@ -66,8 +66,7 @@ class SubjectAttendanceTenantMixin:
             section_qs = Section.objects.filter(id=section_id)
             if class_obj:
                 section_qs = section_qs.filter(school_class_id=class_obj.id)
-            if not request.user.is_superuser:
-                section_qs = section_qs.filter(school_class__school_id=request.user.school_id)
+            section_qs = section_qs.filter(school_class__school_id=request.user.school_id)
             section_obj = section_qs.first()
             if not section_obj:
                 raise ValidationError({"section_id": "Invalid section selection."})
@@ -157,7 +156,7 @@ class SubjectAttendanceSearchAPIView(SubjectAttendanceTenantMixin, APIView):
                 attendance_type = first.attendance_type
 
         class_info = Class.objects.filter(id=class_id, **self.school_filter(request)).first()
-        section_info = Section.objects.filter(id=section_id).first() if request.user.is_superuser else Section.objects.filter(
+        section_info = Section.objects.filter(
             id=section_id,
             school_class__school_id=request.user.school_id,
         ).first()

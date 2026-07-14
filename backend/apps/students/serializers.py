@@ -422,7 +422,7 @@ class PromotionBatchCreateSerializer(serializers.Serializer):
 
         year_qs = AcademicYear.objects.filter(id=academic_year_id)
         target_qs = AcademicYear.objects.filter(id=target_year_id)
-        if user and not user.is_superuser and school_id:
+        if user and school_id:
             year_qs = year_qs.filter(school_id=school_id)
             target_qs = target_qs.filter(school_id=school_id)
 
@@ -516,7 +516,7 @@ class StudentPromoteRequestSerializer(serializers.Serializer):
         attrs["student_ids"] = list(dict.fromkeys(student_ids))
 
         class_qs = Class.objects.filter(id=class_id)
-        if user and not user.is_superuser and school_id:
+        if user and school_id:
             class_qs = class_qs.filter(school_id=school_id)
         if not class_qs.exists():
             raise serializers.ValidationError({"to_class": "Please select a valid target class."})
@@ -528,7 +528,7 @@ class StudentPromoteRequestSerializer(serializers.Serializer):
 
         if year_id:
             year_qs = AcademicYear.objects.filter(id=year_id)
-            if user and not user.is_superuser and school_id:
+            if user and school_id:
                 year_qs = year_qs.filter(school_id=school_id)
             year = year_qs.first()
             if not year:
@@ -630,7 +630,7 @@ class StudentSubjectAssignmentRequestSerializer(serializers.Serializer):
         subject_ids = attrs.get("subject_ids", [])
 
         class_qs = Class.objects.filter(id=class_id)
-        if user and not user.is_superuser and school_id:
+        if user and school_id:
             class_qs = class_qs.filter(school_id=school_id)
         if not class_qs.exists():
             raise serializers.ValidationError({"class": "Please select a class"})
@@ -640,14 +640,14 @@ class StudentSubjectAssignmentRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError({"section": "Section does not belong to selected class"})
 
         year_qs = AcademicYear.objects.filter(id=year_id)
-        if user and not user.is_superuser and school_id:
+        if user and school_id:
             year_qs = year_qs.filter(school_id=school_id)
         year = year_qs.first()
         if not year or not year.is_current:
             raise serializers.ValidationError({"academic_year": "Academic year must be active"})
 
         subject_qs = Subject.objects.filter(id__in=subject_ids)
-        if user and not user.is_superuser and school_id:
+        if user and school_id:
             subject_qs = subject_qs.filter(school_id=school_id)
         if subject_qs.count() != len(set(subject_ids)):
             raise serializers.ValidationError({"subject_ids": "Please select at least one subject"})

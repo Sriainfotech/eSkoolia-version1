@@ -1,8 +1,8 @@
 from django.contrib import admin
 from django.conf import settings
-from django.conf.urls.static import static
-from django.urls import include, path
+from django.urls import include, path, re_path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+from apps.core.media_views import serve_media
 from apps.users.views import HealthView
 
 urlpatterns = [
@@ -39,18 +39,11 @@ urlpatterns = [
     path("api/v1/parent/", include("apps.parent_portal.urls")),
 ]
 
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-else:
-    # Local non-DEBUG setups (daphne) still need /media/ served by Django
-    # so uploaded school logos and other user media are reachable.
-    # In real production, serve /media/ via nginx/CDN instead.
-    from django.views.static import serve as _media_serve
-    from django.urls import re_path
-    urlpatterns += [
-        re_path(
-            r"^media/(?P<path>.*)$",
-            _media_serve,
-            {"document_root": settings.MEDIA_ROOT},
-        ),
-    ]
+# /media/* always goes through serve_media, which requires authentication
+# and checks the requesting user's school owns the file — DEBUG and
+# production both need this since uploaded documents contain student/staff
+# PII. In real production, prefer serving /media/ via nginx/CDN with the
+# same auth+ownership check (e.g. an auth_request subrequest to this view).
+urlpatterns += [
+    re_path(r"^media/(?P<path>.*)$", serve_media),
+]

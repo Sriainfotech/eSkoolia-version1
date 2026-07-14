@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Plus, Upload, ChevronDown, X, GripVertical } from "lucide-react";
 import {
   HrBadge, HrKpiCard, HrModal, HrField,
@@ -390,20 +390,37 @@ function InlineDesigForm({ initial, defaultDeptId, departments, onSaved, onCance
   });
   const [form, setForm] = useState<Partial<Designation>>(initForm);
   const [saving, setSaving] = useState(false);
-  const set = (k: keyof Designation, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+  // Mirrors `form` synchronously (written inside the same call as any `set()`,
+  // not on the next render), so handleSave never reads a stale value even if
+  // it fires before React has committed the latest state update — this is what
+  // caused the intermittent "Department and designation title are required"
+  // error despite the dropdown visually showing a selection.
+  const formRef = useRef(form);
+  const set = (k: keyof Designation, v: unknown) => {
+    setForm((f) => {
+      const next = { ...f, [k]: v };
+      formRef.current = next;
+      return next;
+    });
+  };
 
   const handleSave = async (addAnother?: boolean) => {
-    if (!form.name?.trim() || !form.department) {
+    const current = formRef.current;
+    if (!current.name?.trim() || !current.department) {
       toast("Department and designation title are required", "error");
       return;
     }
     setSaving(true);
     try {
-      if (initial?.id) await updateDesignation(initial.id, form);
-      else await createDesignation(form);
+      if (initial?.id) await updateDesignation(initial.id, current);
+      else await createDesignation(current);
       toast(initial?.id ? "Designation updated" : "Designation saved");
       onSaved(addAnother);
-      if (addAnother) setForm({ ...emptyDesig(), department: form.department });
+      if (addAnother) {
+        const next = { ...emptyDesig(), department: current.department };
+        formRef.current = next;
+        setForm(next);
+      }
     } catch (err: unknown) {
       toast(err instanceof Error ? err.message : "Failed to save designation", "error");
     } finally {

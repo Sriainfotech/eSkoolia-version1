@@ -17,7 +17,9 @@ import type {
 } from "@/types/hr";
 
 // ─── Generic fetch hook ───────────────────────────────────────────────────────
-function useFetch<T>(url: string, deps: unknown[] = []) {
+// `silent401`: for background/non-critical lookups (master data dropdowns, pincode)
+// whose own stray 401 shouldn't force-logout a user with an otherwise-valid session.
+function useFetch<T>(url: string, deps: unknown[] = [], fetchOptions?: { silent401?: boolean }) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +28,7 @@ function useFetch<T>(url: string, deps: unknown[] = []) {
     setLoading(true);
     setError(null);
     try {
-      const data = await apiRequestWithRefresh<T>(url, { method: "GET" });
+      const data = await apiRequestWithRefresh<T>(url, { method: "GET", silent401: fetchOptions?.silent401 });
       setData(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
@@ -186,6 +188,34 @@ export function useStaff(filters: StaffFilters = {}) {
   );
 }
 
+export class HrApiError extends Error {
+  errors?: Record<string, unknown>;
+  constructor(message: string, errors?: Record<string, unknown>) {
+    super(message);
+    this.name = "HrApiError";
+    this.errors = errors;
+  }
+}
+
+// The backend returns {success, message, errors} on 4xx — parse it so callers get the
+// specific field message instead of the raw JSON blob (previously `new Error(await res.text())`
+// dumped the whole response body as the error message).
+async function throwHrApiError(res: Response): Promise<never> {
+  const text = await res.text();
+  let message = text || `Request failed (${res.status})`;
+  let errors: Record<string, unknown> | undefined;
+  try {
+    const parsed = JSON.parse(text) as { message?: string; errors?: Record<string, unknown> };
+    if (parsed && typeof parsed === "object") {
+      if (parsed.message) message = parsed.message;
+      if (parsed.errors) errors = parsed.errors;
+    }
+  } catch {
+    // Response wasn't JSON — fall back to the raw text as the message.
+  }
+  throw new HrApiError(message, errors);
+}
+
 export async function createStaff(body: Partial<Staff>, photoFile?: File | null) {
   if (photoFile) {
     const fd = new FormData();
@@ -202,7 +232,7 @@ export async function createStaff(body: Partial<Staff>, photoFile?: File | null)
       method: "POST",
       body: fd,
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) await throwHrApiError(res);
     return res.json() as Promise<Staff>;
   }
   const res = await apiRequestWithRefreshResponse("/api/v1/hr/staff/", {
@@ -210,7 +240,7 @@ export async function createStaff(body: Partial<Staff>, photoFile?: File | null)
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<Staff>;
 }
 
@@ -230,7 +260,7 @@ export async function updateStaff(id: number, body: Partial<Staff>, photoFile?: 
       method: "PATCH",
       body: fd,
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) await throwHrApiError(res);
     return res.json() as Promise<Staff>;
   }
   const res = await apiRequestWithRefreshResponse(`/api/v1/hr/staff/${id}/`, {
@@ -238,7 +268,7 @@ export async function updateStaff(id: number, body: Partial<Staff>, photoFile?: 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<Staff>;
 }
 
@@ -405,7 +435,7 @@ export async function lookupPincode(
   try {
     const data = await apiRequestWithRefresh<{ city: string; state: string; country: string }>(
       `/api/v1/core/pincode-lookup/?pincode=${encodeURIComponent(pincode)}`,
-      { method: "GET" },
+      { method: "GET", silent401: true },
     );
     return data;
   } catch {
@@ -653,19 +683,19 @@ export async function completeOffboarding(id: number) {
 export interface MasterItem { id: number; name: string; }
 
 export function useMasterLanguages() {
-  return useFetch<MasterItem[]>("/api/v1/master/languages/");
+  return useFetch<MasterItem[]>("/api/v1/master/languages/", [], { silent401: true });
 }
 
 export function useMasterReligions() {
-  return useFetch<MasterItem[]>("/api/v1/master/religions/");
+  return useFetch<MasterItem[]>("/api/v1/master/religions/", [], { silent401: true });
 }
 
 export function useMasterCountries() {
-  return useFetch<MasterItem[]>("/api/v1/master/countries/");
+  return useFetch<MasterItem[]>("/api/v1/master/countries/", [], { silent401: true });
 }
 
 export function useMasterEmploymentTypes() {
-  return useFetch<MasterItem[]>("/api/v1/master/employment-types/");
+  return useFetch<MasterItem[]>("/api/v1/master/employment-types/", [], { silent401: true });
 }
 
 // Staff form options (roles, departments, designations) — backed by hr/staff/form-options/
@@ -675,7 +705,7 @@ export interface StaffFormOptions {
   designations: { id: number; name: string; department: number }[];
 }
 export function useStaffFormOptions() {
-  return useFetch<{ success: boolean; data: StaffFormOptions }>("/api/v1/hr/staff/form-options/");
+  return useFetch<{ success: boolean; data: StaffFormOptions }>("/api/v1/hr/staff/form-options/", [], { silent401: true });
 }
 
 

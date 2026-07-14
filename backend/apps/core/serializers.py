@@ -563,6 +563,17 @@ class AssignVehicleSerializer(serializers.ModelSerializer):
         fields = ["id", "school", "academic_year", "vehicle", "vehicle_no", "route", "route_title", "active_status", "created_at", "updated_at"]
         read_only_fields = ["id", "school", "academic_year", "created_at", "updated_at"]
 
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None:
+            school_id = getattr(user, "school_id", None)
+            for field_name in ("vehicle", "route"):
+                related = attrs.get(field_name) or getattr(self.instance, field_name, None)
+                if related is not None and related.school_id != school_id:
+                    raise serializers.ValidationError({field_name: f"Invalid {field_name}."})
+        return attrs
+
 
 # ===== BUS TRACKING MODULE SERIALIZERS =====
 class BusStopSerializer(serializers.ModelSerializer):
@@ -588,6 +599,16 @@ class BusStopSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None:
+            school_id = getattr(user, "school_id", None)
+            route = attrs.get("route") or getattr(self.instance, "route", None)
+            if route is not None and route.school_id != school_id:
+                raise serializers.ValidationError({"route": "Invalid route."})
+        return attrs
+
 
 class BusLocationSerializer(serializers.ModelSerializer):
     vehicle_no = serializers.CharField(source="vehicle.vehicle_no", read_only=True)
@@ -606,6 +627,17 @@ class TransportAlertSerializer(serializers.ModelSerializer):
         model = TransportAlert
         fields = ["id", "vehicle", "vehicle_no", "route", "route_title", "alert_type", "message", "severity", "latitude", "longitude", "is_resolved", "created_at", "resolved_at"]
         read_only_fields = ["id", "created_at"]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None:
+            school_id = getattr(user, "school_id", None)
+            for field_name in ("vehicle", "route"):
+                related = attrs.get(field_name) or getattr(self.instance, field_name, None)
+                if related is not None and related.school_id != school_id:
+                    raise serializers.ValidationError({field_name: f"Invalid {field_name}."})
+        return attrs
 
 
 class BusRoutePickupUpdateSerializer(serializers.ModelSerializer):
@@ -636,6 +668,17 @@ class VehicleDriverAssignmentSerializer(serializers.ModelSerializer):
             "is_primary", "active_status", "created_at", "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None:
+            school_id = getattr(user, "school_id", None)
+            for field_name in ("vehicle", "driver"):
+                related = attrs.get(field_name) or getattr(self.instance, field_name, None)
+                if related is not None and related.school_id != school_id:
+                    raise serializers.ValidationError({field_name: f"Invalid {field_name}."})
+        return attrs
 
 
 class TransportNotificationLogSerializer(serializers.ModelSerializer):
@@ -713,6 +756,16 @@ class ItemReceiveChildSerializer(serializers.ModelSerializer):
         fields = ["id", "receive", "item", "item_name", "item_code", "quantity", "unit_cost", "total_cost"]
         read_only_fields = ["id", "total_cost"]
 
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None:
+            school_id = getattr(user, "school_id", None)
+            item = attrs.get("item") or getattr(self.instance, "item", None)
+            if item is not None and item.school_id != school_id:
+                raise serializers.ValidationError({"item": "Invalid item."})
+        return attrs
+
 
 class ItemReceiveSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
@@ -723,6 +776,16 @@ class ItemReceiveSerializer(serializers.ModelSerializer):
         model = ItemReceive
         fields = ["id", "school", "supplier", "supplier_name", "receive_date", "total_amount", "discount", "tax", "payment_status", "paid_amount", "reference_no", "notes", "line_items", "created_by", "created_by_name", "created_at", "updated_at"]
         read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None:
+            school_id = getattr(user, "school_id", None)
+            supplier = attrs.get("supplier") or getattr(self.instance, "supplier", None)
+            if supplier is not None and supplier.school_id != school_id:
+                raise serializers.ValidationError({"supplier": "Invalid supplier."})
+        return attrs
 
 
 class ItemIssueSerializer(serializers.ModelSerializer):
@@ -743,6 +806,16 @@ class ItemSellChildSerializer(serializers.ModelSerializer):
         model = ItemSellChild
         fields = ["id", "sell", "item", "item_name", "item_code", "quantity", "unit_price", "total_price"]
         read_only_fields = ["id", "total_price"]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None:
+            school_id = getattr(user, "school_id", None)
+            item = attrs.get("item") or getattr(self.instance, "item", None)
+            if item is not None and item.school_id != school_id:
+                raise serializers.ValidationError({"item": "Invalid item."})
+        return attrs
 
 
 class ItemSellSerializer(serializers.ModelSerializer):

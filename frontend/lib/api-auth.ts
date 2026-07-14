@@ -141,12 +141,23 @@ async function fetchWithRetry(input: RequestInfo | URL, init?: RequestInit): Pro
   }
 }
 
-async function requestWithRefreshResponse(path: string, options?: RequestInit): Promise<Response> {
+export interface RequestOptions extends RequestInit {
+  /**
+   * Suppress the global redirect-to-login side effect on a 401 response.
+   * Use for background/non-critical calls (lookups, master data) where a stray
+   * 401 shouldn't force-logout a user with an otherwise-valid session — reserve
+   * the hard redirect for primary, user-initiated actions.
+   */
+  silent401?: boolean;
+}
+
+async function requestWithRefreshResponse(path: string, options?: RequestOptions): Promise<Response> {
+  const silent401 = options?.silent401 ?? false;
   let token = getAccessToken();
   if (!token) {
-    const refreshed = await refreshAccessToken();
+    const refreshed = await refreshAccessToken(silent401);
     if (!refreshed) {
-      if (typeof window !== "undefined") {
+      if (!silent401 && typeof window !== "undefined") {
         window.location.href = "/login";
       }
       throw new Error("401");
@@ -167,7 +178,7 @@ async function requestWithRefreshResponse(path: string, options?: RequestInit): 
   });
 
   if (response.status === 401) {
-    const refreshed = await refreshAccessToken();
+    const refreshed = await refreshAccessToken(silent401);
     if (!refreshed) throw new Error("401");
 
     response = await fetchWithRetry(`${API_BASE_URL}${path}`, {
@@ -185,7 +196,7 @@ async function requestWithRefreshResponse(path: string, options?: RequestInit): 
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    if (response.status === 401) {
+    if (response.status === 401 && !silent401) {
       clearAuthTokens();
       if (typeof window !== "undefined") {
         window.location.href = "/login";
@@ -203,7 +214,7 @@ async function requestWithRefreshResponse(path: string, options?: RequestInit): 
   return response;
 }
 
-async function refreshAccessToken(): Promise<string | null> {
+async function refreshAccessToken(silent401 = false): Promise<string | null> {
   const refresh = getRefreshToken();
   if (!refresh) return null;
 
@@ -214,18 +225,22 @@ async function refreshAccessToken(): Promise<string | null> {
   });
 
   if (!res.ok) {
-    clearAuthTokens();
-    if (typeof window !== "undefined") {
-      window.location.href = "/login";
+    if (!silent401) {
+      clearAuthTokens();
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
     }
     return null;
   }
 
   const data = (await res.json()) as { access?: string };
   if (!data.access) {
-    clearAuthTokens();
-    if (typeof window !== "undefined") {
-      window.location.href = "/login";
+    if (!silent401) {
+      clearAuthTokens();
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
     }
     return null;
   }
@@ -292,7 +307,7 @@ function normalizeIdsDeep(value: unknown): unknown {
   return normalized;
 }
 
-export async function apiRequestWithRefresh<T>(path: string, options?: RequestInit): Promise<T> {
+export async function apiRequestWithRefresh<T>(path: string, options?: RequestOptions): Promise<T> {
   const response = await requestWithRefreshResponse(path, options);
 
   if (response.status === 204) {
@@ -306,6 +321,6 @@ export async function apiRequestWithRefresh<T>(path: string, options?: RequestIn
   return normalizeIdsDeep(parsed) as T;
 }
 
-export async function apiRequestWithRefreshResponse(path: string, options?: RequestInit): Promise<Response> {
+export async function apiRequestWithRefreshResponse(path: string, options?: RequestOptions): Promise<Response> {
   return requestWithRefreshResponse(path, options);
 }

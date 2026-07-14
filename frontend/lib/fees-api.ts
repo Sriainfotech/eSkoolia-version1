@@ -70,10 +70,13 @@ export type FeesAssignment = {
   academic_year: number;
   student: number;
   fees_type: number;
+  fees_type_name?: string;
   due_date: string;
   amount: string;
   discount_amount: string;
+  concession_amount?: string;
   status: "unpaid" | "partial" | "paid";
+  reason?: string;
 };
 
 export type FeesPayment = {

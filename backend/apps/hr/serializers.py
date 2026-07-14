@@ -1060,7 +1060,8 @@ class StaffSerializer(serializers.ModelSerializer):
         if marital_status_val and marital_status_val not in valid_marital:
             raise serializers.ValidationError({"marital_status": "Select a valid marital status."})
 
-        num_children_raw = str(self.initial_data.get("num_children", "")).strip()
+        num_children_input = self.initial_data.get("num_children")
+        num_children_raw = "" if num_children_input is None else str(num_children_input).strip()
         if num_children_raw:
             try:
                 num_children_val = int(num_children_raw)

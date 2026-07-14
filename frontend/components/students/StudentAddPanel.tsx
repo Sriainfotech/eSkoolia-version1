@@ -13,6 +13,8 @@ import {
   type GuardianDraft,
   type GuardianFieldErrors,
 } from "./StudentGuardiansStep";
+import StudentFeesStep, { EMPTY_FEE_PLAN, type FeePlanState, type FeePlanSummary, type StudentFeesStepHandle } from "./StudentFeesStep";
+import { feesApi } from "@/lib/fees-api";
 
 type ApiList<T> = T[] | { results?: T[]; count?: number };
 
@@ -36,6 +38,7 @@ type SchoolClass = {
 type AcademicYear = {
   id: number;
   name: string;
+  is_current?: boolean;
 };
 
 type Section = {
@@ -222,6 +225,7 @@ const NAV_ITEMS: ReadonlyArray<{ id: string; label: string; description: string;
   { id: 'medical',        label: 'Medical & emergency', description: 'Health, vaccinations',       badge: 'NEW',       group: 'health-identity' },
   { id: 'speciallyAbled', label: 'Specially abled',     description: 'PwD accommodations',         badge: 'NEW',       group: 'health-identity' },
   { id: 'identityMarks',  label: 'Identity marks',      description: 'Physical identifiers',       badge: 'SENSITIVE', group: 'health-identity' },
+  { id: 'fees',           label: 'Fee plan',            description: 'Assign fees & concessions' },
   { id: 'review',         label: 'Review',              description: 'Confirm & enroll' },
 ];
 
@@ -268,7 +272,7 @@ const COMMON_VACCINATIONS = [
   { id: "hpv", label: "HPV" },
 ];
 
-type NavItemId = 'identity' | 'academic' | 'contact' | 'guardians' | 'apaar' | 'documents' | 'medical' | 'speciallyAbled' | 'identityMarks' | 'review';
+type NavItemId = 'identity' | 'academic' | 'contact' | 'guardians' | 'apaar' | 'documents' | 'medical' | 'speciallyAbled' | 'identityMarks' | 'fees' | 'review';
 
 const CLASS_AGE_RULES_STRICT: Record<string, { min: number; max: number }> = {
   LKG: { min: 3.5, max: 5.5 },
@@ -362,29 +366,35 @@ async function fetchAllPages<T>(basePath: string, pageSize = 100): Promise<T[]> 
 }
 
 async function apiGet<T>(path: string): Promise<T> {
-  return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
+  // Background/lookup reads only in this file — a stray 401 here must not force-logout
+  // the user and wipe an in-progress enrollment form. The actual submit calls below
+  // default to a hard redirect (silent401 not set) so a truly expired session still logs out.
+  return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" }, silent401: true });
 }
 
-async function apiPostJson<T>(path: string, payload: unknown): Promise<T> {
+async function apiPostJson<T>(path: string, payload: unknown, silent401 = false): Promise<T> {
   return apiRequestWithRefresh<T>(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    silent401,
   });
 }
 
-async function apiPutJson<T>(path: string, payload: unknown): Promise<T> {
+async function apiPutJson<T>(path: string, payload: unknown, silent401 = false): Promise<T> {
   return apiRequestWithRefresh<T>(path, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    silent401,
   });
 }
 
-async function apiPostForm<T>(path: string, formData: FormData): Promise<T> {
+async function apiPostForm<T>(path: string, formData: FormData, silent401 = false): Promise<T> {
   return apiRequestWithRefresh<T>(path, {
     method: "POST",
     body: formData,
+    silent401,
   });
 }
 
@@ -871,6 +881,11 @@ export function StudentAddPanel() {
   const [maxReachedIdx, setMaxReachedIdx] = useState(0);
   const [returnToReview, setReturnToReview] = useState(false);
 
+  // Step 10 — fee plan (assignment + concessions), persisted once the student is saved.
+  const [feePlan, setFeePlan] = useState<FeePlanState>(EMPTY_FEE_PLAN);
+  const [feeSummary, setFeeSummary] = useState<FeePlanSummary>({ groupName: "", concessionName: "", lineCount: 0, annualTotal: 0 });
+  const feesStepRef = useRef<StudentFeesStepHandle>(null);
+
   // Consolidated document upload state with proper status management
   type DocumentStatus = "idle" | "validating" | "uploading" | "success" | "error";
   
@@ -1134,6 +1149,7 @@ export function StudentAddPanel() {
       case 'contact': return !!(phone.trim() && addressLine.trim() && stateName && city && pincode.trim());
       case 'guardians': return !!(guardianDrafts[0]?.fullName?.trim() && guardianDrafts[0]?.phone?.trim());
       case 'documents': return consentChecked;
+      case 'fees': return !!feePlan.feeGroupId;
       default: return false;
     }
   };
@@ -1827,6 +1843,15 @@ export function StudentAddPanel() {
 
   useEffect(() => {
     if (academicYearId || validAcademicYears.length === 0) return;
+    // Prefer the school's actual "current" academic year (set in Academics →
+    // Foundation → Academic Year) over a calendar guess — the guess is only a
+    // fallback for schools that haven't flagged one yet, since fee groups and
+    // other year-scoped data are only ever configured against the real one.
+    const currentYear = validAcademicYears.find((y) => y.is_current);
+    if (currentYear) {
+      setAcademicYearId(String(currentYear.id));
+      return;
+    }
     const now = new Date();
     const startYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
     const targetName = `${startYear}-${startYear + 1}`;
@@ -2074,6 +2099,8 @@ export function StudentAddPanel() {
     setDocBirthCertificate(false);
     setDocAadhaar(false);
     setDraftSavedAt(null);
+    setFeePlan(EMPTY_FEE_PLAN);
+    setFeeSummary({ groupName: "", concessionName: "", lineCount: 0, annualTotal: 0 });
   };
 
   const setSingleFieldError = (field: string, message: string) => {
@@ -2826,7 +2853,7 @@ export function StudentAddPanel() {
       const compressed = await compressImage(file);
       const formData = new FormData();
       formData.append("photo", compressed);
-      const res = await apiPostForm<{ data?: { photo?: string } }>("/api/v1/students/students/upload-photo/", formData);
+      const res = await apiPostForm<{ data?: { photo?: string } }>("/api/v1/students/students/upload-photo/", formData, true);
       const uploadedUrl = String(res?.data?.photo || "");
       if (!uploadedUrl) throw new Error("Photo upload failed");
       setPhoto(uploadedUrl);
@@ -3498,6 +3525,30 @@ export function StudentAddPanel() {
       setGuardianId(String(resolvedPrimaryGuardianId));
     }
 
+    // Persist the fee plan built in Step 10 against the (now-known) student id.
+    // Non-fatal: the student record is already saved by this point, so a fee
+    // assignment hiccup surfaces as a toast rather than blocking enrollment.
+    const persistFeePlan = async (studentIdForFees: number) => {
+      const lines = feesStepRef.current?.getAssignmentPayloads() ?? [];
+      if (lines.length === 0) return;
+      let failed = 0;
+      for (const line of lines) {
+        try {
+          await feesApi.createAssignment({
+            academic_year: Number(academicYearId),
+            student: studentIdForFees,
+            ...line,
+          });
+        } catch (feeErr) {
+          failed += 1;
+          console.error("Fee assignment failed", line, feeErr);
+        }
+      }
+      if (failed > 0) {
+        showToast(`Student saved, but ${failed} of ${lines.length} fee line(s) could not be assigned. Finish this from Fees → Assignment.`, "error", 6000);
+      }
+    };
+
     try {
       setSaving(true);
       const isStudentActive = !isDisabled && statusValue === "active";
@@ -3564,6 +3615,7 @@ export function StudentAddPanel() {
 
       if (isEditMode && studentId) {
         await apiPutJson<{ message?: string }>(`/api/v1/students/students/${studentId}/`, payload);
+        await persistFeePlan(studentId);
         setSuccess("Student updated successfully.");
         if (typeof window !== "undefined") {
           window.sessionStorage.setItem("students:list:flash", "Student updated successfully.");
@@ -3583,6 +3635,7 @@ export function StudentAddPanel() {
           `/api/v1/students/students/${newlyCreatedStudentId}/`,
           finalizePayload,
         );
+        await persistFeePlan(newlyCreatedStudentId);
         finishSuccessAsEnrollment("Student enrolled successfully");
       } else {
         // Fresh POST — no auto-save happened (user submitted without
@@ -3592,6 +3645,7 @@ export function StudentAddPanel() {
         const createdStudentId = Number(response?.id ?? response?.data?.id);
         if (Number.isFinite(createdStudentId) && createdStudentId > 0) {
           console.log("✅ New student created with ID:", createdStudentId);
+          await persistFeePlan(createdStudentId);
         }
         const toastMsg = response?.warning
           ? `Student enrolled successfully. ${response.warning}`
@@ -4568,6 +4622,24 @@ export function StudentAddPanel() {
               {renderSectionNavButtons('identityMarks')}
             </section>
 
+            <div style={{ display: activeNavSection === "fees" ? "block" : "none" }}>
+              <StudentFeesStep
+                ref={feesStepRef}
+                academicYearId={academicYearId}
+                academicYearName={validAcademicYears.find((y) => String(y.id) === academicYearId)?.name}
+                classId={classId}
+                studentDisplayName={`${firstName.trim()} ${lastName.trim()}`.trim()}
+                admissionNo={admissionNo}
+                isDraft={!isEditMode}
+                value={feePlan}
+                onChange={setFeePlan}
+                onSummaryChange={setFeeSummary}
+                showToast={showToast}
+                sectionCounter={getSectionCounter("fees")}
+                navButtonsSlot={renderSectionNavButtons("fees")}
+              />
+            </div>
+
             {/* REVIEW SECTION */}
             <section className="section-card" id="review" style={{ display: activeNavSection === "review" ? "block" : "none" }}>
               <div className="section-card-header">
@@ -4634,6 +4706,18 @@ export function StudentAddPanel() {
                 <div className="review-grid">
                   <div className="review-item"><div className="review-label">PHONE</div><div className="review-value">{phone || '—'}</div></div>
                   <div className="review-item"><div className="review-label">CITY / STATE</div><div className="review-value">{[city, stateName].filter(Boolean).join(', ') || '—'}</div></div>
+                </div>
+              </div>
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: '#6b7280', textTransform: 'uppercase' }}>Fee plan</div>
+                  <button type="button" onClick={() => { setReturnToReview(true); jumpToSection('fees'); }} style={{ fontSize:12, color:'#6c3ce1', background:'none', border:'none', cursor:'pointer', padding:0, fontWeight:500 }}>Edit →</button>
+                </div>
+                <div className="review-grid">
+                  <div className="review-item"><div className="review-label">FEE GROUP</div><div className="review-value">{feeSummary.groupName || 'Not assigned yet'}</div></div>
+                  <div className="review-item"><div className="review-label">CONCESSION</div><div className="review-value">{feeSummary.concessionName || 'None'}</div></div>
+                  <div className="review-item"><div className="review-label">FEE TYPES ASSIGNED</div><div className="review-value">{feeSummary.lineCount}</div></div>
+                  <div className="review-item"><div className="review-label">ANNUAL TOTAL</div><div className="review-value">{feeSummary.annualTotal > 0 ? `₹${feeSummary.annualTotal.toLocaleString('en-IN')}` : '—'}</div></div>
                 </div>
               </div>
 

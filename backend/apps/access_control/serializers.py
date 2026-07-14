@@ -98,6 +98,19 @@ class UserRoleSerializer(serializers.ModelSerializer):
         fields = ["id", "user", "role", "user_name", "role_name", "created_at"]
         read_only_fields = ["id", "created_at"]
 
+    def validate(self, attrs):
+        request = self.context.get("request")
+        requester = getattr(request, "user", None)
+        if requester is not None:
+            school_id = getattr(requester, "school_id", None)
+            role = attrs.get("role") or getattr(self.instance, "role", None)
+            target_user = attrs.get("user") or getattr(self.instance, "user", None)
+            if role is not None and role.school_id != school_id:
+                raise serializers.ValidationError({"role": "Invalid role."})
+            if target_user is not None and target_user.school_id != school_id:
+                raise serializers.ValidationError({"user": "Invalid user."})
+        return attrs
+
     def get_user_name(self, obj):
         user = obj.user
         if not user:

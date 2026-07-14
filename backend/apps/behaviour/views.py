@@ -50,8 +50,6 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
-        if user.is_superuser:
-            return queryset
         if user.school_id:
             return queryset.filter(school_id=user.school_id)
         return queryset.none()
@@ -59,7 +57,7 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         school = user.school or getattr(self.request, "school", None)
-        if not school and not user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
         serializer.save(school=school)
 
@@ -136,7 +134,7 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         school = user.school or getattr(self.request, "school", None)
-        if not school and not user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
 
         incident = serializer.validated_data["incident"]
@@ -152,7 +150,7 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
 
     def _assign_incidents_bulk(self, request, data):
         school = request.user.school or getattr(request, "school", None)
-        if not school and not request.user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
 
         incidents = list(Incident.objects.filter(school=school, id__in=data["incident_ids"]))
@@ -229,7 +227,7 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
     @action(detail=False, methods=["get"], url_path="students-grouped")
     def students_grouped(self, request):
         school = request.user.school or getattr(request, "school", None)
-        if not school and not request.user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
 
         class_id = request.query_params.get("class_id")
@@ -308,7 +306,7 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
     @action(detail=False, methods=["get"], url_path="students-summary")
     def students_summary(self, request):
         school = request.user.school or getattr(request, "school", None)
-        if not school and not request.user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
 
         academic_year_id = request.query_params.get("academic_year_id")
@@ -369,7 +367,7 @@ class AssignedIncidentViewSet(SchoolScopedModelViewSet):
     @action(detail=False, methods=["get"], url_path="student-rank-report")
     def student_rank_report(self, request):
         school = request.user.school or getattr(request, "school", None)
-        if not school and not request.user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
 
         query_serializer = StudentRankQuerySerializer(data=request.query_params)
@@ -636,7 +634,7 @@ class AssignedIncidentCommentViewSet(SchoolScopedModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         school = user.school or getattr(self.request, "school", None)
-        if not school and not user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
 
         assigned_incident = serializer.validated_data["assigned_incident"]
@@ -660,7 +658,7 @@ class BehaviourRecordSettingAPIView(APIView):
 
     def _get_school(self, request):
         school = request.user.school or getattr(request, "school", None)
-        if not school and not request.user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
         return school
 

@@ -72,6 +72,7 @@ class FeeService:
         concession_amount: Decimal = Decimal('0.00'),
         created_by: AbstractBaseUser,
         academic_year,
+        reason: str = "",
     ) -> FeeAssignment:
         """
         Assigns a fee to a student, creating the charge and concession ledger entries.
@@ -119,11 +120,12 @@ class FeeService:
                 notes=f"Concession at time of assignment."
             )
         
+        default_reason = f"Assigned {fees_type.name} to {student}."
         FeeService._create_audit_event(
             user=created_by,
             event_type="fee.assigned",
             instance=assignment,
-            reason=f"Assigned {fees_type.name} to {student}."
+            reason=f"{default_reason} {reason}".strip() if reason else default_reason,
         )
 
         return assignment

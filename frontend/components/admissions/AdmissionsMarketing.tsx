@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { toast } from "react-toastify";
 import {
   Send,
   Plus,
@@ -384,7 +385,7 @@ function CountUp({ target, suffix = '' }: { target: number; suffix?: string }) {
   return <>{count}{suffix}</>;
 }
 
-function CampaignEditModal({ campaign, isOpen, onClose }: { campaign: Campaign; isOpen: boolean; onClose: () => void }) {
+function CampaignEditModal({ campaign, isOpen, onClose, onSave }: { campaign: Campaign; isOpen: boolean; onClose: () => void; onSave: (name: string) => void }) {
   const [name, setName] = useState(campaign.name);
   if (!isOpen) return null;
   return (
@@ -413,7 +414,7 @@ function CampaignEditModal({ campaign, isOpen, onClose }: { campaign: Campaign; 
         </div>
         <div className="flex gap-3 mt-6">
           <button onClick={onClose} className="flex-1 border border-gray-200 rounded-lg py-2 text-sm text-gray-600 hover:bg-gray-50">Cancel</button>
-          <button onClick={() => { onClose(); }}
+          <button onClick={() => { onSave(name.trim() || campaign.name); onClose(); }}
             className="flex-1 bg-blue-600 text-white rounded-lg py-2 text-sm font-semibold hover:bg-blue-700">Save Changes</button>
         </div>
       </div>
@@ -488,6 +489,12 @@ export function AdmissionsMarketing() {
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [previewTemplate, setPreviewTemplate] = useState<Template | null>(null);
+  const [reportCampaign, setReportCampaign] = useState<Campaign | null>(null);
+  const [events, setEvents] = useState([
+    { name: "Open House", date: "15 May 2026", time: "10:00 AM", rsvp: 14, capacity: 40 },
+    { name: "Campus Tour", date: "22 May 2026", time: "11:00 AM", rsvp: 6, capacity: 20 },
+  ]);
+  const [showNewEvent, setShowNewEvent] = useState(false);
 
   const filtered = TEMPLATES.filter(
     (t) => t.channel === templateTab && (searchQ === "" || t.name.toLowerCase().includes(searchQ.toLowerCase()) || t.category.toLowerCase().includes(searchQ.toLowerCase()))
@@ -590,7 +597,7 @@ export function AdmissionsMarketing() {
                     <div className="flex gap-2">
                       <button onClick={() => handleEditCampaign(campaign)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm hover:bg-gray-50 text-gray-700">Edit</button>
                       {campaign.status === 'sent' && (
-                        <button className="bg-blue-600 text-white rounded-lg px-3 py-1.5 text-sm hover:bg-blue-700">View Report</button>
+                        <button onClick={() => setReportCampaign(campaign)} className="bg-blue-600 text-white rounded-lg px-3 py-1.5 text-sm hover:bg-blue-700">View Report</button>
                       )}
                       {campaign.status === 'scheduled' && (
                         <button onClick={() => setCampaigns(prev => prev.filter(x => x.id !== campaign.id))}
@@ -711,17 +718,14 @@ export function AdmissionsMarketing() {
             <span style={{ fontSize: 13.5, fontWeight: 700, color: "var(--ink-1, #111)" }}>Events Manager</span>
           </div>
           <button
+            onClick={() => setShowNewEvent(true)}
             style={{ display: "flex", alignItems: "center", gap: 6, height: 32, padding: "0 12px", background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 8, fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}
           >
             <Plus size={13} /> New Event
           </button>
         </div>
         <div style={{ padding: 20 }}>
-          {/* Demo events */}
-          {[
-            { name: "Open House", date: "15 May 2026", time: "10:00 AM", rsvp: 14, capacity: 40 },
-            { name: "Campus Tour", date: "22 May 2026", time: "11:00 AM", rsvp: 6, capacity: 20 },
-          ].map((ev, i) => (
+          {events.map((ev, i) => (
             <div
               key={i}
               style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 0", borderBottom: "1px solid var(--line, #e5e7eb)", flexWrap: "wrap", gap: 10 }}
@@ -736,8 +740,18 @@ export function AdmissionsMarketing() {
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button style={{ padding: "6px 12px", border: "1px solid var(--line, #e5e7eb)", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer" }}>Manage RSVPs</button>
-                <button style={{ padding: "6px 12px", border: "1px solid #bfdbfe", borderRadius: 7, background: "#eff6ff", color: "#1d4ed8", fontSize: 12, cursor: "pointer" }}>Send Reminder</button>
+                <button
+                  onClick={() => setEvents(prev => prev.map((e, idx) => idx === i && e.rsvp < e.capacity ? { ...e, rsvp: e.rsvp + 1 } : e))}
+                  style={{ padding: "6px 12px", border: "1px solid var(--line, #e5e7eb)", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer" }}
+                >
+                  Manage RSVPs
+                </button>
+                <button
+                  onClick={() => toast.success(`Reminder sent to ${Math.max(ev.capacity - ev.rsvp, 0)} pending invitee(s) for ${ev.name}.`)}
+                  style={{ padding: "6px 12px", border: "1px solid #bfdbfe", borderRadius: 7, background: "#eff6ff", color: "#1d4ed8", fontSize: 12, cursor: "pointer" }}
+                >
+                  Send Reminder
+                </button>
               </div>
             </div>
           ))}
@@ -748,7 +762,45 @@ export function AdmissionsMarketing() {
       </div>
 
       {previewTemplate && <TemplatePreviewModal template={previewTemplate} onClose={() => setPreviewTemplate(null)} />}
-      {editingCampaign && <CampaignEditModal campaign={editingCampaign} isOpen={editModalOpen} onClose={() => { setEditModalOpen(false); setEditingCampaign(null); }} />}
+      {editingCampaign && (
+        <CampaignEditModal
+          campaign={editingCampaign}
+          isOpen={editModalOpen}
+          onClose={() => { setEditModalOpen(false); setEditingCampaign(null); }}
+          onSave={(name) => {
+            setCampaigns(prev => prev.map(c => c.id === editingCampaign.id ? { ...c, name } : c));
+            toast.success("Campaign updated.");
+          }}
+        />
+      )}
+      {reportCampaign && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setReportCampaign(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-gray-900">{reportCampaign.name} — Report</h2>
+              <button onClick={() => setReportCampaign(null)} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-gray-100">✕</button>
+            </div>
+            <div className="space-y-2 text-sm text-gray-700">
+              <div className="flex justify-between"><span>Sent to</span><span className="font-semibold">{reportCampaign.sentCount ?? 0} parents</span></div>
+              <div className="flex justify-between"><span>Delivered</span><span className="font-semibold">{reportCampaign.deliveredPct ?? 0}%</span></div>
+              <div className="flex justify-between"><span>Replies</span><span className="font-semibold">{reportCampaign.replies ?? 0}</span></div>
+              <div className="flex justify-between"><span>Channel</span><span className="font-semibold">{reportCampaign.channel}</span></div>
+              <div className="flex justify-between"><span>Audience</span><span className="font-semibold">{reportCampaign.audience}</span></div>
+            </div>
+            <button onClick={() => setReportCampaign(null)} className="w-full mt-6 bg-blue-600 text-white rounded-lg py-2 text-sm font-semibold hover:bg-blue-700">Close</button>
+          </div>
+        </div>
+      )}
+      {showNewEvent && (
+        <NewEventModal
+          onCancel={() => setShowNewEvent(false)}
+          onSave={(ev) => {
+            setEvents(prev => [...prev, ev]);
+            setShowNewEvent(false);
+            toast.success("Event created.");
+          }}
+        />
+      )}
 
       {/* ── New Campaign Modal ── */}
       {showNewCampaign && (
@@ -838,6 +890,79 @@ function NewCampaignForm({ onSave, onCancel }: { onSave: (c: Campaign) => void; 
         >
           {form.scheduledFor ? "Schedule Campaign" : "Save Draft"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── New Event Modal ─── */
+type MarketingEvent = { name: string; date: string; time: string; rsvp: number; capacity: number };
+
+function NewEventModal({ onSave, onCancel }: { onSave: (ev: MarketingEvent) => void; onCancel: () => void }) {
+  const [form, setForm] = useState({ name: "", date: "", time: "", capacity: "40" });
+  const f = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm((prev) => ({ ...prev, [k]: e.target.value }));
+
+  const labelStyle: React.CSSProperties = { fontSize: 12.5, fontWeight: 600, color: "var(--ink-1, #111)", marginBottom: 4, display: "block" };
+  const inputStyle: React.CSSProperties = { width: "100%", height: 38, border: "1px solid var(--line, #e5e7eb)", borderRadius: 8, padding: "0 12px", fontSize: 13, outline: "none", boxSizing: "border-box" };
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
+      onClick={onCancel}
+    >
+      <div
+        style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 480, padding: 24, boxShadow: "0 20px 50px rgba(0,0,0,.2)" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>New Event</h2>
+          <button onClick={onCancel} style={{ background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+            <X size={18} color="var(--ink-2, #6b7280)" />
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <div>
+            <label style={labelStyle}>Event Name</label>
+            <input value={form.name} onChange={f("name")} placeholder="e.g. Open House" style={inputStyle} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={labelStyle}>Date</label>
+              <input type="date" value={form.date} onChange={f("date")} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Time</label>
+              <input type="time" value={form.time} onChange={f("time")} style={inputStyle} />
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>Capacity</label>
+            <input type="number" min={1} value={form.capacity} onChange={f("capacity")} style={inputStyle} />
+          </div>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+            <button onClick={onCancel} style={{ padding: "8px 18px", border: "1px solid var(--line, #e5e7eb)", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
+            <button
+              onClick={() => {
+                if (!form.name.trim() || !form.date) return;
+                const dateLabel = new Date(form.date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+                const timeLabel = form.time
+                  ? new Date(`1970-01-01T${form.time}`).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
+                  : "";
+                onSave({
+                  name: form.name.trim(),
+                  date: dateLabel,
+                  time: timeLabel,
+                  rsvp: 0,
+                  capacity: Math.max(1, Number(form.capacity) || 40),
+                });
+              }}
+              style={{ padding: "8px 18px", background: "#0ea5e9", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+            >
+              Create Event
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
