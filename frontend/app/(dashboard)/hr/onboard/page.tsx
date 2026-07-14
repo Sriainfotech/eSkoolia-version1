@@ -4,6 +4,7 @@
  * Layout: page header → QR banner → [252px grouped sidebar | step card] → sticky footer bar
  */
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Camera, Upload, ChevronDown, X, Printer, Sparkles,
   FileText, CheckCircle, QrCode,
@@ -3467,6 +3468,7 @@ type OnboardProps = {
 const HR_ONBOARD_LOCAL_DRAFT_KEY = "hr_onboard_local_draft_v1";
 
 export default function HrOnboardPage(props: any) {
+  const router = useRouter();
   const isPopup = "isPopup" in props ? props.isPopup : false;
   const popupStaffId = "popupStaffId" in props ? props.popupStaffId : null;
   const popupStep = "popupStep" in props ? props.popupStep : null;
@@ -4243,7 +4245,7 @@ export default function HrOnboardPage(props: any) {
       if (onClose) {
         onClose();
       } else {
-        window.location.href = "/hr/directory";
+        router.push("/hr/directory");
       }
     } catch (err) {
       let msg = err instanceof Error ? err.message : "Failed to save staff. Please check the form.";
@@ -4291,7 +4293,7 @@ export default function HrOnboardPage(props: any) {
             Onboard another
           </button>
           <button
-            onClick={() => { if (onClose) onClose(); else window.location.href = "/hr/directory"; }}
+            onClick={() => { if (onClose) onClose(); else router.push("/hr/directory"); }}
             className="px-5 py-2 rounded-[10px] text-[13px] font-[700] text-white"
             style={{ background: "var(--brand)" }}
           >

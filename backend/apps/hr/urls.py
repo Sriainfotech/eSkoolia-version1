@@ -14,6 +14,7 @@ from .views import (
     LeaveDefineViewSet,
     LeaveRequestViewSet,
     LeaveTypeViewSet,
+    OffboardingViewSet,
     PayrollRecordViewSet,
     StaffAttendanceViewSet,
     StaffViewSet,
@@ -41,6 +42,7 @@ router.register("leave-defines", LeaveDefineViewSet, basename="hr-leave-define")
 router.register("leave-requests", LeaveRequestViewSet, basename="hr-leave-request")
 router.register("staff-attendance", StaffAttendanceViewSet, basename="hr-staff-attendance")
 router.register("payroll", PayrollRecordViewSet, basename="hr-payroll")
+router.register("offboarding", OffboardingViewSet, basename="hr-offboarding")
 
 urlpatterns = [
     path("designations/reorder/", DesignationReorderView.as_view(), name="hr-designation-reorder"),

@@ -11,7 +11,7 @@ from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 from rest_framework import serializers
 
-from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft, PREDEFINED_DEPARTMENT_TYPES
+from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, Offboarding, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft, PREDEFINED_DEPARTMENT_TYPES
 
 
 def _is_valid_person_name(value: str) -> bool:
@@ -1097,11 +1097,15 @@ class StaffSerializer(serializers.ModelSerializer):
             except (TypeError, ValueError):
                 raise serializers.ValidationError({"num_children": "Please enter a valid number of children."})
 
-        spouse_name_raw = self._normalize_text_input(str(self.initial_data.get("spouse_parent_name", "")))
-        if marital_status_val == "married" and not spouse_name_raw:
-            raise serializers.ValidationError({"spouse_parent_name": "Spouse name is required."})
-        if spouse_name_raw and not _is_valid_person_name(spouse_name_raw):
-            raise serializers.ValidationError({"spouse_parent_name": "Please enter a valid name using alphabets only."})
+        # On partial update, skip spouse validation unless marital_status or spouse_parent_name
+        # is explicitly included in the request — otherwise a minimal PATCH (e.g. status only)
+        # would incorrectly fire this check because marital_status comes from the instance.
+        if not self.partial or "marital_status" in self.initial_data or "spouse_parent_name" in self.initial_data:
+            spouse_name_raw = self._normalize_text_input(str(self.initial_data.get("spouse_parent_name", "")))
+            if marital_status_val == "married" and not spouse_name_raw:
+                raise serializers.ValidationError({"spouse_parent_name": "Spouse name is required."})
+            if spouse_name_raw and not _is_valid_person_name(spouse_name_raw):
+                raise serializers.ValidationError({"spouse_parent_name": "Please enter a valid name using alphabets only."})
 
         emergency_name_raw = self._normalize_text_input(str(self.initial_data.get("emergency_name", "")))
         if emergency_name_raw and not _is_valid_person_name(emergency_name_raw):
@@ -2216,8 +2220,8 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     def validate_reason(self, value):
         if value and value.strip():
             reason_length = len(value.strip())
-            if reason_length < 20:
-                raise serializers.ValidationError("Reason must be at least 20 characters if provided.")
+            if reason_length < 3:
+                raise serializers.ValidationError("Reason must be at least 3 characters if provided.")
             if reason_length > 500:
                 raise serializers.ValidationError("Reason cannot exceed 500 characters.")
         return value
@@ -2516,3 +2520,35 @@ class PayrollSettingsSerializer(serializers.ModelSerializer):
         attrs["default_allowance"] = allowance_total
         attrs["default_deduction"] = deduction_total
         return attrs
+
+
+class OffboardingSerializer(serializers.ModelSerializer):
+    staff_name  = serializers.SerializerMethodField()
+    staff_id    = serializers.SerializerMethodField()
+    department  = serializers.SerializerMethodField()
+    designation = serializers.SerializerMethodField()
+    joining_date = serializers.SerializerMethodField()
+    is_complete = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Offboarding
+        fields = "__all__"
+        read_only_fields = ["school", "completed_at", "created_at"]
+
+    def get_staff_name(self, obj):
+        return f"{obj.staff.first_name} {obj.staff.last_name}".strip()
+
+    def get_staff_id(self, obj):
+        return obj.staff.staff_no
+
+    def get_department(self, obj):
+        return obj.staff.department.name if obj.staff.department else ""
+
+    def get_designation(self, obj):
+        return obj.staff.designation.name if obj.staff.designation else ""
+
+    def get_joining_date(self, obj):
+        return str(obj.staff.join_date) if obj.staff.join_date else ""
+
+    def get_is_complete(self, obj):
+        return obj.status == Offboarding.STATUS_COMPLETED

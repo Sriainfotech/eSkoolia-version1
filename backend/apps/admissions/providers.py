@@ -132,19 +132,71 @@ class AIMessageService:
         self.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
         self.model = os.environ.get("AI_MODEL", "gpt-4o-mini")
 
-    def generate(
-        self,
-        *,
-        system_prompt: str,
-        user_prompt: str,
-    ) -> dict[str, str]:
+    def generate(self, * , system_prompt: str | None = None, user_prompt: str | None = None, inquiry=None, template=None, tone_preferences=None) -> dict[str, str]:
         """
+        Generates message variants.
+
+        Supported call patterns:
+        - generate(system_prompt=..., user_prompt=...)
+        - generate(inquiry=<AdmissionInquiry>, template=<AIMessageTemplate|None>, tone_preferences=dict)
+
         Returns {'variant_a': str, 'variant_b': str, 'prompt_used': str}.
         PII is NOT included in `prompt_used` when logged.
         """
-        if self.provider == "openai":
-            return self._openai(system_prompt=system_prompt, user_prompt=user_prompt)
-        return self._stub(user_prompt=user_prompt)
+        # If explicit prompts provided, use those (backwards compatible)
+        if system_prompt is not None and user_prompt is not None:
+            if self.provider == "openai":
+                return self._openai(system_prompt=system_prompt, user_prompt=user_prompt)
+            return self._stub(user_prompt=user_prompt)
+
+        # Otherwise, build prompts from inquiry + template
+        try:
+            lead = inquiry
+            school = getattr(lead, "school", None)
+            # Template selection: prefer provided template else try to load default
+            tpl = template
+            system = None
+            user = None
+            if tpl is not None:
+                system = getattr(tpl, "system_prompt", None)
+                user = getattr(tpl, "user_prompt_template", None)
+            if system is None:
+                system = (
+                    "You are a helpful assistant that writes short, clear, and culturally appropriate messages "
+                    "for Indian school admissions. Produce two variants: Formal and Friendly. Keep messages under 220 characters."
+                )
+            if user is None:
+                # Simple user prompt template; view may pass next_step in tone_preferences
+                next_step = (tone_preferences or {}).get("next_step") if isinstance(tone_preferences, dict) else None
+                next_step = next_step or "schedule campus visit"
+                user = (
+                    f"Lead context:\n- name: {getattr(lead, 'full_name', '')}\n- child_grade: {getattr(getattr(lead,'school_class',None),'name','')}\n- next_step: {next_step}\n- source: {getattr(getattr(lead,'source',None),'name','')}\n- school_name: {getattr(getattr(school,'name',None),'strip',lambda: '')()}\n"
+                    "Generate: 1) Variant A (Formal): ... 2) Variant B (Friendly): ..."
+                )
+
+            # Rudimentary templating: replace common {{lead.xxx}} placeholders if present
+            def render(template_str: str, lead_obj):
+                out = str(template_str)
+                mapping = {
+                    "lead.name": getattr(lead_obj, "full_name", ""),
+                    "lead.grade_interest": getattr(getattr(lead_obj, "school_class", None), "name", ""),
+                    "next_step": (tone_preferences or {}).get("next_step") if isinstance(tone_preferences, dict) else "",
+                    "lead.source": getattr(getattr(lead_obj, "source", None), "name", ""),
+                    "school.name": getattr(getattr(lead_obj, "school", None), "name", ""),
+                }
+                for key, val in mapping.items():
+                    out = out.replace("{{" + key + "}}", str(val))
+                return out
+
+            system_rendered = render(system, lead) if system else system
+            user_rendered = render(user, lead) if user else user
+
+            if self.provider == "openai":
+                return self._openai(system_prompt=system_rendered, user_prompt=user_rendered)
+            return self._stub(user_prompt=user_rendered)
+        except Exception:
+            # Fallback to stub if anything goes wrong building prompts
+            return self._stub(user_prompt=user_prompt or "")
 
     def _openai(self, *, system_prompt: str, user_prompt: str) -> dict[str, str]:
         try:

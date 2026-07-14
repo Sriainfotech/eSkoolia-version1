@@ -668,9 +668,11 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
         # Store school reference for validation
         request = self.context.get("request")
         self._school = None
+        request = self.context.get("request")
         if request:
             user = getattr(request, "user", None)
             school_from_request = getattr(request, "school", None)
@@ -688,13 +690,12 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
         return None
 
     def validate_complaint_type(self, value):
+
         # Complaint type is optional
         if value is None or value == "" or value == "null":
             return None
-        # If it's already an object, extract the id
         if isinstance(value, ComplaintType):
             return value.id
-        # Otherwise treat as integer
         try:
             return int(value)
         except (ValueError, TypeError) as e:
@@ -790,6 +791,7 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         errors = {}
 
+
         # Validate file upload
         upload = attrs.get("file_upload")
         if upload is not None:
@@ -800,13 +802,14 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
             elif getattr(upload, "size", 0) > MAX_COMPLAINT_FILE_SIZE:
                 errors["file_upload"] = "File size exceeds 5MB limit."
 
+
         # Validate FK permissions - must belong to user's school
         if self._school:
             complaint_type_id = attrs.get("complaint_type")
             if complaint_type_id and complaint_type_id != "null":
-                # Extract ID if it's an object
                 ct_id = complaint_type_id.id if isinstance(complaint_type_id, ComplaintType) else complaint_type_id
                 try:
+
                     ct_id = int(ct_id)
                     ct_exists = ComplaintType.objects.filter(id=ct_id, school=self._school, is_active=True).exists()
                     if not ct_exists:
@@ -816,9 +819,9 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
 
             complaint_source_id = attrs.get("complaint_source")
             if complaint_source_id and complaint_source_id != "null":
-                # Extract ID if it's an object
                 cs_id = complaint_source_id.id if isinstance(complaint_source_id, ComplaintSource) else complaint_source_id
                 try:
+
                     cs_id = int(cs_id)
                     cs_exists = ComplaintSource.objects.filter(id=cs_id, school=self._school, is_active=True).exists()
                     if not cs_exists:
@@ -828,9 +831,9 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
 
             assigned_to_id = attrs.get("assigned_to")
             if assigned_to_id and assigned_to_id != "null":
-                # Extract ID if it's an object
                 at_id = assigned_to_id.id if isinstance(assigned_to_id, User) else assigned_to_id
                 try:
+
                     at_id = int(at_id)
                     user_exists = User.objects.filter(id=at_id, school=self._school, is_active=True).exists()
                     if not user_exists:
@@ -868,6 +871,7 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
         upload = validated_data.pop("file_upload", None)
         if upload is not None:
             validated_data["file"] = upload
+
         request = self.context.get("request")
         if request and getattr(request, "user", None):
             validated_data["created_by"] = request.user
@@ -882,6 +886,7 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
 
         if "complaint_source" in validated_data and validated_data["complaint_source"]:
             try:
+
                 complaint_source_id = int(validated_data["complaint_source"])
                 validated_data["complaint_source"] = ComplaintSource.objects.get(id=complaint_source_id)
             except (ComplaintSource.DoesNotExist, ValueError, TypeError):
@@ -889,6 +894,7 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
 
         if "assigned_to" in validated_data and validated_data.get("assigned_to"):
             try:
+
                 assigned_to_id = int(validated_data["assigned_to"])
                 validated_data["assigned_to"] = User.objects.get(id=assigned_to_id)
             except (User.DoesNotExist, ValueError, TypeError):
@@ -1264,10 +1270,8 @@ class PhoneCallLogEntrySerializer(serializers.ModelSerializer):
             errors["date"] = "From Date cannot be in the future."
 
         if to_date:
-            if to_date > timezone.localdate():
-                errors["next_follow_up_date"] = "To Date cannot be in the future."
-            elif from_date and to_date < from_date:
-                errors["next_follow_up_date"] = "To Date cannot be before From Date."
+            if from_date and to_date < from_date:
+                errors["next_follow_up_date"] = "Follow-up date cannot be before the call date."
 
         if call_duration:
             if len(call_duration) > 8:

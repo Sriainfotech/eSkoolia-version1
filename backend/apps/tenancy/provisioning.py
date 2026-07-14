@@ -175,10 +175,14 @@ def create_postgres_schema(schema_name):
 def run_tenant_migrations(schema_name):
     """Run Django migrations inside the tenant schema.
 
-    Uses SET search_path (same as TenantMainMiddleware) instead of
-    django_tenants.schema_context, which requires the django-tenants DB
-    backend that this project does not configure.
+    Uses SET search_path (same as TenantMainMiddleware) to avoid requiring the
+    django-tenants DB backend. Skipped entirely when MULTI_TENANCY_ENABLED=False
+    since all tables already exist in the public schema.
     """
+    if not is_provisioning_enabled():
+        logger.info(f"Skipping tenant migrations for '{schema_name}': MULTI_TENANCY_ENABLED=False")
+        return True
+
     from django.core.management import call_command
     from io import StringIO
 

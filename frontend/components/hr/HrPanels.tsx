@@ -3394,7 +3394,7 @@ export function HrStaffDirectoryPanel() {
     const newStatus = currentStatus === "active" ? "inactive" : "active";
     try {
       setTogglingStatusId(staffId);
-      await apiPatch(`/api/v1/hr/staff/${staffId}/`, { status: newStatus });
+      await apiPatch(`/api/v1/hr/staff/${staffId}/set_status/`, { status: newStatus });
       setSuccess(`Staff status updated to ${newStatus}.`);
       await load(currentPage);
     } catch (err) {

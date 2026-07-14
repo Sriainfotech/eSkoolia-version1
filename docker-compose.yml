@@ -26,9 +26,11 @@ services:
 
   # ── Django API ──────────────────────────────────────────────────────────────
   backend:
-    build: ./backend
+    image: python:3.11-slim
+    working_dir: /app
     command: >
-      sh -c "python manage.py migrate &&
+      sh -c "pip install --no-cache-dir -r requirements.txt && \
+             python manage.py migrate && \
              python manage.py runserver 0.0.0.0:8000"
     volumes:
       - ./backend:/app
@@ -49,8 +51,11 @@ services:
 
   # ── Celery Worker ───────────────────────────────────────────────────────────
   celery:
-    build: ./backend
-    command: celery -A config worker -l info -Q default,admissions
+    image: python:3.11-slim
+    working_dir: /app
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt && \
+             celery -A config worker -l info -Q default,admissions"
     volumes:
       - ./backend:/app
     env_file:
@@ -66,8 +71,11 @@ services:
 
   # ── Celery Beat (scheduler) ─────────────────────────────────────────────────
   celery-beat:
-    build: ./backend
-    command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    image: python:3.11-slim
+    working_dir: /app
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt && \
+             celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
     volumes:
       - ./backend:/app
     env_file:

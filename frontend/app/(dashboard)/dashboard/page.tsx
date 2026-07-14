@@ -57,17 +57,21 @@ export default function DashboardPage() {
     const fetchKPIs = async () => {
       try {
         const token = getAccessToken();
-        const res = await fetch(`${API_BASE_URL}/api/dashboard/kpis/`, {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        const res = await fetch(`${API_BASE_URL}/api/v1/dashboard/kpis/`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
+          signal: controller.signal,
         });
+        clearTimeout(timer);
         if (res.ok) {
           const data = await res.json();
           setKpi(data);
         }
-      } catch { /* graceful fallback */ }
+      } catch { /* graceful fallback — show '—' values */ }
       finally { setLoading(false); }
     };
-    fetchKPIs();
+    void fetchKPIs();
   }, []);
 
   const cards = [

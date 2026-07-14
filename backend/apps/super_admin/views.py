@@ -870,22 +870,24 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # Create the PostgreSQL schema and run migrations outside the atomic block.
-        # CREATE SCHEMA cannot be rolled back cleanly inside a transaction, and
-        # migration state must be committed before the gunicorn workers can see it.
-        try:
-            from apps.tenancy.provisioning import create_postgres_schema, run_tenant_migrations
-            create_postgres_schema(tenant.schema_name)
-            run_tenant_migrations(tenant.schema_name)
-        except Exception as exc:
-            import logging
-            logging.getLogger(__name__).error(
-                f"Schema provisioning failed for {tenant.tenant_id} ({tenant.schema_name}): {exc}"
-            )
-            return Response(
-                {"detail": f"School record created but schema setup failed: {exc}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        # Schema-per-tenant setup is only needed when MULTI_TENANCY_ENABLED=True.
+        # In single-schema mode all school data lives in public, isolated by ForeignKey(School).
+        # schema_context() from django-tenants requires TenantDatabaseWrapper (connection.tenant)
+        # which is only present when TenantMainMiddleware is active — skip entirely when disabled.
+        if getattr(settings, "MULTI_TENANCY_ENABLED", False):
+            try:
+                from apps.tenancy.provisioning import create_postgres_schema, run_tenant_migrations
+                create_postgres_schema(tenant.schema_name)
+                run_tenant_migrations(tenant.schema_name)
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).error(
+                    f"Schema provisioning failed for {tenant.tenant_id} ({tenant.schema_name}): {exc}"
+                )
+                return Response(
+                    {"detail": f"School record created but schema setup failed: {exc}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
 
         log_audit(
             action="school.provision",

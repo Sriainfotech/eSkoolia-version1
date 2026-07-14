@@ -549,3 +549,79 @@ class PayrollSettings(models.Model):
 
     def __str__(self):
         return f"Payroll settings ({self.school_id})"
+
+
+class Offboarding(models.Model):
+    EXIT_TYPE_CHOICES = [
+        ("Resignation", "Resignation"),
+        ("Termination", "Termination"),
+        ("Retirement", "Retirement"),
+        ("End of Contract", "End of Contract"),
+        ("Transfer", "Transfer"),
+        ("Voluntary Exit", "Voluntary Exit"),
+    ]
+    STATUS_INITIATED   = "initiated"
+    STATUS_IN_PROGRESS = "in_progress"
+    STATUS_COMPLETED   = "completed"
+    STATUS_CHOICES = [
+        (STATUS_INITIATED,   "Initiated"),
+        (STATUS_IN_PROGRESS, "In Progress"),
+        (STATUS_COMPLETED,   "Completed"),
+    ]
+    INTERVIEW_STATUS_CHOICES = [
+        ("Pending",   "Pending"),
+        ("Scheduled", "Scheduled"),
+        ("Conducted", "Conducted"),
+        ("Waived",    "Waived"),
+    ]
+    APPROVAL_STATUS_CHOICES = [
+        ("Pending",  "Pending"),
+        ("Approved", "Approved"),
+        ("Rejected", "Rejected"),
+    ]
+    FF_STATUS_CHOICES = [
+        ("Pending",    "Pending"),
+        ("Processing", "Processing"),
+        ("Cleared",    "Cleared"),
+    ]
+    NOTICE_PERIOD_STATUS_CHOICES = [
+        ("Served",    "Served"),
+        ("Bought Out", "Bought Out"),
+        ("Waived",    "Waived"),
+        ("Partial",   "Partial"),
+    ]
+
+    school              = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="offboarding_records")
+    staff               = models.ForeignKey("hr.Staff", on_delete=models.CASCADE, related_name="offboarding_records")
+    exit_type           = models.CharField(max_length=30, choices=EXIT_TYPE_CHOICES)
+    exit_reason         = models.TextField(blank=True)
+    last_working_day    = models.DateField()
+    notice_period_status = models.CharField(max_length=20, choices=NOTICE_PERIOD_STATUS_CHOICES, blank=True)
+    notice_period_days  = models.PositiveIntegerField(null=True, blank=True)
+    exit_interview_conducted = models.CharField(max_length=20, choices=INTERVIEW_STATUS_CHOICES, default="Pending")
+    exit_interview_notes = models.TextField(blank=True)
+    interview_date      = models.DateField(null=True, blank=True)
+    primary_reason      = models.TextField(blank=True)
+    handover_checklist  = models.JSONField(default=list, blank=True)
+    financial_clearance = models.JSONField(default=dict, blank=True)
+    ff_status           = models.CharField(max_length=20, choices=FF_STATUS_CHOICES, default="Pending")
+    salary_dues_cleared = models.BooleanField(default=False)
+    advance_loan        = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    gratuity_applicable = models.BooleanField(default=False)
+    pf_esi_settlement   = models.CharField(max_length=20, choices=APPROVAL_STATUS_CHOICES, default="Pending")
+    docs_to_issue       = models.JSONField(default=list, blank=True)
+    hod_approval        = models.CharField(max_length=20, choices=APPROVAL_STATUS_CHOICES, default="Pending")
+    principal_approval  = models.CharField(max_length=20, choices=APPROVAL_STATUS_CHOICES, default="Pending")
+    hr_signoff          = models.CharField(max_length=20, choices=APPROVAL_STATUS_CHOICES, default="Pending")
+    finance_clearance   = models.CharField(max_length=20, choices=APPROVAL_STATUS_CHOICES, default="Pending")
+    hr_notes            = models.TextField(blank=True)
+    status              = models.CharField(max_length=15, choices=STATUS_CHOICES, default=STATUS_INITIATED)
+    completed_at        = models.DateTimeField(null=True, blank=True)
+    created_at          = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "hr_offboarding"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Offboarding {self.staff_id} ({self.status})"

@@ -21,7 +21,7 @@ from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 
-from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft
+from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, Offboarding, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft
 from .serializers import (
     DepartmentSerializer,
     DepartmentTypeSerializer,
@@ -29,6 +29,7 @@ from .serializers import (
     LeaveDefineSerializer,
     LeaveRequestSerializer,
     LeaveTypeSerializer,
+    OffboardingSerializer,
     PayrollRecordSerializer,
     PayrollSettingsSerializer,
     StaffSerializer,
@@ -608,29 +609,6 @@ class StaffViewSet(SchoolScopedModelViewSet):
 
         return data
 
-    def create(self, request, *args, **kwargs):
-        try:
-            self._validate_related_ids(request)
-            payload = self._normalize_staff_request_data(request)
-            serializer = self.get_serializer(data=payload)
-            serializer.is_valid(raise_exception=True)
-            self.perform_create(serializer)
-            return self.success_response(
-                "Staff created successfully",
-                serializer.data,
-                status_code=status.HTTP_201_CREATED,
-            )
-        except IntegrityError:
-            raise ValidationError({"staff_no": "Staff number already exists."})
-        except (ValidationError, NotFound, PermissionDenied, NotAuthenticated, AuthenticationFailed):
-            raise
-        except Exception as exc:
-            import logging, traceback
-            logging.getLogger(__name__).error(
-                "StaffViewSet.create unhandled error: %s\n%s", exc, traceback.format_exc()
-            )
-            raise
-
     def update(self, request, *args, **kwargs):
         try:
             partial = kwargs.pop("partial", False)
@@ -819,15 +797,28 @@ class StaffViewSet(SchoolScopedModelViewSet):
         self._ensure_staff_user(staff)
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        response_data = dict(serializer.data)
-        creds = getattr(self, "_staff_creds", None)
-        if creds:
-            response_data["credentials"] = creds
-        return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
+        try:
+            self._validate_related_ids(request)
+            payload = self._normalize_staff_request_data(request)
+            serializer = self.get_serializer(data=payload)
+            serializer.is_valid(raise_exception=True)
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
+            response_data = dict(serializer.data)
+            creds = getattr(self, "_staff_creds", None)
+            if creds:
+                response_data["credentials"] = creds
+            return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
+        except IntegrityError:
+            raise ValidationError({"staff_no": "Staff number already exists."})
+        except (ValidationError, NotFound, PermissionDenied, NotAuthenticated, AuthenticationFailed):
+            raise
+        except Exception as exc:
+            import logging, traceback
+            logging.getLogger(__name__).error(
+                "StaffViewSet.create unhandled error: %s\n%s", exc, traceback.format_exc()
+            )
+            raise
 
     def perform_update(self, serializer):
         staff = serializer.save()
@@ -839,6 +830,22 @@ class StaffViewSet(SchoolScopedModelViewSet):
         if not school and not request.user.is_superuser:
             raise PermissionDenied("School context is required.")
         return Response({"staff_no": self._generate_staff_no(school)})
+
+    @action(detail=True, methods=["patch"], url_path="set_status")
+    def set_status(self, request, pk=None):
+        staff = self.get_object()
+        new_status = request.data.get("status")
+        if not new_status:
+            return Response({"message": "status is required."}, status=status.HTTP_400_BAD_REQUEST)
+        allowed = {Staff.STATUS_ACTIVE, Staff.STATUS_INACTIVE, Staff.STATUS_TERMINATED}
+        if new_status not in allowed:
+            return Response(
+                {"message": f"Invalid status '{new_status}'. Allowed: {', '.join(sorted(allowed))}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        staff.status = new_status
+        staff.save(update_fields=["status"])
+        return Response({"message": f"Staff status updated to '{new_status}'.", "status": new_status})
 
 
 class StaffDocumentViewSet(SchoolScopedModelViewSet):
@@ -1715,6 +1722,36 @@ class PayrollRecordViewSet(SchoolScopedModelViewSet):
         payroll.status = PayrollRecord.STATUS_PROCESSED
         payroll.save(update_fields=["status", "updated_at"])
         return Response({"id": payroll.id, "status": payroll.status, "paid_at": payroll.paid_at})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Offboarding
+# ─────────────────────────────────────────────────────────────────────────────
+
+class OffboardingViewSet(SchoolScopedModelViewSet):
+    serializer_class = OffboardingSerializer
+    permission_codes = {"*": "human_resource.staff.view"}
+    filterset_fields = ["status", "exit_type", "staff__department"]
+    search_fields = ["staff__first_name", "staff__last_name", "staff__staff_no", "exit_reason"]
+    ordering_fields = ["created_at", "last_working_day", "status"]
+
+    def get_queryset(self):
+        return Offboarding.objects.select_related(
+            "school", "staff", "staff__department", "staff__designation"
+        ).filter(school=self.request.user.school)
+
+    def perform_create(self, serializer):
+        serializer.save(school=self.request.user.school)
+
+    @action(detail=True, methods=["patch"], url_path="complete")
+    def complete(self, request, pk=None):
+        record = self.get_object()
+        if record.status == Offboarding.STATUS_COMPLETED:
+            return Response({"message": "Offboarding record is already completed."}, status=status.HTTP_400_BAD_REQUEST)
+        record.status = Offboarding.STATUS_COMPLETED
+        record.completed_at = timezone.now()
+        record.save(update_fields=["status", "completed_at"])
+        return Response(OffboardingSerializer(record).data)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

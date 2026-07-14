@@ -1,4 +1,4 @@
-from django.contrib import admin
+﻿from django.contrib import admin
 from django.conf import settings
 from django.urls import include, path, re_path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
@@ -12,6 +12,7 @@ urlpatterns = [
     path("admissions/", include("apps.admissions.urls")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+    path("api/v1/dashboard/", include("apps.dashboard.urls")),
     path("api/v1/auth/", include("apps.users.urls")),
     path("api/v1/access-control/", include("apps.access_control.urls")),
     path("api/v1/admissions/", include("apps.admissions.urls")),
@@ -38,6 +39,7 @@ urlpatterns = [
     path("api/v1/teacher/", include("apps.teacher_portal.urls")),
     path("api/v1/parent/", include("apps.parent_portal.urls")),
 ]
+
 
 # /media/* always goes through serve_media, which requires authentication
 # and checks the requesting user's school owns the file — DEBUG and

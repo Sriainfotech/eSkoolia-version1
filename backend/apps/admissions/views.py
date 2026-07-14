@@ -98,6 +98,7 @@ class AdminSectionRBACMixin:
 
         code = self._get_permission_code()
 
+
         # Enforce permission checks for all admin section operations (fail-safe)
         # If no permission code is configured, deny access by default
         if code is None:
@@ -987,6 +988,7 @@ class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
         serializer.save(school=school, created_by=user)
 
     def create(self, request, *args, **kwargs):
+
         try:
             serializer = self.get_serializer(data=request.data)
             if not serializer.is_valid():
@@ -1120,7 +1122,9 @@ class PostalDispatchEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
 
 class PhoneCallLogEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, viewsets.ModelViewSet):
     serializer_class = PhoneCallLogEntrySerializer
+    pagination_class = ApiPageNumberPagination
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     create_success_message = "Phone call log added successfully"
     update_success_message = "Record updated successfully"
     permission_codes = {

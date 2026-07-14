@@ -178,7 +178,7 @@ class AccountsFeeCollectionReportView(BaseReportAPIView):
             "fees_type": getattr(getattr(item.assignment, "fees_type", None), "name", ""),
             "amount_paid": _safe_decimal(item.amount_paid),
             "method": item.method or "",
-            "assignment_status": getattr(item.assignment, "status", "") or "",
+            "assignment_status": item.status or "",
             "transaction_reference": item.transaction_reference or "",
         }
 
@@ -247,10 +247,7 @@ class StudentListReportView(BaseReportAPIView):
             "student_name": _full_name(item.first_name, item.last_name),
             "class_name": getattr(item.current_class, "name", "") if item.current_class else "",
             "section_name": getattr(item.current_section, "name", "") if item.current_section else "",
-            "guardian_name": _full_name(
-                getattr(item.guardian, "first_name", "") if item.guardian else "",
-                getattr(item.guardian, "last_name", "") if item.guardian else "",
-            ),
+            "guardian_name": getattr(item.guardian, "full_name", "") if item.guardian else "",
             "phone": guardian_phone,
             "gender": item.gender or "",
             "is_disabled": item.is_disabled,
@@ -459,7 +456,7 @@ class HrStaffAttendanceReportView(BaseReportAPIView):
                 getattr(item.staff, "last_name", "") if item.staff else "",
             ),
             "department": getattr(getattr(item.staff, "department", None), "name", ""),
-            "designation": getattr(getattr(item.staff, "designation", None), "title", ""),
+            "designation": getattr(getattr(item.staff, "designation", None), "name", ""),
             "note": item.note or "",
         }
 
@@ -491,8 +488,8 @@ class TransportStudentReportView(BaseReportAPIView):
             "section_name": getattr(item.current_section, "name", "") if item.current_section else "",
             "route_name": getattr(item.transport_route, "title", "") if item.transport_route else "",
             "fare": _safe_decimal(getattr(item.transport_route, "fare", None)) if item.transport_route else None,
-            "vehicle_no": getattr(item.vehicle, "number", "") if item.vehicle else "",
-            "vehicle_model": getattr(item.vehicle, "model", "") if item.vehicle else "",
+            "vehicle_no": getattr(item.vehicle, "vehicle_no", "") if item.vehicle else "",
+            "vehicle_model": getattr(item.vehicle, "vehicle_model", "") if item.vehicle else "",
         }
 
 
@@ -522,7 +519,7 @@ class InventoryStockReportView(BaseReportAPIView):
             "item_id": item.id,
             "item_code": item.item_code or "",
             "item_name": item.name or "",
-            "category": getattr(item.category, "name", "") if item.category else "",
+            "category": getattr(item.category, "title", "") if item.category else "",
             "supplier": getattr(item.supplier, "name", "") if item.supplier else "",
             "quantity": quantity,
             "reorder_level": reorder_level,
