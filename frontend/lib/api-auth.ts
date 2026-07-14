@@ -220,7 +220,7 @@ async function requestWithRefreshResponse(path: string, options?: RequestOptions
 // clearAuthTokens() + window.location redirect → spurious logout.
 let _refreshLock: Promise<string | null> | null = null;
 
-async function refreshAccessToken(silent401 = false): Promise<string | null> {
+export async function refreshAccessToken(silent401 = false): Promise<string | null> {
   if (_refreshLock) return _refreshLock;
   _refreshLock = _doRefresh(silent401).finally(() => { _refreshLock = null; });
   return _refreshLock;
