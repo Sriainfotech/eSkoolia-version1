@@ -29,10 +29,12 @@ class RefreshView(TokenRefreshView):
 
 
 class LogoutView(APIView):
-    # Use standard JWTAuthentication (not TenantAware) — this endpoint runs
-    # in the public-schema path where no tenant context is set.
-    authentication_classes = [JWTAuthentication]
-    permission_classes = [permissions.IsAuthenticated]
+    # No authentication required — the refresh token in the POST body is its own
+    # credential. Requiring IsAuthenticated blocks logout when the access token
+    # has expired but the refresh is still valid, leaving the refresh token alive
+    # after the user "logged out" (security bug).
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         refresh_token = request.data.get("refresh")

@@ -58,17 +58,6 @@ def school_info_view(request):
     try:
         from apps.tenancy.models import Domain
         
-        # DEBUG PRINTS
-        print("=" * 50)
-        print("REQUEST USER:", request.user)
-        print("USERNAME:", request.user.username)
-        print("SCHOOL ID:", request.user.school_id)
-        print("SCHOOL:", request.user.school)
-        print("HOST:", request.get_host())
-        print("TENANT:", getattr(request, "tenant", None))
-        print("SUBDOMAIN PARAM:", subdomain)
-        print("=" * 50)
-        
         # First try exact match (subdomain stored as-is)
         domain = Domain.objects.select_related("tenant").filter(domain=subdomain).first()
         # Fall back to prefix match for full FQDNs like "testschool.eskoolia.local"
@@ -99,19 +88,30 @@ def my_school_info_view(request):
         return Response({"error": "No school associated with this account"}, status=404)
     try:
         school = School.objects.get(id=school_id)
+        # Address/contact fields live on SchoolTenant, not School
+        tenant = None
+        if school.subdomain:
+            try:
+                from apps.tenancy.models import SchoolTenant
+                tenant = SchoolTenant.objects.filter(subdomain_url__iexact=school.subdomain).first()
+            except Exception:
+                pass
         address_parts = []
-        if school.campus_address:
-            address_parts.append(school.campus_address.strip())
-        if school.city:
-            address_parts.append(school.city)
-        if school.pin_code:
-            address_parts.append(school.pin_code)
+        campus_address = getattr(tenant, "campus_address", None) or ""
+        city = getattr(tenant, "city", None) or ""
+        pin_code = getattr(tenant, "pin_code", None) or ""
+        if campus_address:
+            address_parts.append(campus_address.strip())
+        if city:
+            address_parts.append(city)
+        if pin_code:
+            address_parts.append(pin_code)
         return Response({
             "name": school.name,
             "address": ", ".join(address_parts),
-            "email": school.principal_email or "",
-            "phone": school.principal_phone or "",
-            "logo_url": school.logo_url or "",
+            "email": getattr(tenant, "principal_email", None) or "",
+            "phone": getattr(tenant, "principal_phone", None) or "",
+            "logo_url": getattr(tenant, "logo_url", None) or "",
         })
     except School.DoesNotExist:
         return Response({"error": "School not found"}, status=404)

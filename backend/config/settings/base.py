@@ -134,6 +134,7 @@ INSTALLED_APPS = [
     "apps.reports",
     "apps.teacher_portal",
     "apps.parent_portal",
+    "apps.dashboard",
 ]
 
 # Guarded django-tenants integration

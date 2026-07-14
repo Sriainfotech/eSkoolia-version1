@@ -135,28 +135,29 @@ class ChatViewSet(ChatPermissionMixin, viewsets.ModelViewSet):
             id__in=connected_user_ids
         ).exclude(
             id=current_user.id
-        ).distinct()
+        ).select_related("chat_status").distinct()
 
         # Fallback: if no explicit invitation connections exist yet,
         # allow listing all users for direct chat selection.
         if not users.exists():
-            users = User.objects.exclude(id=current_user.id).distinct()
+            school = getattr(current_user, "school", None)
+            if school is not None:
+                users = User.objects.filter(school=school).exclude(id=current_user.id).select_related("chat_status").distinct()[:200]
+            else:
+                users = User.objects.exclude(id=current_user.id).select_related("chat_status").distinct()[:200]
 
         # Exclude users blocked by current user OR who blocked current user.
-        blocked_by_me_ids = BlockUser.objects.filter(
+        blocked_by_me_ids = list(BlockUser.objects.filter(
             blocked_by=current_user
-        ).values_list("blocked_user_id", flat=True)
-        blocked_me_ids = BlockUser.objects.filter(
+        ).values_list("blocked_user_id", flat=True))
+        blocked_me_ids = list(BlockUser.objects.filter(
             blocked_user=current_user
-        ).values_list("blocked_by_id", flat=True)
-        users = users.exclude(id__in=blocked_by_me_ids).exclude(id__in=blocked_me_ids)
-        
+        ).values_list("blocked_by_id", flat=True))
+        users = [u for u in users if u.id not in blocked_by_me_ids and u.id not in blocked_me_ids]
+
         # Check who is blocked
-        blocked_ids = BlockUser.objects.filter(
-            blocked_by=current_user
-        ).values_list("blocked_user_id", flat=True)
-        blocked_ids = set(blocked_ids)
-        
+        blocked_ids = set(blocked_by_me_ids)
+
         serializer = UserDetailedSerializer(users, many=True)
         
         # Annotate blocked status
@@ -1270,11 +1271,8 @@ class UserStatusViewSet(ChatPermissionMixin, viewsets.ViewSet):
 
     @action(detail=False, methods=["get"])
     def get_status(self, request):
-        """Get status of a user"""
-        user_id = request.query_params.get("user_id")
-        if not user_id:
-            raise ValidationError("user_id query parameter is required")
-        
+        """Get status of a user. Defaults to the authenticated user when user_id is omitted."""
+        user_id = request.query_params.get("user_id") or request.user.id
         user = get_object_or_404(User, id=user_id)
         try:
             status_obj = user.chat_status

@@ -1,4 +1,4 @@
-from django.contrib import admin
+﻿from django.contrib import admin
 from django.conf import settings
 from django.conf.urls.static import static
 from django.urls import include, path
@@ -12,6 +12,7 @@ urlpatterns = [
     path("admissions/", include("apps.admissions.urls")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+    path("api/v1/dashboard/", include("apps.dashboard.urls")),
     path("api/v1/auth/", include("apps.users.urls")),
     path("api/v1/access-control/", include("apps.access_control.urls")),
     path("api/v1/admissions/", include("apps.admissions.urls")),
@@ -54,3 +55,4 @@ else:
             {"document_root": settings.MEDIA_ROOT},
         ),
     ]
+

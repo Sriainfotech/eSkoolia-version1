@@ -5097,3 +5097,38 @@ Login at localhost:3000
    - New active version adds `import traceback` and increases Django migrate verbosity from `2` to `3` for maximum output.
    - On success: prints full migration output to stdout via `========== MIGRATION OUTPUT ==========` block (in addition to logger).
    - On failure: prints schema name, all captured stdout/stderr output collected so far, and full Python traceback via `traceback.print_exc()` before re-raising — makes provisioning failures fully visible in server logs without needing to dig into Django error handling. 
+
+13/07/2026 (Srinivas / AIRA Session)
+
+### Dashboard Module — Created & Fixed
+
+1. Created `apps/dashboard/` module from scratch (`__init__.py`, `views.py`, `urls.py`) with `DashboardKPIView` returning 8 KPIs: `total_students`, `attendance_today`, `fees_collected_mtd`, `open_admissions`, `total_staff`, `library_books`, `pending_homework`, `exams_this_week`.
+2. Added `"apps.dashboard"` to `INSTALLED_APPS` in `config/settings/base.py` (was missing — caused Django to not register the app and silently ignore its URLs).
+3. Registered `path("api/v1/dashboard/", include("apps.dashboard.urls"))` in `config/urls.py` (PowerShell replace had previously garbled this line into a comment — restored via Edit tool).
+4. Fixed `DashboardKPIView` 500: `Homework.objects.filter(complete_status="P")` → `Homework.objects.filter(active_status=True, evaluation_date__isnull=True)` — `complete_status` field does not exist on `Homework` model (only exists on `HomeworkSubmission`).
+5. Fixed Windows `UnicodeEncodeError` for `₹` in fees_collected_mtd — Django server must be started with `python -X utf8` flag and `PYTHONIOENCODING=utf-8` env var set.
+
+### Login "Failed to Fetch" — Resolved
+
+6. Fixed `frontend/.env` — `NEXT_PUBLIC_API_URL` was pointing to `http://192.168.1.40:8000`; corrected to `http://127.0.0.1:8765`.
+7. Restarted Next.js (port 3000) to pick up the new env value; restarted Django with `--noreload --settings=config.settings.local` on port 8765.
+8. Root cause of recurrence: Django `__pycache__` had stale compiled bytecode — deleted all `__pycache__` directories and performed full restart; Django takes 15–25 seconds to cold-start after cache clear.
+
+### Comprehensive QA Testing — Full API Audit (34 Issues Found)
+
+9. Generated a valid JWT token via `RefreshToken.for_user(u)` (Django shell bypass) for `localtesting_admin` (user_id=678, school_id=96) after login password change invalidated credentials.
+10. Ran automated `urllib.request` sweep across 100+ endpoints + two deep CRUD agents (Students/Admissions/Academics; Attendance/Fees/Exams/Finance). Complete bug report logged in `context.md`.
+
+**Critical bugs found:**
+- `DELETE /api/v1/students/students/{id}/` → 500 (record not deleted, orphaned QA records remain)
+- `POST /api/v1/attendance/student-attendance/` returns 201 on duplicate (body says error, client is misled)
+- `POST /api/v1/fees/groups/` returns 201 on duplicate instead of 409
+- `POST /api/v1/finance/chart-of-accounts/` and `/bank-accounts/` always return `success:false` error body even on successful record creation — `id` never returned, breaking create→edit flow
+
+**High bugs:** Student `?gender=` and `?status=` filters silently ignored; PATCH clears unspecified fields (serializer `partial=True` not enforced — destroys data); attendance `?attendance_date=` filter returns wrong-date records.
+
+**Medium bugs:** `/attendance/dashboard/today/` timeout; bulk-store rejects JSON (undocumented multipart-only); exam type `academic_year` field silently dropped; 3 incompatible validation error formats across modules.
+
+**18 endpoints return 404 (not yet implemented):** Core timetable/events, Attendance teacher view, Fees fee-types/structures/categories, Exams schedule/exam-types, Finance income/expenses/accounts, HR leaves, Behaviour categories, Reports attendance, Communication notices/circulars, Teacher Portal dashboard, Parent Portal dashboard.
+
+**Overall API health: 6/10 | Production readiness: 4.5/10**

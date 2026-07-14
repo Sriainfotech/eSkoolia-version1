@@ -1,25 +1,27 @@
+// Configurable backend port — set NEXT_PUBLIC_BACKEND_PORT in .env to override default 8000.
+// e.g. NEXT_PUBLIC_BACKEND_PORT=8765 when Django runs on a non-default port locally.
+const DEV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
+
 function deriveApiBaseUrl(): string {
-  if (typeof window === "undefined") return "http://127.0.0.1:8001";
+  if (typeof window === "undefined") return `http://127.0.0.1:${DEV_BACKEND_PORT}`;
   const { hostname, protocol } = window.location;
-  // VS Code / GitHub dev tunnels: replace "-3000." with "-8000." in hostname.
-  // e.g. https://39k3c0bf-3000.inc1.devtunnels.ms  ->  https://39k3c0bf-8000.inc1.devtunnels.ms
+  // VS Code / GitHub dev tunnels: replace "-3000." with "-<port>." in hostname.
   if (/devtunnels\.ms$/i.test(hostname) || /\.githubpreview\.dev$/i.test(hostname)) {
-    const apiHost = hostname.replace(/-3000\./, "-8000.");
+    const apiHost = hostname.replace(/-3000\./, `-${DEV_BACKEND_PORT}.`);
     return `${protocol}//${apiHost}`;
   }
-  if (hostname === "localhost" || hostname === "127.0.0.1") return "http://127.0.0.1:8000";
-  // Subdomain-based multi-tenant access: use same hostname on port 8000
+  if (hostname === "localhost" || hostname === "127.0.0.1") return `http://127.0.0.1:${DEV_BACKEND_PORT}`;
+  // Subdomain-based multi-tenant access: use same hostname on the backend port
   // so the backend tenant middleware can resolve the tenant from the Host header.
-  // e.g. testschool.eskoolia.local:3000 → http://testschool.eskoolia.local:8000
+  // e.g. testschool.eskoolia.local:3000 → http://testschool.eskoolia.local:<port>
   if (hostname !== "127.0.0.1") {
     // Production (*.eskoolia.com): API is behind Nginx on standard ports — no explicit port needed.
-    // Local dev (*.eskoolia.local or similar): Django runs directly on port 8000.
     if (hostname.endsWith(".eskoolia.com") || hostname === "eskoolia.com") {
       return `${protocol}//${hostname}`;
     }
-    return `${protocol}//${hostname}:8000`;
+    return `${protocol}//${hostname}:${DEV_BACKEND_PORT}`;
   }
-  return "http://127.0.0.1:8000";
+  return `http://127.0.0.1:${DEV_BACKEND_PORT}`;
 }
 
 const DEFAULT_API_BASE_URL = deriveApiBaseUrl();
@@ -39,7 +41,7 @@ function pickApiBaseUrl(): string {
     // rewrites. The proxy layer can normalize trailing slashes on POST routes,
     // which breaks Django endpoints protected by APPEND_SLASH.
     if (host === "localhost" || host === "127.0.0.1") {
-      return "http://127.0.0.1:8000";
+      return `http://127.0.0.1:${DEV_BACKEND_PORT}`;
     }
   }
   return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE_URL;

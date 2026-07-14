@@ -32,7 +32,7 @@ class ReportQueryService:
             "student__current_section",
             "assignment",
             "assignment__fees_type",
-        ).filter(school_id=school_id).only(
+        ).filter(student__school_id=school_id).only(
             "id",
             "paid_at",
             "amount_paid",
@@ -43,7 +43,7 @@ class ReportQueryService:
             "student__last_name",
             "student__current_class__name",
             "student__current_section__name",
-            "assignment__status",
+            "status",
             "assignment__fees_type__name",
         )
 
@@ -63,7 +63,7 @@ class ReportQueryService:
         if filters.get("method"):
             queryset = queryset.filter(method=filters["method"])
         if filters.get("status"):
-            queryset = queryset.filter(assignment__status=filters["status"])
+            queryset = queryset.filter(status=filters["status"])
         if filters.get("keyword"):
             keyword = filters["keyword"]
             queryset = queryset.filter(
@@ -128,8 +128,7 @@ class ReportQueryService:
             "is_disabled",
             "current_class__name",
             "current_section__name",
-            "guardian__first_name",
-            "guardian__last_name",
+            "guardian__full_name",
             "guardian__phone",
             "guardian__email",
         )
@@ -161,8 +160,7 @@ class ReportQueryService:
         if filters.get("keyword"):
             keyword = filters["keyword"]
             queryset = queryset.filter(
-                Q(guardian__first_name__icontains=keyword)
-                | Q(guardian__last_name__icontains=keyword)
+                Q(guardian__full_name__icontains=keyword)
                 | Q(guardian__phone__icontains=keyword)
                 | Q(guardian__email__icontains=keyword)
             )
@@ -366,7 +364,7 @@ class ReportQueryService:
             "staff__first_name",
             "staff__last_name",
             "staff__department__name",
-            "staff__designation__title",
+            "staff__designation__name",
         )
 
         queryset = ReportQueryService._apply_date_range(
@@ -410,8 +408,8 @@ class ReportQueryService:
             "current_section__name",
             "transport_route__title",
             "transport_route__fare",
-            "vehicle__number",
-            "vehicle__model",
+            "vehicle__vehicle_no",
+            "vehicle__vehicle_model",
         )
 
         if filters.get("class_id"):
@@ -442,7 +440,7 @@ class ReportQueryService:
             "reorder_level",
             "unit_cost",
             "unit_price",
-            "category__name",
+            "category__title",
             "supplier__name",
         )
 
@@ -457,7 +455,7 @@ class ReportQueryService:
             queryset = queryset.filter(
                 Q(item_code__icontains=keyword)
                 | Q(name__icontains=keyword)
-                | Q(category__name__icontains=keyword)
+                | Q(category__title__icontains=keyword)
             )
 
         return queryset.order_by("item_code", "name")

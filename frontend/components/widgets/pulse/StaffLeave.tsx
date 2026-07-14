@@ -1,8 +1,6 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { UserMinus, CheckCircle2, AlertCircle, Plus, Pencil, Trash2, X, Check } from 'lucide-react';
-import { getAccessToken } from '@/lib/auth';
-import { API_BASE_URL } from '@/lib/api';
 
 interface LeaveEntry {
   staffId: string;
@@ -40,16 +38,7 @@ export function StaffLeave() {
   const [addForm, setAddForm] = useState({ name: '', role: '', classCovered: '', substituteName: '' });
 
   const fetchData = useCallback(() => {
-    const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/hr/today-leave/`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (Array.isArray(d) && d.length) { setEntries(d); saveLS(d); }
-        else setEntries(loadLS());
-      })
-      .catch(() => setEntries(loadLS()));
+    setEntries(loadLS());
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -59,21 +48,10 @@ export function StaffLeave() {
   const updateSub = (staffId: string, subName: string) => {
     const next = entries.map(e => e.staffId === staffId ? { ...e, substituteAssigned: !!subName.trim(), substituteName: subName.trim() || undefined } : e);
     saveAll(next);
-    const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/hr/today-leave/${staffId}/`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ substituteAssigned: !!subName.trim(), substituteName: subName.trim() }),
-    }).catch(() => {});
   };
 
   const deleteEntry = (staffId: string) => {
     saveAll(entries.filter(e => e.staffId !== staffId));
-    const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/hr/today-leave/${staffId}/`, {
-      method: 'DELETE',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    }).catch(() => {});
   };
 
   const addEntry = () => {
@@ -89,12 +67,6 @@ export function StaffLeave() {
     saveAll([...entries, newEntry]);
     setAddForm({ name: '', role: '', classCovered: '', substituteName: '' });
     setShowAddForm(false);
-    const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/hr/today-leave/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify(newEntry),
-    }).catch(() => {});
   };
 
   return (

@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { API_BASE_URL } from "@/lib/api";
+import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from "@/lib/auth";
 import { clearPermissionsCache } from "@/hooks/usePermissions";
 
@@ -104,9 +105,7 @@ export async function apiLogin(
 }
 
 export async function apiGetMe(): Promise<MeResponse> {
-  const token = getAccessToken();
-  const res = await authFetch("/api/v1/auth/me/", { method: "GET" }, token);
-  return res.json() as Promise<MeResponse>;
+  return apiRequestWithRefresh<MeResponse>("/api/v1/auth/me/");
 }
 
 export async function apiChangePassword(oldPassword: string, newPassword: string): Promise<void> {
@@ -198,7 +197,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     apiGetMe()
       .then((me) => setUser(me))
-      .catch(() => clearAuthTokens())
+      .catch((err: unknown) => {
+        // Only evict the session on a confirmed auth failure (401).
+        // Network errors and server errors (5xx) are transient — do not wipe
+        // valid tokens. The next request will re-enter the refresh flow normally.
+        const status = (err as { status?: number }).status;
+        if (status === 401) clearAuthTokens();
+      })
       .finally(() => setIsLoading(false));
   }, []);
 
