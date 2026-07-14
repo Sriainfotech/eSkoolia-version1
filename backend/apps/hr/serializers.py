@@ -538,8 +538,20 @@ class StaffSerializer(serializers.ModelSerializer):
             for item in value:
                 if hasattr(item, "name"):
                     text = str(item.name or "").strip()
-                else:
-                    text = str(item or "").strip()
+                    if text:
+                        normalized.append(text)
+                    continue
+                text = str(item or "").strip()
+                # A single form field posts its value as one raw string, which may
+                # itself be a JSON-encoded array (e.g. '["a.pdf", "b.pdf"]") — expand it.
+                if text.startswith("[") and text.endswith("]"):
+                    try:
+                        parsed = json.loads(text)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        parsed = None
+                    if isinstance(parsed, list):
+                        normalized.extend(str(p).strip() for p in parsed if str(p).strip())
+                        continue
                 if text:
                     normalized.append(text)
             return normalized
@@ -677,9 +689,19 @@ class StaffSerializer(serializers.ModelSerializer):
 
         # QueryDict keeps repeated keys in getlist; use that for multi-file/name document input.
         if hasattr(data, "getlist") and "other_document" in data:
-            mutable_data["other_document"] = self._normalize_other_documents(data.getlist("other_document"))
+            normalized_docs = self._normalize_other_documents(data.getlist("other_document"))
         elif "other_document" in mutable_data:
-            mutable_data["other_document"] = self._normalize_other_documents(mutable_data.get("other_document"))
+            normalized_docs = self._normalize_other_documents(mutable_data.get("other_document"))
+        else:
+            normalized_docs = None
+
+        if normalized_docs is not None:
+            if hasattr(mutable_data, "setlist"):
+                # QueryDict.__setitem__ would wrap the list as a single list element
+                # (ListField.get_value() then sees [[...]] instead of [...]); setlist avoids that.
+                mutable_data.setlist("other_document", normalized_docs)
+            else:
+                mutable_data["other_document"] = normalized_docs
 
         custom_field = mutable_data.get("custom_field")
         custom_dict = {}
@@ -702,7 +724,12 @@ class StaffSerializer(serializers.ModelSerializer):
                     custom_dict[key] = value
 
         if custom_dict:
-            mutable_data["custom_field"] = custom_dict
+            if hasattr(mutable_data, "setlist"):
+                # JSONField.get_value() str()-ifies the raw value for HTML/multipart input,
+                # so it must already be a JSON string, not a dict (str(dict) isn't valid JSON).
+                mutable_data.setlist("custom_field", [json.dumps(custom_dict)])
+            else:
+                mutable_data["custom_field"] = custom_dict
 
         for field_name in [
             "resume",
