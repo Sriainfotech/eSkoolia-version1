@@ -257,6 +257,21 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  // Recent → oldest so the newest academic years surface first
+  const sortedYears = [...years].sort(
+    (a, b) => new Date(b.start_date).getTime() - new Date(a.start_date).getTime()
+  );
+
+  // "Make Current" is only allowed for the year whose date range actually
+  // contains today — past and future years can't be marked current.
+  function isTooFarFromToday(y: AcademicYear): boolean {
+    const start = new Date(y.start_date);
+    const end = new Date(y.end_date);
+    start.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+    return today < start || today > end;
+  }
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       {/* ── Left: form ── */}
@@ -455,11 +470,12 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
               Academic Years <span className="ml-1 font-normal normal-case text-[#9FA6AD]">({years.length})</span>
             </p>
 
-            {years.map((y) => {
+            {sortedYears.map((y) => {
               const endDate = new Date(y.end_date);
               endDate.setHours(0, 0, 0, 0);
               const isArchived = !y.is_current && endDate < today;
               const isInactive = y.is_active === false;
+              const tooFar = isTooFarFromToday(y);
 
               return (
                 <div
@@ -523,6 +539,13 @@ export default function AcademicYearPane({ years, loading, onRefresh, showToast,
                       </span>
                     ) : isInactive ? (
                       <span className="text-[11px] text-[#9FA6AD] px-1" title="Re-activate this year before making it current">
+                        —
+                      </span>
+                    ) : tooFar ? (
+                      <span
+                        className="text-[11px] text-[#9FA6AD] px-1"
+                        title="Only the year whose date range includes today can be made current."
+                      >
                         —
                       </span>
                     ) : (

@@ -238,8 +238,6 @@ class EmailSmsLogViewSet(BaseCommunicationViewSet):
 
     def get_queryset(self):
         queryset = EmailSmsLog.objects.select_related("created_by", "school", "academic_year")
-        if self.request.user.is_superuser:
-            return queryset
         return queryset.filter(Q(school=self.request.user.school) | Q(school__isnull=True))
 
     def perform_create(self, serializer):
@@ -257,8 +255,6 @@ class NoticeBoardViewSet(BaseCommunicationViewSet):
 
     def get_queryset(self):
         queryset = NoticeBoard.objects.select_related("created_by", "updated_by", "school", "academic_year")
-        if self.request.user.is_superuser:
-            return queryset
         return queryset.filter(Q(school=self.request.user.school) | Q(school__isnull=True))
 
     def perform_create(self, serializer):
@@ -284,8 +280,6 @@ class HolidayCalendarViewSet(BaseCommunicationViewSet):
 
     def get_queryset(self):
         queryset = HolidayCalendar.objects.select_related("created_by", "updated_by", "school", "academic_year")
-        if self.request.user.is_superuser:
-            return queryset
         return queryset.filter(Q(school=self.request.user.school) | Q(school__isnull=True))
 
     def perform_create(self, serializer):

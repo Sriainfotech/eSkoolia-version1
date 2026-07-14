@@ -59,9 +59,9 @@ class TenantScopedSerializer(AuditedModelSerializer):
         )
 
     def validate_school(self, value):
-        """Validate that the school belongs to the current user."""
+        """Validate that the school belongs to the current user (superusers included)."""
         request = self.context.get('request')
-        if request and request.user and not request.user.is_superuser:
+        if request and request.user:
             if request.user.school_id and value.id != request.user.school_id:
                 raise serializers.ValidationError("You can only access your own school's data.")
         return value

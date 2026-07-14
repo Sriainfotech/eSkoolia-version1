@@ -81,28 +81,27 @@ export default function FoundationWorkspace({ initialTab = "foundation" }: Props
               </p>
             </div>
 
-            {/* Year archive + progress row */}
+            {/* Current year + progress row */}
             <div className="flex items-center justify-between gap-3 mb-3.5 flex-wrap">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[12px] font-semibold text-[#6F767E]">Academic Year:</span>
+                <span className="text-[12px] font-semibold text-[#6F767E]">Current Academic Year:</span>
                 {years.length === 0 ? (
                   <span className="text-[12px] text-[#9FA6AD] italic">No years yet — create one in Step 1</span>
                 ) : (
-                  years.map((y) => (
-                    <button
-                      key={y.id}
-                      onClick={() => setWzStep(1)}
-                      className={[
-                        "flex items-center gap-1 px-3 py-1 rounded-full text-[12px] font-semibold border transition-all",
-                        y.is_current
-                          ? "bg-[#5B4FCF] text-white border-[#5B4FCF]"
-                          : "bg-[#F0F2F5] text-[#6F767E] border-[#E8ECEF] hover:border-[#5B4FCF] hover:text-[#5B4FCF]",
-                      ].join(" ")}
-                    >
-                      {y.name}
-                      {y.is_current && <span>✓</span>}
-                    </button>
-                  ))
+                  (() => {
+                    const current = years.find((y) => y.is_current);
+                    return current ? (
+                      <button
+                        onClick={() => setWzStep(1)}
+                        className="flex items-center gap-1 px-3 py-1 rounded-full text-[12px] font-semibold border bg-[#5B4FCF] text-white border-[#5B4FCF] transition-all"
+                      >
+                        {current.name}
+                        <span>✓</span>
+                      </button>
+                    ) : (
+                      <span className="text-[12px] text-[#9FA6AD] italic">No year marked current yet</span>
+                    );
+                  })()
                 )}
               </div>
               {/* Setup progress */}

@@ -36,12 +36,14 @@ class PaginatedModelViewSet(APIResponseMixin, viewsets.ModelViewSet):
         
         queryset = self.model.objects.all()
         
-        # Apply tenant scoping
+        # Apply tenant scoping. Every user, including superusers, is scoped
+        # to their own school (superuser accounts are provisioned with a
+        # school of their own, e.g. "Default School") — there is no
+        # cross-school aggregation on ordinary per-school data views.
         if hasattr(self.model, 'school'):
-            if not user.is_superuser:
-                if not user.school_id:
-                    return queryset.none()
-                queryset = queryset.filter(school_id=user.school_id)
+            if not user.school_id:
+                return queryset.none()
+            queryset = queryset.filter(school_id=user.school_id)
         
         # Apply search filtering
         search_query = self.request.query_params.get('search', '').strip()

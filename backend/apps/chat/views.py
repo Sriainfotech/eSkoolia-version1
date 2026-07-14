@@ -40,6 +40,16 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
+def _same_school(user_a, user_b) -> bool:
+    """Everyone, including superusers, may only message within their own school."""
+    return bool(user_a.school_id) and user_a.school_id == user_b.school_id
+
+
+def _school_scoped_users(user):
+    """Base User queryset for chat features: own school only."""
+    return User.objects.filter(school_id=user.school_id)
+
+
 class ChatPermissionMixin:
     required_permission_code = "utilities.chat.view"
     public_actions = set()
@@ -89,7 +99,7 @@ class ChatViewSet(ChatPermissionMixin, viewsets.ModelViewSet):
     
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = ConversationSerializer
-    public_actions = {"search_users"}
+    public_actions = set()
     action_permission_codes = {
         "block_user": "utilities.blocked_user.view",
         "unblock_user": "utilities.blocked_user.view",
@@ -130,17 +140,17 @@ class ChatViewSet(ChatPermissionMixin, viewsets.ModelViewSet):
         ).values_list("from_user_id", flat=True)
         
         connected_user_ids = list(connected_from) + list(connected_to)
-        
-        users = User.objects.filter(
+
+        users = _school_scoped_users(current_user).filter(
             id__in=connected_user_ids
         ).exclude(
             id=current_user.id
         ).distinct()
 
         # Fallback: if no explicit invitation connections exist yet,
-        # allow listing all users for direct chat selection.
+        # allow listing same-school users for direct chat selection.
         if not users.exists():
-            users = User.objects.exclude(id=current_user.id).distinct()
+            users = _school_scoped_users(current_user).exclude(id=current_user.id).distinct()
 
         # Exclude users blocked by current user OR who blocked current user.
         blocked_by_me_ids = BlockUser.objects.filter(
@@ -191,18 +201,18 @@ class ChatViewSet(ChatPermissionMixin, viewsets.ModelViewSet):
             "users": users_data
         })
 
-    @action(detail=False, methods=["get"], permission_classes=[permissions.AllowAny])
+    @action(detail=False, methods=["get"])
     def search_users(self, request):
         """
         Search for users to start a conversation or add to group.
         Query param: query (optional)
-        Returns all users when query is empty, else matching users.
+        Returns same-school users when query is empty, else matching users.
         """
         query = (request.query_params.get("query") or request.query_params.get("q") or "").strip()
         user_type = request.query_params.get("user_type", "all").strip().lower()
         class_id = request.query_params.get("class_id")
 
-        users = User.objects.all()
+        users = _school_scoped_users(request.user)
 
         strict_staff_filter = (
             Q(is_staff=True)
@@ -322,7 +332,8 @@ class ChatViewSet(ChatPermissionMixin, viewsets.ModelViewSet):
         try:
             from apps.students.models import Student
 
-            student_rows = Student.objects.values("first_name", "last_name", "admission_no")
+            student_qs = Student.objects.filter(school_id=request.user.school_id)
+            student_rows = student_qs.values("first_name", "last_name", "admission_no")
             admission_nos = []
             name_filter = Q()
 
@@ -379,7 +390,10 @@ class ChatViewSet(ChatPermissionMixin, viewsets.ModelViewSet):
         
         current_user = request.user
         target_user = get_object_or_404(User, id=user_id)
-        
+
+        if not _same_school(current_user, target_user):
+            raise PermissionDenied("You cannot message a user from a different school.")
+
         # Check if blocked
         if BlockUser.objects.filter(
             blocked_by=target_user,
@@ -434,7 +448,10 @@ class ChatViewSet(ChatPermissionMixin, viewsets.ModelViewSet):
             )
         
         target_user = get_object_or_404(User, id=to_id)
-        
+
+        if not _same_school(current_user, target_user):
+            raise PermissionDenied("You cannot message a user from a different school.")
+
         # Check if blocked in either direction
         if BlockUser.objects.filter(
             blocked_by=target_user,

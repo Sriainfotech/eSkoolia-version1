@@ -1,0 +1,13 @@
+{
+  "name": "eskoolia-version1-root",
+  "private": true,
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "dev:clean": "npm --prefix frontend run dev:clean",
+    "dev:fresh": "npm --prefix frontend run dev:fresh",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix frontend run start",
+    "lint": "npm --prefix frontend run lint",
+    "test": "npm --prefix frontend run test"
+  }
+}

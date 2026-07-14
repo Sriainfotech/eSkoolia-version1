@@ -1,8 +1,10 @@
+import logging
 from datetime import datetime
 
 import requests
 from django.core.cache import cache
 from django.db import IntegrityError, models, transaction
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, permissions, status, viewsets
 from rest_framework.decorators import action
@@ -57,6 +59,8 @@ from .serializers import (
     VisitorBookEntrySerializer,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class VisitorBookPagination(ApiPageNumberPagination):
     page_size = 10
@@ -90,57 +94,22 @@ class AdminSectionRBACMixin:
         return self.permission_codes.get("*")
 
     def initial(self, request, *args, **kwargs):
-        import sys
-        print(f"\nDEBUG: AdminSectionRBACMixin.initial() - START")
-        print(f"DEBUG: Request: {request.method} {request.path}")
-        sys.stdout.flush()
-        
-        try:
-            print(f"DEBUG: Calling super().initial()")
-            sys.stdout.flush()
-            super().initial(request, *args, **kwargs)
-            print(f"DEBUG: super().initial() completed successfully")
-            sys.stdout.flush()
-        except Exception as e:
-            print(f"DEBUG: EXCEPTION in super().initial(): {e}")
-            import traceback
-            traceback.print_exc()
-            sys.stdout.flush()
-            raise
-        
+        super().initial(request, *args, **kwargs)
+
         code = self._get_permission_code()
-        print(f"DEBUG: Permission code: {code}")
-        sys.stdout.flush()
-        
+
         # Enforce permission checks for all admin section operations (fail-safe)
         # If no permission code is configured, deny access by default
         if code is None:
-            print(f"DEBUG: Permission code is None, raising PermissionDenied")
-            sys.stdout.flush()
             raise PermissionDenied("This action requires specific permissions that are not configured.")
 
         user = request.user
-        print(f"DEBUG: User: {user}, is_superuser: {user.is_superuser}")
-        sys.stdout.flush()
-        
         if user.is_superuser:
-            print(f"DEBUG: User is superuser, returning")
-            sys.stdout.flush()
             return
 
-        print(f"DEBUG: Checking permission code: {code}")
-        sys.stdout.flush()
         has_perm = hasattr(user, "has_permission_code") and user.has_permission_code(code)
-        print(f"DEBUG: has_permission_code: {has_perm}")
-        sys.stdout.flush()
-        
         if not has_perm:
-            print(f"DEBUG: User does not have permission, raising PermissionDenied")
-            sys.stdout.flush()
             raise PermissionDenied("You do not have permission to perform this action.")
-        
-        print(f"DEBUG: AdminSectionRBACMixin.initial() - SUCCESS")
-        sys.stdout.flush()
 
 
 class DuplicateSafeWriteMixin:
@@ -401,9 +370,7 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
             "reference",
             "school_class",
         ).prefetch_related("follow_ups__author")
-        if user.is_superuser:
-            scoped = queryset
-        elif user.school_id:
+        if user.school_id:
             scoped = queryset.filter(school_id=user.school_id)
         else:
             return queryset.none()
@@ -494,8 +461,6 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
         user = self.request.user
         qs = AdmissionInquiry.objects.select_related("school")
         try:
-            if user.is_superuser:
-                return qs.get(pk=pk)
             return qs.get(pk=pk, school_id=user.school_id)
         except AdmissionInquiry.DoesNotExist:
             raise PermissionDenied("Inquiry not found.")
@@ -669,9 +634,7 @@ class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
         user = self.request.user
         qs = AdmissionFollowUp.objects.select_related("inquiry__school", "author")
         inquiry_id = self.request.query_params.get("inquiry")
-        if user.is_superuser:
-            scoped = qs
-        elif user.school_id:
+        if user.school_id:
             scoped = qs.filter(inquiry__school_id=user.school_id)
         else:
             return qs.none()
@@ -685,7 +648,7 @@ class AdmissionFollowUpViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
         user = self.request.user
         inquiry_id = self.request.data.get("inquiry")
         # Ensure the inquiry belongs to the user's school
-        if inquiry_id and not user.is_superuser:
+        if inquiry_id:
             if not AdmissionInquiry.objects.filter(id=inquiry_id, school_id=user.school_id).exists():
                 raise PermissionDenied("Inquiry not found in your school.")
 
@@ -762,9 +725,7 @@ class VisitorBookEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
     def get_queryset(self):
         user = self.request.user
         qs = VisitorBookEntry.objects.select_related("school", "created_by")
-        if user.is_superuser:
-            pass
-        elif user.school_id:
+        if user.school_id:
             qs = qs.filter(school_id=user.school_id)
         else:
             return qs.none()
@@ -863,10 +824,8 @@ class ComplaintTypeListView(APIView):
     def get(self, request):
         user = request.user
         qs = ComplaintType.objects.filter(is_active=True).select_related("school")
-        
-        if user.is_superuser:
-            pass
-        elif user.school_id:
+
+        if user.school_id:
             qs = qs.filter(school_id=user.school_id)
         else:
             qs = qs.none()
@@ -876,6 +835,31 @@ class ComplaintTypeListView(APIView):
         serializer = ComplaintTypeSerializer(paginated_qs, many=True)
         return paginator.get_paginated_response(serializer.data)
 
+    def post(self, request):
+        user = request.user
+        if not user.school_id:
+            return Response({"detail": "School context is required."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = ComplaintTypeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(school_id=user.school_id)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def _get_object(self, request, pk):
+        return get_object_or_404(ComplaintType, pk=pk, school_id=request.user.school_id)
+
+    def patch(self, request, pk=None):
+        instance = self._get_object(request, pk)
+        serializer = ComplaintTypeSerializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, pk=None):
+        instance = self._get_object(request, pk)
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class ComplaintSourceListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -883,18 +867,41 @@ class ComplaintSourceListView(APIView):
     def get(self, request):
         user = request.user
         qs = ComplaintSource.objects.filter(is_active=True).select_related("school")
-        
-        if user.is_superuser:
-            pass
-        elif user.school_id:
+
+        if user.school_id:
             qs = qs.filter(school_id=user.school_id)
         else:
             qs = qs.none()
-        
+
         paginator = ApiPageNumberPagination()
         paginated_qs = paginator.paginate_queryset(qs, request)
         serializer = ComplaintSourceSerializer(paginated_qs, many=True)
         return paginator.get_paginated_response(serializer.data)
+
+    def post(self, request):
+        user = request.user
+        if not user.school_id:
+            return Response({"detail": "School context is required."}, status=status.HTTP_400_BAD_REQUEST)
+        serializer = ComplaintSourceSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(school_id=user.school_id)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def _get_object(self, request, pk):
+        return get_object_or_404(ComplaintSource, pk=pk, school_id=request.user.school_id)
+
+    def patch(self, request, pk=None):
+        instance = self._get_object(request, pk)
+        serializer = ComplaintSourceSerializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, pk=None):
+        instance = self._get_object(request, pk)
+        instance.is_active = False
+        instance.save(update_fields=["is_active"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class StaffLookupListView(APIView):
@@ -904,10 +911,8 @@ class StaffLookupListView(APIView):
         from apps.users.models import User
         user = request.user
         qs = User.objects.filter(is_active=True).select_related("school")
-        
-        if user.is_superuser:
-            pass
-        elif user.school_id:
+
+        if user.school_id:
             qs = qs.filter(school_id=user.school_id)
         else:
             qs = qs.none()
@@ -937,10 +942,8 @@ class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
     def get_queryset(self):
         user = self.request.user
         qs = ComplaintEntry.objects.select_related("school", "created_by", "complaint_type", "complaint_source", "assigned_to")
-        
-        if user.is_superuser:
-            base_qs = qs
-        elif user.school_id:
+
+        if user.school_id:
             base_qs = qs.filter(school_id=user.school_id)
         else:
             return qs.none()
@@ -984,104 +987,23 @@ class ComplaintEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
         serializer.save(school=school, created_by=user)
 
     def create(self, request, *args, **kwargs):
-        import sys
-        import logging
-        logger = logging.getLogger(__name__)
-        
         try:
-            print(f"\n{'='*60}")
-            print(f"DEBUG: ComplaintEntryViewSet.create() - START")
-            sys.stdout.flush()
-            
-            print(f"DEBUG: Request method: {request.method}")
-            print(f"DEBUG: Content-Type: {request.content_type}")
-            print(f"DEBUG: Request data: {request.data}")
-            print(f"DEBUG: Request data type: {type(request.data)}")
-            print(f"DEBUG: Request user: {request.user}")
-            sys.stdout.flush()
-            
-            try:
-                school = getattr(request.user, 'school', None)
-                print(f"DEBUG: Request user school: {school}")
-                sys.stdout.flush()
-            except Exception as e:
-                print(f"DEBUG: Error getting school: {e}")
-                sys.stdout.flush()
-            
-            try:
-                serializer = self.get_serializer(data=request.data)
-                print(f"DEBUG: Serializer created successfully")
-                sys.stdout.flush()
-            except Exception as e:
-                print(f"DEBUG: ERROR creating serializer: {e}")
-                import traceback
-                traceback.print_exc()
-                sys.stdout.flush()
-                raise
-            
-            try:
-                print(f"DEBUG: Serializer class: {serializer.__class__.__name__}")
-                print(f"DEBUG: Serializer fields: {list(serializer.fields.keys())}")
-                print(f"DEBUG: Serializer initial_data keys: {list(serializer.initial_data.keys())}")
-                sys.stdout.flush()
-            except Exception as e:
-                print(f"DEBUG: ERROR accessing serializer properties: {e}")
-                import traceback
-                traceback.print_exc()
-                sys.stdout.flush()
-            
-            try:
-                is_valid = serializer.is_valid()
-                print(f"DEBUG: Serializer is_valid: {is_valid}")
-                sys.stdout.flush()
-            except Exception as e:
-                print(f"DEBUG: ERROR calling is_valid(): {e}")
-                import traceback
-                traceback.print_exc()
-                sys.stdout.flush()
-                raise
-            
-            if not is_valid:
-                print(f"DEBUG: Serializer errors: {serializer.errors}")
-                sys.stdout.flush()
-                logger.error(f"Serializer validation failed: {serializer.errors}")
+            serializer = self.get_serializer(data=request.data)
+            if not serializer.is_valid():
                 field_errors = self._normalize_field_errors(serializer.errors)
-                print(f"DEBUG: Normalized field_errors: {field_errors}")
-                sys.stdout.flush()
                 return self._validation_response(field_errors, self._first_error_message(field_errors))
-            
-            print(f"DEBUG: Serializer validated_data keys: {list(serializer.validated_data.keys())}")
-            sys.stdout.flush()
-            
+
             try:
                 self.perform_create(serializer)
-                print(f"DEBUG: perform_create() completed, instance id: {serializer.instance.id}")
-                sys.stdout.flush()
             except IntegrityError as exc:
-                print(f"DEBUG: IntegrityError: {exc}")
-                sys.stdout.flush()
                 return self._integrity_response(exc)
-            
+
             output = self.get_serializer(serializer.instance)
-            print(f"DEBUG: Output serializer created successfully")
-            sys.stdout.flush()
-            print(f"DEBUG: ComplaintEntryViewSet.create() - SUCCESS")
-            print(f"{'='*60}\n")
-            sys.stdout.flush()
             return self._success_response(self.create_success_message, output.data, status.HTTP_201_CREATED)
         except Exception as e:
-            # Log the error for debugging
-            import traceback
-            print(f"\nDEBUG: EXCEPTION in ComplaintEntryViewSet.create: {e}")
-            print(f"DEBUG: Exception type: {type(e).__name__}")
-            print(f"DEBUG: Exception module: {type(e).__module__}")
-            traceback.print_exc()
-            sys.stdout.flush()
-            logger.exception(f"Exception in create: {e}")
-            print(f"{'='*60}\n")
-            sys.stdout.flush()
+            logger.exception("Exception in ComplaintEntryViewSet.create: %s", e)
             return self._validation_response(
-                {"error": [str(e)]}, 
+                {"error": [str(e)]},
                 f"Failed to process request: {str(e)}"
             )
 
@@ -1123,8 +1045,6 @@ class PostalReceiveEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, 
     def get_queryset(self):
         user = self.request.user
         qs = PostalReceiveEntry.objects.select_related("school", "created_by")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -1156,8 +1076,6 @@ class PostalDispatchEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
     def get_queryset(self):
         user = self.request.user
         qs = PostalDispatchEntry.objects.select_related("school", "created_by")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -1217,8 +1135,6 @@ class PhoneCallLogEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, v
     def get_queryset(self):
         user = self.request.user
         qs = PhoneCallLogEntry.objects.select_related("school", "created_by")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -1293,13 +1209,10 @@ class AdminSetupEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vie
     def get_queryset(self):
         user = self.request.user
         qs = AdminSetupEntry.objects.select_related("school", "created_by")
-        if user.is_superuser:
-            scoped = qs
-        else:
-            school = self._resolve_school()
-            if not school:
-                return qs.none()
-            scoped = qs.filter(school_id=school.id)
+        school = self._resolve_school()
+        if not school:
+            return qs.none()
+        scoped = qs.filter(school_id=school.id)
 
         type_filter = str(self.request.query_params.get("type", "")).strip()
         if type_filter in {"1", "2", "3", "4"}:
@@ -1332,7 +1245,7 @@ class AdminSetupEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vie
         elif instance.type == "2":
             complaint_type_exists = ComplaintEntry.objects.filter(
                 school_id=school_id,
-                complaint_type__iexact=label,
+                complaint_type__name__iexact=label,
             ).exists()
             if complaint_type_exists:
                 blockers.append("Complaints by type")
@@ -1344,7 +1257,7 @@ class AdminSetupEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vie
             ).exists()
             complaint_source_exists = ComplaintEntry.objects.filter(
                 school_id=school_id,
-                complaint_source__iexact=label,
+                complaint_source__name__iexact=label,
             ).exists()
             if inquiry_source_exists:
                 blockers.append("Admission Inquiries source")
@@ -1391,8 +1304,6 @@ class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
     def get_queryset(self):
         user = self.request.user
         qs = IdCardTemplate.objects.select_related("school", "created_by")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -1414,10 +1325,9 @@ class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
         classes_qs = Class.objects.order_by("numeric_order", "name")
         sections_qs = Section.objects.select_related("school_class").order_by("name")
 
-        if not user.is_superuser:
-            roles_qs = roles_qs.filter(school_id=user.school_id) | roles_qs.filter(school__isnull=True)
-            classes_qs = classes_qs.filter(school_id=user.school_id)
-            sections_qs = sections_qs.filter(school_class__school_id=user.school_id)
+        roles_qs = roles_qs.filter(school_id=user.school_id) | roles_qs.filter(school__isnull=True)
+        classes_qs = classes_qs.filter(school_id=user.school_id)
+        sections_qs = sections_qs.filter(school_class__school_id=user.school_id)
 
         role_rows = []
         for role in roles_qs.distinct():
@@ -1454,7 +1364,7 @@ class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
             return Response({"detail": "role query param is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         roles_qs = Role.objects.all()
-        if not user.is_superuser and user.school_id:
+        if user.school_id:
             roles_qs = roles_qs.filter(school_id=user.school_id) | roles_qs.filter(school__isnull=True)
 
         role = roles_qs.distinct().filter(id=role_id).first()
@@ -1465,8 +1375,7 @@ class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
 
         if is_student_role:
             students_qs = Student.objects.select_related("current_class", "current_section")
-            if not user.is_superuser:
-                students_qs = students_qs.filter(school_id=user.school_id)
+            students_qs = students_qs.filter(school_id=user.school_id)
             if class_id:
                 students_qs = students_qs.filter(current_class_id=class_id)
             if section_id:
@@ -1503,7 +1412,7 @@ class IdCardTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, view
             return Response({"is_student_role": True, "recipients": rows}, status=status.HTTP_200_OK)
 
         user_role_qs = UserRole.objects.select_related("user", "role").filter(role_id=role.id)
-        if not user.is_superuser and user.school_id:
+        if user.school_id:
             user_role_qs = user_role_qs.filter(user__school_id=user.school_id)
 
         seen = set()
@@ -1543,8 +1452,6 @@ class CertificateTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
     def get_queryset(self):
         user = self.request.user
         qs = CertificateTemplate.objects.select_related("school", "created_by")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -1566,10 +1473,9 @@ class CertificateTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
         classes_qs = Class.objects.order_by("numeric_order", "name")
         sections_qs = Section.objects.select_related("school_class").order_by("name")
 
-        if not user.is_superuser:
-            roles_qs = roles_qs.filter(school_id=user.school_id) | roles_qs.filter(school__isnull=True)
-            classes_qs = classes_qs.filter(school_id=user.school_id)
-            sections_qs = sections_qs.filter(school_class__school_id=user.school_id)
+        roles_qs = roles_qs.filter(school_id=user.school_id) | roles_qs.filter(school__isnull=True)
+        classes_qs = classes_qs.filter(school_id=user.school_id)
+        sections_qs = sections_qs.filter(school_class__school_id=user.school_id)
 
         role_rows = []
         for role in roles_qs.distinct():
@@ -1606,7 +1512,7 @@ class CertificateTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
             return Response({"detail": "role query param is required."}, status=status.HTTP_400_BAD_REQUEST)
 
         roles_qs = Role.objects.all()
-        if not user.is_superuser and user.school_id:
+        if user.school_id:
             roles_qs = roles_qs.filter(school_id=user.school_id) | roles_qs.filter(school__isnull=True)
 
         role = roles_qs.distinct().filter(id=role_id).first()
@@ -1617,8 +1523,7 @@ class CertificateTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
 
         if is_student_role:
             students_qs = Student.objects.select_related("current_class", "current_section")
-            if not user.is_superuser:
-                students_qs = students_qs.filter(school_id=user.school_id)
+            students_qs = students_qs.filter(school_id=user.school_id)
             if class_id:
                 students_qs = students_qs.filter(current_class_id=class_id)
             if section_id:
@@ -1648,7 +1553,7 @@ class CertificateTemplateViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin,
             return Response({"is_student_role": True, "recipients": rows}, status=status.HTTP_200_OK)
 
         user_role_qs = UserRole.objects.select_related("user", "role").filter(role_id=role.id)
-        if not user.is_superuser and user.school_id:
+        if user.school_id:
             user_role_qs = user_role_qs.filter(user__school_id=user.school_id)
 
         seen = set()
@@ -1675,8 +1580,6 @@ class CertificateReadOnlyViewSet(AdminSectionRBACMixin, mixins.ListModelMixin, m
     def get_queryset(self):
         user = self.request.user
         qs = CertificateTemplate.objects.select_related("school", "created_by")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -1694,8 +1597,6 @@ class IdCardReadOnlyViewSet(AdminSectionRBACMixin, mixins.ListModelMixin, mixins
     def get_queryset(self):
         user = self.request.user
         qs = IdCardTemplate.objects.select_related("school", "created_by")
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -1717,8 +1618,6 @@ class PipelineViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         user = self.request.user
         qs = PipelineStage.objects.all()
-        if user.is_superuser:
-            return qs
         if getattr(user, "school_id", None):
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -1747,8 +1646,6 @@ class BulkJobViewSet(viewsets.GenericViewSet,
     def get_queryset(self):
         user = self.request.user
         qs = BulkJob.objects.all()
-        if user.is_superuser:
-            return qs
         if getattr(user, "school_id", None):
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -1808,17 +1705,14 @@ class AIGenerateView(APIView):
 
         user = request.user
         try:
-            inquiry = AdmissionInquiry.objects.get(
-                pk=lead_id,
-                **({"school_id": user.school_id} if not user.is_superuser else {}),
-            )
+            inquiry = AdmissionInquiry.objects.get(pk=lead_id, school_id=user.school_id)
         except AdmissionInquiry.DoesNotExist:
             return Response({"success": False, "message": "Lead not found."}, status=404)
 
         from apps.admissions.models import AIMessageTemplate
         template = None
         if template_id:
-            template = AIMessageTemplate.objects.filter(pk=template_id).first()
+            template = AIMessageTemplate.objects.filter(pk=template_id, school_id=user.school_id).first()
 
         svc = AIMessageService()
         result = svc.generate(inquiry=inquiry, template=template, tone_preferences=tone)
@@ -1856,7 +1750,7 @@ class ConsentLogView(APIView):
         try:
             inquiry = AdmissionInquiry.objects.get(
                 pk=lead_id,
-                **({"school_id": user.school_id} if not user.is_superuser else {}),
+                school_id=user.school_id,
             )
         except AdmissionInquiry.DoesNotExist:
             return Response({"success": False, "message": "Lead not found."}, status=404)
@@ -1889,7 +1783,7 @@ class AnalyticsOverviewView(APIView):
 
         user = request.user
         base_qs = AdmissionInquiry.objects.all()
-        if not user.is_superuser and getattr(user, "school_id", None):
+        if getattr(user, "school_id", None):
             base_qs = base_qs.filter(school_id=user.school_id)
 
         # Period filter
@@ -1962,7 +1856,7 @@ class AnalyticsOverviewView(APIView):
 
         # Channel breakdown from ContactLog
         contact_qs = ContactLog.objects.all()
-        if not user.is_superuser and getattr(user, "school_id", None):
+        if getattr(user, "school_id", None):
             contact_qs = contact_qs.filter(inquiry__school_id=user.school_id)
         channel_breakdown = list(
             contact_qs.values("channel").annotate(count=Count("id")).order_by("-count")

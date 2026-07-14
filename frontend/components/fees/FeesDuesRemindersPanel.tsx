@@ -681,7 +681,7 @@ export default function FeesDuesRemindersPanel() {
                 </div>
                 <button onClick={() => setResolveTarget(null)} disabled={resolveSaving} style={{ width:28, height:28, borderRadius:6, border:"1px solid #E8E8EE", background:"#fff", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", fontSize:16, color:"#A0A3B8" }}>×</button>
               </div>
-              <div style={{ fontSize:13, color:"#5B5E72", marginTop:10 }}>Choose one action to resolve or progress this student's outstanding balance.</div>
+              <div style={{ fontSize:13, color:"#5B5E72", marginTop:10 }}>Choose one action to resolve or progress this student&apos;s outstanding balance.</div>
             </div>
 
             {/* Scrollable body */}

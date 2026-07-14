@@ -41,7 +41,7 @@ class CompetitionSerializer(serializers.ModelSerializer):
             "location", "opponent", "notes", "created_by",
             "created_at", "updated_at", "teams",
         ]
-        read_only_fields = ["created_by", "created_at", "updated_at"]
+        read_only_fields = ["school", "created_by", "created_at", "updated_at"]
 
 
 class ResultListSerializer(serializers.ListSerializer):
@@ -60,6 +60,25 @@ class ResultSerializer(serializers.ModelSerializer):
             "created_at", "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None:
+            school_id = getattr(user, "school_id", None)
+            competition = attrs.get("competition") or getattr(self.instance, "competition", None)
+            if competition is not None and competition.school_id != school_id:
+                raise serializers.ValidationError({"competition": "Competition not found."})
+            for field_name in ("student", "team", "house", "club"):
+                related = attrs.get(field_name)
+                if related is None:
+                    continue
+                related_school_id = (
+                    related.school_id if hasattr(related, "school_id") else related.competition.school_id
+                )
+                if related_school_id != school_id:
+                    raise serializers.ValidationError({field_name: f"Invalid {field_name}."})
+        return attrs
 
 
 class AIReviewItemSerializer(serializers.Serializer):

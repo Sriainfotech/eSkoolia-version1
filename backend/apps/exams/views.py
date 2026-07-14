@@ -118,12 +118,10 @@ class ExamTenantMixin:
             raise PermissionDenied("You do not have permission to perform this action.")
 
     def school_filter(self, request):
-        return {} if request.user.is_superuser else {"school_id": request.user.school_id}
+        return {"school_id": request.user.school_id}
 
     def get_school(self, request):
         school = request.user.school or getattr(request, "school", None)
-        if request.user.is_superuser and school:
-            return school
         if not school:
             raise PermissionDenied("School context is required.")
         return school
@@ -141,9 +139,7 @@ class ExamTenantMixin:
     def get_teachers(self, request):
         User = get_user_model()
         queryset = User.objects.filter(is_active=True, access_status=True)
-        school_id = None
-        if not request.user.is_superuser:
-            school_id = request.user.school_id
+        school_id = request.user.school_id
 
         role_teacher_qs = queryset.filter(user_roles__role__name__icontains="teacher")
         if school_id:
@@ -2007,8 +2003,6 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
-        if user.is_superuser:
-            return queryset
         if user.school_id:
             return queryset.filter(school_id=user.school_id)
         return queryset.none()
@@ -2016,7 +2010,7 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         school = user.school or getattr(self.request, "school", None)
-        if not school and not user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
         serializer.save(school=school)
 
@@ -2164,7 +2158,7 @@ class ExamMarkViewSet(SchoolScopedModelViewSet):
     def perform_create(self, serializer):
         user = self.request.user
         school = user.school or getattr(self.request, "school", None)
-        if not school and not user.is_superuser:
+        if not school:
             raise PermissionDenied("School context is required.")
         serializer.save(school=school, created_by=user)
 

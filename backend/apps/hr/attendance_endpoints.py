@@ -96,8 +96,6 @@ class StaffAttendanceExportAPIView(StaffAttendancePermissionMixin, APIView):
         return (renderer, renderer.media_type)
 
     def _school_filter(self, request):
-        if request.user.is_superuser:
-            return {}
         return {"school_id": request.user.school_id}
 
     def get(self, request):

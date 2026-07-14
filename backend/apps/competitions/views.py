@@ -21,15 +21,26 @@ class CompetitionViewSet(viewsets.ModelViewSet):
     serializer_class = CompetitionSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        return qs.filter(school_id=user.school_id)
+
     def perform_create(self, serializer):
         user = self.request.user if self.request.user.is_authenticated else None
-        serializer.save(created_by=user)
+        school = getattr(user, "school", None) if user else None
+        serializer.save(created_by=user, school=school)
 
 
 class ResultViewSet(viewsets.ModelViewSet):
     queryset = Result.objects.all().select_related("competition", "student", "team", "house", "club")
     serializer_class = ResultSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+        return qs.filter(competition__school_id=user.school_id)
 
     def get_serializer(self, *args, **kwargs):
         if isinstance(kwargs.get("data"), list):

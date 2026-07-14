@@ -69,8 +69,6 @@ class SchoolScopedModelViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
-        if user.is_superuser:
-            return queryset
         if user.school_id:
             return queryset.filter(school_id=user.school_id)
         return queryset.none()
@@ -517,7 +515,7 @@ class StaffViewSet(SchoolScopedModelViewSet):
         dept_qs = Department.objects.all()
         desg_qs = Designation.objects.all()
 
-        if school_id and not request.user.is_superuser:
+        if school_id:
             role_qs = role_qs.filter(school_id=school_id)
             dept_qs = dept_qs.filter(school_id=school_id)
             desg_qs = desg_qs.filter(school_id=school_id)
@@ -602,6 +600,12 @@ class StaffViewSet(SchoolScopedModelViewSet):
                 except (TypeError, ValueError, json.JSONDecodeError):
                     pass
 
+        # An empty string for an optional integer field fails DRF's plain
+        # IntegerField ("A valid integer is required.") — allow_null only
+        # tolerates None, not "". Normalize blank to None regardless of client.
+        if isinstance(data.get("num_children"), str) and not data["num_children"].strip():
+            data["num_children"] = None
+
         return data
 
     def create(self, request, *args, **kwargs):
@@ -654,7 +658,7 @@ class StaffViewSet(SchoolScopedModelViewSet):
         dept_qs = Department.objects.filter(is_active=True).order_by("name")
         desg_qs = Designation.objects.filter(is_active=True).order_by("name")
 
-        if school_id and not request.user.is_superuser:
+        if school_id:
             role_qs = role_qs.filter(school_id=school_id)
             dept_qs = dept_qs.filter(school_id=school_id)
             desg_qs = desg_qs.filter(school_id=school_id)
@@ -1139,7 +1143,7 @@ class LeaveDefineViewSet(SchoolScopedModelViewSet):
         section_qs = Section.objects.select_related("school_class")
         leave_type_qs = LeaveType.objects.all()
 
-        if school_id and not request.user.is_superuser:
+        if school_id:
             role_qs = role_qs.filter(school_id=school_id)
             staff_qs = staff_qs.filter(school_id=school_id)
             student_qs = student_qs.filter(school_id=school_id)
@@ -1261,7 +1265,7 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
                 {"staff": "Staff profile is not linked with this user. Please contact admin to map your staff account."}
             )
 
-        if not user.is_superuser and user.school_id and staff.school_id != user.school_id:
+        if user.school_id and staff.school_id != user.school_id:
             raise ValidationError({"staff": "Selected staff member does not belong to your school."})
 
         serializer.save(school=school, staff=staff)
@@ -1362,7 +1366,7 @@ class StaffAttendanceViewSet(SchoolScopedModelViewSet):
     def _active_staff_qs(self, request, department=None):
         """Active staff in the requesting user's school, optionally filtered by department."""
         staff_qs = Staff.objects.filter(status="active")
-        if not request.user.is_superuser and request.user.school_id:
+        if request.user.school_id:
             staff_qs = staff_qs.filter(school_id=request.user.school_id)
         if department:
             staff_qs = staff_qs.filter(department_id=department)

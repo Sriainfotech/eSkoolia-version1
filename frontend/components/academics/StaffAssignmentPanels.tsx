@@ -883,8 +883,10 @@ export function StaffAssignmentPanels() {
     try {
       const res = await apiFetch<CTAssignment[]>(`/api/v1/academics/staff/class-teachers/?academic_year_id=${yearId}`);
       setCtAssignments(Array.isArray(res) ? res : (res as { results?: CTAssignment[] }).results ?? []);
-    } catch {}
-  }, []);
+    } catch {
+      showToast("Failed to load class teacher assignments.", "error");
+    }
+  }, [showToast]);
 
   const fetchSubjectRows = useCallback(async (yearId: number) => {
     try {
@@ -893,15 +895,19 @@ export function StaffAssignmentPanels() {
         `/api/v1/academics/staff/subject-assignments/?academic_year_id=${yearId}`
       );
       setSubjectRows(Array.isArray(rows) ? rows : []);
-    } catch {}
-  }, []);
+    } catch {
+      showToast("Failed to load subject assignments. Please retry.", "error");
+    }
+  }, [showToast]);
 
   const fetchKpi = useCallback(async (yearId: number) => {
     try {
       const res = await apiFetch<KPI>(`/api/v1/academics/staff/kpi/?academic_year_id=${yearId}`);
       setKpi(res);
-    } catch {}
-  }, []);
+    } catch {
+      showToast("Failed to load assignment summary.", "error");
+    }
+  }, [showToast]);
 
   useEffect(() => {
     (async () => {

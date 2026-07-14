@@ -2201,6 +2201,18 @@ export default function FeeConfigurationPanel() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, marginBottom: 16 }}>
           <div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>FEE GROUP</div>
+            <select
+              value={typeGroupId}
+              onChange={event => setTypeGroupId(event.target.value ? Number(event.target.value) : "")}
+              style={inputField("Select group")}
+            >
+              <option value="">Select fee group</option>
+              {feeGroups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+            {typeErrors.fees_group ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.fees_group}</div> : null}
+          </div>
+          <div>
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>FEE TYPE NAME</div>
             <input
               placeholder="Tuition Fee"
@@ -2217,6 +2229,8 @@ export default function FeeConfigurationPanel() {
             />
             {typeErrors.name ? <div style={{ marginTop: 6, color: "#dc2626", fontSize: 12, fontWeight: 600 }}>{typeErrors.name}</div> : null}
           </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 14, marginBottom: 16 }}>
           <div>
             <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#A0A3B8", marginBottom: 6 }}>GL CODE</div>
             <input
@@ -2684,7 +2698,13 @@ export default function FeeConfigurationPanel() {
                   <option value="">Select fee type</option>
                   {feeTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
-                {scheduleErrors.fee_type && <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.fee_type}</div>}
+                {feeTypes.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "#b45309", marginTop: 4 }}>
+                    No fee types configured yet — create one in the Fee Types tab first.
+                  </div>
+                ) : scheduleErrors.fee_type ? (
+                  <div style={{ fontSize: 12, color: "#dc2626", marginTop: 4 }}>{scheduleErrors.fee_type}</div>
+                ) : null}
               </div>
               <div>
                 <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.07em", color: "#8a90a2", marginBottom: 6 }}>COLLECTION STRUCTURE</div>
@@ -2910,7 +2930,7 @@ export default function FeeConfigurationPanel() {
                  })()}
                  {termSettings.length === 0 && scheduleTermBreakdown.length === 0 && (
                    <div style={{ padding: 20, textAlign: "center", border: "1px dashed #E8E8EE", borderRadius: 12, color: "#8a90a2" }}>
-                     No terms configured. Please set them up in "School Term Settings" above.
+                     No terms configured. Please set them up in &quot;School Term Settings&quot; above.
                    </div>
                  )}
                </div>
@@ -4116,7 +4136,7 @@ export default function FeeConfigurationPanel() {
                     <span style={{ fontSize: 18, fontWeight: 700 }}>!</span>
                   </div>
                   <div>
-                    <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 5 }}>Delete "{deleteGroup.name}"?</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 5 }}>Delete &quot;{deleteGroup.name}&quot;?</div>
                     <div style={{ fontSize: 13, color: "#3b4150", lineHeight: 1.5 }}>
                       {hasDependents
                         ? "This fee group is in use and cannot be deleted."

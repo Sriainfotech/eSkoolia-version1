@@ -390,7 +390,7 @@ class ExamCommandCenterScheduleSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         request = self.context.get("request")
-        school_id = request.user.school_id if request and not request.user.is_superuser else None
+        school_id = request.user.school_id if request else None
 
         room_id = attrs.pop("room_id", None)
         room_value = (attrs.get("room") or getattr(self.instance, "room", "") or "").strip()

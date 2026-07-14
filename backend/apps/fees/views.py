@@ -197,15 +197,26 @@ class FeeAssignmentListCreateAPIView(BaseFeeAPIView):
                 academic_year__school=request.user.school,
             ).first()
             if existing:
-                patch_serializer = FeeAssignmentSerializer(existing, data=request.data, partial=True)
+                patch_serializer = FeeAssignmentSerializer(existing, data=request.data, partial=True, context={'request': request})
                 if patch_serializer.is_valid():
                     patch_serializer.save()
+                    reason = request.data.get('reason', '')
+                    FeeService._create_audit_event(
+                        user=request.user,
+                        event_type="fee.updated",
+                        instance=existing,
+                        reason=reason or f"Updated {existing.fees_type.name} for {existing.student}.",
+                    )
                     return Response(patch_serializer.data, status=status.HTTP_200_OK)
                 return Response(patch_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         # No existing assignment — full validation then create
-        serializer = FeeAssignmentSerializer(data=request.data)
+        serializer = FeeAssignmentSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            assignment = FeeService.assign_fees(created_by=request.user, **serializer.validated_data)
+            assignment = FeeService.assign_fees(
+                created_by=request.user,
+                reason=request.data.get('reason', ''),
+                **serializer.validated_data,
+            )
             return Response(FeeAssignmentSerializer(assignment).data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -220,7 +231,7 @@ class FeeAssignmentDetailAPIView(BaseFeeAPIView):
 
     def patch(self, request, pk):
         assignment = self.get_object(pk, request.user)
-        serializer = FeeAssignmentSerializer(assignment, data=request.data, partial=True)
+        serializer = FeeAssignmentSerializer(assignment, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -242,7 +253,7 @@ class PaymentListCreateAPIView(BaseFeeAPIView):
         return self.get_paginated_response(payments, PaymentSerializer, request)
 
     def post(self, request):
-        serializer = PaymentSerializer(data=request.data)
+        serializer = PaymentSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             payment = FeeService.post_payment(collected_by=request.user, **serializer.validated_data)
             return Response(PaymentSerializer(payment).data, status=status.HTTP_201_CREATED)
@@ -1518,12 +1529,13 @@ class YearEndGroupAmountsAPIView(BaseFeeAPIView):
         if not group_id:
             return Response({'error': 'group_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        get_object_or_404(FeesGroup, pk=group_id)
+        school = request.user.school
+        get_object_or_404(FeesGroup, pk=group_id, academic_year__school=school)
 
         updated, errors = [], []
         for item in amounts:
             try:
-                ft      = FeesType.objects.get(pk=item['fee_type_id'])
+                ft      = FeesType.objects.get(pk=item['fee_type_id'], academic_year__school=school)
                 new_amt = Decimal(str(item.get('new_amount', '0')))
                 if new_amt < 0:
                     errors.append(f'{ft.name}: amount cannot be negative')

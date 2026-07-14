@@ -57,8 +57,6 @@ class TenantQueryMixin:
     def get_queryset(self):
         user = self.request.user
         qs = self.model.objects.all()
-        if user.is_superuser:
-            return qs
         if user.school_id:
             return qs.filter(school_id=user.school_id)
         return qs.none()
@@ -166,10 +164,6 @@ class ClassViewSet(TenantQueryMixin, viewsets.ModelViewSet):
             Prefetch("sections", queryset=sections_qs)
         ).order_by("numeric_order", "name", "id")
 
-        if user.is_superuser:
-            if getattr(user, "school_id", None):
-                qs = qs.filter(school_id=user.school_id)
-            return qs.annotate(_total_students=DbCount("students", filter=Q(students__is_active=True)))
         if user.school_id:
             qs = qs.filter(school_id=user.school_id)
             return qs.annotate(_total_students=DbCount("students", filter=Q(students__is_active=True)))
@@ -220,8 +214,6 @@ class StreamViewSet(TenantQueryMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_superuser:
-            return Stream.objects.all().order_by("name")
         if user.school_id:
             # Lazily seed the default streams for this school on first access.
             try:
@@ -299,12 +291,6 @@ class SectionViewSet(viewsets.ModelViewSet):
         user = self.request.user
         qs = Section.objects.select_related("school_class__school")
         class_filter = (self.request.query_params.get("class") or self.request.query_params.get("school_class") or "").strip()
-        if user.is_superuser:
-            self._normalize_legacy_combined_sections(qs)
-            scoped = Section.objects.select_related("school_class__school")
-            if class_filter.isdigit():
-                scoped = scoped.filter(school_class_id=int(class_filter))
-            return scoped
         if user.school_id:
             scoped_qs = qs.filter(school_class__school_id=user.school_id)
             self._normalize_legacy_combined_sections(scoped_qs)
@@ -429,9 +415,7 @@ class SectionReplaceView(APIView):
             raise ValidationError({"capacity": "Capacity must be an integer between 1 and 200."})
 
         # --- scope class_ids to the user's school ---
-        if user.is_superuser:
-            base_qs = Class.objects.filter(id__in=class_ids)
-        elif getattr(user, "school_id", None):
+        if getattr(user, "school_id", None):
             base_qs = Class.objects.filter(id__in=class_ids, school_id=user.school_id)
         else:
             return Response({"detail": "No school access."}, status=status.HTTP_403_FORBIDDEN)
@@ -501,9 +485,7 @@ class SectionBulkDeleteView(APIView):
         except (TypeError, ValueError):
             raise ValidationError({"ids": "Must contain valid integer section IDs."})
 
-        if user.is_superuser:
-            qs = Section.objects.filter(id__in=ids)
-        elif getattr(user, "school_id", None):
+        if getattr(user, "school_id", None):
             qs = Section.objects.filter(id__in=ids, school_class__school_id=user.school_id)
         else:
             return Response({"detail": "No school access."}, status=status.HTTP_403_FORBIDDEN)
@@ -951,11 +933,10 @@ class BusStopViewSet(TenantQueryMixin, PermissionScopedViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = BusStop.objects.all()
-        if not user.is_superuser:
-            if user.school_id:
-                queryset = queryset.filter(route__school_id=user.school_id)
-            else:
-                return queryset.none()
+        if user.school_id:
+            queryset = queryset.filter(route__school_id=user.school_id)
+        else:
+            return queryset.none()
         route_id = self.request.query_params.get("route_id")
         if route_id:
             queryset = queryset.filter(route_id=route_id)
@@ -1061,11 +1042,10 @@ class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = BusLocation.objects.all()
-        if not user.is_superuser:
-            if user.school_id:
-                queryset = queryset.filter(vehicle__school_id=user.school_id)
-            else:
-                return queryset.none()
+        if user.school_id:
+            queryset = queryset.filter(vehicle__school_id=user.school_id)
+        else:
+            return queryset.none()
 
         route_id = self.request.query_params.get("route_id")
         if route_id:
@@ -1082,7 +1062,17 @@ class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
         if not vehicle_id:
             return Response({"error": "vehicle_id required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        assignment = AssignVehicle.objects.filter(vehicle_id=vehicle_id, active_status=True).select_related("route").first()
+        user = request.user
+        if not user.school_id:
+            return Response({"error": "vehicle_id required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        assignment = (
+            AssignVehicle.objects.filter(
+                vehicle_id=vehicle_id, active_status=True, school_id=user.school_id
+            )
+            .select_related("route")
+            .first()
+        )
         if not assignment:
             return Response({"vehicle_id": int(vehicle_id), "stops": [], "next_stop": None})
 
@@ -1361,11 +1351,10 @@ class BusLocationViewSet(TenantQueryMixin, PermissionScopedViewSet):
     def live(self, request):
         """Parent/operations live feed with latest status per vehicle."""
         vehicles = Vehicle.objects.all()
-        if not request.user.is_superuser:
-            if request.user.school_id:
-                vehicles = vehicles.filter(school_id=request.user.school_id)
-            else:
-                vehicles = vehicles.none()
+        if request.user.school_id:
+            vehicles = vehicles.filter(school_id=request.user.school_id)
+        else:
+            vehicles = vehicles.none()
 
         payload = []
         for vehicle in vehicles.order_by("vehicle_no"):
@@ -1496,11 +1485,10 @@ class TransportAlertViewSet(TenantQueryMixin, PermissionScopedViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = TransportAlert.objects.all()
-        if not user.is_superuser:
-            if user.school_id:
-                queryset = queryset.filter(vehicle__school_id=user.school_id)
-            else:
-                return queryset.none()
+        if user.school_id:
+            queryset = queryset.filter(vehicle__school_id=user.school_id)
+        else:
+            return queryset.none()
 
         vehicle_id = self.request.query_params.get("vehicle_id")
         alert_type = self.request.query_params.get("alert_type")
@@ -1533,11 +1521,10 @@ class BusRoutePickupUpdateViewSet(TenantQueryMixin, PermissionScopedViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = BusRoutePickupUpdate.objects.all()
-        if not user.is_superuser:
-            if user.school_id:
-                queryset = queryset.filter(vehicle__school_id=user.school_id)
-            else:
-                return queryset.none()
+        if user.school_id:
+            queryset = queryset.filter(vehicle__school_id=user.school_id)
+        else:
+            return queryset.none()
 
         vehicle_id = self.request.query_params.get("vehicle_id")
         stop_id = self.request.query_params.get("stop_id")
@@ -1564,11 +1551,10 @@ class VehicleDriverAssignmentViewSet(TenantQueryMixin, PermissionScopedViewSet):
 
     def get_queryset(self):
         queryset = VehicleDriverAssignment.objects.all()
-        if not self.request.user.is_superuser:
-            if self.request.user.school_id:
-                queryset = queryset.filter(vehicle__school_id=self.request.user.school_id)
-            else:
-                return queryset.none()
+        if self.request.user.school_id:
+            queryset = queryset.filter(vehicle__school_id=self.request.user.school_id)
+        else:
+            return queryset.none()
 
         vehicle_id = self.request.query_params.get("vehicle_id")
         if vehicle_id:
@@ -1584,11 +1570,10 @@ class TransportNotificationLogViewSet(TenantQueryMixin, PermissionScopedViewSet)
 
     def get_queryset(self):
         queryset = TransportNotificationLog.objects.all()
-        if not self.request.user.is_superuser:
-            if self.request.user.school_id:
-                queryset = queryset.filter(vehicle__school_id=self.request.user.school_id)
-            else:
-                return queryset.none()
+        if self.request.user.school_id:
+            queryset = queryset.filter(vehicle__school_id=self.request.user.school_id)
+        else:
+            return queryset.none()
 
         vehicle_id = self.request.query_params.get("vehicle_id")
         channel = self.request.query_params.get("channel")
@@ -1607,11 +1592,10 @@ class RoutePerformanceLogViewSet(TenantQueryMixin, PermissionScopedViewSet):
 
     def get_queryset(self):
         queryset = RoutePerformanceLog.objects.all()
-        if not self.request.user.is_superuser:
-            if self.request.user.school_id:
-                queryset = queryset.filter(route__school_id=self.request.user.school_id)
-            else:
-                return queryset.none()
+        if self.request.user.school_id:
+            queryset = queryset.filter(route__school_id=self.request.user.school_id)
+        else:
+            return queryset.none()
 
         route_id = self.request.query_params.get("route_id")
         vehicle_id = self.request.query_params.get("vehicle_id")

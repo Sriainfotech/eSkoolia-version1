@@ -80,17 +80,14 @@ class AttendanceTenantMixin:
             raise PermissionDenied("You do not have permission to perform this action.")
 
     def school_filter(self, request):
-        if getattr(request.user, "school_id", None):
-            return {"school_id": request.user.school_id}
-        return {} if request.user.is_superuser else {"school_id": request.user.school_id}
+        return {"school_id": request.user.school_id}
 
 class StudentAttendanceListCreateAPIView(AttendanceTenantMixin, APIView):
     def get(self, request):
         queryset = StudentAttendance.objects.select_related("student")
-        if not request.user.is_superuser:
-            if not request.user.school_id:
-                return Response([])
-            queryset = queryset.filter(school_id=request.user.school_id)
+        if not request.user.school_id:
+            return Response([])
+        queryset = queryset.filter(school_id=request.user.school_id)
 
         params = request.query_params
         month_raw = params.get("month")
@@ -158,9 +155,7 @@ class StudentAttendanceListCreateAPIView(AttendanceTenantMixin, APIView):
 
 class StudentAttendanceRetrieveUpdateDeleteAPIView(AttendanceTenantMixin, APIView):
     def get_object(self, request, pk):
-        queryset = StudentAttendance.objects.all()
-        if not request.user.is_superuser:
-            queryset = queryset.filter(school_id=request.user.school_id)
+        queryset = StudentAttendance.objects.filter(school_id=request.user.school_id)
         return get_object_or_404(queryset, pk=pk)
 
     def get(self, request, pk):
@@ -944,9 +939,9 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
         class_qs = Class.objects.filter(id=class_id, **school_scope)
         if not class_qs.exists():
             return Response({"detail": "Invalid class selected."}, status=status.HTTP_400_BAD_REQUEST)
-        section_qs = Section.objects.filter(id=section_id, school_class_id=class_id)
-        if not request.user.is_superuser:
-            section_qs = section_qs.filter(school_class__school_id=request.user.school_id)
+        section_qs = Section.objects.filter(
+            id=section_id, school_class_id=class_id, school_class__school_id=request.user.school_id
+        )
         if not section_qs.exists():
             return Response({"detail": "Invalid section selected for class."}, status=status.HTTP_400_BAD_REQUEST)
 

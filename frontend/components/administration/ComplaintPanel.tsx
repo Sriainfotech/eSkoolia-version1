@@ -336,8 +336,6 @@ export function ComplaintPanel() {
       action_taken: actionTaken.trim() || "",
       description: description.trim() || "",
     };
-    
-    console.log("DEBUG: Payload before sending:", payload);
 
     try {
       setSaving(true);
@@ -367,8 +365,7 @@ export function ComplaintPanel() {
       } else {
         // Use JSON when no file upload - don't pass headers, apiRequestWithRefresh handles it
         const jsonBody = JSON.stringify(payload);
-        console.log("DEBUG: JSON payload:", jsonBody);
-        
+
         if (editingId) {
           response = await apiRequestWithRefresh(`/api/v1/admissions/complaints/${editingId}/`, { method: "PATCH", body: jsonBody });
         } else {

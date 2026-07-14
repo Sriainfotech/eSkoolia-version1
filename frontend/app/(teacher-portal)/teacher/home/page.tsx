@@ -73,9 +73,9 @@ function QuickTile({ tile }: { tile: typeof TEACHER_QUICK[0] }) {
 // ── Class teacher card ────────────────────────────────────────────────────────
 
 function ClassTeacherCard({ me }: { me: TeacherMe }) {
+  const router = useRouter();
   const ct = me.class_teacher_for;
   if (!ct) return null;
-  const router = useRouter();
   return (
     <div style={{ background: "#fff", border: "1px solid var(--bd)", borderLeft: "3px solid var(--pu)", borderRadius: 12, padding: "16px 20px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
       <div style={{ width: 40, height: 40, borderRadius: 10, background: "var(--pu-soft)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>

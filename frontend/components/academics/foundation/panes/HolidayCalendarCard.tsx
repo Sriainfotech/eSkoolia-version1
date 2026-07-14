@@ -568,7 +568,7 @@ export default function HolidayCalendarCard({ years, currentYear, showToast }: P
                 <span>
                   <span className="font-semibold">Shift dates to target year</span>
                   <span className="block text-[11px] text-[#6F767E]">
-                    Re-base each holiday's date so it falls in the target academic year.
+                    Re-base each holiday&apos;s date so it falls in the target academic year.
                   </span>
                 </span>
               </label>

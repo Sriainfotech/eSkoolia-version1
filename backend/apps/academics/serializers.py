@@ -540,6 +540,19 @@ class HomeworkSubmissionSerializer(LegacyAliasMixin):
         read_only_fields = ["id", "homework", "student", "created_by", "created_at", "updated_at"]
         validators = []
 
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None:
+            school_id = getattr(user, "school_id", None)
+            homework = attrs.get("homework") or getattr(self.instance, "homework", None)
+            student = attrs.get("student") or getattr(self.instance, "student", None)
+            if homework is not None and homework.school_id != school_id:
+                raise serializers.ValidationError({"homework_id": "Invalid homework."})
+            if student is not None and student.school_id != school_id:
+                raise serializers.ValidationError({"student_id": "Invalid student."})
+        return attrs
+
 
 class HomeworkSerializer(LegacyAliasMixin):
     class_id = serializers.PrimaryKeyRelatedField(source="class_id_ref", queryset=Homework._meta.get_field("class_id_ref").related_model.objects.all())
@@ -1150,6 +1163,20 @@ class LessonPlannerCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError({"school_class": ["Class is required."]})
         if not lesson_date:
             raise serializers.ValidationError({"lesson_date": ["Lesson date is required."]})
+
+        for field_name, related in (
+            ("lesson", lesson),
+            ("subject_id", subject),
+            ("class_id", school_class),
+            ("teacher_id", teacher),
+            ("academic_year_id", academic_year),
+        ):
+            if related is not None and getattr(related, "school_id", None) != school.id:
+                raise serializers.ValidationError({field_name: [f"Invalid {field_name}."]})
+
+        # Section has no direct `school` FK — scope via its parent class.
+        if section is not None and section.school_class.school_id != school.id:
+            raise serializers.ValidationError({"section_id": ["Invalid section_id."]})
 
         if section and school_class and section.school_class_id != school_class.id:
             raise serializers.ValidationError({"section_id": ["Invalid class and section combination."]})
