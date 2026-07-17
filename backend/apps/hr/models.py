@@ -109,16 +109,22 @@ class Staff(models.Model):
     GENDER_MALE = "male"
     GENDER_FEMALE = "female"
     GENDER_OTHER = "other"
+    GENDER_PREFER_NOT_TO_SAY = "prefer_not_to_say"
     GENDER_CHOICES = [
         (GENDER_MALE, "Male"),
         (GENDER_FEMALE, "Female"),
         (GENDER_OTHER, "Other"),
+        (GENDER_PREFER_NOT_TO_SAY, "Prefer not to say"),
     ]
     MARITAL_SINGLE = "single"
     MARITAL_MARRIED = "married"
+    MARITAL_DIVORCED = "divorced"
+    MARITAL_WIDOWED = "widowed"
     MARITAL_CHOICES = [
         (MARITAL_SINGLE, "Single"),
         (MARITAL_MARRIED, "Married"),
+        (MARITAL_DIVORCED, "Divorced"),
+        (MARITAL_WIDOWED, "Widowed"),
     ]
     CONTRACT_PERMANENT = "permanent"
     CONTRACT_CONTRACT = "contract"
@@ -145,7 +151,7 @@ class Staff(models.Model):
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=32, blank=True)
     emergency_mobile = models.CharField(max_length=32, blank=True)
-    gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True)
+    gender = models.CharField(max_length=20, choices=GENDER_CHOICES, blank=True)
     marital_status = models.CharField(max_length=12, choices=MARITAL_CHOICES, blank=True)
     driving_license = models.CharField(max_length=80, blank=True)
     staff_photo = models.ImageField(upload_to="staff/photos/", blank=True)
@@ -225,6 +231,21 @@ class StaffDocument(models.Model):
     DOCUMENT_AADHAR_CARD = "aadhar_card"
     DOCUMENT_DRIVING_LICENSE = "driving_license"
     DOCUMENT_OTHER = "other"
+    # Added so onboarding-wizard documents (StaffOnboardDocument.doc_key) can be
+    # copied over with their real type preserved instead of collapsing to "other".
+    DOCUMENT_SIGNATURE = "signature"
+    DOCUMENT_PAN_CARD = "pan_card"
+    DOCUMENT_PASSPORT_PHOTO = "passport_photo"
+    DOCUMENT_BANK_PROOF = "bank_proof"
+    DOCUMENT_ADDRESS_PROOF = "address_proof"
+    DOCUMENT_TWELFTH_CERTIFICATE = "twelfth_certificate"
+    DOCUMENT_DEGREE_CERTIFICATE = "degree_certificate"
+    DOCUMENT_BED_CERTIFICATE = "bed_certificate"
+    DOCUMENT_EXPERIENCE_LETTER = "experience_letter"
+    DOCUMENT_NOC_CERTIFICATE = "noc_certificate"
+    DOCUMENT_MEDICAL_FITNESS_CERTIFICATE = "medical_fitness_certificate"
+    DOCUMENT_POLICE_VERIFICATION_CERTIFICATE = "police_verification_certificate"
+    DOCUMENT_DISABILITY_CERTIFICATE = "disability_certificate"
     DOCUMENT_TYPE_CHOICES = [
         (DOCUMENT_RESUME, "Resume"),
         (DOCUMENT_JOINING_LETTER, "Joining Letter"),
@@ -233,11 +254,48 @@ class StaffDocument(models.Model):
         (DOCUMENT_AADHAR_CARD, "Aadhar Card"),
         (DOCUMENT_DRIVING_LICENSE, "Driving License"),
         (DOCUMENT_OTHER, "Other"),
+        (DOCUMENT_SIGNATURE, "Signature"),
+        (DOCUMENT_PAN_CARD, "PAN Card"),
+        (DOCUMENT_PASSPORT_PHOTO, "Passport Photo"),
+        (DOCUMENT_BANK_PROOF, "Bank Proof"),
+        (DOCUMENT_ADDRESS_PROOF, "Address Proof"),
+        (DOCUMENT_TWELFTH_CERTIFICATE, "Twelfth Certificate"),
+        (DOCUMENT_DEGREE_CERTIFICATE, "Degree Certificate"),
+        (DOCUMENT_BED_CERTIFICATE, "B.Ed / D.El.Ed Certificate"),
+        (DOCUMENT_EXPERIENCE_LETTER, "Experience Letter"),
+        (DOCUMENT_NOC_CERTIFICATE, "No-Objection Certificate"),
+        (DOCUMENT_MEDICAL_FITNESS_CERTIFICATE, "Medical Fitness Certificate"),
+        (DOCUMENT_POLICE_VERIFICATION_CERTIFICATE, "Police Verification Certificate"),
+        (DOCUMENT_DISABILITY_CERTIFICATE, "Disability Certificate"),
     ]
+
+    # Maps the onboarding wizard's free-form doc_key (StaffOnboardDocument.doc_key)
+    # to a StaffDocument.document_type choice. Unmapped keys fall back to "other".
+    ONBOARD_DOC_KEY_MAP = {
+        "signature": DOCUMENT_SIGNATURE,
+        "aadhaar": DOCUMENT_AADHAR_CARD,
+        "pan": DOCUMENT_PAN_CARD,
+        "passport_photo": DOCUMENT_PASSPORT_PHOTO,
+        "bank_proof": DOCUMENT_BANK_PROOF,
+        "address_proof": DOCUMENT_ADDRESS_PROOF,
+        "marksheet_10": DOCUMENT_TENTH_CERTIFICATE,
+        "marksheet_12": DOCUMENT_TWELFTH_CERTIFICATE,
+        "degree": DOCUMENT_DEGREE_CERTIFICATE,
+        "bed": DOCUMENT_BED_CERTIFICATE,
+        "experience": DOCUMENT_EXPERIENCE_LETTER,
+        "noc": DOCUMENT_NOC_CERTIFICATE,
+        "medical_cert": DOCUMENT_MEDICAL_FITNESS_CERTIFICATE,
+        "police_verification": DOCUMENT_POLICE_VERIFICATION_CERTIFICATE,
+        # Uploaded from Step 7 (Medical & Fitness), not the Step 9 checklist —
+        # "medical_fitness_cert" intentionally shares the same document_type
+        # as Step 9's "medical_cert" since they're the same real-world document.
+        "medical_fitness_cert": DOCUMENT_MEDICAL_FITNESS_CERTIFICATE,
+        "disability_cert": DOCUMENT_DISABILITY_CERTIFICATE,
+    }
 
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="staff_documents")
     staff = models.ForeignKey(Staff, on_delete=models.CASCADE, related_name="documents")
-    document_type = models.CharField(max_length=32, choices=DOCUMENT_TYPE_CHOICES)
+    document_type = models.CharField(max_length=40, choices=DOCUMENT_TYPE_CHOICES)
     file_path = models.CharField(max_length=500)
     file_name = models.CharField(max_length=255)
     file_size = models.PositiveBigIntegerField(default=0)

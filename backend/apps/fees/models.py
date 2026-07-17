@@ -405,6 +405,12 @@ class Payment(models.Model):
     note = models.TextField(blank=True)
 
     collected_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name='collected_payments')
+    # Free-text cash-handling annotations, distinct from collected_by (the real
+    # logged-in user, set server-side) — a shared login at a collection
+    # counter may need to record who physically handled the cash and which
+    # counter/drawer it went through.
+    collected_by_note = models.CharField(max_length=120, blank=True)
+    counter = models.CharField(max_length=60, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

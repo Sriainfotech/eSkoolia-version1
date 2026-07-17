@@ -1,5 +1,82 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — GitHub Copilot (17/07/2026)
+
+**Area:** Cross-cutting tenancy, access-control, and data-integrity fixes across backend + frontend
+
+### What Changed
+
+This pass tightened school scoping and fixed several data paths that were either leaking across tenants or accepting inputs that never reached the right model fields.
+
+#### Tenancy and Access Control
+- Added shared public-path handling in `backend/apps/tenancy/context.py`, `middleware.py`, and `auth.py` so auth/public routes stay tenant-agnostic without tripping tenant-aware JWT checks.
+- Switched the parent portal and teacher portal to `TenantAwareJWTAuthentication` in the portal viewsets so those routes resolve under the active school context.
+- Removed cross-school bypasses from communication and login-permission flows, and added fail-closed checks where bulk admin actions would otherwise run without a school scope.
+- Scoped AI request logs, chat invitations, and bulk login-access/reset actions to the acting user’s school.
+
+#### Fees and Payments
+- Added `collected_by_note` and `counter` to `Payment` with a matching migration, and exposed them through the fees serializer/API.
+- Fixed fee-assignment calculations to account for payments already posted against an assignment instead of relying on the computed Python status property.
+- Added school-scoped validation for fee groups, fee types, and academic years, and updated the fee collection UI to send transaction references plus the new payment metadata.
+- Added late-fee rule parsing and calculation in the collection UI, and updated reports/config to use the real attendance/filter codes stored by the backend.
+
+#### Attendance, Exams, and Students
+- Added `middle_name` to `Student` with migration, serializer support, and frontend wiring.
+- Validated attendance records so a student cannot be attached to another school’s attendance row.
+- Zeroed absent exam totals before report-card and merit calculations so stale marks do not count.
+- Preserved online exam `instruction` and `auto_mark` when reopening an existing exam record.
+- Sent pickup time and pickup-by data from teacher attendance, matching the admin attendance flow.
+
+#### HR Onboarding and Staff Data
+- Added real staff document types and onboarding document-key mapping so uploaded onboarding documents copy into `StaffDocument` with the correct type.
+- Enforced mandatory onboarding documents server-side before staff creation.
+- Expanded staff demographic/document choices and widened the corresponding fields/migrations.
+- Reworked staff serializer validation to match the frontend payload shape for nominees, emergency contacts, qualifications, previous employment, and allowance fields.
+- Wired medical/disability certificate uploads directly from the onboarding wizard so those files are persisted instead of staying local-only.
+
+#### Super Admin and School Provisioning
+- Added plan/capacity fields to school tenant provisioning and update serializers/views, including `trial_ends_at` recomputation.
+- Kept `School.is_active` in sync with tenant status changes.
+- Fixed school provisioning metadata handling in the super-admin serializers and views.
+
+#### Frontend and UX Fixes
+- Removed school-admin wildcard permission bypasses from module guards so access now follows assigned permission codes.
+- Fixed pagination error handling in role, fees, inventory, and student lists so out-of-range pages reset cleanly.
+- Corrected student onboarding UI to use a real middle-name field and the proper gender/custom-gender mapping.
+- Updated the bug-fix specification document and kept the generated TypeScript build info in sync with the frontend changes.
+
+### Files Touched Most Heavily
+- `backend/apps/tenancy/*`
+- `backend/apps/fees/*`
+- `backend/apps/hr/*`
+- `backend/apps/attendance/*`
+- `backend/apps/communication/*`
+- `backend/apps/chat/*`
+- `backend/apps/exams/*`
+- `backend/apps/students/*`
+- `backend/apps/super_admin/*`
+- `backend/apps/teacher_portal/*`
+- `backend/apps/parent_portal/*`
+- `frontend/app/(dashboard)/hr/onboard/page.tsx`
+- `frontend/components/fees/*`
+- `frontend/components/students/*`
+- `frontend/components/access-control/*`
+- `frontend/components/inventory/*`
+- `frontend/components/exams/*`
+- `frontend/hooks/useHrApi.ts`
+- `frontend/hooks/usePermissions.ts`
+- `frontend/lib/fees-api.ts`
+- `frontend/lib/portal-modules.ts`
+- `frontend/lib/reports-config.ts`
+
+### Verification Notes
+- Backend changes were paired with new migrations where the schema changed.
+- Frontend state/validation changes were updated alongside the consuming components so the API payloads and form state match.
+- `eskoolia_bug_fixes.html` was updated to reflect the latest audit status and the remaining intentionally open items.
+
+### Status
+✅ Current repo state reflects the tenancy hardening, fees/student/HR fixes, portal auth updates, and matching documentation changes from this pass.
+
 ## Update — GitHub Copilot (14/07/2026)
 
 **Area:** Frontend Code Quality — ESLint Production Readiness

@@ -113,7 +113,7 @@ export async function updateDepartment(id: number, body: Partial<Department>) {
 
 export async function deleteDepartment(id: number) {
   const res = await apiRequestWithRefreshResponse(`/api/v1/hr/departments/${id}/`, { method: "DELETE" });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
 }
 
 // ─── Designations ────────────────────────────────────────────────────────────
@@ -152,7 +152,7 @@ export async function updateDesignation(id: number, body: Partial<Designation>) 
 
 export async function deleteDesignation(id: number) {
   const res = await apiRequestWithRefreshResponse(`/api/v1/hr/designations/${id}/`, { method: "DELETE" });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
 }
 
 export async function reorderDesignations(items: { id: number; sort_order: number }[]): Promise<void> {
@@ -308,7 +308,7 @@ export async function updateStaffStatus(id: number, status: string, note?: strin
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status, note }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<Staff>;
 }
 
@@ -454,7 +454,7 @@ export async function createLeaveType(body: Partial<LeaveType>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<LeaveType>;
 }
 
@@ -464,7 +464,7 @@ export async function updateLeaveType(id: number, body: Partial<LeaveType>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<LeaveType>;
 }
 
@@ -494,7 +494,7 @@ export async function applyLeave(body: Partial<LeaveApplication>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<LeaveApplication>;
 }
 
@@ -510,7 +510,7 @@ export async function updateLeaveStatus(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: verb, note }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<LeaveApplication>;
 }
 
@@ -566,7 +566,7 @@ export async function saveStaffAttendanceBulk(rows: StaffAttendanceMark[]) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rows }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<{ detail: string; count: number }>;
 }
 
@@ -655,7 +655,7 @@ export async function createOffboarding(body: Partial<OffboardingRecord>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<OffboardingRecord>;
 }
 
@@ -665,7 +665,7 @@ export async function updateOffboarding(id: number, body: Partial<OffboardingRec
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<OffboardingRecord>;
 }
 
@@ -675,7 +675,7 @@ export async function completeOffboarding(id: number) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<OffboardingRecord>;
 }
 

@@ -1401,6 +1401,16 @@ class ExamMarksRegisterStoreAPIView(ExamTenantMixin, APIView):
             elif absent_raw not in (None, "", False, 0, "0"):
                 is_absent = str(absent_raw) == str(record_id)
 
+            # An absent student's total must not count toward report cards or
+            # merit rankings — those read total_marks/total_gpa_point directly
+            # (ExamReportStudentSearchAPIView, ExamMeritSearchAPIView). Zero the
+            # roll-up here; per-part marks in parts_payload are left as entered
+            # (whatever was on the sheet before the student was marked absent)
+            # since that's a separate audit-trail concern, not what merit/report
+            # generation reads.
+            if is_absent:
+                total_marks = Decimal("0.00")
+
             percent = Decimal("0.00")
             if full_marks > 0:
                 percent = (total_marks * Decimal("100.00")) / full_marks

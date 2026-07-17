@@ -1116,33 +1116,55 @@ class StaffSerializer(serializers.ModelSerializer):
             if len(emergency_phone_raw) != 10 or emergency_phone_raw[0] not in "6789":
                 raise serializers.ValidationError({"emergency_phone": "Please enter a valid mobile number."})
 
-        emergency_alt_raw = re.sub(r"\D", "", str(self.initial_data.get("emergency_alt_mobile", "")))
-        if emergency_alt_raw:
-            if len(emergency_alt_raw) != 10 or emergency_alt_raw[0] not in "6789":
-                raise serializers.ValidationError({"emergency_alt_mobile": "Please enter a valid mobile number."})
-            if emergency_phone_raw and emergency_alt_raw == emergency_phone_raw:
-                raise serializers.ValidationError({"emergency_alt_mobile": "Alternate mobile cannot be the same as primary mobile."})
+        # The frontend sends alt_mobile nested inside each entry of the
+        # top-level "emergency_contacts" JSON array, not as a flat
+        # "emergency_alt_mobile" key — check every entry that has one.
+        _ec_raw = self.initial_data.get("emergency_contacts") or []
+        if isinstance(_ec_raw, str):
+            try:
+                _ec_raw = json.loads(_ec_raw)
+            except (ValueError, TypeError):
+                _ec_raw = []
+        if isinstance(_ec_raw, list):
+            for _ec in _ec_raw:
+                if not isinstance(_ec, dict):
+                    continue
+                _ec_mobile = re.sub(r"\D", "", str(_ec.get("mobile") or ""))
+                _ec_alt = re.sub(r"\D", "", str(_ec.get("alt_mobile") or ""))
+                if _ec_alt:
+                    if len(_ec_alt) != 10 or _ec_alt[0] not in "6789":
+                        raise serializers.ValidationError({"emergency_alt_mobile": "Please enter a valid mobile number."})
+                    if _ec_mobile and _ec_alt == _ec_mobile:
+                        raise serializers.ValidationError({"emergency_alt_mobile": "Alternate mobile cannot be the same as primary mobile."})
 
-        # ========== NOMINEE NAME VALIDATION ==========
-        # Check any nom_name_N keys in initial_data
-        for k, v in self.initial_data.items():
-            if k.startswith("nom_name_"):
-                _n = str(v).strip()
+        # ========== NOMINEE VALIDATION ==========
+        # Frontend sends nominees as a top-level JSON-stringified array
+        # (each row: {name, relation, share}), not nested inside custom_field
+        # or as flat nom_name_N keys — read the actual shape it sends.
+        _nominees_raw = self.initial_data.get("nominees") or []
+        if isinstance(_nominees_raw, str):
+            try:
+                _nominees_raw = json.loads(_nominees_raw)
+            except (ValueError, TypeError):
+                _nominees_raw = []
+        if isinstance(_nominees_raw, list):
+            _total_share = 0
+            _has_any_share = False
+            for _nom in _nominees_raw:
+                if not isinstance(_nom, dict):
+                    continue
+                _n = str(_nom.get("name") or "").strip()
                 if _n and not _is_valid_person_name(_n):
                     raise serializers.ValidationError({"nominees": "Please enter a valid name using alphabets only."})
-        # Also check if nominees are nested inside custom_field JSON
-        _cf = self.initial_data.get("custom_field") or {}
-        if isinstance(_cf, str):
-            try:
-                _cf = json.loads(_cf)
-            except (ValueError, TypeError):
-                _cf = {}
-        if isinstance(_cf, dict):
-            for _nom in (_cf.get("nominees") or []):
-                if isinstance(_nom, dict):
-                    _n = str(_nom.get("name") or "").strip()
-                    if _n and not _is_valid_person_name(_n):
-                        raise serializers.ValidationError({"nominees": "Please enter a valid name using alphabets only."})
+                _share_raw = str(_nom.get("share") or "").strip()
+                if _share_raw:
+                    _has_any_share = True
+                    try:
+                        _total_share += float(_share_raw)
+                    except ValueError:
+                        raise serializers.ValidationError({"nominees": "Nominee share must be a number."})
+            if _has_any_share and len(_nominees_raw) > 1 and _total_share != 100:
+                raise serializers.ValidationError({"nominees": "Total nominee share must equal 100%."})
 
         # ========== BANK INFO VALIDATION ==========
         # Account Holder Name: Letters, spaces, hyphens, apostrophes; no gibberish
@@ -1332,11 +1354,11 @@ class StaffSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({field: f"Please enter a valid {label.lower()} name."})
 
         _validate_payroll_amount(
-            self.initial_data.get("hra", ""),
+            self.initial_data.get("hra", self.initial_data.get("hra_input", "")),
             "hra", "HRA",
         )
         _validate_payroll_amount(
-            self.initial_data.get("da", ""),
+            self.initial_data.get("da", self.initial_data.get("da_input", "")),
             "da", "DA",
         )
         _validate_payroll_amount(
@@ -1361,7 +1383,7 @@ class StaffSerializer(serializers.ModelSerializer):
 
         _basic_val = _to_decimal(basic_salary)
         if _basic_val > 0:
-            _hra_raw = self.initial_data.get("hra", "") or ""
+            _hra_raw = self.initial_data.get("hra") or self.initial_data.get("hra_input") or ""
             _hra_val = _to_decimal(_hra_raw) if str(_hra_raw).strip() else Decimal("0")
             _hra_limit = (_basic_val * Decimal("0.50")).quantize(Decimal("1"), rounding="ROUND_HALF_UP")
             if _hra_val > _hra_limit:
@@ -1369,7 +1391,7 @@ class StaffSerializer(serializers.ModelSerializer):
                     "hra": f"HRA cannot exceed 50% of Basic Salary (max ₹{_hra_limit:,})."
                 })
 
-            _da_raw = self.initial_data.get("da", "") or ""
+            _da_raw = self.initial_data.get("da") or self.initial_data.get("da_input") or ""
             _da_val = _to_decimal(_da_raw) if str(_da_raw).strip() else Decimal("0")
             _da_limit = (_basic_val * Decimal("0.50")).quantize(Decimal("1"), rounding="ROUND_HALF_UP")
             if _da_val > _da_limit:
@@ -1405,7 +1427,8 @@ class StaffSerializer(serializers.ModelSerializer):
                 })
 
         # Custom allowance rows: expected as JSON array [{"label": "...", "amount": "..."}, ...]
-        _custom_allowances_raw = self.initial_data.get("custom_allowances", [])
+        # Frontend serializes this state under "custom_earnings", not "custom_allowances".
+        _custom_allowances_raw = self.initial_data.get("custom_allowances") or self.initial_data.get("custom_earnings") or []
         if isinstance(_custom_allowances_raw, str):
             try:
                 import json as _json
@@ -1461,15 +1484,20 @@ class StaffSerializer(serializers.ModelSerializer):
             """3+ consecutive identical characters is gibberish."""
             return bool(re.search(r"(.)\1{2,}", v, re.IGNORECASE))
 
-        # --- Qualification rows from initial_data ---
-        _qual_universities = [
-            str(self.initial_data.get(k, "")).strip()
-            for k in self.initial_data
-            if k.startswith("qual_university_")
-        ]
-        # Also accept flat fields if wizard sends as single block
-        _qual_universities += [str(self.initial_data.get("qual_university", "")).strip()]
+        # --- Qualification rows ---
+        # The frontend sends a single top-level "qualifications" JSON array
+        # (rows shaped {degree, university, year, spec, pct}), not indexed
+        # qual_university_N / flat qual_university keys — parse the real shape.
+        _qualifications_raw = self.initial_data.get("qualifications") or []
+        if isinstance(_qualifications_raw, str):
+            try:
+                _qualifications_raw = json.loads(_qualifications_raw)
+            except (ValueError, TypeError):
+                _qualifications_raw = []
+        if not isinstance(_qualifications_raw, list):
+            _qualifications_raw = []
 
+        _qual_universities = [str(_row.get("university") or "").strip() for _row in _qualifications_raw if isinstance(_row, dict)]
         for _uni in _qual_universities:
             if not _uni:
                 continue
@@ -1482,24 +1510,14 @@ class StaffSerializer(serializers.ModelSerializer):
             if _is_gibberish_name(_uni):
                 raise serializers.ValidationError({"qual_university": "University / Board contains repeated characters."})
 
-        _qual_years = [
-            str(self.initial_data.get(k, "")).strip()
-            for k in self.initial_data
-            if k.startswith("qual_year_")
-        ] + [str(self.initial_data.get("qual_year", "")).strip()]
-
+        _qual_years = [str(_row.get("year") or "").strip() for _row in _qualifications_raw if isinstance(_row, dict)]
         for _yr in _qual_years:
             if not _yr:
                 continue
             if not re.fullmatch(r"\d{4}", _yr) or not (1950 <= int(_yr) <= _this_year + 1):
                 raise serializers.ValidationError({"qual_year": "Please enter a valid year."})
 
-        _qual_specs = [
-            str(self.initial_data.get(k, "")).strip()
-            for k in self.initial_data
-            if k.startswith("qual_spec_")
-        ] + [str(self.initial_data.get("qual_spec", "")).strip()]
-
+        _qual_specs = [str(_row.get("spec") or "").strip() for _row in _qualifications_raw if isinstance(_row, dict)]
         for _spec in _qual_specs:
             if not _spec:
                 continue
@@ -1510,12 +1528,7 @@ class StaffSerializer(serializers.ModelSerializer):
             if _is_gibberish_name(_spec):
                 raise serializers.ValidationError({"qual_spec": "Specialisation contains repeated characters."})
 
-        _qual_pcts = [
-            str(self.initial_data.get(k, "")).strip()
-            for k in self.initial_data
-            if k.startswith("qual_pct_")
-        ] + [str(self.initial_data.get("qual_pct", "")).strip()]
-
+        _qual_pcts = [str(_row.get("pct") or "").strip() for _row in _qualifications_raw if isinstance(_row, dict)]
         for _pct in _qual_pcts:
             if not _pct:
                 continue
@@ -1553,12 +1566,19 @@ class StaffSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"subjects_qualified": "Subjects contains repeated characters."})
 
         # --- Previous employment rows ---
-        _prev_employers = [
-            str(self.initial_data.get(k, "")).strip()
-            for k in self.initial_data
-            if k.startswith("prev_employer_")
-        ] + [str(self.initial_data.get("prev_employer", "")).strip()]
+        # Same story as qualifications: a single top-level "previous_employment"
+        # JSON array (rows: {employer, designation, experience, from, to, salary}),
+        # not indexed prev_employer_N / flat prev_employer keys.
+        _prev_employment_raw = self.initial_data.get("previous_employment") or []
+        if isinstance(_prev_employment_raw, str):
+            try:
+                _prev_employment_raw = json.loads(_prev_employment_raw)
+            except (ValueError, TypeError):
+                _prev_employment_raw = []
+        if not isinstance(_prev_employment_raw, list):
+            _prev_employment_raw = []
 
+        _prev_employers = [str(_row.get("employer") or "").strip() for _row in _prev_employment_raw if isinstance(_row, dict)]
         for _emp in _prev_employers:
             if not _emp:
                 continue
@@ -1575,12 +1595,7 @@ class StaffSerializer(serializers.ModelSerializer):
             if re.search(r"(..)\1{2,}", _emp, re.IGNORECASE):
                 raise serializers.ValidationError({"prev_employer": "Enter a valid employer name."})
 
-        _prev_desigs = [
-            str(self.initial_data.get(k, "")).strip()
-            for k in self.initial_data
-            if k.startswith("prev_designation_")
-        ] + [str(self.initial_data.get("prev_designation", "")).strip()]
-
+        _prev_desigs = [str(_row.get("designation") or "").strip() for _row in _prev_employment_raw if isinstance(_row, dict)]
         for _des in _prev_desigs:
             if not _des:
                 continue
@@ -1597,12 +1612,7 @@ class StaffSerializer(serializers.ModelSerializer):
             if re.search(r"(..)\1{2,}", _des, re.IGNORECASE):
                 raise serializers.ValidationError({"prev_designation": "Enter a valid designation."})
 
-        _prev_exps = [
-            str(self.initial_data.get(k, "")).strip()
-            for k in self.initial_data
-            if k.startswith("prev_experience_")
-        ] + [str(self.initial_data.get("prev_experience", "")).strip()]
-
+        _prev_exps = [str(_row.get("experience") or "").strip() for _row in _prev_employment_raw if isinstance(_row, dict)]
         for _exp in _prev_exps:
             if not _exp:
                 continue
@@ -1613,12 +1623,7 @@ class StaffSerializer(serializers.ModelSerializer):
             if not re.fullmatch(r"\d+(\.\d)?", _exp) or _exp_val < 0 or _exp_val > 50:
                 raise serializers.ValidationError({"prev_experience": "Experience must be between 0 and 50 years."})
 
-        _prev_salaries = [
-            str(self.initial_data.get(k, "")).strip()
-            for k in self.initial_data
-            if k.startswith("prev_salary_")
-        ] + [str(self.initial_data.get("prev_salary", "")).strip()]
-
+        _prev_salaries = [str(_row.get("salary") or "").strip() for _row in _prev_employment_raw if isinstance(_row, dict)]
         for _sal in _prev_salaries:
             if not _sal:
                 continue
@@ -1654,10 +1659,6 @@ class StaffSerializer(serializers.ModelSerializer):
         _dob = date_of_birth  # already parsed above
         _min_work_date = add_years_safe(_dob, 18) if _dob else None
 
-        _from_keys = sorted(k for k in self.initial_data if k.startswith("prev_from_"))
-        _to_keys   = sorted(k for k in self.initial_data if k.startswith("prev_to_"))
-        _emp_keys  = sorted(k for k in self.initial_data if k.startswith("prev_employer_"))
-
         def _validate_prev_dates(from_str, to_str, employer_str):
             has_employer = bool(employer_str.strip())
             _from_dt = None
@@ -1690,23 +1691,14 @@ class StaffSerializer(serializers.ModelSerializer):
             if _from_dt and _min_work_date and _from_dt < _min_work_date:
                 raise serializers.ValidationError({"prev_from": "Employment start date is not valid based on employee age."})
 
-        # Indexed rows
-        for _fk, _tk, _ek in zip(
-            _from_keys,
-            _to_keys,
-            _emp_keys if _emp_keys else [""] * len(_from_keys),
-        ):
+        for _row in _prev_employment_raw:
+            if not isinstance(_row, dict):
+                continue
             _validate_prev_dates(
-                str(self.initial_data.get(_fk, "")).strip(),
-                str(self.initial_data.get(_tk, "")).strip(),
-                str(self.initial_data.get(_ek, "")).strip() if _ek else "",
+                str(_row.get("from") or "").strip(),
+                str(_row.get("to") or "").strip(),
+                str(_row.get("employer") or "").strip(),
             )
-        # Flat keys
-        _validate_prev_dates(
-            str(self.initial_data.get("prev_from", "")).strip(),
-            str(self.initial_data.get("prev_to",   "")).strip(),
-            str(self.initial_data.get("prev_employer", "")).strip(),
-        )
 
 
 

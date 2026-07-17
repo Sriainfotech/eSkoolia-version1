@@ -180,12 +180,18 @@ export function StudentUnassignedPanel() {
       setTotalCount(meta?.count ?? items.length);
       setSelectedIds([]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "";
-      if (message === "401") {
+      // Check the real HTTP status (attached by apiRequestWithRefresh), not
+      // message text — the previous message.includes("404") never matched
+      // because DRF's error detail for an out-of-range page ("Invalid page.")
+      // never literally contains the digits "404", so this branch was dead
+      // code and every such error fell through to the generic message below.
+      const apiErr = err as { status?: number };
+      if (apiErr?.status === 401) {
         setListError("Session expired. Please login again.");
-      } else if (message.includes("404")) {
-        setListError("No student data endpoint found (404).");
-      } else if (message.includes("500")) {
+      } else if (apiErr?.status === 404 && targetPage !== 1) {
+        setPage(1);
+        setListError("Invalid page. Reset to page 1.");
+      } else if (apiErr?.status === 500) {
         setListError("Server error while loading students (500).");
       } else {
         setListError("Failed to load data.");

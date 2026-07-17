@@ -46,10 +46,8 @@ class FeesGroupListCreateAPIView(BaseFeeAPIView):
         return self.get_paginated_response(groups, FeesGroupSerializer, request)
 
     def post(self, request):
-        serializer = FeesGroupSerializer(data=request.data)
+        serializer = FeesGroupSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            # Ensure academic_year belongs to the user's school
-            # This check should be more robust in a real app
             serializer.save(created_by=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -65,7 +63,7 @@ class FeesGroupDetailAPIView(BaseFeeAPIView):
 
     def patch(self, request, pk):
         group = self.get_object(pk, request.user)
-        serializer = FeesGroupSerializer(group, data=request.data, partial=True)
+        serializer = FeesGroupSerializer(group, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)

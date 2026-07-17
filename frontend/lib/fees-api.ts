@@ -87,6 +87,8 @@ export type FeesPayment = {
   method: "cash" | "bank" | "online" | "wallet" | "cheque";
   transaction_reference?: string;
   note?: string;
+  collected_by_note?: string;
+  counter?: string;
   paid_at: string;
 };
 

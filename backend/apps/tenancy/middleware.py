@@ -16,7 +16,13 @@ from django.db import connection
 from django.http import Http404, HttpRequest, HttpResponse
 from django.utils.deprecation import MiddlewareMixin
 
-from .context import clear_tenant_context, is_multi_tenancy_enabled, set_current_tenant
+from .context import (
+    PUBLIC_PATH_PREFIXES,
+    clear_tenant_context,
+    is_multi_tenancy_enabled,
+    is_public_path,
+    set_current_tenant,
+)
 from .models import SchoolTenant
 from .resolvers import get_tenant_from_request
 
@@ -37,27 +43,11 @@ class TenantMainMiddleware(MiddlewareMixin):
     """
 
     # Paths that must be reachable before tenant context is established
-    # (login page branding, auth tokens, admin, static assets).
-    # NOTE: All /api/v1/auth/ endpoints intentionally run against the public
-    # schema so that me/, logout/, change-password/ work for users that still
-    # live in the public schema (pre-schema-migration schools). Those views
-    # declare authentication_classes = [JWTAuthentication] (not the
-    # TenantAwareJWT variant) to avoid the tenant-context check.
-    _PUBLIC_PATH_PREFIXES = (
-        "/api/v1/tenancy/school-info/",
-        # All /api/v1/auth/ endpoints (login, refresh, logout, me,
-        # change-password, forgot/verify/reset-password, health) run against
-        # the public schema — see class docstring above.
-        "/api/v1/auth/",
-        "/api/v1/super-admin/",
-        "/admin/",
-        "/static/",
-        "/media/",
-        "/health/",
-        # Global/static reference data — not per-tenant, always served from public schema.
-        "/api/v1/master/",
-        "/api/master/",
-    )
+    # (login page branding, auth tokens, admin, static assets, global
+    # reference data). Shared with TenantAwareJWTAuthentication via
+    # apps.tenancy.context.PUBLIC_PATH_PREFIXES / is_public_path() so the
+    # two layers can't disagree about which paths are tenant-agnostic.
+    _PUBLIC_PATH_PREFIXES = PUBLIC_PATH_PREFIXES
 
     def process_request(self, request: HttpRequest) -> Optional[HttpResponse]:
         """Resolve tenant and set up schema context for this request.
@@ -80,7 +70,7 @@ class TenantMainMiddleware(MiddlewareMixin):
 
         # Bypass tenant resolution for public/auth paths — these must be
         # reachable regardless of whether the subdomain has an active schema.
-        if request.path.startswith(self._PUBLIC_PATH_PREFIXES):
+        if is_public_path(request.path):
             clear_tenant_context()
             request.tenant = None
             request.schema_name = None

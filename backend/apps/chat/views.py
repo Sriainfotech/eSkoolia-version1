@@ -1164,8 +1164,10 @@ class InvitationViewSet(ChatPermissionMixin, viewsets.ModelViewSet):
         if not to_user_id:
             raise ValidationError("to_user_id is required")
         
-        to_user = get_object_or_404(User, id=to_user_id)
-        
+        # Scope to the sender's own school — otherwise a user could send (and
+        # sustain) a cross-school chat invitation just by guessing a user id.
+        to_user = get_object_or_404(User, id=to_user_id, school_id=current_user.school_id)
+
         if to_user == current_user:
             raise ValidationError("You cannot send invitation to yourself")
         

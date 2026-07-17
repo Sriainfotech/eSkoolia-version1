@@ -51,6 +51,7 @@ type StudentCreatePayload = {
   admission_no: string;
   roll_no?: string;
   first_name: string;
+  middle_name?: string;
   last_name: string;
   date_of_birth?: string;
   academic_year: number;
@@ -91,6 +92,7 @@ type StudentDetail = {
   admission_no: string;
   roll_no?: string;
   first_name: string;
+  middle_name?: string;
   last_name: string;
   date_of_birth?: string;
   academic_year?: number;
@@ -704,6 +706,7 @@ export function StudentAddPanel() {
   const [isManualEdit, setIsManualEdit] = useState(false);
   const [rollNo, setRollNo] = useState("");
   const [firstName, setFirstName] = useState("");
+  const [middleName, setMiddleName] = useState("");
   const [lastName, setLastName] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
   const [academicYearId, setAcademicYearId] = useState("");
@@ -999,6 +1002,7 @@ export function StudentAddPanel() {
     () => ({
       admission_no: admissionNo.trim(),
       first_name: firstName.trim(),
+      middle_name: middleName.trim(),
       last_name: lastName.trim(),
       date_of_birth: dateOfBirth,
       gender: gender,
@@ -1217,6 +1221,7 @@ export function StudentAddPanel() {
       newlyCreatedStudentId,
       rollNo,
       firstName,
+      middleName,
       lastName,
       dateOfBirth,
       academicYearId,
@@ -1289,6 +1294,7 @@ export function StudentAddPanel() {
       }
       setRollNo(String(draft.rollNo || ""));
       setFirstName(String(draft.firstName || ""));
+      setMiddleName(String(draft.middleName || ""));
       setLastName(String(draft.lastName || ""));
       setDateOfBirth(String(draft.dateOfBirth || ""));
       setAcademicYearId(String(draft.academicYearId || ""));
@@ -1352,6 +1358,7 @@ export function StudentAddPanel() {
     }
     setRollNo(String(draft.rollNo || ""));
     setFirstName(String(draft.firstName || ""));
+    setMiddleName(String(draft.middleName || ""));
     setLastName(String(draft.lastName || ""));
     setDateOfBirth(String(draft.dateOfBirth || ""));
     setAcademicYearId(String(draft.academicYearId || ""));
@@ -1449,6 +1456,7 @@ export function StudentAddPanel() {
     setIsManualEdit(false);
     setRollNo(String(data.roll_no || ""));
     setFirstName(String(data.first_name || ""));
+    setMiddleName(String(data.middle_name || ""));
     setLastName(String(data.last_name || ""));
     setDateOfBirth(String(data.date_of_birth || ""));
     setAcademicYearId(data.academic_year ? String(data.academic_year) : "");
@@ -2048,6 +2056,7 @@ export function StudentAddPanel() {
     admissionNoInitRequestedRef.current = false;
     setRollNo("");
     setFirstName("");
+    setMiddleName("");
     setLastName("");
     setDateOfBirth("");
     setAcademicYearId("");
@@ -3014,6 +3023,7 @@ export function StudentAddPanel() {
         admission_no: snapshot.admission_no || "",
         roll_no: rollNo.trim() || undefined,
         first_name: snapshot.first_name,
+        middle_name: snapshot.middle_name || undefined,
         last_name: snapshot.last_name,
         date_of_birth: snapshot.date_of_birth || undefined,
         academic_year: academicYearNum,
@@ -3556,6 +3566,7 @@ export function StudentAddPanel() {
         admission_no: sanitizeText(admissionNo).replace(/-/g, ""),
         roll_no: rollNo.trim() || undefined,
         first_name: sanitizeText(firstName),
+        middle_name: sanitizeText(middleName) || undefined,
         last_name: sanitizeText(lastName),
         date_of_birth: dateOfBirth || undefined,
         academic_year: Number(academicYearId),
@@ -3985,13 +3996,13 @@ export function StudentAddPanel() {
 
               <div className="grid-3 mt-20">
                 <div className="field-wrapper"><label className="field-label">First name <span className="req">*</span></label><input aria-describedby="first_name-error" className={fieldErrors.first_name ? "field-input error" : "field-input"} value={firstName} onChange={(e) => { setFirstName(sanitizeNameInput(e.target.value)); setSingleFieldError('first_name', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setFirstName(val); if (val.trim() && !isProperName(val)) { setSingleFieldError('first_name', 'Enter a valid first name (letters only)'); } }} placeholder="e.g. Rahul" />{fieldErrors.first_name ? <span id="first_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.first_name}</span> : null}</div>
-                <div className="field-wrapper"><label className="field-label">Middle name <span className="badge badge-optional">OPTIONAL</span></label><input className="field-input" title="Middle name" value={customGender} onChange={(e) => setCustomGender(e.target.value)} placeholder="e.g. Kumar" /></div>
+                <div className="field-wrapper"><label className="field-label">Middle name <span className="badge badge-optional">OPTIONAL</span></label><input className="field-input" title="Middle name" value={middleName} onChange={(e) => setMiddleName(sanitizeNameInput(e.target.value))} placeholder="e.g. Kumar" /></div>
                 <div className="field-wrapper"><label className="field-label">Last name <span className="req">*</span></label><input aria-describedby="last_name-error" className={fieldErrors.last_name ? "field-input error" : "field-input"} value={lastName} onChange={(e) => { setLastName(sanitizeNameInput(e.target.value)); setSingleFieldError('last_name', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setLastName(val); if (val.trim() && !isProperName(val)) { setSingleFieldError('last_name', 'Enter a valid last name (letters only)'); } }} placeholder="e.g. Sharma" />{fieldErrors.last_name ? <span id="last_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.last_name}</span> : null}</div>
               </div>
 
               <div className="grid-3 mt-20">
                 <div className="field-wrapper"><label className="field-label">Date of birth <span className="req">*</span></label><div style={{display:'flex',gap:6,alignItems:'center'}}><input type="text" placeholder="DD / MM / YYYY" maxLength={14} aria-describedby="dob-error" className={fieldErrors.dob ? "field-input error" : "field-input"} style={{letterSpacing:1,flex:1}} value={dobDisplay} onChange={(e) => { const raw = e.target.value.replace(/[^0-9]/g,''); const masked = toDobMask(raw); setDobDisplay(masked); const iso = parseDobMaskedToISO(masked); if (iso) { setDateOfBirth(iso); setSingleFieldError("dob",""); } }} onBlur={() => { if (dateOfBirth) { const dob = new Date(dateOfBirth); const now = new Date(); const ageyrs = (now.getTime()-dob.getTime())/(365.25*24*60*60*1000); if (ageyrs < 2) setSingleFieldError('dob','Student must be at least 2 years old'); else if (ageyrs > 25) setSingleFieldError('dob','Date of birth seems too old — please verify'); else setSingleFieldError('dob',''); } }} /><input type="date" title="Pick date" tabIndex={-1} style={{width:32,padding:0,border:'none',background:'transparent',cursor:'pointer',opacity:0.7}} value={dateOfBirth} min={(() => { const d=new Date(); d.setFullYear(d.getFullYear()-25); return d.toISOString().slice(0,10); })()} max={maxDobIso} onChange={(e) => { setDateOfBirth(e.target.value); setSingleFieldError("dob",""); }} /></div>{fieldErrors.dob ? <span id="dob-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.dob}</span> : null}</div>
-                <div className="field-wrapper"><label className="field-label">Gender <span className="req">*</span></label><select aria-describedby="gender-error" className={fieldErrors.gender ? "field-select error" : "field-select"} title="Gender" value={gender} onChange={(e) => { setGender(e.target.value); setSingleFieldError('gender', ''); }} onBlur={() => { if (!gender) setSingleFieldError('gender','Gender is required'); }}><option value="">Select</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select>{fieldErrors.gender ? <span id="gender-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.gender}</span> : null}</div>
+                <div className="field-wrapper"><label className="field-label">Gender <span className="req">*</span></label><select aria-describedby="gender-error" className={fieldErrors.gender ? "field-select error" : "field-select"} title="Gender" value={gender} onChange={(e) => { setGender(e.target.value); setSingleFieldError('gender', ''); }} onBlur={() => { if (!gender) setSingleFieldError('gender','Gender is required'); }}><option value="">Select</option><option value="male">Male</option><option value="female">Female</option><option value="other">Other</option></select>{fieldErrors.gender ? <span id="gender-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.gender}</span> : null}{gender === "other" ? <input className={fieldErrors.custom_gender ? "field-input error mt-8" : "field-input mt-8"} title="Specify gender" value={customGender} onChange={(e) => { setCustomGender(e.target.value); setSingleFieldError('custom_gender', ''); }} placeholder="Please specify" /> : null}</div>
                 <div className="field-wrapper"><label className="field-label">Blood group <span className="badge badge-optional">OPTIONAL</span></label><select className="field-select" title="Blood group" value={bloodGroup} onChange={(e) => setBloodGroup(e.target.value)}><option value="">Select</option>{"A+,A-,B+,B-,AB+,AB-,O+,O-".split(",").map((bg) => <option key={bg} value={bg}>{bg}</option>)}</select></div>
               </div>
 
@@ -4672,7 +4683,7 @@ export function StudentAddPanel() {
                 </div>
                 <div className="review-grid">
                   <div className="review-item"><div className="review-label">ADMISSION NO</div><div className="review-value">{admissionNo || '—'}</div></div>
-                  <div className="review-item"><div className="review-label">FULL NAME</div><div className="review-value">{[firstName, lastName].filter(Boolean).join(' ') || '—'}</div></div>
+                  <div className="review-item"><div className="review-label">FULL NAME</div><div className="review-value">{[firstName, middleName, lastName].filter(Boolean).join(' ') || '—'}</div></div>
                   <div className="review-item"><div className="review-label">DATE OF BIRTH</div><div className="review-value">{dateOfBirth || '—'}</div></div>
                   <div className="review-item"><div className="review-label">GENDER</div><div className="review-value">{gender ? gender.charAt(0).toUpperCase() + gender.slice(1) : '—'}</div></div>
                   <div className="review-item"><div className="review-label">BLOOD GROUP</div><div className="review-value">{bloodGroup || '—'}</div></div>

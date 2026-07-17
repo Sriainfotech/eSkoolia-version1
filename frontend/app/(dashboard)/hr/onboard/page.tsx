@@ -2222,12 +2222,41 @@ function StepMedical({
     d.setFullYear(d.getFullYear() + years);
     return d.toISOString().split("T")[0];
   }
+  const { toast } = useHrToast();
   const [medCertFile,     setMedCertFile]     = useState<File | null>(null);
   const [medCertFileErr,  setMedCertFileErr]  = useState<string>("");
   const [disabCertFile,   setDisabCertFile]   = useState<File | null>(null);
   const [disabCertFileErr,setDisabCertFileErr]= useState<string>("");
+  const [medCertUploading,   setMedCertUploading]   = useState(false);
+  const [disabCertUploading, setDisabCertUploading] = useState(false);
   const medCertFileRef  = useRef<HTMLInputElement>(null);
   const disabCertFileRef= useRef<HTMLInputElement>(null);
+
+  // Same upload mechanism StepDocuments uses (POST to the onboarding
+  // documents endpoint) — these two certificates were previously only kept
+  // in local component state and never actually sent anywhere.
+  async function uploadOnboardDoc(file: File, docKey: string, docLabel: string): Promise<boolean> {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("doc_key", docKey);
+    fd.append("doc_label", docLabel);
+    try {
+      const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/upload/", {
+        method: "POST",
+        body: fd,
+        silent401: true,
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({})) as Record<string, unknown>;
+        toast((errJson.message as string) || "Upload failed.", "error");
+        return false;
+      }
+      return true;
+    } catch {
+      toast("Upload failed. Please try again.", "error");
+      return false;
+    }
+  }
 
   const ALLOWED_FILE_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png"];
   const ALLOWED_EXT_PATTERN = /\.(pdf|jpg|jpeg|png)$/i;
@@ -2241,21 +2270,37 @@ function StepMedical({
     return "";
   }
 
-  function handleMedCertFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleMedCertFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0] ?? null;
     if (!file) return;
     const err = validateFile(file);
     setMedCertFileErr(err);
-    if (!err) setMedCertFile(file);
     e.target.value = "";
+    if (err) return;
+    setMedCertUploading(true);
+    try {
+      const ok = await uploadOnboardDoc(file, "medical_fitness_cert", "Medical Fitness Certificate");
+      if (ok) setMedCertFile(file);
+      else setMedCertFileErr("Upload failed. Please try again.");
+    } finally {
+      setMedCertUploading(false);
+    }
   }
-  function handleDisabCertFile(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleDisabCertFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0] ?? null;
     if (!file) return;
     const err = validateFile(file);
     setDisabCertFileErr(err);
-    if (!err) setDisabCertFile(file);
     e.target.value = "";
+    if (err) return;
+    setDisabCertUploading(true);
+    try {
+      const ok = await uploadOnboardDoc(file, "disability_cert", "Disability Certificate");
+      if (ok) setDisabCertFile(file);
+      else setDisabCertFileErr("Upload failed. Please try again.");
+    } finally {
+      setDisabCertUploading(false);
+    }
   }
 
   // ---- Validators ----
@@ -4179,15 +4224,44 @@ export default function HrOnboardPage(props: any) {
 
       // Backend choice fields are lowercase; frontend captures Title Case labels.
       const lower = (v: unknown) => (typeof v === "string" ? v.trim().toLowerCase() : v);
+      // Gender's "Prefer not to say" label has spaces, but the backend choice
+      // key is the underscored "prefer_not_to_say" — normalize explicitly
+      // instead of relying on lower() alone, which would send "prefer not to say".
+      const genderValue = ((): string => {
+        const raw = lower(form.gender);
+        return typeof raw === "string" ? raw.replace(/\s+/g, "_") : (raw as string);
+      })();
+
+      // "Other" fields: SearchableSelect stores the typed replacement value in a
+      // separate `<field>_other` key, leaving the field itself at the literal
+      // string "Other" — reconcile them here before anything reads the field,
+      // otherwise the typed value is silently discarded and "Other" is saved.
+      const resolveOther = (value: unknown, other: unknown): unknown => {
+        if (typeof value === "string" && value.trim().toLowerCase() === "other") {
+          const otherStr = typeof other === "string" ? other.trim() : "";
+          return otherStr || value;
+        }
+        return value;
+      };
+      const fAnyPre = form as Record<string, unknown>;
+      const mother_tongue = resolveOther(fAnyPre.mother_tongue, fAnyPre.mother_tongue_other);
+      const religion = resolveOther(fAnyPre.religion, fAnyPre.religion_other);
+      const nationality = resolveOther(fAnyPre.nationality, fAnyPre.nationality_other);
+      const employmentTypeResolved = resolveOther(fAnyPre.employment_type, fAnyPre.employment_type_other);
 
       // Map frontend employment_type label → backend contract_type key
       // (model choices: "permanent" / "contract")
-      const empLabel = String((form as Record<string, unknown>).employment_type ?? "").trim().toLowerCase();
+      const empLabel = String(employmentTypeResolved ?? "").trim().toLowerCase();
       const contractType = empLabel.includes("contract") ? "contract" : (empLabel ? "permanent" : "");
 
       const fAny = form as Record<string, unknown>;
-      const { joining_date, mobile, personal_email, official_email, employment_type, blood_group_input, ...rest } = fAny;
+      const {
+        joining_date, mobile, personal_email, official_email, employment_type, blood_group_input,
+        mother_tongue: _rawMotherTongue, religion: _rawReligion, nationality: _rawNationality,
+        ...rest
+      } = fAny;
       void employment_type; // mapped to contract_type below
+      void _rawMotherTongue; void _rawReligion; void _rawNationality; // replaced by resolved values below
 
       // "" (empty/unset "No. of Children") fails DRF's IntegerField with
       // "A valid integer is required." — null is the correct empty representation.
@@ -4209,7 +4283,10 @@ export default function HrOnboardPage(props: any) {
         official_email,
         // Fallback: if user didn't fill permanent_address, reuse current_address.
         permanent_address: (fAny.permanent_address as string) || (fAny.current_address as string) || "",
-        gender: lower(form.gender),
+        mother_tongue,
+        religion,
+        nationality,
+        gender: genderValue,
         marital_status: lower(form.marital_status),
         basic_salary: form.basic_salary_input ? Number(form.basic_salary_input) : 0,
         num_children: numChildren,

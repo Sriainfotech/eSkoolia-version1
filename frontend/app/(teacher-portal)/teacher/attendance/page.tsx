@@ -269,6 +269,8 @@ export default function TeacherAttendancePage() {
       const arrival_time: Record<string, string> = {};
       const sign_in_time: Record<string, string> = {};
       const sign_out_time: Record<string, string> = {};
+      const pickup_time: Record<string, string> = {};
+      const pickup_by: Record<string, string> = {};
 
       for (const s of marked) {
         const k = String(s.id);
@@ -278,6 +280,8 @@ export default function TeacherAttendancePage() {
         if (s.arrival_time) arrival_time[k] = s.arrival_time;
         if (s.sign_in_time) sign_in_time[k] = s.sign_in_time;
         if (s.sign_out_time) sign_out_time[k] = s.sign_out_time;
+        if (s.pickup_time) pickup_time[k] = s.pickup_time;
+        if (s.pickup_by) pickup_by[k] = s.pickup_by;
       }
 
       const res = await fetchWithRefresh(`${API_BASE_URL}/api/v1/teacher/attendance/store/`, {
@@ -294,6 +298,8 @@ export default function TeacherAttendancePage() {
           arrival_time,
           sign_in_time,
           sign_out_time,
+          pickup_time,
+          pickup_by,
           lock_attendance: false,
         }),
       });
@@ -396,7 +402,10 @@ export default function TeacherAttendancePage() {
     if (effectiveReadOnly) return;
     const now = new Date();
     const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    updateStudent({ ...student, sign_out_time: time });
+    // Pickup mirrors sign-out, matching the admin attendance screen's behavior
+    // (app/(dashboard)/attendance/student/page.tsx) — previously this only set
+    // sign_out_time, so pickup_time was never populated at all here.
+    updateStudent({ ...student, sign_out_time: time, pickup_time: time });
   };
 
   const handleLateMarkLate = (message: string) => {

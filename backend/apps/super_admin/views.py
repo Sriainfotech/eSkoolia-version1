@@ -802,6 +802,18 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                     city=data.get("city") or "",
                     pin_code=data.get("pin_code") or "",
                     affiliation_number=data.get("affiliation_number") or "",
+                    school_type=data.get("school_type") or "",
+                    student_seat_limit=data.get("student_seat_limit"),
+                    staff_seat_limit=data.get("staff_seat_limit"),
+                    storage_cap_gb=data.get("storage_cap_gb"),
+                    trial_days=data.get("trial_days"),
+                    go_live_date=data.get("go_live_date"),
+                    billing_cycle=data.get("billing_cycle"),
+                    trial_ends_at=(
+                        data["go_live_date"] + timedelta(days=int(data["trial_days"]))
+                        if data.get("go_live_date") and data.get("trial_days")
+                        else None
+                    ),
                 )
 
                 # 2. Create ERP School record (used for login + data isolation)
@@ -940,6 +952,14 @@ class SchoolTenantDetailView(SuperAdminBaseAPIView):
         if "status" in serializer.validated_data:
             is_active = updated.status in ("active", "trial")
             School.objects.filter(subdomain__iexact=updated.subdomain_url).update(is_active=is_active)
+
+        # Derived: recompute trial_ends_at whenever the trial config changes.
+        if "trial_days" in serializer.validated_data or "go_live_date" in serializer.validated_data:
+            if updated.go_live_date and updated.trial_days:
+                updated.trial_ends_at = updated.go_live_date + timedelta(days=int(updated.trial_days))
+            else:
+                updated.trial_ends_at = None
+            updated.save(update_fields=["trial_ends_at"])
 
         log_audit(
             action="school.update",

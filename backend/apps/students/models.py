@@ -100,6 +100,7 @@ class Student(models.Model):
     admission_no = models.CharField(max_length=40)
     roll_no = models.CharField(max_length=40, blank=True)
     first_name = models.CharField(max_length=80)
+    middle_name = models.CharField(max_length=80, blank=True)
     last_name = models.CharField(max_length=80, blank=True)
     date_of_birth = models.DateField(null=True, blank=True)
     academic_year = models.ForeignKey(

@@ -790,11 +790,52 @@ class StaffViewSet(SchoolScopedModelViewSet):
         if not school and not user.is_superuser:
             raise PermissionDenied("School context is required.")
 
+        onboard_docs = list(StaffOnboardDocument.objects.filter(uploaded_by=user))
+        self._enforce_mandatory_onboard_documents(onboard_docs)
+
         self._staff_creds = None
         submitted_staff_no = (serializer.validated_data.get("staff_no") or "").strip()
         staff_no = submitted_staff_no or self._generate_staff_no(school)
         staff = serializer.save(school=school, staff_no=staff_no)
         self._ensure_staff_user(staff)
+        self._copy_onboard_documents(staff, school, onboard_docs)
+
+    @staticmethod
+    def _enforce_mandatory_onboard_documents(onboard_docs):
+        """Mirror the wizard's client-side mandatory-document gate server-side.
+
+        StaffOnboardDocument.MANDATORY_KEYS was previously declared but never
+        checked anywhere in the API — a direct POST could create a staff record
+        with zero identity documents. Rows are scoped to uploaded_by=request.user,
+        matching how the onboarding wizard looks them up (see the GET/upload/
+        delete actions on StaffOnboardDocumentViewSet).
+        """
+        uploaded_keys = {d.doc_key for d in onboard_docs}
+        missing = StaffOnboardDocument.MANDATORY_KEYS - uploaded_keys
+        if missing:
+            raise ValidationError(
+                {"documents": f"Missing required document(s): {', '.join(sorted(missing))}."}
+            )
+
+    @staticmethod
+    def _copy_onboard_documents(staff, school, onboard_docs):
+        """Copy temporary onboarding uploads into StaffDocument, linked to the
+        new staff record, then delete the temp rows — completing the flow
+        StaffOnboardDocument's own docstring describes but that never ran.
+        """
+        for doc in onboard_docs:
+            document_type = StaffDocument.ONBOARD_DOC_KEY_MAP.get(doc.doc_key, StaffDocument.DOCUMENT_OTHER)
+            StaffDocument.objects.get_or_create(
+                school=school,
+                staff=staff,
+                document_type=document_type,
+                file_name=doc.file_name,
+                defaults={
+                    "file_path": doc.file.name if doc.file else "",
+                    "file_size": doc.file_size,
+                },
+            )
+        StaffOnboardDocument.objects.filter(id__in=[d.id for d in onboard_docs]).delete()
 
     def create(self, request, *args, **kwargs):
         try:

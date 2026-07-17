@@ -105,8 +105,14 @@ export function FeesGroupPanel() {
       setFeesGroups(items);
       setTotalCount(meta?.count ?? items.length);
     } catch (err) {
-      toast.showApiError(err, "Unable to load fees groups.");
-      setError("Unable to load fees groups.");
+      const apiErr = err as { status?: number };
+      if (apiErr?.status === 404 && targetPage !== 1) {
+        setPage(1);
+        setError("Invalid page. Reset to page 1.");
+      } else {
+        toast.showApiError(err, "Unable to load fees groups.");
+        setError("Unable to load fees groups.");
+      }
     } finally {
       setLoading(false);
     }

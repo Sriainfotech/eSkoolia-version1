@@ -1,6 +1,21 @@
 "use client";
 import { useState, useMemo, useEffect } from "react";
-import { feesApi, listData } from "@/lib/fees-api";
+import { feesApi, listData, type LateFeeRule } from "@/lib/fees-api";
+
+// Parses the school-configured penalty_rule free-text field (e.g. "Rs. 50 daily",
+// "2% per week") into a per-day rate. Only recognizes a few unambiguous phrasings —
+// an unrecognized format returns null (0 penalty shown) rather than guessing, since
+// a confidently wrong auto-charged amount is worse than none at all.
+function parsePenaltyRule(rule: string, outstanding: number): { perDay: number; kind: "flat" | "percent" } | null {
+  const text = (rule || "").toLowerCase();
+  const flatDaily = text.match(/rs\.?\s*(\d+(\.\d+)?)\s*(daily|per\s*day|\/\s*day)/);
+  if (flatDaily) return { perDay: parseFloat(flatDaily[1]), kind: "flat" };
+  const pctWeekly = text.match(/(\d+(\.\d+)?)\s*%\s*(per\s*week|weekly|\/\s*week)/);
+  if (pctWeekly) return { perDay: (parseFloat(pctWeekly[1]) / 100) * outstanding / 7, kind: "percent" };
+  const pctDaily = text.match(/(\d+(\.\d+)?)\s*%\s*(daily|per\s*day|\/\s*day)/);
+  if (pctDaily) return { perDay: (parseFloat(pctDaily[1]) / 100) * outstanding, kind: "percent" };
+  return null;
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Due { id:string; label:string; amount:number; due:string; }
@@ -78,6 +93,7 @@ function parseDateTimeToISO(dateStr: string): string {
 
 export default function FeesCollectionPanel() {
   const [studentsData, setStudentsData] = useState<any[]>([]);
+  const [lateFeeRules, setLateFeeRules] = useState<LateFeeRule[]>([]);
   const [assignments, setAssignments] = useState<any[]>([]);
   const [paymentsList, setPaymentsList] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
@@ -97,19 +113,22 @@ export default function FeesCollectionPanel() {
   const fetchDynamicData = async () => {
     setLoading(true);
     // Use allSettled so a 500 on one endpoint doesn't block others from loading
-    const [stRes, asgnRes, payRes, grpRes, reconRes, schoolRes] = await Promise.allSettled([
+    const [stRes, asgnRes, payRes, grpRes, reconRes, schoolRes, lateFeeRes] = await Promise.allSettled([
       feesApi.listStudents(),
       feesApi.listAssignments(),
       feesApi.listPayments(),
       feesApi.listGroups(),
       feesApi.listReconciliations(),
       feesApi.getMySchoolInfo(),
+      feesApi.listLateFeeRules({ page_size: 500 }),
     ]);
     if (stRes.status    === "fulfilled") setStudentsData(listData(stRes.value));
     if (asgnRes.status  === "fulfilled") setAssignments(listData(asgnRes.value));
     if (payRes.status   === "fulfilled") setPaymentsList(listData(payRes.value));
     if (grpRes.status   === "fulfilled") setGroups(listData(grpRes.value));
     if (reconRes.status === "fulfilled") setReconList(listData(reconRes.value));
+    if (lateFeeRes.status === "fulfilled") setLateFeeRules(listData(lateFeeRes.value));
+    else console.error("Late fee rules failed:", lateFeeRes.reason);
     if (schoolRes.status === "fulfilled") {
       const s = schoolRes.value as any;
       setSchoolHeader({
@@ -229,6 +248,52 @@ export default function FeesCollectionPanel() {
         status = "overdue";     // Has fees, no payments made yet
       }
 
+      // Late fee calc — computed from the earliest outstanding due and the
+      // school's configured LateFeeRule, instead of never being computed at
+      // all (this whole section previously never rendered: nothing ever set
+      // lateFeeCalc anywhere).
+      let lateFeeCalc: LateFeeCalc | undefined;
+      if (dues.length > 0) {
+        const earliestDue = [...dues].sort((a, b) => (a.due || "").localeCompare(b.due || ""))[0];
+        const dueDate = new Date(earliestDue.due);
+        if (!isNaN(dueDate.getTime())) {
+          const todayMs = Date.now();
+          const daysOverdue = Math.max(0, Math.floor((todayMs - dueDate.getTime()) / (24 * 60 * 60 * 1000)));
+          if (daysOverdue > 0) {
+            const dueAsgn = uniqueAsgns.find(a => a.id?.toString() === earliestDue.id);
+            const dueYear = dueAsgn?.academic_year;
+            const rule = lateFeeRules.find(r => (r.status || "active") !== "inactive" && (dueYear == null || r.academic_year === dueYear))
+              ?? lateFeeRules.find(r => (r.status || "active") !== "inactive");
+            const grace = rule?.grace_period_days ?? 0;
+            const chargeableDays = Math.max(0, daysOverdue - grace);
+            const cap = rule?.cap_amount != null ? parseFloat(String(rule.cap_amount)) : null;
+            let rawPenalty = 0;
+            let dueRule = "No late fee rule configured for this academic year.";
+            if (rule && chargeableDays > 0) {
+              const parsed = parsePenaltyRule(rule.penalty_rule || "", earliestDue.amount);
+              if (parsed) {
+                rawPenalty = parsed.perDay * chargeableDays;
+                if (cap != null) rawPenalty = Math.min(rawPenalty, cap);
+                dueRule = `${rule.name} — ${rule.penalty_rule}${grace ? ` (after ${grace}-day grace period)` : ""}`;
+              } else {
+                dueRule = `${rule.name} — "${rule.penalty_rule}" is not in a recognized format (e.g. "Rs. 50 daily"); penalty not auto-calculated.`;
+              }
+            } else if (rule && chargeableDays === 0) {
+              dueRule = `${rule.name} — within the ${grace}-day grace period, no penalty yet.`;
+            }
+            lateFeeCalc = {
+              label: earliestDue.label,
+              dueRule,
+              outstanding: earliestDue.amount,
+              daysOverdue,
+              chargeableDays,
+              rawPenalty,
+              finalDue: earliestDue.amount + rawPenalty,
+            };
+          }
+        }
+      }
+
       return {
         id: st.id.toString(),
         name: `${st.first_name || ""} ${st.last_name || ""}`.trim(),
@@ -240,9 +305,10 @@ export default function FeesCollectionPanel() {
         ledger: ledger,
         fullLedger: ledger,
         ledgerBalance: totalDue - totalPaid,
+        lateFeeCalc,
       };
     });
-  }, [studentsData, assignments, paymentsList]);
+  }, [studentsData, assignments, paymentsList, lateFeeRules]);
 
   const INIT_PAYMENTS = useMemo(() => {
     return [...paymentsList]
@@ -298,6 +364,7 @@ export default function FeesCollectionPanel() {
   const [sendSMS,      setSendSMS]      = useState(false);
   const [collectedBy,  setCollectedBy]  = useState("Finance Desk");
   const [counter,      setCounter]      = useState("Counter 1");
+  const [txRef,        setTxRef]        = useState("");
 
   const toast_ = (m:string)=>{setToast(m);setTimeout(()=>setToast(""),3000);};
 
@@ -339,7 +406,7 @@ export default function FeesCollectionPanel() {
     setSelectedId(s.id); setSearchQ(s.name); setShowDrop(false);
     const ids=new Set(s.dues.map(d=>d.id)); setChecked(ids);
     setAmtPaid(String(s.dues.reduce((a,d)=>a+d.amount,0)));
-    setNote(""); setMethod("Cash");
+    setNote(""); setMethod("Cash"); setTxRef("");
   };
 
   const toggle = (id:string)=>{
@@ -369,6 +436,9 @@ export default function FeesCollectionPanel() {
           method: backendMethod as any,
           paid_at: paidAt,
           note: note || "",
+          collected_by_note: collectedBy || "",
+          counter: counter || "",
+          transaction_reference: needsTxRef ? txRef || "" : "",
         } as any);
       }
       // Refresh from server — STUDENTS memo recomputes → selected auto-updates with new balance
@@ -378,7 +448,7 @@ export default function FeesCollectionPanel() {
       setShowConfirm(false);
       toast_(`Receipt ${r} posted for ${selected.name}.`);
       // Keep selected student visible so the user sees the updated ledger immediately
-      setChecked(new Set()); setAmtPaid("0"); setNote(""); setMethod("Cash");
+      setChecked(new Set()); setAmtPaid("0"); setNote(""); setMethod("Cash"); setTxRef("");
     } catch (err) {
       console.error("Payment failed:", err);
       toast_("Payment failed. Please try again.");
@@ -387,6 +457,7 @@ export default function FeesCollectionPanel() {
     }
   };
 
+  const needsTxRef = method === "Bank Transfer" || method === "Cheque" || method === "Online";
   const selDues = selected?.dues.filter(d=>checked.has(d.id))??[];
   // When multiple dues are selected every due is paid in full — amtPaid is irrelevant.
   // When a single due is selected the user may enter a partial amount.
@@ -854,6 +925,18 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#181B2A}
                   </select>
                 </div>
               </div>
+
+              {/* Transaction reference — only for methods that have one */}
+              {needsTxRef && (
+                <div style={{marginBottom:14}}>
+                  <div style={{fontSize:10.5,fontWeight:700,letterSpacing:"0.07em",color:"#A0A3B8",marginBottom:7}}>
+                    {method === "Cheque" ? "CHEQUE NO." : "TRANSACTION REFERENCE"}
+                  </div>
+                  <input value={txRef} onChange={e=>setTxRef(e.target.value)}
+                    placeholder={method === "Cheque" ? "Cheque number" : "UTR / transaction ID"}
+                    style={{width:"100%",height:40,border:"1px solid #E8E8EE",borderRadius:9,padding:"0 12px",fontSize:13.5,boxSizing:"border-box"}}/>
+                </div>
+              )}
 
               {/* Date/Time */}
               <div style={{marginBottom:14}}>

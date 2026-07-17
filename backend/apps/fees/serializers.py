@@ -23,6 +23,13 @@ class FeesGroupSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Please select at least one applicable class.")
         return value
 
+    def validate_academic_year(self, value):
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        if school_id and value.school_id != school_id:
+            raise serializers.ValidationError("Selected academic year does not belong to your school.")
+        return value
+
 class FeesTypeSerializer(serializers.ModelSerializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True, required=False)
     taxable = serializers.CharField()
@@ -91,7 +98,12 @@ class FeesTypeSerializer(serializers.ModelSerializer):
         if not re.match(r'^[0-9]{4}-[A-Z0-9]+$', code):
             raise serializers.ValidationError('Invalid GL Code format. Use XXXX-CODE (e.g., 4001-TUITION).')
 
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+
         queryset = FeesType.objects.filter(is_deleted=False, gl_code=code)
+        if school_id:
+            queryset = queryset.filter(academic_year__school_id=school_id)
         if self.instance:
             queryset = queryset.exclude(pk=self.instance.pk)
         if queryset.exists():
@@ -99,6 +111,8 @@ class FeesTypeSerializer(serializers.ModelSerializer):
 
         account_number = code.split('-')[0]
         account_qs = FeesType.objects.filter(is_deleted=False, gl_code__startswith=f'{account_number}-')
+        if school_id:
+            account_qs = account_qs.filter(academic_year__school_id=school_id)
         if self.instance:
             account_qs = account_qs.exclude(pk=self.instance.pk)
         if account_qs.exists():
@@ -242,7 +256,7 @@ class PaymentSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'assignment', 'student', 'amount_paid', 'method', 'status',
             'paid_at', 'transaction_reference', 'note',
-            'collected_by', 'created_at'
+            'collected_by', 'collected_by_note', 'counter', 'created_at'
         ]
         # student is derived from assignment.student by the service layer.
         # status is computed from payment method by the service layer.
@@ -457,6 +471,12 @@ class _CurrentYearScopedMixin:
         academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
         if not academic_year:
             raise serializers.ValidationError({'academic_year': 'Academic year is required.'})
+
+        # The auto-fill path above always picks a same-school year, but a
+        # client can also supply academic_year explicitly — verify that one
+        # actually belongs to the acting user's school too.
+        if school_id and academic_year.school_id != school_id:
+            raise serializers.ValidationError({'academic_year': 'Selected academic year does not belong to your school.'})
 
         if 'status' in attrs:
             attrs['status'] = (attrs['status'] or 'active').strip().lower()

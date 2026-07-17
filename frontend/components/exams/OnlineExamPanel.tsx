@@ -23,6 +23,8 @@ type OnlineExam = {
   end_time: string;
   status: number;
   percentage?: string;
+  instruction?: string;
+  auto_mark?: boolean;
 };
 
 type MarkStudent = {
@@ -197,8 +199,8 @@ export default function OnlineExamPanel() {
     setStartTime((row.start_time || "").slice(0, 5));
     setEndTime((row.end_time || "").slice(0, 5));
     setPercentage(String(row.percentage || ""));
-    setInstruction("");
-    setAutoMark(false);
+    setInstruction(row.instruction || "");
+    setAutoMark(Boolean(row.auto_mark));
   };
 
   const remove = async (id: number) => {

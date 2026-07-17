@@ -738,10 +738,17 @@ export function StudentListPanel() {
         setTotalCount(meta?.count ?? items.length);
         setSelectedIds([]);
       } catch (err) {
-        const message = err instanceof Error ? err.message : "";
-        if (message.includes("401")) {
+        // Check the real HTTP status (attached by apiRequestWithRefresh),
+        // not message.includes("401"/"500") — DRF's default error text for
+        // those codes doesn't literally contain the digits, so that string
+        // match never actually fired for either case.
+        const apiErr = err as { status?: number };
+        if (apiErr?.status === 401) {
           setError("Session expired. Please login again.");
-        } else if (message.includes("500")) {
+        } else if (apiErr?.status === 404 && page !== 1) {
+          setPage(1);
+          setError("Invalid page. Reset to page 1.");
+        } else if (apiErr?.status === 500) {
           setError("Server error while loading students.");
         } else {
           setError("Failed to load student records.");

@@ -85,8 +85,14 @@ export function RoleManagementPanel() {
       const meta = extractPaginationMeta(data);
       setRoles(items);
       setTotalCount(meta?.count ?? items.length);
-    } catch {
-      setError("Unable to load role list.");
+    } catch (err) {
+      const apiErr = err as { status?: number };
+      if (apiErr?.status === 404 && targetPage !== 1) {
+        setPage(1);
+        setError("Invalid page. Reset to page 1.");
+      } else {
+        setError("Unable to load role list.");
+      }
     } finally {
       setLoading(false);
     }

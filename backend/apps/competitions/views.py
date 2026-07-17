@@ -90,6 +90,13 @@ class AIReviewView(APIView):
 
 
 class AIRequestLogViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = AIRequestLog.objects.all()
     serializer_class = AIRequestLogSerializer
     permission_classes = [IsAdminUser]
+
+    def get_queryset(self):
+        # AIRequestLog has no school FK of its own, but every row has a
+        # user, and every user belongs to exactly one school — scope
+        # through that relation instead of adding a redundant column.
+        # No is_superuser bypass: this isn't a genuine cross-school admin
+        # surface, so a superuser is scoped like any other user here too.
+        return AIRequestLog.objects.filter(user__school_id=self.request.user.school_id)

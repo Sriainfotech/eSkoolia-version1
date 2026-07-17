@@ -21,7 +21,7 @@ from rest_framework import status as http_status
 from rest_framework.exceptions import ParseError
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from apps.tenancy.auth import TenantAwareJWTAuthentication
 
 from .permissions import IsTeacherPortalUser
 from .utils import (
@@ -56,7 +56,7 @@ class TeacherMeView(APIView):
     the school admin changes class or subject assignments.
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsTeacherPortalUser]
 
     def get(self, request):
@@ -131,7 +131,7 @@ class TeacherTimetableView(APIView):
     Scope-enforced: teacher only sees their own slots.
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsTeacherPortalUser]
 
     def get(self, request):
@@ -160,7 +160,7 @@ class MyClassesView(APIView):
       ]
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsTeacherPortalUser]
 
     def get(self, request):
@@ -192,7 +192,7 @@ class StudentListView(APIView):
     Sprint 5 (Attendance) and Sprint 6 (Results) are built.
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsTeacherPortalUser]
 
     def get(self, request):
@@ -235,7 +235,7 @@ class StudentProfileView(APIView):
     the frontend via the same usePermissions().can() hook.
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsTeacherPortalUser]
 
     def get(self, request, pk: int):
@@ -257,7 +257,7 @@ class StudentCredentialsView(APIView):
     Permission: students.view
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsTeacherPortalUser]
 
     def get(self, request, pk: int):
@@ -279,7 +279,7 @@ class StudentResetPasswordView(APIView):
     Permission: students.manage
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsTeacherPortalUser]
 
     def post(self, request, pk: int):
@@ -287,6 +287,7 @@ class StudentResetPasswordView(APIView):
         import string
         from apps.students.models import Student
         from rest_framework.exceptions import NotFound, PermissionDenied as DRFPermissionDenied
+        from .utils import assert_can_view_class
 
         user = request.user
         codes = user.get_permission_codes()
@@ -300,6 +301,11 @@ class StudentResetPasswordView(APIView):
             ).get(pk=pk, school=school, is_active=True, is_deleted=False)
         except Student.DoesNotExist:
             raise NotFound("Student not found.")
+
+        # students.manage alone is not enough to reset ANY student's portal
+        # password school-wide — still require the same class/section
+        # ownership check every other student-facing teacher view uses.
+        assert_can_view_class(user, student.current_class_id, student.current_section_id)
 
         target = request.data.get('target', 'student')
 
@@ -349,7 +355,7 @@ class TeacherAttendanceFetchView(APIView):
     AttendanceTable component can be reused on the teacher portal unchanged.
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsTeacherPortalUser]
 
     def post(self, request):
@@ -465,7 +471,7 @@ class TeacherAttendanceStoreView(APIView):
     Locked rows cannot be updated (admin override only).
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsTeacherPortalUser]
 
     @staticmethod

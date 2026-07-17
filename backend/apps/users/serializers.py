@@ -48,6 +48,15 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
         if not login_value or not password:
             raise AuthenticationFailed("Username and password are required.")
 
+        # Resolve the request's tenant once up front — reused below both to
+        # scope the full-name fallback lookup and for the school-match check.
+        _request = self.context.get("request") if hasattr(self, "context") else None
+        try:
+            from apps.tenancy.resolvers import get_tenant_from_request as _resolve_tenant
+            current_tenant = _resolve_tenant(_request) if _request is not None else None
+        except Exception:
+            current_tenant = None
+
         candidates = User.objects.filter(
             Q(username__iexact=login_value) | Q(email__iexact=login_value) | Q(phone__iexact=login_value)
         ).order_by("id")
@@ -62,6 +71,18 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
                     first_name__iexact=first_name,
                     last_name__iexact=last_name,
                 ).order_by("id")
+                # If this request resolved to a specific school subdomain,
+                # scope the (otherwise name-only, cross-school) full-name
+                # lookup to that school so it can't match a same-named
+                # account belonging to a different school.
+                if current_tenant is not None:
+                    from apps.tenancy.models import School
+                    _subdomain = (current_tenant.subdomain_url or "").lower()
+                    _tenant_school_id = School.objects.filter(
+                        Q(subdomain__iexact=_subdomain) | Q(code__iexact=_subdomain)
+                    ).values_list("id", flat=True).first()
+                    if _tenant_school_id is not None:
+                        candidates = candidates.filter(school_id=_tenant_school_id)
 
         user = None
         blocked_reason = None
@@ -99,12 +120,6 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
         # that school. This blocks staff/admins from one school logging into
         # another school's portal even if their credentials are valid.
         if not user.is_superuser:
-            try:
-                from apps.tenancy.resolvers import get_tenant_from_request as _resolve_tenant
-                _req = self.context.get("request") if hasattr(self, "context") else None
-                current_tenant = _resolve_tenant(_req) if _req is not None else None
-            except Exception:
-                current_tenant = None
             if current_tenant is not None:
                 user_school_id = getattr(user, 'school_id', None)
                 if not user_school_id:
@@ -149,16 +164,13 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
         def _is_blocked_status(t) -> bool:
             return (getattr(t, "status", "") or "").lower() not in ("active", "trial")
 
-        request_tenant = None
-        if not user.is_superuser:
-            try:
-                request = self.context.get("request") if hasattr(self, "context") else None
-                if request is not None:
-                    from apps.tenancy.resolvers import get_tenant_from_request
-                    request_tenant = get_tenant_from_request(request)
-            except Exception:
-                request_tenant = None
-
+        # Only meaningful when multi-tenancy is actually enabled — otherwise
+        # get_tenant_from_request() can still resolve a real SchoolTenant row
+        # purely from the Host header (it doesn't check the feature flag
+        # itself), which would incorrectly block login on a monolithic
+        # deployment whenever the Host happens to match a provisioned schema.
+        if not user.is_superuser and is_multi_tenancy_enabled():
+            request_tenant = current_tenant
             if request_tenant is not None and _is_blocked_status(request_tenant):
                 raise AuthenticationFailed(
                     "Login is disabled for this school. "

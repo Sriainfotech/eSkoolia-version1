@@ -75,6 +75,13 @@ class CommunicationNotificationSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "created_by", "is_read", "read_at", "created_at", "updated_at"]
 
+    def validate_recipient_id(self, recipient):
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        if school_id and recipient.school_id != school_id:
+            raise serializers.ValidationError("Recipient does not belong to your school.")
+        return recipient
+
 
 class InAppMessageSerializer(serializers.ModelSerializer):
     sender = UserBasicSerializer(read_only=True)
@@ -100,10 +107,18 @@ class InAppMessageSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "sender", "is_read", "read_at", "delivered_at", "created_at", "updated_at"]
 
-    def validate_recipient(self, recipient):
+    def validate_recipient_id(self, recipient):
+        # NOTE: this was previously named validate_recipient(), which DRF never
+        # calls for a field declared as recipient_id (source="recipient") — the
+        # method name must match the serializer FIELD name, not its `source`.
+        # That meant neither the self-message check nor same-school scoping
+        # ever actually ran. Renaming it makes both checks live.
         request = self.context.get("request")
         if request and request.user == recipient:
             raise serializers.ValidationError("You cannot send an in-app message to yourself.")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        if school_id and recipient.school_id != school_id:
+            raise serializers.ValidationError("Recipient does not belong to your school.")
         return recipient
 
 
@@ -147,6 +162,11 @@ class EmailMessageLogSerializer(serializers.ModelSerializer):
 
         if not recipient and not to_email:
             raise serializers.ValidationError("Either recipient_id or to_email must be provided.")
+
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        if recipient and school_id and recipient.school_id != school_id:
+            raise serializers.ValidationError({"recipient_id": "Recipient does not belong to your school."})
 
         if recipient and not to_email:
             if not recipient.email:

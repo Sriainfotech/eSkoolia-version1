@@ -37,7 +37,10 @@ const HOME_IDS = new Set(['teacher-home', 'parent-home']);
 function hasPermission(permission: string | undefined, me: MeData): boolean {
   if (!permission) return true;                          // no guard → always show
   if (me.is_superuser) return true;
-  if (me.is_school_admin) return true;                   // school admins see all modules
+  // No is_school_admin bypass — school admins are scoped by permission_codes
+  // like any other user (see CLAUDE.md tenancy policy). A role with a "*"
+  // permission code still grants full access; is_school_admin no longer
+  // does so on its own.
   if (me.permission_codes?.includes('*')) return true;   // wildcard permission
   if (!me.permission_codes?.length) return false;        // no codes → no access
   return me.permission_codes.some(

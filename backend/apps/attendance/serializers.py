@@ -30,6 +30,11 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
         if academic_year is None and self.instance is not None:
             academic_year = getattr(self.instance, "academic_year", None)
 
+        if school and student and student.school_id != school.id:
+            raise serializers.ValidationError(
+                {"student": "Selected student does not belong to your school."}
+            )
+
         if school and student and attendance_date:
             queryset = StudentAttendance.objects.filter(
                 school=school,
@@ -150,6 +155,16 @@ class StudentAttendanceStoreRequestSerializer(serializers.Serializer):
 
 
 class SubjectAttendanceSerializer(serializers.ModelSerializer):
+    def validate(self, attrs):
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        student = attrs.get("student") or getattr(self.instance, "student", None)
+        if school_id and student and student.school_id != school_id:
+            raise serializers.ValidationError(
+                {"student": "Selected student does not belong to your school."}
+            )
+        return attrs
+
     class Meta:
         model = SubjectAttendance
         fields = [

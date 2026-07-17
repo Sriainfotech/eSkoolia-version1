@@ -87,8 +87,14 @@ export function ItemCategoryPanel() {
       const meta = extractPaginationMeta(data);
       setItemCategories(items);
       setTotalCount(meta?.count ?? items.length);
-    } catch {
-      setError("Unable to load item categories.");
+    } catch (err) {
+      const apiErr = err as { status?: number };
+      if (apiErr?.status === 404 && targetPage !== 1) {
+        setPage(1);
+        setError("Invalid page. Reset to page 1.");
+      } else {
+        setError("Unable to load item categories.");
+      }
     } finally {
       setLoading(false);
     }

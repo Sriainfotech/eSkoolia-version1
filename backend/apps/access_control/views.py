@@ -10,7 +10,9 @@ from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated, No
 from rest_framework.response import Response
 
 from apps.core.models import Class, Section
-from apps.fees.models import FeeAssignment
+from decimal import Decimal
+
+from apps.fees.models import FeeAssignment, Payment
 from apps.hr.models import Staff
 from apps.students.models import Student, StudentMultiClassRecord
 
@@ -802,11 +804,28 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
                 name_filter |= Q(first_name__icontains=first_name, last_name__icontains=last_name)
             students_qs = students_qs.filter(name_filter)
 
-        outstanding_qs = FeesAssignment.objects.filter(
+        # FeeAssignment.status is a computed Python property (not a DB column), so it
+        # can't be filtered/excluded on at the queryset level — compute the remaining
+        # due (amount - discount - concession - posted payments) per assignment instead.
+        assignment_qs = FeeAssignment.objects.filter(
             student_id__in=students_qs.values_list("id", flat=True),
-        ).exclude(status=FeesAssignment.STATUS_PAID)
-        due_rows = outstanding_qs.values("student_id").annotate(total_due=Sum("amount") - Sum("discount_amount"))
-        due_map = {row["student_id"]: row["total_due"] for row in due_rows}
+        ).values("id", "student_id", "amount", "discount_amount", "concession_amount")
+        paid_by_assignment = dict(
+            Payment.objects.filter(
+                assignment_id__in=[row["id"] for row in assignment_qs],
+                status="posted",
+            )
+            .values("assignment_id")
+            .annotate(paid=Sum("amount_paid"))
+            .values_list("assignment_id", "paid")
+        )
+        due_map: dict = {}
+        for row in assignment_qs:
+            net_amount = row["amount"] - row["discount_amount"] - row["concession_amount"]
+            paid = paid_by_assignment.get(row["id"]) or Decimal("0.00")
+            remaining = net_amount - paid
+            if remaining > 0:
+                due_map[row["student_id"]] = due_map.get(row["student_id"], Decimal("0.00")) + remaining
 
         student_role = None
         parent_role = None
@@ -1183,6 +1202,12 @@ class LoginPermissionViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["post"], url_path="bulk-access")
     def bulk_access(self, request):
+        # Fail closed: a bulk action must never run unscoped. An acting admin
+        # with no school_id has no school to scope against, so reject rather
+        # than silently skip the filter and affect every school's users.
+        if not request.user.school_id:
+            raise DRFPermissionDenied("Acting admin has no school context; bulk actions are not permitted.")
+
         ids = request.data.get("ids") or []
         all_matching = _coerce_bool(request.data.get("allMatching", False))
         login_access = _coerce_bool(request.data.get("login_access", request.data.get("loginAccess", False)))
@@ -1193,9 +1218,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
             role = self._get_role_by_slug(request, role_slug)
             if role:
                 user_ids_qs = UserRole.objects.filter(role_id=role.id).values_list("user_id", flat=True).distinct()
-                target_qs = User.objects.filter(id__in=user_ids_qs)
-                if request.user.school_id:
-                    target_qs = target_qs.filter(school_id=request.user.school_id)
+                target_qs = User.objects.filter(id__in=user_ids_qs, school_id=request.user.school_id)
                 if search:
                     target_qs = target_qs.filter(
                         Q(first_name__icontains=search)
@@ -1206,9 +1229,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
                 return Response({"affected": affected}, status=status.HTTP_200_OK)
         elif ids:
             safe_ids = [int(i) for i in ids if str(i).lstrip("-").isdigit()]
-            qs = User.objects.filter(id__in=safe_ids)
-            if request.user.school_id:
-                qs = qs.filter(school_id=request.user.school_id)
+            qs = User.objects.filter(id__in=safe_ids, school_id=request.user.school_id)
             affected = qs.update(access_status=login_access)
             return Response({"affected": affected}, status=status.HTTP_200_OK)
 
@@ -1218,6 +1239,10 @@ class LoginPermissionViewSet(viewsets.ViewSet):
     def bulk_reset(self, request):
         import secrets
         import string as _string
+
+        # Fail closed — see bulk_access above for rationale.
+        if not request.user.school_id:
+            raise DRFPermissionDenied("Acting admin has no school context; bulk actions are not permitted.")
 
         ids = request.data.get("ids") or []
         all_matching = _coerce_bool(request.data.get("allMatching", False))
@@ -1235,9 +1260,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
                 user_ids = list(
                     UserRole.objects.filter(role_id=role.id).values_list("user_id", flat=True).distinct()
                 )
-                target_qs = User.objects.filter(id__in=user_ids)
-                if request.user.school_id:
-                    target_qs = target_qs.filter(school_id=request.user.school_id)
+                target_qs = User.objects.filter(id__in=user_ids, school_id=request.user.school_id)
                 if search:
                     target_qs = target_qs.filter(
                         Q(first_name__icontains=search)
@@ -1252,9 +1275,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
                 return Response({"affected": count}, status=status.HTTP_200_OK)
         elif ids:
             safe_ids = [int(i) for i in ids if str(i).lstrip("-").isdigit()]
-            qs = User.objects.filter(id__in=safe_ids)
-            if request.user.school_id:
-                qs = qs.filter(school_id=request.user.school_id)
+            qs = User.objects.filter(id__in=safe_ids, school_id=request.user.school_id)
             count = 0
             for u in qs:
                 u.set_password(gen_pwd())

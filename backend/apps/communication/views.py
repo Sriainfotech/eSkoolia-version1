@@ -92,8 +92,9 @@ class CommunicationNotificationViewSet(BaseCommunicationViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = CommunicationNotification.objects.select_related("recipient", "created_by")
-        if user.is_superuser:
-            return queryset
+        # No is_superuser bypass: a superuser's own account is scoped like any
+        # other user's — they see notifications addressed to them, not every
+        # school's notifications. See CLAUDE.md tenancy policy.
         return queryset.filter(recipient=user)
 
     def perform_create(self, serializer):
@@ -135,8 +136,7 @@ class InAppMessageViewSet(BaseCommunicationViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = InAppMessage.objects.select_related("sender", "recipient")
-        if user.is_superuser:
-            return queryset
+        # No is_superuser bypass — see CommunicationNotificationViewSet above.
         return queryset.filter(Q(sender=user) | Q(recipient=user))
 
     def perform_create(self, serializer):
@@ -158,7 +158,7 @@ class InAppMessageViewSet(BaseCommunicationViewSet):
     @action(detail=True, methods=["post"], url_path="mark-read")
     def mark_read(self, request, pk=None):
         message = self.get_object()
-        if message.recipient_id != request.user.id and not request.user.is_superuser:
+        if message.recipient_id != request.user.id:
             raise ValidationError("Only the recipient can mark this message as read.")
 
         if not message.is_read:
@@ -177,8 +177,7 @@ class EmailMessageLogViewSet(BaseCommunicationViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = EmailMessageLog.objects.select_related("recipient", "created_by")
-        if user.is_superuser:
-            return queryset
+        # No is_superuser bypass — see CommunicationNotificationViewSet above.
         return queryset.filter(Q(created_by=user) | Q(recipient=user))
 
     def create(self, request, *args, **kwargs):

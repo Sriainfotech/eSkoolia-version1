@@ -73,12 +73,15 @@ const STAFF_FILTERS: ReportFilterField[] = [
     key: "attendance_type",
     label: "Attendance Type",
     type: "select",
+    // Values must match StaffAttendance.STATUS_CHOICES (backend/apps/hr/models.py) —
+    // single-letter codes, and note "L" means Leave for staff (not Late).
     options: [
       { value: "", label: "All" },
-      { value: "present", label: "Present" },
-      { value: "absent", label: "Absent" },
-      { value: "late", label: "Late" },
-      { value: "half_day", label: "Half Day" },
+      { value: "P", label: "Present" },
+      { value: "A", label: "Absent" },
+      { value: "L", label: "Leave" },
+      { value: "F", label: "Half Day" },
+      { value: "H", label: "Holiday" },
     ],
   },
   ...DEFAULT_REPORT_FILTERS,
@@ -266,12 +269,15 @@ const REPORTS: Record<string, ReportDefinition> = {
         key: "attendance_type",
         label: "Attendance Type",
         type: "select",
+        // Values must match ATTENDANCE_TYPE_CHOICES (backend/apps/attendance/models.py) —
+        // single-letter codes, direct-equality filter on the backend.
         options: [
           { value: "", label: "All" },
-          { value: "present", label: "Present" },
-          { value: "absent", label: "Absent" },
-          { value: "late", label: "Late" },
-          { value: "half_day", label: "Half Day" },
+          { value: "P", label: "Present" },
+          { value: "A", label: "Absent" },
+          { value: "L", label: "Late" },
+          { value: "F", label: "Half Day" },
+          { value: "H", label: "Holiday" },
         ],
       },
       ...DEFAULT_REPORT_FILTERS,

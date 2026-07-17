@@ -1,6 +1,6 @@
 "use client";
 import { useState, useMemo, useEffect } from "react";
-import { feesApi, listData } from "@/lib/fees-api";
+import { feesApi, listData, type ConcessionRule } from "@/lib/fees-api";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 type Category  = "Day Scholar" | "Transport Users" | "Full Boarder" | "Unassigned";
@@ -84,21 +84,35 @@ function ModalFooter({ children }: { children:React.ReactNode }) {
 }
 
 // ── Fee schedule table (shared by Assign + Edit modals) ────────────────────────
-function parseConcessionPct(c: string): number {
+// Looks up the real discount_percentage from the school's configured
+// ConcessionRule records — previously this parsed the percentage out of the
+// dropdown label text with a regex, so any rule an admin actually configured
+// in Fee Configuration (e.g. "Sibling Discount 15%", a rule with a
+// non-obvious name, or one edited to a different percentage) had zero effect
+// on what got applied here; only the hardcoded label list mattered.
+function parseConcessionPct(c: string, rules: ConcessionRule[]): number {
+  if (!c || c === "None") return 0;
+  const rule = rules.find(r => r.name === c);
+  if (rule) {
+    const pct = parseFloat(rule.discount_percentage || "0");
+    return Number.isFinite(pct) ? pct / 100 : 0;
+  }
+  // Fallback for any pre-existing session/override state referencing a label
+  // that no longer matches a live rule (e.g. rule renamed/deleted).
   const m = c.match(/(\d+(\.\d+)?)\s*%/);
   if (m) return parseFloat(m[1]) / 100;
   if (/full/i.test(c)) return 1;
   return 0;
 }
 
-function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange, feeSchedules, concessions, groups }: {
+function FeeScheduleTable({ group, concession, onGroupChange, onConcessionChange, feeSchedules, concessions, concessionRules, groups }: {
   group:string; concession:string;
   onGroupChange:(g:string)=>void; onConcessionChange:(c:string)=>void;
-  feeSchedules: Record<string, any[]>; concessions: string[];
+  feeSchedules: Record<string, any[]>; concessions: string[]; concessionRules: ConcessionRule[];
   groups: any[];
 }) {
   const rows  = feeSchedules[group] ?? [];
-  const pct   = parseConcessionPct(concession);
+  const pct   = parseConcessionPct(concession, concessionRules);
   const total = rows.reduce((s,r) => s + r.annual * (1 - pct), 0);
   return (
     <div style={{ padding:"14px 20px" }}>
@@ -165,6 +179,7 @@ export default function FeesAssignmentPanel() {
   const [assignments, setAssignments] = useState<any[]>([]);
   const [groups, setGroups] = useState<any[]>([]);
   const [schedules, setSchedules] = useState<any[]>([]);
+  const [concessionRules, setConcessionRules] = useState<ConcessionRule[]>([]);
   const [feeTypes, setFeeTypes] = useState<any[]>([]);
   const [years, setYears] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -196,9 +211,17 @@ export default function FeesAssignmentPanel() {
         feesApi.listGroups({ academic_year: yearId }),
         feesApi.listSchedules({ academic_year: yearId }),
         feesApi.listTypes({ page_size: 500 }),
+        feesApi.listConcessionRules({ page_size: 500 }),
       ]);
-      const [stRes, clRes, asgnRes, grpRes, schRes, typeRes] = results;
-      console.log("API raw results:", { stRes, clRes, asgnRes, grpRes, schRes, typeRes });
+      const [stRes, clRes, asgnRes, grpRes, schRes, typeRes, concRes] = results;
+      console.log("API raw results:", { stRes, clRes, asgnRes, grpRes, schRes, typeRes, concRes });
+
+      if (concRes.status === "fulfilled") {
+        setConcessionRules(listData(concRes.value));
+      } else {
+        console.error("Failed to load concession rules", concRes.reason);
+        setConcessionRules([]);
+      }
 
       if (stRes.status === "fulfilled") {
         let studentsData = listData(stRes.value);
@@ -385,7 +408,13 @@ export default function FeesAssignmentPanel() {
     return map;
   }, [LATEST_ASSIGNMENTS]);
 
-  const CONCESSIONS = ["None", "Staff Ward 50%", "Merit 25%", "Need-Based Full", "Sibling 10%"];
+  // Real, admin-configured concession rules (Fee Configuration → Concession
+  // Rules) drive this dropdown — previously a hardcoded list unrelated to
+  // whatever a school actually configured.
+  const CONCESSIONS = useMemo(
+    () => ["None", ...concessionRules.filter(r => (r.status || "").toLowerCase() !== "inactive").map(r => r.name)],
+    [concessionRules],
+  );
 
   const CLASS_DATA = useMemo(() => {
     const classMap = new Map<string, ClassSection>();
@@ -524,7 +553,7 @@ export default function FeesAssignmentPanel() {
       const amt     = parseFloat(a.amount || '0');
       if (concAmt > 0 && amt > 0) {
         const pct     = concAmt / amt;
-        const matched = CONCESSIONS.find(c => Math.abs(parseConcessionPct(c) - pct) < 0.01);
+        const matched = CONCESSIONS.find(c => Math.abs(parseConcessionPct(c, concessionRules) - pct) < 0.01);
         if (matched && matched !== "None") { inferred = matched; break; }
       }
     }
@@ -573,7 +602,7 @@ export default function FeesAssignmentPanel() {
         );
 
         const rawAmount = parseFloat(matchingSchedule.amount || '0');
-        const concPct   = parseConcessionPct(modalConcession);
+        const concPct   = parseConcessionPct(modalConcession, concessionRules);
         const concAmt   = (rawAmount * concPct).toFixed(2);
 
         const payload: Record<string, unknown> = {
@@ -618,7 +647,7 @@ export default function FeesAssignmentPanel() {
     }
 
     // Only update UI after confirmed DB write — store net annual (after concession)
-    const concPctSave = parseConcessionPct(modalConcession);
+    const concPctSave = parseConcessionPct(modalConcession, concessionRules);
     const netTotal    = rows.reduce((s, r) => s + r.annual * (1 - concPctSave), 0);
     setOverrides(prev=>({...prev,[assignModal.student.id]:{group:modalGroup,annual:netTotal,concession:modalConcession}}));
     setAssignModal(null);
@@ -951,7 +980,7 @@ export default function FeesAssignmentPanel() {
           <FeeScheduleTable
             group={modalGroup} concession={modalConcession}
             onGroupChange={setModalGroup} onConcessionChange={setModalConcession}
-            feeSchedules={FEE_SCHEDULES} concessions={CONCESSIONS}
+            feeSchedules={FEE_SCHEDULES} concessions={CONCESSIONS} concessionRules={concessionRules}
             groups={groups}
           />
           <ModalFooter>

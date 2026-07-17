@@ -132,6 +132,13 @@ class SchoolTenantBaseSerializer(serializers.ModelSerializer):
             "logo_url",
             "brand_color",
             "school_type",
+            "student_seat_limit",
+            "staff_seat_limit",
+            "storage_cap_gb",
+            "trial_days",
+            "go_live_date",
+            "trial_ends_at",
+            "billing_cycle",
         ]
         read_only_fields = ["tenant_id"]
 
@@ -180,6 +187,12 @@ class SchoolTenantUpdateSerializer(serializers.ModelSerializer):
             "pin_code",
             "affiliation_number",
             "school_type",
+            "student_seat_limit",
+            "staff_seat_limit",
+            "storage_cap_gb",
+            "trial_days",
+            "go_live_date",
+            "billing_cycle",
         ]
 
     _VALID_SCHOOL_TYPES = {
@@ -266,9 +279,25 @@ class ProvisionSchoolRequestSerializer(serializers.Serializer):
     pin_code = serializers.CharField(max_length=6, required=False, allow_blank=True, default="")
     # Board affiliation
     affiliation_number = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
+    # Plan & capacity overrides (null = inherit subscription plan default)
+    school_type = serializers.CharField(max_length=64, required=False, allow_blank=True, default="")
+    student_seat_limit = serializers.IntegerField(required=False, allow_null=True, default=None, min_value=0)
+    staff_seat_limit = serializers.IntegerField(required=False, allow_null=True, default=None, min_value=0)
+    storage_cap_gb = serializers.IntegerField(required=False, allow_null=True, default=None, min_value=0)
+    trial_days = serializers.IntegerField(required=False, allow_null=True, default=None, min_value=0)
+    go_live_date = serializers.DateField(required=False, allow_null=True, default=None)
+    billing_cycle = serializers.CharField(max_length=16, required=False, allow_null=True, default=None)
     # Optional admin credentials — auto-generated if omitted
     admin_username = serializers.CharField(max_length=150, required=False, allow_blank=True, default="")
     admin_password = serializers.CharField(max_length=128, required=False, allow_blank=True, default="")
+
+    def validate_school_type(self, value):
+        if value and value not in SchoolTenantUpdateSerializer._VALID_SCHOOL_TYPES:
+            raise serializers.ValidationError(
+                f"Invalid school type '{value}'. Must be one of: "
+                + ", ".join(sorted(SchoolTenantUpdateSerializer._VALID_SCHOOL_TYPES))
+            )
+        return value
 
 
 class ProvisionSchoolResponseSerializer(serializers.Serializer):

@@ -14,7 +14,7 @@ from django.db.models import Count, DecimalField, OuterRef, Q, Subquery, Sum, Va
 from django.db.models.functions import Coalesce
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.authentication import JWTAuthentication
+from apps.tenancy.auth import TenantAwareJWTAuthentication
 
 from .permissions import IsParentPortalUser
 
@@ -27,7 +27,7 @@ class ParentMeView(APIView):
     (name, class, section — no heavy stats so the home screen loads fast).
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsParentPortalUser]
 
     def get(self, request):
@@ -77,7 +77,7 @@ class ChildrenListView(APIView):
     Used by the My Children screen for the summary cards.
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsParentPortalUser]
 
     def get(self, request):
@@ -147,7 +147,7 @@ class ChildDetailView(APIView):
     (same as "not found" to avoid enumeration attacks).
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsParentPortalUser]
 
     def get(self, request, pk):
@@ -257,7 +257,7 @@ class ChildAttendanceCalendarView(APIView):
     month defaults to the current month.
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsParentPortalUser]
 
     def get(self, request):
@@ -360,7 +360,7 @@ class ChildFeesView(APIView):
     with per-item paid/due amounts computed via a single aggregate query.
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsParentPortalUser]
 
     def get(self, request):
@@ -449,7 +449,7 @@ class ParentNoticesView(APIView):
     Filters to notices where inform_to is empty (all) or contains 'parent'.
     """
 
-    authentication_classes = [JWTAuthentication]
+    authentication_classes = [TenantAwareJWTAuthentication]
     permission_classes = [IsParentPortalUser]
 
     def get(self, request):

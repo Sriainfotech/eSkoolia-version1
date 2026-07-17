@@ -21,7 +21,7 @@ from rest_framework_simplejwt.exceptions import InvalidToken
 from rest_framework.request import Request
 from rest_framework.exceptions import AuthenticationFailed
 
-from .context import get_current_schema, get_current_tenant, is_multi_tenancy_enabled
+from .context import get_current_schema, get_current_tenant, is_multi_tenancy_enabled, is_public_path
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -80,7 +80,16 @@ class TenantAwareJWTAuthentication(JWTAuthentication):
             )
             return (user, validated_token)
         
-        # Regular users must authenticate in their tenant schema
+        # Regular users must authenticate in their tenant schema — except on
+        # paths the middleware deliberately serves from the public schema
+        # (global reference data, auth, admin, static/media). The middleware
+        # already cleared tenant context for those paths on purpose; without
+        # this check every non-superuser request to e.g. /api/v1/master/*
+        # would be rejected as "missing tenant context" even though no
+        # tenant was ever supposed to be resolved for it.
+        if is_public_path(request.path):
+            return (user, validated_token)
+
         if current_tenant is None or current_schema is None:
             # Request didn't resolve to a tenant, but JWT token exists
             # This is ambiguous - user is trying to auth to public schema
