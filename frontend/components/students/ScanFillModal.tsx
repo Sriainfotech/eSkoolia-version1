@@ -1,24 +1,28 @@
 "use client";
-import React, { useRef, useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 
 // ─── field definitions ────────────────────────────────────────────────────────
-interface FieldDef {
+export interface FieldDef {
   key: string;
   label: string;
   required: boolean;
   hint?: string;
   type?: string;
+  /** Extra OCR label synonyms to search for besides `label` (e.g. lastName → "SURNAME"). */
+  aliases?: string[];
 }
 
-const FIELD_GROUPS: Array<{ section: string; fields: FieldDef[] }> = [
+export type FieldGroup = { section: string; fields: FieldDef[] };
+
+export const STUDENT_FIELD_GROUPS: FieldGroup[] = [
   {
     section: "Section A — Student Identity",
     fields: [
-      { key: "firstName",    label: "First Name",    required: true,  hint: "As per birth certificate" },
-      { key: "lastName",     label: "Last Name",     required: true  },
-      { key: "dateOfBirth",  label: "Date of Birth", required: true,  hint: "DD / MM / YYYY", type: "text" },
-      { key: "gender",       label: "Gender",        required: true,  hint: "MALE / FEMALE / OTHER" },
-      { key: "bloodGroup",   label: "Blood Group",   required: false, hint: "e.g. A+" },
+      { key: "firstName",    label: "First Name",    required: true,  hint: "As per birth certificate", aliases: ["GIVEN NAME"] },
+      { key: "lastName",     label: "Last Name",     required: true,  aliases: ["SURNAME"] },
+      { key: "dateOfBirth",  label: "Date of Birth", required: true,  hint: "DD / MM / YYYY", type: "text", aliases: ["DOB", "D.O.B"] },
+      { key: "gender",       label: "Gender",        required: true,  hint: "MALE / FEMALE / OTHER", aliases: ["SEX"] },
+      { key: "bloodGroup",   label: "Blood Group",   required: false, hint: "e.g. A+", aliases: ["BLOOD TYPE"] },
       { key: "religion",     label: "Religion",      required: false },
       { key: "nationality",  label: "Nationality",   required: false },
       { key: "motherTongue", label: "Mother Tongue", required: false },
@@ -27,21 +31,21 @@ const FIELD_GROUPS: Array<{ section: string; fields: FieldDef[] }> = [
   {
     section: "Section B — Contact & Address",
     fields: [
-      { key: "phone",       label: "Mobile Phone",  required: true,  hint: "10-digit" },
+      { key: "phone",       label: "Mobile Phone",  required: true,  hint: "10-digit", aliases: ["MOBILE", "PHONE"] },
       { key: "email",       label: "Email",         required: false },
-      { key: "addressLine", label: "Address Line",  required: true  },
-      { key: "city",        label: "City",          required: true  },
+      { key: "addressLine", label: "Address Line",  required: true,  aliases: ["ADDRESS"] },
+      { key: "city",        label: "City",          required: true,  aliases: ["TOWN"] },
       { key: "district",    label: "District",      required: true  },
       { key: "stateName",   label: "State",         required: true  },
-      { key: "pincode",     label: "Pincode",       required: true,  hint: "6-digit" },
+      { key: "pincode",     label: "Pincode",       required: true,  hint: "6-digit", aliases: ["PIN CODE", "POSTAL CODE"] },
     ],
   },
   {
     section: "Section C — Parent / Guardian",
     fields: [
-      { key: "guardianName",       label: "Guardian Full Name",   required: true  },
+      { key: "guardianName",       label: "Guardian Full Name",   required: true,  aliases: ["GUARDIAN NAME", "FATHER", "MOTHER"] },
       { key: "guardianRelation",   label: "Relationship",         required: false, hint: "Father / Mother / Guardian" },
-      { key: "guardianPhone",      label: "Guardian Mobile",      required: true,  hint: "10-digit" },
+      { key: "guardianPhone",      label: "Guardian Mobile",      required: true,  hint: "10-digit", aliases: ["GUARDIAN PHONE"] },
       { key: "guardianEmail",      label: "Guardian Email",       required: false },
       { key: "guardianOccupation", label: "Guardian Occupation",  required: false },
     ],
@@ -49,15 +53,17 @@ const FIELD_GROUPS: Array<{ section: string; fields: FieldDef[] }> = [
   {
     section: "Section D — Government Identity",
     fields: [
-      { key: "aadhaarNo", label: "Aadhaar Number", required: false, hint: "12 digits" },
+      { key: "aadhaarNo", label: "Aadhaar Number", required: false, hint: "12 digits", aliases: ["AADHAR", "UID"] },
     ],
   },
 ];
 
-const REQUIRED_KEYS = FIELD_GROUPS.flatMap(g => g.fields.filter(f => f.required).map(f => f.key));
-const FIELD_LABEL_MAP: Record<string, string> = Object.fromEntries(
-  FIELD_GROUPS.flatMap(g => g.fields.map(f => [f.key, f.label]))
-);
+function requiredKeysOf(fieldGroups: FieldGroup[]): string[] {
+  return fieldGroups.flatMap(g => g.fields.filter(f => f.required).map(f => f.key));
+}
+function fieldLabelMapOf(fieldGroups: FieldGroup[]): Record<string, string> {
+  return Object.fromEntries(fieldGroups.flatMap(g => g.fields.map(f => [f.key, f.label])));
+}
 
 // ─── typed errors for precise user-facing messages ───────────────────────────
 class ScanError extends Error {
@@ -116,13 +122,15 @@ const SCAN_ERROR_MESSAGES: Record<ScanError["code"], { title: string; detail: st
   },
   no_text: {
     title: "No form fields detected",
-    detail: "The file was read but no recognisable admission form fields were found.",
-    tip: "Ensure the uploaded file is the Eskoolia Admission Form. For handwritten or scanned forms, check that all text is clearly visible and written in BLOCK LETTERS.",
+    detail: "The file was read but no recognisable form fields were found.",
+    tip: "Ensure the uploaded file matches the expected form. For handwritten or scanned forms, check that all text is clearly visible and written in BLOCK LETTERS.",
   },
 };
 
 // ─── field extraction from text ──────────────────────────────────────────────
-function extractFieldsFromText(text: string): Record<string, string> {
+// Search terms for each field are derived from its `label` (uppercased) plus any
+// `aliases` — this is what lets the same extractor serve any fieldGroups list.
+function extractFieldsFromText(text: string, fieldGroups: FieldGroup[]): Record<string, string> {
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
 
   const findAfterLabel = (label: string): string => {
@@ -144,29 +152,12 @@ function extractFieldsFromText(text: string): Record<string, string> {
     return "";
   };
 
-  const raw: Record<string, string> = {
-    firstName:          pick("FIRST NAME", "GIVEN NAME"),
-    lastName:           pick("LAST NAME", "SURNAME"),
-    dateOfBirth:        pick("DATE OF BIRTH", "DOB", "D.O.B"),
-    gender:             pick("GENDER", "SEX"),
-    bloodGroup:         pick("BLOOD GROUP", "BLOOD TYPE"),
-    religion:           pick("RELIGION"),
-    nationality:        pick("NATIONALITY"),
-    motherTongue:       pick("MOTHER TONGUE"),
-    phone:              pick("MOBILE PHONE", "MOBILE", "PHONE"),
-    email:              pick("EMAIL"),
-    addressLine:        pick("ADDRESS LINE", "ADDRESS"),
-    city:               pick("CITY", "TOWN"),
-    district:           pick("DISTRICT"),
-    stateName:          pick("STATE"),
-    pincode:            pick("PINCODE", "PIN CODE", "POSTAL CODE"),
-    guardianName:       pick("GUARDIAN FULL NAME", "GUARDIAN NAME", "FATHER", "MOTHER"),
-    guardianRelation:   pick("RELATIONSHIP"),
-    guardianPhone:      pick("GUARDIAN MOBILE", "GUARDIAN PHONE"),
-    guardianEmail:      pick("GUARDIAN EMAIL"),
-    guardianOccupation: pick("GUARDIAN OCCUPATION"),
-    aadhaarNo:          pick("AADHAAR", "AADHAR", "UID"),
-  };
+  const raw: Record<string, string> = {};
+  for (const group of fieldGroups) {
+    for (const f of group.fields) {
+      raw[f.key] = pick(f.label.toUpperCase(), ...(f.aliases ?? []));
+    }
+  }
 
   Object.keys(raw).forEach(k => { if (!raw[k]) delete raw[k]; });
   return raw;
@@ -178,6 +169,7 @@ type ScanMode = "pdf-text" | "pdf-ocr" | "image-ocr";
 
 async function runOcr(
   file: File,
+  fieldGroups: FieldGroup[],
   onProgress: (p: number) => void,
   onPreview?: (url: string) => void,
   onMode?: (m: ScanMode) => void
@@ -245,7 +237,7 @@ async function runOcr(
       // Digital PDF — text layer is rich, no OCR needed
       onMode?.("pdf-text");
       onProgress(95);
-      return extractFieldsFromText(allText); // may be empty if PDF isn't the admission form — review step shows why
+      return extractFieldsFromText(allText, fieldGroups); // may be empty if PDF isn't the expected form — review step shows why
     }
 
     // Scanned PDF — fall back to Tesseract on rendered canvas
@@ -271,7 +263,7 @@ async function runOcr(
     }
     await worker.terminate();
     onProgress(95);
-    const scannedResult = extractFieldsFromText(ocrResult.data.text);
+    const scannedResult = extractFieldsFromText(ocrResult.data.text, fieldGroups);
     return scannedResult; // may be empty — review step will show the "no fields detected" message
   }
 
@@ -299,7 +291,7 @@ async function runOcr(
   }
   await worker.terminate();
   onProgress(95);
-  const imageResult = extractFieldsFromText(ocrResult.data.text);
+  const imageResult = extractFieldsFromText(ocrResult.data.text, fieldGroups);
   return imageResult; // may be empty — review step will show the "no fields detected" message
 }
 
@@ -307,11 +299,16 @@ async function runOcr(
 interface ScanFillModalProps {
   onClose: () => void;
   onApply: (results: Record<string, string>) => void;
+  fieldGroups: FieldGroup[];
+  /** What kind of form this is, used in a couple of on-screen hints (default: "admission form"). */
+  documentLabel?: string;
 }
 
 type Step = "pick" | "scanning" | "review";
 
-export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
+export function ScanFillModal({ onClose, onApply, fieldGroups, documentLabel = "admission form" }: ScanFillModalProps) {
+  const REQUIRED_KEYS = useMemo(() => requiredKeysOf(fieldGroups), [fieldGroups]);
+  const FIELD_LABEL_MAP = useMemo(() => fieldLabelMapOf(fieldGroups), [fieldGroups]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>("pick");
   const [previewUrl, setPreviewUrl] = useState("");
@@ -357,7 +354,7 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
     setScanMode(null);
     setShowMissingPrompt(false);
     try {
-      const extracted = await runOcr(file, setProgress, setPreviewUrl, setScanMode);
+      const extracted = await runOcr(file, fieldGroups, setProgress, setPreviewUrl, setScanMode);
       setFields(extracted);
       setProgress(100);
       setStep("review");
@@ -424,7 +421,7 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
               📷 Scan & Fill — Auto extract from filled form
             </h2>
             <p style={{ margin: "3px 0 0", fontSize: 12, color: "#c4b5fd" }}>
-              {step === "pick" && "Select or drop a scanned / photographed admission form"}
+              {step === "pick" && `Select or drop a scanned / photographed ${documentLabel}`}
               {step === "scanning" && `Reading "${fileName}"…`}
               {step === "review" && `${filledCount} fields extracted. Review & correct before applying.`}
             </p>
@@ -561,7 +558,7 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
                   }
                 </p>
 
-                {FIELD_GROUPS.map(group => (
+                {fieldGroups.map(group => (
                   <div key={group.section} style={{ marginBottom: 20 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
                       <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
@@ -641,12 +638,12 @@ export function ScanFillModal({ onClose, onApply }: ScanFillModalProps) {
                     <p style={{ margin: "0 0 8px", fontWeight: 700 }}>⚠ No fields could be extracted</p>
                     {scanMode === "pdf-text" ? (
                       <>
-                        <p style={{ margin: "0 0 6px" }}>The PDF text layer was read but no admission form fields were recognised. This can happen if:</p>
+                        <p style={{ margin: "0 0 6px" }}>The PDF text layer was read but no form fields were recognised. This can happen if:</p>
                         <ul style={{ margin: "0 0 8px", paddingLeft: 18, lineHeight: 1.8 }}>
-                          <li>The uploaded file is not the Eskoolia Admission Form</li>
+                          <li>The uploaded file is not the expected {documentLabel}</li>
                           <li>The form labels are in a language or format the extractor doesn&apos;t recognise</li>
                         </ul>
-                        <p style={{ margin: 0 }}>💡 Try uploading the correct Eskoolia blank form filled with student details.</p>
+                        <p style={{ margin: 0 }}>💡 Try uploading the correct Eskoolia blank form filled with the details.</p>
                       </>
                     ) : (
                       <>

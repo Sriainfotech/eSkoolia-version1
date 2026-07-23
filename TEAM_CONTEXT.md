@@ -1,5 +1,94 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — GitHub Copilot (23/07/2026)
+
+**Area:** HR Onboarding UX + PDF Flow, Tenancy Public Path Auth, and Data Entry Reliability Fixes
+
+### 1. HR Onboarding — Major UX Refresh + New Document Flow
+
+**Frontend:** `frontend/app/(dashboard)/hr/onboard/page.tsx`
+
+- Refactored the onboarding page visual system to align with the newer Student enrollment design language:
+  - Sidebar nav redesigned (group headers, active/done states, compact “Heads up” guidance)
+  - Hero/action bar restyled (Drafts, AI Assist, PDF, Header, guidance actions)
+  - Scan banner and sticky footer actions modernized
+  - Improved photo-upload UX and step header hierarchy
+- Added signed acknowledgment support:
+  - New document key: `signed_onboarding_form`
+  - File validation (type + max 5MB) and upload call to `/api/v1/hr/onboard/documents/upload/`
+- Added school-header and verification/PDF tooling:
+  - Header popover entry point (for school branding in generated forms)
+  - Verification form preview modal before PDF save
+  - Scan & Fill modal integration for onboarding field prefill
+
+**New frontend HR components:**
+- `frontend/components/hr/OnboardFieldUi.tsx`
+- `frontend/components/hr/SchoolHeaderPopover.tsx`
+- `frontend/components/hr/StaffVerificationForm.tsx`
+- `frontend/components/hr/staffScanFields.ts`
+
+### 2. HR PDF Generation — Backend Field/Branding Enhancements
+
+**Backend:** `backend/apps/hr/views.py`
+
+- Added optional school header support for onboarding PDFs:
+  - `_parse_school_header(raw)` to normalize incoming header payload
+  - `_school_header_flowables(...)` to render logo + school metadata block
+- Applied school branding to both blank and filled onboarding form PDF flows.
+- Updated filled-form field mapping to align with current frontend payload keys (examples: `staff_no`, `biometric_rfid`, `nin`, `pan`, `passport_no`, `bank_account_no`, etc.).
+- Improved current/permanent address mapping consistency with current form structure.
+
+**Frontend API hook updates:** `frontend/hooks/useHrApi.ts`
+- `downloadBlankForm(copies, schoolHeader?)` now accepts optional branding payload via query param (without logo blob in URL).
+- `downloadFilledForm(formData, schoolHeader?)` now sends both form data and header in POST body.
+
+### 3. Tenancy/Auth Consistency Fix — Public Paths
+
+**Files:**
+- `backend/apps/tenancy/context.py`
+- `backend/apps/tenancy/middleware.py`
+- `backend/apps/tenancy/auth.py`
+
+- Introduced shared public-path helpers (`PUBLIC_PATH_PREFIXES`, `is_public_path`) in tenancy context.
+- Middleware and JWT auth now use the same public-path source of truth.
+- Prevents false “missing tenant context” rejections on intentionally tenant-agnostic routes (auth, admin, static/media, master data endpoints).
+
+### 4. Attendance/Admissions/Admin Robustness Fixes
+
+**Attendance (Student):**
+- `frontend/app/(dashboard)/attendance/student/hooks/useAttendance.ts`
+  - Delayed `URL.revokeObjectURL` after download click to avoid browser race/drop on Firefox/Safari.
+- `frontend/app/(dashboard)/attendance/student/page.tsx`
+  - Added guard toast when trying to download sample with no attendance data.
+
+**Students:**
+- `frontend/components/students/StudentAddPanel.tsx`
+  - Section-load timeout flow revised so late success responses still apply.
+  - Admission-number uniqueness check now excludes newly auto-created draft IDs where applicable.
+  - Camera retake flow now reattaches active stream to remounted video element.
+
+**Admissions/Admin:**
+- `frontend/components/administration/AdminSetupPanel.tsx`
+  - Complaint Type CRUD routed to dedicated `complaint-types` endpoints instead of generic admin-setup storage.
+- `frontend/components/admissions/AdmissionsCommandCenter.tsx`
+  - Improved error toasts to surface backend message when available.
+- `frontend/components/admissions/AdmissionsMarketing.tsx`
+  - New event validation requires at least one alphabetic character in event name.
+
+### 5. Scan & Fill Reusability Upgrade
+
+**File:** `frontend/components/students/ScanFillModal.tsx`
+
+- Generalized Scan & Fill modal to accept dynamic `fieldGroups` and optional `documentLabel`.
+- Exported reusable field types/config for student and HR onboarding use cases.
+- Extraction now derives labels/aliases from supplied config instead of hardcoded admission-only mappings.
+
+### Status
+
+✅ **IMPLEMENTED (WORKTREE CHANGES PRESENT)** — Multi-module changes are in place across HR, tenancy, attendance, admissions, and admin UX/data flows.
+
+⚠️ **Validation pending:** Full regression pass (lint/tests + key user flows) should be completed before merge.
+
 ## Update — GitHub Copilot (14/07/2026)
 
 **Area:** Frontend Code Quality — ESLint Production Readiness

@@ -2005,6 +2005,79 @@ class StaffOnboardDraftDeleteView(APIView):
 
 # ── Blank onboarding form PDF ─────────────────────────────────────────────────
 
+def _parse_school_header(raw) -> dict:
+    """Normalize the optional `school_header` request field (query-string JSON
+    string on the blank-form GET, or a dict in the filled-form POST body) into
+    a plain dict of string fields. Returns {} for anything missing/invalid —
+    callers treat an empty dict as "no header requested"."""
+    if raw is None:
+        return {}
+    if isinstance(raw, str):
+        import json as _json
+        try:
+            raw = _json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    fields = ("schoolName", "schoolAddress", "schoolPhone", "schoolEmail", "logoDataUrl", "principalName")
+    return {k: str(raw.get(k) or "").strip() for k in fields if str(raw.get(k) or "").strip()}
+
+
+def _school_header_flowables(school_header: dict, inner_w):
+    """Builds the optional school-branding block (logo + name/address/contact)
+    shown above the form title. Returns [] when no header fields were supplied,
+    so PDFs render exactly as before when the caller omits `school_header`."""
+    if not school_header:
+        return []
+
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import HRFlowable, Image, Paragraph, Spacer, Table, TableStyle
+
+    INK = colors.HexColor("#15172A")
+    MUTED = colors.HexColor("#94A3B8")
+    BORDER = colors.HexColor("#E8E8F0")
+
+    name_style = ParagraphStyle("SchoolHdrName", fontName="Helvetica-Bold", fontSize=13, textColor=INK)
+    meta_style = ParagraphStyle("SchoolHdrMeta", fontName="Helvetica", fontSize=7.5, textColor=MUTED, leading=10)
+
+    name = school_header.get("schoolName") or ""
+    meta_lines = [
+        school_header.get("schoolAddress"),
+        " · ".join(filter(None, [school_header.get("schoolPhone"), school_header.get("schoolEmail")])),
+        (f"Principal: {school_header['principalName']}" if school_header.get("principalName") else ""),
+    ]
+    meta_html = "<br/>".join(line for line in meta_lines if line)
+
+    text_cell = Paragraph(
+        (f"<b>{name}</b>" if name else "") + (f"<br/>{meta_html}" if meta_html else ""),
+        name_style if name else meta_style,
+    )
+
+    logo_cell = ""
+    logo_data_url = school_header.get("logoDataUrl") or ""
+    if logo_data_url.startswith("data:"):
+        try:
+            import base64
+            from io import BytesIO
+            header, b64data = logo_data_url.split(",", 1)
+            img_bytes = base64.b64decode(b64data)
+            logo_cell = Image(BytesIO(img_bytes), width=16 * mm, height=16 * mm, kind="proportional")
+        except Exception:
+            logo_cell = ""  # malformed data URL — skip the logo, still show text
+
+    if logo_cell:
+        row = Table([[logo_cell, text_cell]], colWidths=[18 * mm, inner_w - 18 * mm])
+        row.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+        block = row
+    else:
+        block = text_cell
+
+    return [block, Spacer(1, 6), HRFlowable(width=inner_w, thickness=0.75, color=BORDER), Spacer(1, 6)]
+
+
 class StaffOnboardBlankFormView(APIView):
     """GET /api/v1/hr/onboard/blank-form/
 
@@ -2039,6 +2112,8 @@ class StaffOnboardBlankFormView(APIView):
                 {"error": f"`copies` must be between 1 and {self._MAX_COPIES}."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        school_header = _parse_school_header(request.query_params.get("school_header"))
 
         # ── Build PDF ──────────────────────────────────────────────────────
         try:
@@ -2191,14 +2266,14 @@ class StaffOnboardBlankFormView(APIView):
 
         # ── Build story ────────────────────────────────────────────────────
         def _build_story(copy_num: int, total: int) -> list:
-            story = []
+            story = list(_school_header_flowables(school_header, INNER_W))
 
             # ─── Header ───────────────────────────────────────────────────
             copy_label = f"Copy {copy_num} of {total}" if total > 1 else ""
             header_data = [[
                 Paragraph("<b>STAFF ONBOARDING FORM</b>", title_style),
                 Paragraph(
-                    f'<font color="#94A3B8">Eskoolia School Management · {copy_label}</font>',
+                    f'<font color="#94A3B8">{school_header.get("schoolName") or "Eskoolia School Management"} · {copy_label}</font>',
                     ParagraphStyle("HR", fontName="Helvetica", fontSize=7.5, textColor=MUTED, alignment=2)
                 ),
             ]]
@@ -2492,6 +2567,8 @@ class StaffOnboardFilledFormView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        school_header = _parse_school_header(body.get("school_header"))
+
         # Sanitise: all values to strings, strip control characters
         def _s(key: str, default: str = "") -> str:
             """Return form_data[key] as a safe stripped string."""
@@ -2615,11 +2692,11 @@ class StaffOnboardFilledFormView(APIView):
             return t
 
         # ── Assemble story ─────────────────────────────────────────────────
-        story = []
+        story = list(_school_header_flowables(school_header, INNER_W))
 
         # ─── Header ───────────────────────────────────────────────────────
         staff_name = " ".join(filter(None, [_s("first_name"), _s("middle_name"), _s("last_name")]))
-        staff_code = _s("staff_code") or "—"
+        staff_code = _s("staff_no") or "—"
 
         header_data = [[
             Paragraph(f"<b>STAFF ONBOARDING FORM</b><br/><font size='9' color='#94A3B8'>{staff_name}</font>", title_style),
@@ -2643,8 +2720,8 @@ class StaffOnboardFilledFormView(APIView):
 
         # ─── Photo box + identifiers ───────────────────────────────────────
         id_pairs = [
-            ("Staff Code", _s("staff_code")),
-            ("Biometric / RFID Code", _s("biometric_code")),
+            ("Staff Code", _s("staff_no")),
+            ("Biometric / RFID Code", _s("biometric_rfid")),
             ("Status", status_val),
             ("Date of Form", _s("joining_date")),
         ]
@@ -2691,7 +2768,7 @@ class StaffOnboardFilledFormView(APIView):
             ("Role / Access",    _s("role")),              ("Joining Date", _s("joining_date")),
             ("Employment Type",  _s("employment_type")),   ("Contract Type", _s("contract_type")),
             ("Probation Period", prob),                    ("Reporting Manager", _s("reporting_manager")),
-            ("Work Location",    _s("work_location")),     ("Biometric ID", _s("biometric_code")),
+            ("Work Location",    _s("work_location")),     ("Biometric ID", _s("biometric_rfid")),
         ])
 
         # ─── Section 3: Contact ────────────────────────────────────────────
@@ -2705,8 +2782,8 @@ class StaffOnboardFilledFormView(APIView):
         story.append(Spacer(1, 2))
 
         curr_addr = ", ".join(filter(None, [
-            _s("current_address_line1"), _s("current_address_line2"),
-            _s("current_city"),          _s("current_state"),
+            _s("current_address"), _s("current_address_line2"),
+            _s("city"),          _s("state"),
             _s("current_pin"),           _s("current_country"),
         ])) or "—"
         story.append(_field_row("Address", curr_addr, col_ratio=0.2))
@@ -2716,7 +2793,7 @@ class StaffOnboardFilledFormView(APIView):
             story.append(Paragraph("✓  Permanent address same as current address", value_style))
         else:
             perm_addr = ", ".join(filter(None, [
-                _s("permanent_address_line1"), _s("permanent_address_line2"),
+                _s("permanent_address"), _s("permanent_address_line2"),
                 _s("permanent_city"),          _s("permanent_state"),
                 _s("permanent_pin"),           _s("permanent_country"),
             ])) or ""
@@ -2729,7 +2806,7 @@ class StaffOnboardFilledFormView(APIView):
         story += _section("4. Family & Emergency Contact")
         story += _two_fields([
             ("Father / Mother Name", _s("father_name") or _s("mother_name")),
-            ("Spouse / Partner",     _s("spouse_name")),
+            ("Spouse / Partner",     _s("spouse_parent_name")),
             ("No. of Children",      _s("num_children")), ("Marital Status", _s("marital_status")),
             ("Emergency Contact",    _s("emergency_name")),
             ("Emergency Relation",   _s("emergency_relation")),
@@ -2739,10 +2816,10 @@ class StaffOnboardFilledFormView(APIView):
         # ─── Section 5: Government IDs ────────────────────────────────────
         story += _section("5. Government & Statutory IDs")
         story += _two_fields([
-            ("Aadhaar Number", _s("aadhaar_number")), ("PAN Number", _s("pan_number")),
-            ("Passport Number",_s("passport_number")), ("Passport Expiry", _s("passport_expiry")),
-            ("Driving License", _s("driving_license")), ("EPF / PF Number", _s("epf_number")),
-            ("ESI Number",      _s("esi_number")),     ("UAN", _s("uan")),
+            ("Aadhaar Number", _s("nin")), ("PAN Number", _s("pan")),
+            ("Passport Number",_s("passport_no")), ("Passport Expiry", _s("passport_expiry")),
+            ("Driving License", _s("driving_licence")), ("EPF / PF Number", _s("epf_number")),
+            ("ESI Number",      _s("esi_no")),     ("UAN", _s("uan")),
         ])
 
         # ─── Section 6: Qualifications ────────────────────────────────────
@@ -2775,7 +2852,7 @@ class StaffOnboardFilledFormView(APIView):
         story += _section("9. Bank & Payroll Details")
         story += _two_fields([
             ("Bank Name",          _s("bank_name")),         ("Branch", _s("bank_branch")),
-            ("Account Holder",     _s("bank_account_name")), ("Account Number", _s("bank_account_number")),
+            ("Account Holder",     _s("bank_account_name")), ("Account Number", _s("bank_account_no")),
             ("IFSC Code",          _s("ifsc_code")),         ("Bank Mobile", _s("bank_mobile")),
             ("Basic Salary (₹)",   _s("basic_salary_input")),("Salary Mode", _s("salary_mode")),
         ])

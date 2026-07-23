@@ -966,6 +966,10 @@ export default function StudentAttendancePage() {
         onImport={() => setImportDialogOpen(true)}
         onExport={handleExportCsv}
         onDownloadSample={() => {
+          if (!kpis || kpis.total_students === 0) {
+            pushToast('No data present to download.', 'error');
+            return;
+          }
           downloadSampleTemplate(
             () => pushToast('Sample attendance template downloaded.', 'success'),
             () => pushToast('Failed to download sample file.', 'error'),

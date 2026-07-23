@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { StudentDocumentsUpload, type DocumentType as DocumentTypeKey, type CustomDocMeta, type MarksheetMeta } from "./StudentDocumentsUpload";
 import { ConsentForm } from "./ConsentForm";
-import { ScanFillModal } from "./ScanFillModal";
+import { ScanFillModal, STUDENT_FIELD_GROUPS } from "./ScanFillModal";
 import {
   StudentGuardiansStep,
   makeEmptyGuardianDraft,
@@ -1410,11 +1410,18 @@ export function StudentAddPanel() {
       return;
     }
 
-    let timedOut = false;
+    // Flips the UI to a "taking a while" error after 8s, but — unlike an
+    // AbortController — doesn't actually cancel the in-flight request. A
+    // response that lands just after 8s on a slower connection is still
+    // real data, not a connection failure, so it must still be applied
+    // instead of being silently discarded (that was the previous bug:
+    // sections would "intermittently fail to load" on a perfectly working
+    // but slightly slow network).
+    let requestSettled = false;
     const timeoutId = window.setTimeout(() => {
-      timedOut = true;
+      if (requestSettled) return;
       setSectionLoading(false);
-      setSectionLoadError("Could not load sections. Check your connection and retry.");
+      setSectionLoadError("Still loading sections… this is taking longer than usual.");
     }, 8000);
 
     try {
@@ -1423,23 +1430,22 @@ export function StudentAddPanel() {
       setSections([]);
       setSectionId("");
       const data = await apiGet<ApiList<Section>>(`/api/v1/core/sections/?class=${encodeURIComponent(targetClassId)}&page_size=200`);
+      requestSettled = true;
       window.clearTimeout(timeoutId);
-      if (!timedOut) {
-        const sectionsArray = listData(data);
-        setSections(sectionsArray);
-        // Check if no sections found
-        if (!sectionsArray || sectionsArray.length === 0) {
-          setNoSectionModalOpen(true);
-        }
+      const sectionsArray = listData(data);
+      setSections(sectionsArray);
+      setSectionLoadError("");
+      // Check if no sections found
+      if (!sectionsArray || sectionsArray.length === 0) {
+        setNoSectionModalOpen(true);
       }
     } catch (loadError) {
+      requestSettled = true;
       window.clearTimeout(timeoutId);
-      if (!timedOut) {
-        setSections([]);
-        setSectionLoadError(parseError(loadError) || "Unable to load sections for selected class.");
-      }
+      setSections([]);
+      setSectionLoadError(parseError(loadError) || "Unable to load sections for selected class.");
     } finally {
-      if (!timedOut) setSectionLoading(false);
+      setSectionLoading(false);
     }
   };
 
@@ -2526,7 +2532,12 @@ export function StudentAddPanel() {
     try {
       setCheckingAdmission(true);
       const query = new URLSearchParams({ admission_no: value });
-      if (isEditMode && studentId) query.set("exclude_id", String(studentId));
+      // In edit mode, exclude the record being edited. In the new-enrollment
+      // flow, the document-upload step auto-saves a draft Student row under
+      // this same admission number before the user can return here — exclude
+      // that just-created draft too, or the check false-positives against it.
+      const excludeId = (isEditMode && studentId) ? studentId : newlyCreatedStudentId;
+      if (excludeId) query.set("exclude_id", String(excludeId));
       const payload = await apiGet<{ exists: boolean; conflict_student?: { id: number; name: string; class_name: string; section_name: string; is_draft?: boolean } }>(`/api/v1/students/students/check-admission-no/?${query.toString()}`);
       if (payload.exists) {
         const conflict = payload.conflict_student ?? null;
@@ -3470,6 +3481,20 @@ export function StudentAddPanel() {
       stopStudentCamera();
     };
   }, [cameraOpen]);
+
+  // The <video> element unmounts (swapped for the captured-photo <img>) once a
+  // photo is taken, then remounts as a fresh DOM node on Retake. The stream
+  // itself is still alive (capture doesn't stop it), but the fresh node has no
+  // srcObject — reattach it here rather than re-requesting the camera.
+  useEffect(() => {
+    if (!cameraOpen || capturedPhotoPreviewUrl) return;
+    const stream = cameraStreamRef.current;
+    const videoEl = cameraVideoRef.current;
+    if (!stream || !videoEl || videoEl.srcObject === stream) return;
+    videoEl.srcObject = stream;
+    videoEl.muted = true;
+    void videoEl.play().catch(() => {});
+  }, [cameraOpen, capturedPhotoPreviewUrl]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -5589,6 +5614,8 @@ export function StudentAddPanel() {
 
       {scanFillOpen && (
         <ScanFillModal
+          fieldGroups={STUDENT_FIELD_GROUPS}
+          documentLabel="admission form"
           onClose={() => setScanFillOpen(false)}
           onApply={(results) => {
             if (results.firstName) setFirstName(results.firstName.charAt(0).toUpperCase() + results.firstName.slice(1).toLowerCase());

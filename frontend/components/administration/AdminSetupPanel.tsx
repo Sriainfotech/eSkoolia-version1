@@ -109,11 +109,20 @@ export function AdminSetupPanel() {
     if (el) setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   };
 
+  // "Complaint Type" is backed by the real ComplaintType model (read by the
+  // Communication Hub → Complaints dropdown at /api/v1/admissions/complaint-types/),
+  // not the generic AdminSetupEntry table. Routing type "2" through admin-setups
+  // silently wrote to a table nothing else reads, so entries created here never
+  // appeared in the Complaints form. Purpose/Source/Reference (1/3/4) still use
+  // admin-setups since no dedicated model exists for them yet.
+  const isComplaintType = (groupType: AdminSetupRow["type"]) => groupType === "2";
+
   const loadTypePage = async (groupType: AdminSetupRow["type"], targetPage: number, targetPageSize: number) => {
-    const data = await apiGet<ApiList<AdminSetupRow>>(
-      `/api/v1/admissions/admin-setups/?type=${groupType}&page=${targetPage}&page_size=${targetPageSize}`
-    );
-    const rows = listData(data);
+    const path = isComplaintType(groupType)
+      ? `/api/v1/admissions/complaint-types/?page=${targetPage}&page_size=${targetPageSize}`
+      : `/api/v1/admissions/admin-setups/?type=${groupType}&page=${targetPage}&page_size=${targetPageSize}`;
+    const data = await apiGet<ApiList<{ id: number; name: string; description?: string }>>(path);
+    const rows: AdminSetupRow[] = listData(data).map((row) => ({ ...row, type: groupType }));
     const total = getTotalCount(data);
     const pages = Math.max(1, Math.ceil(total / targetPageSize));
 
@@ -158,17 +167,27 @@ export function AdminSetupPanel() {
     if (!type) { setFormBanner("Please select a type."); return; }
     if (!name.trim()) { setFormBanner("Name is required."); return; }
 
-    const payload = { type, name: name.trim(), description: description.trim() };
-
     try {
       setSaving(true);
       setFormBanner("");
-      if (editingId) {
-        await apiMutate(`/api/v1/admissions/admin-setups/${editingId}/`, "PATCH", payload);
-        toast.success("Record updated successfully.");
+      if (isComplaintType(type)) {
+        const payload = { name: name.trim(), description: description.trim() };
+        if (editingId) {
+          await apiMutate(`/api/v1/admissions/complaint-types/${editingId}/`, "PATCH", payload);
+          toast.success("Record updated successfully.");
+        } else {
+          await apiMutate("/api/v1/admissions/complaint-types/", "POST", payload);
+          toast.success("Record created successfully.");
+        }
       } else {
-        await apiMutate("/api/v1/admissions/admin-setups/", "POST", payload);
-        toast.success("Record created successfully.");
+        const payload = { type, name: name.trim(), description: description.trim() };
+        if (editingId) {
+          await apiMutate(`/api/v1/admissions/admin-setups/${editingId}/`, "PATCH", payload);
+          toast.success("Record updated successfully.");
+        } else {
+          await apiMutate("/api/v1/admissions/admin-setups/", "POST", payload);
+          toast.success("Record created successfully.");
+        }
       }
       resetForm();
       await loadAll();
@@ -185,7 +204,10 @@ export function AdminSetupPanel() {
     if (!window.confirm("Are you sure to delete this admin setup entry?")) return;
     try {
       setBusyId(row.id);
-      await apiDelete(`/api/v1/admissions/admin-setups/${row.id}/`);
+      const path = isComplaintType(row.type)
+        ? `/api/v1/admissions/complaint-types/${row.id}/`
+        : `/api/v1/admissions/admin-setups/${row.id}/`;
+      await apiDelete(path);
       toast.success("Record deleted successfully.");
       await loadTypePage(row.type, groupPage[row.type], groupPageSize[row.type]);
     } catch (err) {

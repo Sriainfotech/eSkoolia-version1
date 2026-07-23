@@ -3,15 +3,22 @@
  * HR Onboard — 10-step wizard matching the mockup design.
  * Layout: page header → QR banner → [252px grouped sidebar | step card] → sticky footer bar
  */
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Camera, Upload, ChevronDown, X, Printer, Sparkles,
   FileText, CheckCircle, QrCode,
 } from "lucide-react";
+import { useHrToast } from "@/components/hr/HrUi";
+// Field components below are visually restyled to match the Student Enroll page
+// pixel-for-pixel (see OnboardFieldUi.tsx) — aliased to the original names so
+// none of this file's many call sites need to change, only the import source.
 import {
-  HrField, HrInput, HrSelect, HrDropdown, useHrToast,
-} from "@/components/hr/HrUi";
+  OnboardField as HrField,
+  OnboardInput as HrInput,
+  OnboardSelect as HrSelect,
+  OnboardDropdown as HrDropdown,
+} from "@/components/hr/OnboardFieldUi";
 import SearchableSelect from "@/components/hr/SearchableSelect";
 import { BackButton } from "@/components/common/BackButton";
 import {
@@ -26,6 +33,10 @@ import { HrApiError } from "@/hooks/useHrApi";
 import { apiRequestWithRefreshResponse } from "@/lib/api-auth";
 import type { Staff, StaffDocument } from "@/types/hr";
 import { isValidEmail, isValidPhoneDigits, isValidPin, hasAlphanumeric, isGibberishAddress, isGibberishPlaceName, isValidIndianMobile, isValidPersonName, PERSON_NAME_ERR, isValidBankAccountName, BANK_ACCOUNT_NAME_ERR } from "@/lib/hrValidation";
+import { ScanFillModal } from "@/components/students/ScanFillModal";
+import { STAFF_FIELD_GROUPS } from "@/components/hr/staffScanFields";
+import { SchoolHeaderPopover, loadSchoolHeader } from "@/components/hr/SchoolHeaderPopover";
+import { StaffVerificationForm } from "@/components/hr/StaffVerificationForm";
 
 // --- Constants ---
 const GENDERS        = ["Male", "Female", "Other", "Prefer not to say"] as const;
@@ -228,69 +239,44 @@ function AddRowBtn({ onClick, label }: { onClick: () => void; label: string }) {
 // --- Sidebar Nav ---
 function WizardNav({ step, completedSteps, onGo }: { step: number; completedSteps: Set<number>; onGo: (n: number) => void }) {
   return (
-    <div className="w-[252px] shrink-0 sticky top-[108px] self-start">
-      <div
-        className="bg-white border border-[#E8E8F0] rounded-[14px] overflow-hidden"
-        style={{ boxShadow: "0 2px 8px -2px rgba(15,18,34,0.07)" }}
-      >
-        {STEP_GROUPS.map((group) => (
-          <div key={group.group}>
-            <div className="px-[18px] pt-[20px] pb-[6px] text-[10px] font-[900] text-[#94A3B8] uppercase tracking-[0.13em]">
-              {group.group}
-            </div>
-            {group.steps.map((s) => {
-              const done   = completedSteps.has(s.num) && s.num !== step;
-              const active = s.num === step;
-              return (
-                <button
-                  key={s.num}
-                  type="button"
-                  onClick={() => onGo(s.num)}
-                  className={[
-                    "w-full flex items-start gap-3 px-[18px] py-[12px] text-left transition-colors",
-                    "hover:bg-[#F8FAFC]",
-                  ].join(" ")}
-                  style={{
-                    background: active ? "var(--soft)" : undefined,
-                    borderLeft: active ? "3px solid var(--brand)" : "3px solid transparent",
-                  }}
-                >
-                  <span
-                    className="w-[22px] h-[22px] rounded-full flex items-center justify-center text-[10.5px] font-[900] shrink-0 mt-[1px]"
-                    style={{
-                      background: done ? "#22C55E" : active ? "var(--brand)" : "#F1F5F9",
-                      color:      done || active ? "white" : "#94A3B8",
-                    }}
+    <aside className="onboard-section-nav-wrap">
+      <nav aria-label="Onboard navigation">
+        <ul className="onboard-section-nav-list">
+          {STEP_GROUPS.map((group) => (
+            <Fragment key={group.group}>
+              <li className="onboard-nav-group-heading">{group.group}</li>
+              {group.steps.map((s) => {
+                const done = completedSteps.has(s.num) && s.num !== step;
+                const active = s.num === step;
+                return (
+                  <li
+                    key={s.num}
+                    className={`onboard-nav-item${active ? " active" : done ? " done" : ""}`}
                   >
-                    {done ? "✓" : s.num}
-                  </span>
-                  <div className="min-w-0">
-                    <div
-                      className="text-[13px] font-[700] leading-snug"
-                      style={{ color: active ? "var(--brand)" : done ? "#15172A" : "#475569" }}
-                    >
-                      {s.label}
-                    </div>
-                    <div className="text-[11px] text-[#94A3B8] mt-[2px] leading-snug">{s.sub}</div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        ))}
+                    <button type="button" className="onboard-nav-item-inner" onClick={() => onGo(s.num)}>
+                      <span className="onboard-nav-bullet">{done ? "✓" : s.num}</span>
+                      <span className="onboard-nav-text">
+                        <span className="onboard-nav-label">{s.label}</span>
+                        <span className="onboard-nav-copy">{s.sub}</span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </Fragment>
+          ))}
+        </ul>
 
-        {/* Heads up box */}
-        <div className="m-[14px_14px_16px] p-[12px_14px] bg-amber-50 border border-amber-200 rounded-[9px]">
-          <div className="text-[10.5px] font-[800] text-amber-800 mb-1.5">Heads up</div>
-          <div className="flex items-center gap-1 mb-2 flex-wrap">
-            <span className="text-[8.5px] font-[700] px-[5px] py-[1.5px] bg-red-100 text-red-600 rounded-[4px]">Required</span>
-            <span className="text-[8.5px] font-[700] px-[5px] py-[1.5px] bg-amber-100 text-amber-700 rounded-[4px] uppercase tracking-wide">RECOMMENDED</span>
-            <span className="text-[8.5px] font-[600] px-[5px] py-[1.5px] bg-gray-100 text-gray-500 rounded-[4px]">suggested</span>
-          </div>
-          <p className="text-[10px] text-amber-700 m-0 leading-relaxed">Role-sensitive fields stay visible but compact</p>
+        <div className="onboard-heads-up-card">
+          <p className="onboard-heads-up-title">Heads up</p>
+          <p className="onboard-heads-up-body" style={{ lineHeight: 1.6 }}>
+            <span style={{ color: "#dc2626", fontWeight: 700 }}>*</span> = <strong>Required</strong> — must be filled to onboard<br />
+            <span style={{ background: "#fef3c7", color: "#92400e", borderRadius: 999, padding: "1px 6px", fontSize: 10, fontWeight: 600 }}>RECOMMENDED</span> = Strongly suggested but not mandatory<br />
+            <span style={{ background: "#f3f4f6", color: "#6b7280", borderRadius: 999, padding: "1px 6px", fontSize: 10, fontWeight: 600 }}>suggested</span> = Role-sensitive fields stay visible but compact
+          </p>
         </div>
-      </div>
-    </div>
+      </nav>
+    </aside>
   );
 }
 
@@ -468,19 +454,20 @@ function StepIdentity({
   return (
     <div className="flex flex-col gap-8">
       {/* Photo upload */}
-      <div className="flex items-start gap-6 p-[20px_24px] bg-[#F8FAFC] border border-[#E8E8F0] rounded-[12px]">
+      <div className="onboard-photo-upload-block">
         <div className="relative shrink-0">
           <button
             type="button"
             onClick={onPhotoClick}
-            className="w-[90px] h-[90px] rounded-full border-2 border-dashed border-[#CBD5E1] bg-white flex flex-col items-center justify-center cursor-pointer overflow-hidden hover:border-[var(--brand)] transition-colors"
+            className={photoPreview ? "onboard-photo-circle has-photo" : "onboard-photo-circle"}
           >
             {photoPreview ? (
-              <img src={photoPreview} className="w-full h-full object-cover" alt="Staff" />
+              <img src={photoPreview} alt="Staff" />
             ) : (
-              <span className="text-[8px] font-[900] text-[#94A3B8] tracking-[0.05em] text-center leading-snug">
-                ADD<br />PHOTO
-              </span>
+              <>
+                <span className="onboard-camera-icon">+</span>
+                <span className="onboard-photo-label">ADD PHOTO</span>
+              </>
             )}
           </button>
           {photoPreview && (
@@ -495,25 +482,13 @@ function StepIdentity({
           )}
         </div>
         <div>
-          <div className="text-[13px] font-[700] text-[#15172A] mb-1">Staff photo</div>
-          <div className="text-[12px] text-[#94A3B8] mb-3 leading-relaxed">
+          <p className="onboard-photo-title">Staff photo</p>
+          <p className="onboard-photo-desc">
             Square JPG or PNG, at least 400x400px. Used for ID card, directory, payroll and attendance.
-          </div>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={onPhotoClick}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
-            >
-              <Upload size={12} /> Upload file
-            </button>
-            <button
-              type="button"
-              onClick={onCameraClick}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
-            >
-              <Camera size={12} /> Take photo
-            </button>
+          </p>
+          <div className="onboard-photo-actions">
+            <button type="button" className="btn-upload-file" onClick={onPhotoClick}>{photoPreview ? "Change" : "Upload file"}</button>
+            <button type="button" className="btn-take-photo" onClick={onCameraClick}>Take photo</button>
           </div>
         </div>
       </div>
@@ -3055,6 +3030,7 @@ const ALL_DOCS = [
   { key: "noc",                 label: "No-objection certificate (previous employer)", required: false },
   { key: "medical_cert",        label: "Medical fitness certificate",                  required: false },
   { key: "police_verification", label: "Police verification certificate",              required: false },
+  { key: "signed_onboarding_form", label: "Signed Onboarding Acknowledgment",           required: false },
 ] as const;
 
 const MANDATORY_DOC_KEYS = ALL_DOCS.filter((d) => d.required).map((d) => d.key);
@@ -3498,6 +3474,15 @@ export default function HrOnboardPage(props: any) {
   const [blankFormDownloading, setBlankFormDownloading] = useState(false);
   // Filled form PDF state
   const [filledFormDownloading, setFilledFormDownloading] = useState(false);
+  // Scan & fill modal state
+  const [scanFillOpen, setScanFillOpen] = useState(false);
+  // School header popover state
+  const [headerPopoverOpen, setHeaderPopoverOpen] = useState(false);
+  // Verification form preview state (shown before any PDF is actually downloaded)
+  const [verificationFormOpen, setVerificationFormOpen] = useState(false);
+  // Signed onboarding acknowledgment upload state
+  const [signedFormUploading, setSignedFormUploading] = useState(false);
+  const signedFormInputRef = useRef<HTMLInputElement>(null);
   // Navigate-away guard state (mirrors the student enrollment flow's unsaved-changes prompt)
   const [unsavedNavModalOpen,  setUnsavedNavModalOpen]  = useState(false);
   const [discardConfirmOpen,   setDiscardConfirmOpen]   = useState(false);
@@ -4113,7 +4098,7 @@ export default function HrOnboardPage(props: any) {
   const handleBlankForm = async () => {
     setBlankFormDownloading(true);
     try {
-      await downloadBlankForm();
+      await downloadBlankForm(1, loadSchoolHeader());
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to download blank form.";
       toast(msg, "error");
@@ -4133,12 +4118,58 @@ export default function HrOnboardPage(props: any) {
       const cleanForm = Object.fromEntries(
         Object.entries(form).filter(([, v]) => v !== undefined),
       ) as Record<string, unknown>;
-      await downloadFilledForm(cleanForm);
+      // The PDF just prints these as text — resolve FK ids to their display names
+      // here rather than making the backend do a second round of DB lookups.
+      const deptName = departments.find((d) => String(d.id) === String(form.department))?.name;
+      const desigName = designations.find((d) => String(d.id) === String(form.designation))?.name;
+      const roleMatch = roles.find((r) => String(r.id) === String(form.role))?.name;
+      const managerMatch = staffList.find((s) => String(s.id) === String(form.reporting_manager));
+      const empLabel = String(form.employment_type ?? "").trim().toLowerCase();
+      if (deptName) cleanForm.department = deptName;
+      if (desigName) cleanForm.designation = desigName;
+      if (roleMatch) cleanForm.role = roleMatch;
+      if (managerMatch) cleanForm.reporting_manager = `${managerMatch.first_name} ${managerMatch.last_name}`.trim();
+      cleanForm.contract_type = empLabel.includes("contract") ? "contract" : (empLabel ? "permanent" : "");
+      await downloadFilledForm(cleanForm, loadSchoolHeader());
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to generate PDF.";
       toast(msg, "error");
     } finally {
       setFilledFormDownloading(false);
+    }
+  };
+
+  const handleSignedFormUpload = async (file: File) => {
+    if (file.size > 5 * 1024 * 1024) {
+      toast("File size must be 5 MB or less.", "error");
+      return;
+    }
+    const allowed = ["application/pdf", "image/jpeg", "image/png", "image/jpg"];
+    if (!allowed.includes(file.type)) {
+      toast("Only PDF, JPEG, and PNG files are allowed.", "error");
+      return;
+    }
+    setSignedFormUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("doc_key", "signed_onboarding_form");
+      fd.append("doc_label", "Signed Onboarding Acknowledgment");
+      const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/upload/", {
+        method: "POST",
+        body: fd,
+        silent401: true,
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({})) as Record<string, unknown>;
+        toast((errJson.message as string) || "Upload failed.", "error");
+        return;
+      }
+      toast("Signed acknowledgment uploaded.", "success");
+    } catch {
+      toast("Upload failed. Please try again.", "error");
+    } finally {
+      setSignedFormUploading(false);
     }
   };
 
@@ -4518,13 +4549,10 @@ export default function HrOnboardPage(props: any) {
       <div className="flex items-start justify-between mb-4">
         <div>
           {!isPopup && <div className="mb-2"><BackButton label="Back" /></div>}
-          <h1 className="text-[28px] font-[900] text-[#15172A] m-0 leading-tight">
-            Onboard a{" "}
-            <em className="not-italic font-[400]" style={{ fontFamily: "var(--serif)", color: "var(--brand)" }}>
-              staff member
-            </em>
+          <h1 className="onboard-hero-title">
+            Onboard a <span className="onboard-title-accent">staff member</span>
           </h1>
-          <p className="text-[13px] text-[#5B5E72] mt-1 m-0 max-w-[520px]">
+          <p className="onboard-hero-subtitle">
             Create a staff profile, assign department and role, collect statutory details, documents, payroll setup
             and attendance-ready access.
           </p>
@@ -4541,40 +4569,70 @@ export default function HrOnboardPage(props: any) {
                 Draft saved
               </div>
             )}
-            <div className="text-right">
-              <div className="text-[28px] font-[900] text-[#15172A] leading-none">{staffCount}</div>
-              <div className="text-[9.5px] font-[700] uppercase tracking-[0.1em] text-[#94A3B8]">Current Staff</div>
+            <div className="onboard-hero-kpi">
+              <p className="onboard-hero-kpi-count">{staffCount}</p>
+              <p className="onboard-hero-kpi-label">Current Staff</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="onboard-hero-actions-row">
             <button
+              type="button"
+              className="onboard-hero-action-btn onboard-hero-action-drafts"
               onClick={() => setShowDraftsModal(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              title="View saved drafts"
             >
-              Drafts{" "}
-              <span className="text-[10px] font-[800] px-1 py-0.5 rounded-[4px] bg-[#F1F5F9]">
-                {draftList.length}
-              </span>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="9" y1="13" x2="15" y2="13"/>
+                <line x1="9" y1="17" x2="13" y2="17"/>
+              </svg>
+              <span>Drafts</span>
+              {draftList.length > 0 && <span className="onboard-hero-action-badge">{draftList.length}</span>}
             </button>
+
             <button
+              type="button"
+              className="onboard-hero-action-btn onboard-hero-action-ai"
               onClick={() => toast("AI Assist coming soon", "info")}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[700] border border-[#ddd6fe] text-[var(--brand)] bg-[var(--soft)] hover:bg-[#e5dfff]"
+              title="Get AI-powered help & suggestions"
             >
-              <Sparkles size={12} /> AI Assist
+              <Sparkles size={14} />
+              <span>AI Assist</span>
             </button>
+
             <button
-              onClick={handleFilledForm}
-              disabled={filledFormDownloading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc] disabled:opacity-60 disabled:cursor-not-allowed"
+              type="button"
+              className="onboard-hero-action-btn onboard-hero-action-pdf"
+              onClick={() => setVerificationFormOpen(true)}
+              title="Preview & download the staff verification PDF"
             >
-              {filledFormDownloading ? "Generating…" : (<><FileText size={12} /> PDF</>)}
+              <FileText size={14} />
+              <span>PDF</span>
             </button>
+
             <button
+              type="button"
+              className="onboard-hero-action-btn onboard-hero-action-drafts"
+              onClick={() => setHeaderPopoverOpen(true)}
+              title="Set the school name/logo shown at the top of the onboarding PDFs"
+            >
+              <span>Header</span>
+            </button>
+
+            <button
+              type="button"
+              className="onboard-hero-action-btn onboard-hero-action-info"
               onClick={() => toast("Documents checklist: NIN, Photos, Certs, Offer letter", "info")}
-              className="px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              title="What documents & details will I need?"
             >
-              What I&apos;ll need
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="16" x2="12" y2="12"/>
+                <line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+              <span>What I&apos;ll need</span>
             </button>
           </div>
         </div>
@@ -4582,37 +4640,22 @@ export default function HrOnboardPage(props: any) {
 
       {/* QR Scan banner */}
       {showQrBanner && (
-        <div
-          className="flex items-center gap-4 mb-5 px-[20px] py-[14px] rounded-[12px] text-white relative"
-          style={{ background: "#15172A" }}
-        >
-          <div
-            className="w-[36px] h-[36px] rounded-[8px] flex items-center justify-center shrink-0"
-            style={{ background: "var(--brand)" }}
-          >
-            <QrCode size={18} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-0.5">
-              <span className="text-[13.5px] font-[800]">Scan to pre-fill</span>
-              <span className="text-[9px] font-[900] uppercase tracking-[0.1em] px-1.5 py-0.5 rounded-[4px] bg-[var(--brand)]">NEW</span>
+        <div className="onboard-scan-banner">
+          <div className="onboard-scan-left">
+            <div className="onboard-scan-icon-wrap">
+              <QrCode size={18} />
             </div>
-            <p className="text-[12px] opacity-70 m-0">
-              Got Aadhaar QR, PAN, previous employment record, or joining form? Scan it once and staff onboarding fields will be prepared.
-            </p>
+            <div>
+              <p className="onboard-scan-title">Scan to pre-fill <span className="onboard-badge-new">NEW</span></p>
+              <p className="onboard-scan-copy">
+                Got Aadhaar QR, PAN, previous employment record, or joining form? Scan it once and staff onboarding fields will be prepared.
+              </p>
+            </div>
           </div>
-          <button
-            onClick={() => toast("QR scanner coming soon", "info")}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-[8px] text-[13px] font-[700] border border-white/20 hover:bg-white/10 transition-colors shrink-0"
-          >
-            Scan now
-          </button>
-          <button
-            onClick={() => setShowQrBanner(false)}
-            className="w-[30px] h-[30px] rounded-full flex items-center justify-center hover:bg-white/10 transition-colors shrink-0"
-          >
-            <X size={15} />
-          </button>
+          <div className="onboard-scan-actions">
+            <button type="button" className="onboard-scan-now" onClick={() => toast("QR scanner coming soon", "info")}>Scan now</button>
+            <button type="button" className="onboard-scan-dismiss" onClick={() => setShowQrBanner(false)}>X</button>
+          </div>
         </div>
       )}
 
@@ -4626,28 +4669,25 @@ export default function HrOnboardPage(props: any) {
             style={{ boxShadow: "0 2px 8px -2px rgba(15,18,34,0.07)" }}
           >
             {/* Step card header */}
-            <div className="flex items-start justify-between mb-[4px]">
-              <h2 className="m-0 text-[24px] font-[800] text-[#15172A] leading-tight">
-                {(() => {
-                  const i = currentStep.label.lastIndexOf(" ");
-                  if (i === -1) return (
-                    <em className="italic font-[400]" style={{ fontFamily: 'var(--font-playfair),"Playfair Display",Georgia,serif', color: "var(--brand)" }}>
-                      {currentStep.label}
-                    </em>
-                  );
-                  return (
-                    <>
-                      {currentStep.label.slice(0, i)}{" "}
-                      <em className="italic font-[400]" style={{ fontFamily: 'var(--font-playfair),"Playfair Display",Georgia,serif', color: "var(--brand)" }}>
-                        {currentStep.label.slice(i + 1)}
-                      </em>
-                    </>
-                  );
-                })()}
-              </h2>
-              <span className="text-[13px] font-[700] text-[#94A3B8] shrink-0 ml-4 mt-1">{step}/{TOTAL}</span>
+            <div className="onboard-section-card-header">
+              <div>
+                <h2 className="onboard-section-title">
+                  {(() => {
+                    const i = currentStep.label.lastIndexOf(" ");
+                    if (i === -1) return <span className="onboard-title-accent">{currentStep.label}</span>;
+                    return (
+                      <>
+                        {currentStep.label.slice(0, i)}{" "}
+                        <span className="onboard-title-accent">{currentStep.label.slice(i + 1)}</span>
+                      </>
+                    );
+                  })()}
+                </h2>
+                <p className="onboard-section-subtitle">{currentStep.sub}</p>
+              </div>
+              <span className="onboard-section-counter">{step}/{TOTAL}</span>
             </div>
-            <p className="text-[13px] text-[#94A3B8] mt-1 mb-9">{currentStep.sub}</p>
+            <div className="mb-6" />
 
             {/* Step content */}
             {step === 1 && (
@@ -4683,108 +4723,342 @@ export default function HrOnboardPage(props: any) {
             {step === 9 && <StepDocuments validatorRef={docValidatorRef} externalDocs={staffDocumentsData?.results} />}
             {step === 10 && <StepReview f={form} set={setField} departments={departments} designations={designations} />}
 
-            {/* In-card next step nav */}
-            {step < TOTAL && (
-              <div className="flex justify-end mt-8 pt-4 border-t border-[#F1F5F9]">
-                <button
-                  type="button"
-                  onClick={goNext}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-[10px] text-[13px] font-[700] text-white"
-                  style={{ background: "var(--brand)" }}
-                >
-                  {ALL_STEPS[step]?.label} →
-                </button>
-              </div>
-            )}
           </div>
         </div>
       </div>
 
       {/* Sticky footer bar */}
       <div
-        className="fixed bottom-0 left-0 right-0 bg-white border-t border-[#E8E8F0] z-[100]"
-        style={{ boxShadow: "0 -2px 8px -2px rgba(15,18,34,0.07)" }}
+        className="fixed bottom-0 left-0 right-0 bg-white border-t border-[#ececf2] z-[100]"
+        style={{ boxShadow: "0 -4px 12px rgba(15, 23, 42, 0.05)", padding: "18px 28px" }}
       >
-        {/* Progress bar */}
-        <div className="h-[3px] bg-[#F1F5F9]">
-          <div className="h-full transition-all duration-500" style={{ width: `${progress}%`, background: "var(--brand)" }} />
-        </div>
-        {/* Footer row */}
-        <div className="flex items-center justify-between px-8 py-[10px] gap-3">
-          <span className="text-[12.5px] font-[700] text-[#475569] shrink-0">Step {step} / {TOTAL}</span>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="onboard-footer-progress-wrap" aria-label="Onboarding progress">
+            <span style={{ fontSize: 13, color: "#6b7280", whiteSpace: "nowrap", flexShrink: 0 }}>Progress</span>
+            <div className="onboard-footer-progress-track" title="Onboarding progress">
+              <span className="onboard-footer-progress-fill" style={{ width: `${progress}%` }} />
+            </div>
+            <span className="onboard-footer-progress-value">{progress}% complete</span>
+          </div>
+
           {/* Secondary/utility actions — free to wrap on narrow viewports without
               ever pushing Back/Next off-screen (they live in their own pinned group). */}
           <div className="flex items-center gap-2 flex-wrap justify-end flex-1 min-w-0">
             <button
+              type="button"
+              className="btn-discard"
               onClick={() => { if (isFormDirty) setDiscardConfirmOpen(true); else resetFormToBlank(); }}
-              className="px-3 py-1.5 text-[12.5px] font-[600] text-[#EF4444] hover:bg-red-50 rounded-[8px] transition-colors"
             >
               Discard
             </button>
             <button
+              type="button"
+              className="btn-draft"
               onClick={() => void handleSaveDraft()}
               disabled={draftSaving}
-              className="px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc] disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {draftSaving ? "Saving…" : draftId ? "Update draft" : "Save draft"}
             </button>
+            <input
+              ref={signedFormInputRef}
+              type="file"
+              accept="application/pdf,image/jpeg,image/png,image/jpg"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleSignedFormUpload(file);
+                e.target.value = "";
+              }}
+            />
             <button
-              onClick={() => toast("Upload signed document — coming soon", "info")}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              type="button"
+              className="btn-outline"
+              style={{ fontSize: 11, padding: "6px 10px", background: "#ecfdf5", color: "#065f46", borderColor: "#6ee7b7" }}
+              title="Upload a signed onboarding acknowledgment (PDF or image)"
+              onClick={() => signedFormInputRef.current?.click()}
+              disabled={signedFormUploading}
             >
-              <Upload size={11} /> Upload signed
+              <Upload size={11} /> {signedFormUploading ? "Uploading…" : "Upload signed"}
             </button>
             <button
+              type="button"
+              className="btn-outline"
+              style={{ fontSize: 11, padding: "6px 10px", background: "#fffbeb", color: "#92400e", borderColor: "#fcd34d" }}
+              title="Download a blank onboarding form"
               onClick={handleBlankForm}
               disabled={blankFormDownloading}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc] disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {blankFormDownloading ? "Generating…" : (<><FileText size={11} /> Blank form</>)}
+              <FileText size={11} /> {blankFormDownloading ? "Generating…" : "Blank form"}
             </button>
             <button
-              onClick={() => toast("QR scan to fill — coming soon", "info")}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              type="button"
+              className="btn-outline"
+              style={{ fontSize: 11, padding: "6px 10px", background: "#eff6ff", color: "#1e40af", borderColor: "#93c5fd" }}
+              title="Scan a filled form to auto-fill fields via OCR"
+              onClick={() => setScanFillOpen(true)}
             >
               <QrCode size={11} /> Scan &amp; fill
             </button>
             <button
-              onClick={() => window.print()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[8px] text-[12.5px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
+              type="button"
+              className="btn-outline"
+              onClick={() => setVerificationFormOpen(true)}
             >
               <Printer size={11} /> Print / PDF
             </button>
-          </div>
-          {/* Primary step navigation — always visible together, never wraps away. */}
-          <div className="flex items-center gap-2 shrink-0">
             {step > 1 && (
-              <button
-                onClick={goPrev}
-                className="px-4 py-2 rounded-[10px] text-[13px] font-[600] border border-[#E2E8F0] text-[#475569] bg-white hover:bg-[#f8fafc]"
-              >
+              <button type="button" className="btn-outline" onClick={goPrev}>
                 Back
               </button>
             )}
             {step < TOTAL ? (
-              <button
-                onClick={goNext}
-                className="px-5 py-2 rounded-[10px] text-[13px] font-[700] text-white"
-                style={{ background: "var(--brand)" }}
-              >
-                Next
+              <button type="button" className="btn-save-cta" onClick={goNext}>
+                {ALL_STEPS[step]?.label} →
               </button>
             ) : (
-              <button
-                onClick={() => void handleSubmit()}
-                disabled={saving}
-                className="px-5 py-2 rounded-[10px] text-[13px] font-[700] text-white disabled:opacity-60"
-                style={{ background: "var(--brand)" }}
-              >
+              <button type="button" className="btn-save-cta" onClick={() => void handleSubmit()} disabled={saving}>
                 {saving ? "Saving..." : editingStaffId ? "Update & Onboard" : "Submit & Onboard"}
               </button>
             )}
           </div>
         </div>
       </div>
+
+      {headerPopoverOpen && <SchoolHeaderPopover onClose={() => setHeaderPopoverOpen(false)} />}
+
+      {verificationFormOpen && (
+        <StaffVerificationForm
+          onClose={() => setVerificationFormOpen(false)}
+          saving={filledFormDownloading}
+          onSavePdf={handleFilledForm}
+          staff={{
+            photo: photoPreview ?? undefined,
+            first_name: form.first_name,
+            middle_name: form.middle_name,
+            last_name: form.last_name,
+            staff_code: form.staff_no,
+            date_of_birth: form.date_of_birth,
+            gender: form.gender,
+            blood_group_input: form.blood_group_input,
+            mother_tongue: form.mother_tongue,
+            religion: form.religion,
+            nationality: form.nationality,
+            status: form.status,
+            departmentName: departments.find((d) => String(d.id) === String(form.department))?.name,
+            designationName: designations.find((d) => String(d.id) === String(form.designation))?.name,
+            role: roles.find((r) => String(r.id) === String(form.role))?.name ?? (form.role != null ? String(form.role) : undefined),
+            joining_date: form.joining_date,
+            employment_type: form.employment_type,
+            reporting_manager: (() => {
+              const m = staffList.find((s) => String(s.id) === String(form.reporting_manager));
+              return m ? `${m.first_name} ${m.last_name}`.trim() : undefined;
+            })(),
+            mobile: form.mobile,
+            personal_email: form.personal_email,
+            official_email: form.official_email,
+            current_address_line1: form.current_address,
+            current_city: form.city,
+            current_state: form.state,
+            current_pin: form.current_pin,
+            emergency_name: form.emergency_name,
+            emergency_relation: form.emergency_relation,
+            emergency_phone: form.emergency_phone,
+            aadhaar_number: form.nin,
+            pan_number: form.pan,
+            bank_name: form.bank_name,
+            bank_account_number: form.bank_account_no,
+            ifsc_code: form.ifsc_code,
+          }}
+        />
+      )}
+
+      {scanFillOpen && (
+        <ScanFillModal
+          fieldGroups={STAFF_FIELD_GROUPS}
+          documentLabel="staff onboarding form"
+          onClose={() => setScanFillOpen(false)}
+          onApply={(results) => {
+            Object.entries(results).forEach(([key, value]) => {
+              if (value) setField(key, value);
+            });
+          }}
+        />
+      )}
+
+      {/* Visual system copied from the Student Enroll page (StudentAddPanel.tsx)
+          so this page is a pixel match. `global` because several sections below
+          (StepIdentity, StepRole, etc.) are separate top-level functions in this
+          file — styled-jsx's normal per-component scoping wouldn't reach them. */}
+      <style jsx global>{`
+        .onboard-hero-title {
+          margin: 0;
+          font-size: 28px;
+          font-weight: 900;
+          font-family: var(--serif);
+          letter-spacing: -0.01em;
+          line-height: 1.2;
+          color: #15172A;
+        }
+        .onboard-title-accent {
+          color: var(--brand);
+          font-style: italic;
+          font-family: var(--serif);
+          font-weight: 400;
+        }
+        .onboard-hero-subtitle {
+          max-width: 520px;
+          color: #5B5E72;
+          line-height: 1.5;
+          margin-top: 4px;
+          font-size: 13px;
+        }
+        .onboard-hero-kpi { text-align: right; }
+        .onboard-hero-kpi-count { font-size: 28px; font-weight: 900; margin: 0; color: #15172A; line-height: 1; }
+        .onboard-hero-kpi-label { margin: 4px 0 0; font-size: 9.5px; letter-spacing: 0.1em; color: #94A3B8; font-weight: 700; text-transform: uppercase; }
+
+        .onboard-hero-actions-row { display: flex; gap: 8px; align-items: center; }
+        .onboard-hero-action-btn {
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 8px 14px;
+          border-radius: 10px;
+          font-size: 12.5px;
+          font-weight: 600;
+          line-height: 1;
+          cursor: pointer;
+          transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+          border: 1px solid transparent;
+        }
+        .onboard-hero-action-btn:hover { transform: translateY(-1px); }
+        .onboard-hero-action-btn:active { transform: translateY(0); }
+        .onboard-hero-action-drafts { background: #fff; border-color: #E2E8F0; color: #475569; }
+        .onboard-hero-action-drafts:hover { background: #fff; border-color: #c7d2fe; box-shadow: 0 4px 14px -4px rgba(99,102,241,0.25); }
+        .onboard-hero-action-pdf { background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); border-color: #ddd6fe; color: #6c3ce1; }
+        .onboard-hero-action-pdf:hover { background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%); border-color: #c4b5fd; box-shadow: 0 6px 18px -6px rgba(108,60,225,0.35); }
+        .onboard-hero-action-info { background: linear-gradient(135deg, #ecfeff 0%, #cffafe 100%); border-color: #a5f3fc; color: #0e7490; }
+        .onboard-hero-action-info:hover { background: linear-gradient(135deg, #cffafe 0%, #a5f3fc 100%); border-color: #67e8f9; box-shadow: 0 4px 14px -4px rgba(8,145,178,0.3); }
+        .onboard-hero-action-ai {
+          background: linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%);
+          color: #fff; border-color: transparent;
+          box-shadow: 0 4px 14px -3px rgba(139,92,246,0.45);
+        }
+        .onboard-hero-action-ai:hover { box-shadow: 0 8px 22px -4px rgba(236,72,153,0.55); background: linear-gradient(135deg, #7c3aed 0%, #db2777 100%); }
+        .onboard-hero-action-badge {
+          background: rgba(108,60,225,0.12); color: #6c3ce1; font-size: 10px; font-weight: 700;
+          padding: 2px 6px; border-radius: 999px; margin-left: 2px; min-width: 16px; text-align: center;
+        }
+
+        .onboard-scan-banner {
+          background: #1a1a2e; border-radius: 12px; padding: 20px 24px; margin: 0 0 20px;
+          display: flex; align-items: center; justify-content: space-between; gap: 16px;
+        }
+        .onboard-scan-left { display: flex; gap: 16px; align-items: flex-start; }
+        .onboard-scan-icon-wrap {
+          width: 40px; height: 40px; border-radius: 8px; background: rgba(108, 60, 225, 0.8);
+          color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0;
+        }
+        .onboard-scan-title { color: #fff; font-size: 15px; font-weight: 700; margin: 0; }
+        .onboard-badge-new { margin-left: 8px; background: #10b981; color: #fff; border-radius: 999px; padding: 2px 8px; font-size: 10px; font-weight: 600; }
+        .onboard-scan-copy { color: #9ca3af; margin: 4px 0 0; font-size: 13px; line-height: 1.5; }
+        .onboard-scan-actions { display: flex; align-items: center; gap: 12px; }
+        .onboard-scan-now { border: none; background: var(--brand); color: #fff; border-radius: 8px; padding: 10px 20px; cursor: pointer; font-weight: 700; font-size: 13px; }
+        .onboard-scan-dismiss { width: 32px; height: 32px; border-radius: 6px; border: none; background: rgba(255, 255, 255, 0.15); color: #fff; cursor: pointer; }
+
+        .onboard-section-nav-wrap { position: sticky; top: 108px; width: 280px; height: fit-content; flex-shrink: 0; align-self: flex-start; }
+        .onboard-section-nav-list { list-style: none; margin: 0; padding: 0; }
+        .onboard-nav-group-heading { padding: 20px 8px 6px; font-size: 10px; font-weight: 900; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.13em; }
+        .onboard-nav-item { position: relative; margin-bottom: 4px; }
+        .onboard-nav-item-inner {
+          width: 100%; border: none; background: transparent; display: flex; align-items: flex-start;
+          gap: 12px; padding: 8px 12px 8px 8px; border-radius: 6px; cursor: pointer; text-align: left;
+        }
+        .onboard-nav-item-inner:hover { background: #f3f4f6; }
+        .onboard-nav-bullet {
+          width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+          font-size: 11px; font-weight: 900; background: #f3f4f6; color: #9ca3af; border: 1px solid #e5e7eb; flex-shrink: 0;
+        }
+        .onboard-nav-label { font-size: 13.5px; color: #1f2937; font-weight: 600; line-height: 1.25; }
+        .onboard-nav-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .onboard-nav-copy { font-size: 11.5px; color: #6b7280; line-height: 1.3; }
+        .onboard-nav-item.active::before {
+          content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px;
+          border-radius: 0 2px 2px 0; background: var(--brand);
+        }
+        .onboard-nav-item.active .onboard-nav-bullet { background: var(--brand); color: #fff; border-color: var(--brand); }
+        .onboard-nav-item.active .onboard-nav-item-inner { background: #f5f3ff; }
+        .onboard-nav-item.active .onboard-nav-label { color: var(--brand); font-weight: 700; }
+        .onboard-nav-item.active .onboard-nav-copy { color: #6d28d9; }
+        .onboard-nav-item.done .onboard-nav-bullet { background: #22C55E; color: #fff; border-color: #22C55E; }
+        .onboard-nav-item.done .onboard-nav-label { color: #15172A; }
+
+        .onboard-heads-up-card { margin: 14px 14px 16px; background: #ede9fe; border-radius: 8px; padding: 12px 14px; }
+        .onboard-heads-up-title { margin: 0 0 4px; font-size: 13px; font-weight: 700; color: #15172A; }
+        .onboard-heads-up-body { margin: 0; font-size: 12px; color: #6b7280; line-height: 1.5; }
+
+        .onboard-section-card-header { display: flex; justify-content: space-between; align-items: flex-start; }
+        .onboard-section-title {
+          font-size: 24px; margin: 0; font-weight: 800; font-family: var(--serif);
+          letter-spacing: -0.01em; line-height: 1.2; color: #15172A;
+        }
+        .onboard-section-subtitle { margin: 6px 0 0; font-size: 13px; color: #94A3B8; }
+        .onboard-section-counter { font-size: 13px; font-weight: 700; color: #94A3B8; margin-left: 16px; white-space: nowrap; }
+
+        .field-wrapper { min-width: 0; }
+        .field-label { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; color: #374151; margin-bottom: 6px; }
+        .req { color: #dc2626; font-weight: 700; }
+        .field-input, .field-select, .field-textarea {
+          width: 100%; min-width: 0; max-width: 100%; padding: 10px 12px; border: 1px solid #d1d5db;
+          border-radius: 8px; font-size: 14px; background: #fff; box-sizing: border-box;
+        }
+        .field-input:focus, .field-select:focus, .field-textarea:focus {
+          border-color: var(--brand); box-shadow: 0 0 0 3px rgba(108, 60, 225, 0.12); outline: none;
+        }
+        .field-input.error, .field-select.error, .field-textarea.error { border-color: #dc2626; background: #fef2f2; }
+        .field-input:disabled, .field-input[readonly] { background: #f3f4f6; color: #94A3B8; cursor: not-allowed; }
+        .help-text { font-size: 12px; color: #6b7280; margin-top: 4px; }
+        .error-msg { font-size: 12px; color: #dc2626; margin: 4px 0 0; display: block; }
+        .status-info { font-size: 12px; color: #6b7280; margin: 4px 0 0; }
+
+        .onboard-photo-upload-block { display: flex; align-items: flex-start; gap: 24px; margin-bottom: 24px; }
+        .onboard-photo-circle {
+          width: 128px; height: 128px; border-radius: 50%; border: 2px dashed #d1d5db; background: #fafafa;
+          display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer; padding: 0; flex-shrink: 0;
+        }
+        .onboard-photo-circle.has-photo { border: none; overflow: hidden; }
+        .onboard-photo-circle img { width: 100%; height: 100%; object-fit: cover; }
+        .onboard-camera-icon { font-size: 26px; color: #9ca3af; }
+        .onboard-photo-label { font-size: 9px; letter-spacing: 0.12em; color: #9ca3af; margin-top: 6px; }
+        .onboard-photo-title { margin: 0 0 4px; font-size: 14px; font-weight: 700; color: #15172A; }
+        .onboard-photo-desc { margin: 0 0 12px; font-size: 12px; color: #6b7280; line-height: 1.4; }
+        .onboard-photo-actions { display: flex; gap: 12px; }
+        .btn-upload-file { padding: 7px 14px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; color: #374151; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+        .btn-take-photo { border: none; background: none; color: var(--brand); text-decoration: underline; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+
+        .onboard-footer-progress-wrap { display: flex; align-items: center; gap: 12px; flex: 1 1 260px; min-width: 0; overflow: hidden; }
+        .onboard-footer-progress-track { position: relative; flex: 0 0 180px; width: 180px; height: 6px; border-radius: 999px; background: #e5e7eb; overflow: hidden; }
+        .onboard-footer-progress-fill { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #6c3ce1 0%, #4f39f6 100%); transition: width 0.25s ease; }
+        .onboard-footer-progress-value { font-size: 13px; font-weight: 600; color: #6b7280; white-space: nowrap; }
+        .btn-discard { border: none; background: transparent; color: #6b7280; cursor: pointer; font-size: 13px; padding: 8px 4px; white-space: nowrap; }
+        .btn-discard:hover { color: #374151; }
+        .btn-draft { padding: 10px 18px; border: 1px solid #d1d5db; border-radius: 12px; background: #fff; color: #374151; cursor: pointer; font-size: 13px; }
+        .btn-draft:hover { border-color: #9ca3af; background: #f9fafb; }
+        .btn-draft:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-outline {
+          padding: 10px 16px; border: 1px solid var(--brand); border-radius: 12px; background: transparent;
+          color: var(--brand); cursor: pointer; font-size: 13px; font-weight: 500; transition: background 140ms ease;
+          display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn-outline:hover:not(:disabled) { background: rgba(108,60,225,.06); }
+        .btn-outline:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-save-cta {
+          padding: 10px 22px; border: 1px solid var(--brand); background: var(--brand); color: #fff;
+          border-radius: 12px; cursor: pointer; font-size: 13px; font-weight: 700; box-shadow: 0 8px 22px rgba(79, 57, 246, 0.2);
+        }
+        .btn-save-cta:hover:not(:disabled) { background: #5a2ee0; border-color: #5a2ee0; }
+        .btn-save-cta:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+      `}</style>
     </div>
   );
 }

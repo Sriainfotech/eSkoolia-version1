@@ -944,13 +944,18 @@ function NewEventModal({ onSave, onCancel }: { onSave: (ev: MarketingEvent) => v
             <button onClick={onCancel} style={{ padding: "8px 18px", border: "1px solid var(--line, #e5e7eb)", borderRadius: 8, background: "#fff", fontSize: 13, cursor: "pointer" }}>Cancel</button>
             <button
               onClick={() => {
-                if (!form.name.trim() || !form.date) return;
+                const trimmedName = form.name.trim();
+                if (!trimmedName || !form.date) return;
+                if (!/[a-zA-Z]/.test(trimmedName)) {
+                  toast.error("Event name must contain at least one letter.");
+                  return;
+                }
                 const dateLabel = new Date(form.date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
                 const timeLabel = form.time
                   ? new Date(`1970-01-01T${form.time}`).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })
                   : "";
                 onSave({
-                  name: form.name.trim(),
+                  name: trimmedName,
                   date: dateLabel,
                   time: timeLabel,
                   rsvp: 0,

@@ -13,6 +13,33 @@ from .models import SchoolTenant
 
 logger = logging.getLogger(__name__)
 
+# Path prefixes that are intentionally tenant-agnostic — reference data, auth,
+# and admin surfaces served from the public schema regardless of subdomain.
+# Shared by TenantMainMiddleware (which skips tenant resolution for these
+# paths) and TenantAwareJWTAuthentication (which must not reject a request
+# as "missing tenant context" when the middleware cleared it on purpose).
+PUBLIC_PATH_PREFIXES = (
+    "/api/v1/tenancy/school-info/",
+    # All /api/v1/auth/ endpoints (login, refresh, logout, me,
+    # change-password, forgot/verify/reset-password, health) run against
+    # the public schema.
+    "/api/v1/auth/",
+    "/api/v1/super-admin/",
+    "/admin/",
+    "/static/",
+    "/media/",
+    "/health/",
+    # Global/static reference data — not per-tenant, always served from public schema.
+    "/api/v1/master/",
+    "/api/master/",
+)
+
+
+def is_public_path(path: str) -> bool:
+    """Check if a request path is intentionally tenant-agnostic (see PUBLIC_PATH_PREFIXES)."""
+    return path.startswith(PUBLIC_PATH_PREFIXES)
+
+
 # Thread-safe context variables for storing tenant/schema in async contexts
 _current_tenant_var: ContextVar[Optional[SchoolTenant]] = ContextVar(
     "current_tenant", default=None

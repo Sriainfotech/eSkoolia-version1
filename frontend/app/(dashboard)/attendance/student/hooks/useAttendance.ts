@@ -66,7 +66,10 @@ async function downloadSampleTemplateWithToken(token: string, router: ReturnType
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  URL.revokeObjectURL(link.href);
+  // Revoking the blob URL immediately after click() races the browser's
+  // download handoff on Firefox/Safari — the save can be silently dropped
+  // even though this code path completes without error. Give it a beat.
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
 function mapSummaryToKpis(data: {
@@ -321,7 +324,10 @@ export function useAttendance(date: string) {
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      URL.revokeObjectURL(link.href);
+      // Revoking the blob URL immediately after click() races the browser's
+      // download handoff on Firefox/Safari — the save can be silently dropped
+      // even though this code path completes without error. Give it a beat.
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
       onSuccess?.();
       return true;
     } catch (e: unknown) {

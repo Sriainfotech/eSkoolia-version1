@@ -362,12 +362,32 @@ export async function deleteOnboardDraft(id: number): Promise<void> {
   }
 }
 
+/** Optional school branding rendered at the top of the onboarding PDFs. */
+export interface PdfSchoolHeader {
+  schoolName?: string;
+  schoolAddress?: string;
+  schoolPhone?: string;
+  schoolEmail?: string;
+  logoDataUrl?: string;
+  principalName?: string;
+}
+
 /** Downloads the blank staff onboarding form PDF.
  *  Pass `copies` (1–5) to embed multiple copies in the same PDF.
  */
-export async function downloadBlankForm(copies: number = 1): Promise<void> {
+export async function downloadBlankForm(copies: number = 1, schoolHeader?: PdfSchoolHeader): Promise<void> {
+  const query = new URLSearchParams({ copies: String(copies) });
+  if (schoolHeader) {
+    // Logo omitted here — a base64 data URL can run to tens of KB, too large for
+    // a query string. The filled-form endpoint (POST body, no such limit) does
+    // include it. Blank-form still gets the school name/address/contact/principal.
+    const { logoDataUrl: _logoDataUrl, ...textFields } = schoolHeader;
+    if (Object.values(textFields).some((v) => v)) {
+      query.set("school_header", JSON.stringify(textFields));
+    }
+  }
   const res = await apiRequestWithRefreshResponse(
-    `/api/v1/hr/onboard/blank-form/?copies=${copies}`,
+    `/api/v1/hr/onboard/blank-form/?${query.toString()}`,
     { method: "GET" },
   );
   if (!res.ok) {
@@ -395,11 +415,11 @@ export async function downloadBlankForm(copies: number = 1): Promise<void> {
  *  Sends form_data as JSON to the backend, receives a PDF blob.
  *  Validates: form_data.first_name must be non-empty (backend also validates).
  */
-export async function downloadFilledForm(formData: Record<string, unknown>): Promise<void> {
+export async function downloadFilledForm(formData: Record<string, unknown>, schoolHeader?: PdfSchoolHeader): Promise<void> {
   const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/filled-form/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ form_data: formData }),
+    body: JSON.stringify({ form_data: formData, school_header: schoolHeader }),
   });
   if (!res.ok) {
     let msg = "Failed to generate PDF.";

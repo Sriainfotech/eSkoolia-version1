@@ -490,7 +490,8 @@ export function AdmissionsCommandCenter() {
       }
       setShowAdmissionModal(false); void loadAll();
     } catch (error) {
-      toast.error(editingId ? "Unable to update inquiry." : "Unable to create inquiry.", { autoClose: 5000 });
+      const fallback = editingId ? "Unable to update inquiry." : "Unable to create inquiry.";
+      toast.error(error instanceof Error && error.message ? error.message : fallback, { autoClose: 5000 });
     } finally {
       setDrawerSaving(false);
     }
@@ -509,7 +510,7 @@ export function AdmissionsCommandCenter() {
       setDuplicateCreateConfirm(null);
       void loadAll();
     } catch (error) {
-      toast.error("Unable to create inquiry.", { autoClose: 5000 });
+      toast.error(error instanceof Error && error.message ? error.message : "Unable to create inquiry.", { autoClose: 5000 });
     } finally {
       setDrawerSaving(false);
     }
@@ -929,8 +930,8 @@ export function AdmissionsCommandCenter() {
                   setShowAITip(true);
                   setShowAdmissionModal(false);
                   void loadAll();
-                }).catch(() => {
-                  toast.error("Unable to create inquiry.", { autoClose: 5000 });
+                }).catch((error) => {
+                  toast.error(error instanceof Error && error.message ? error.message : "Unable to create inquiry.", { autoClose: 5000 });
                 }).finally(() => setDrawerSaving(false));
                 return;
               }
