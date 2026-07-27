@@ -10,7 +10,7 @@ interface NoteItem {
   route: string;
   color: 'yellow' | 'pink' | 'green' | 'blue' | 'purple';
   text: string;
-  updatedAt: string;
+  updated_at: string;
   pinned: boolean;
 }
 
@@ -23,8 +23,8 @@ const NOTE_COLORS = {
 };
 
 const MOCK: NoteItem[] = [
-  { id: '1', route: '/fees/payments', color: 'blue', text: 'Follow up with accounts on the Dec batch remittance before Friday', updatedAt: new Date(Date.now() - 3600000).toISOString(), pinned: true },
-  { id: '2', route: '/students/list', color: 'pink', text: 'Aarav Sharma parent meeting scheduled — bring syllabus report', updatedAt: new Date(Date.now() - 7200000).toISOString(), pinned: true },
+  { id: '1', route: '/fees/payments', color: 'blue', text: 'Follow up with accounts on the Dec batch remittance before Friday', updated_at: new Date(Date.now() - 3600000).toISOString(), pinned: true },
+  { id: '2', route: '/students/list', color: 'pink', text: 'Aarav Sharma parent meeting scheduled — bring syllabus report', updated_at: new Date(Date.now() - 7200000).toISOString(), pinned: true },
 ];
 
 function routeLabel(route: string) {

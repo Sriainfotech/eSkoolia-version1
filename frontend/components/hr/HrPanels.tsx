@@ -2001,8 +2001,7 @@ export function HrStaffPanel() {
         return;
       }
 
-      const needsAutoStaffNo = rows.some((row) => !getImportValue(normalizeImportRow(row), ["Staff No", "Staff Number", "staff_no", "staff number"]));
-      let nextGeneratedStaffNo = needsAutoStaffNo ? (await apiGet<{ staff_no: string }>("/api/v1/hr/staff/next-staff-no/")).staff_no || "" : "";
+      const nextGeneratedByYear = new Map<string, string>();
       let importedCount = 0;
       const failures: Array<{ rowNumber: number; message: string }> = [];
 
@@ -2012,14 +2011,27 @@ export function HrStaffPanel() {
         const rowNumber = index + 2;
         const rowPrefix = `Row ${rowNumber}`;
 
+        const joinDateValue = normalizeImportDate(getImportValue(normalizedRow, ["Joining Date", "Join Date", "join_date"]));
         const staffNoInput = getImportValue(normalizedRow, ["Staff No", "Staff Number", "staff_no", "staff number"]);
-        const staffNo = staffNoInput || nextGeneratedStaffNo;
+        let staffNo = staffNoInput;
+        if (!staffNo) {
+          const joinYearKey = /^\d{4}-\d{2}-\d{2}$/.test(joinDateValue) ? joinDateValue.slice(0, 4) : "default";
+          const cached = nextGeneratedByYear.get(joinYearKey);
+          if (cached) {
+            staffNo = cached;
+            nextGeneratedByYear.set(joinYearKey, incrementStaffNo(cached));
+          } else {
+            const query = joinDateValue ? `?joining_date=${encodeURIComponent(joinDateValue)}` : "";
+            const generated = (await apiGet<{ staff_no: string }>(`/api/v1/hr/staff/next-staff-no/${query}`)).staff_no || "";
+            staffNo = generated;
+            if (generated) {
+              nextGeneratedByYear.set(joinYearKey, incrementStaffNo(generated));
+            }
+          }
+        }
         if (!staffNo) {
           failures.push({ rowNumber, message: `${rowPrefix}: staff number could not be generated.` });
           continue;
-        }
-        if (!staffNoInput) {
-          nextGeneratedStaffNo = incrementStaffNo(nextGeneratedStaffNo || staffNo);
         }
 
         const roleIdValue = getImportValue(normalizedRow, ["Role Id", "Role ID", "role_id"]);
@@ -2103,7 +2115,6 @@ export function HrStaffPanel() {
         const genderValue = getImportValue(normalizedRow, ["Gender", "gender"]);
         const maritalStatusValue = getImportValue(normalizedRow, ["Marital Status", "marital_status"]);
         const dateOfBirthValue = normalizeImportDate(getImportValue(normalizedRow, ["Date Of Birth", "DOB", "date_of_birth"]));
-        const joinDateValue = normalizeImportDate(getImportValue(normalizedRow, ["Joining Date", "Join Date", "join_date"]));
         const drivingLicenseValue = getImportValue(normalizedRow, ["Driving License", "driving_license"]);
         const epfNoValue = getImportValue(normalizedRow, ["EPF No", "epf_no"]);
         const currentAddressValue = getImportValue(normalizedRow, ["Current Address", "current_address"]);
@@ -2207,9 +2218,6 @@ export function HrStaffPanel() {
         try {
           await apiPost("/api/v1/hr/staff/", payload);
           importedCount += 1;
-          if (!staffNoInput) {
-            nextGeneratedStaffNo = incrementStaffNo(nextGeneratedStaffNo || staffNo);
-          }
         } catch (err) {
           const message = err instanceof Error ? err.message : "Unable to import staff row.";
           failures.push({ rowNumber, message: `${rowPrefix}: ${message}` });
@@ -2242,7 +2250,7 @@ export function HrStaffPanel() {
 
       const [formOptionsResult, nextStaffNoResult, payrollSettingsResult] = await Promise.allSettled([
         apiGet<{ data?: { roles?: Role[]; departments?: Department[]; designations?: Designation[] } }>("/api/v1/hr/staff/form-options/"),
-        apiGet<{ staff_no?: string }>("/api/v1/hr/staff/next-staff-no/"),
+        apiGet<{ staff_no?: string }>(`/api/v1/hr/staff/next-staff-no/?joining_date=${encodeURIComponent(joinDate)}`),
         apiGet<PayrollSettings>("/api/v1/hr/payroll/settings/"),
       ]);
 
@@ -2294,6 +2302,23 @@ export function HrStaffPanel() {
   useEffect(() => {
     void load();
   }, []);
+
+  useEffect(() => {
+    if (editParam || editingStaffId) return;
+    let active = true;
+    (async () => {
+      try {
+        const next = await apiGet<{ staff_no?: string }>(`/api/v1/hr/staff/next-staff-no/?joining_date=${encodeURIComponent(joinDate)}`);
+        const nextValue = (next.staff_no || "").trim();
+        if (active && nextValue) setStaffNo(nextValue);
+      } catch {
+        // Keep current value; backend still enforces/generates on save fallback.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [joinDate, editParam, editingStaffId]);
 
   useEffect(() => {
     if (editParam) return;
@@ -3286,11 +3311,52 @@ export function HrStaffDirectoryPanel() {
   const [pageSize, setPageSize] = useState(25);
   const [totalRows, setTotalRows] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [lookupsLoaded, setLookupsLoaded] = useState(false);
+
+  const loadLookups = async () => {
+    const [roleResult, departmentResult, designationResult] = await Promise.allSettled([
+      apiGet<ApiList<Role>>("/api/v1/access-control/roles/"),
+      apiGet<ApiList<Department>>("/api/v1/hr/departments/?is_active=true"),
+      apiGet<ApiList<Designation>>("/api/v1/hr/designations/?is_active=true"),
+    ]);
+
+    if (roleResult.status === "fulfilled") {
+      const payload = roleResult.value as { results?: Role[]; data?: Role[] } | Role[];
+      const roleList = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload.data)
+          ? payload.data
+          : payload.results || [];
+      setRoles(roleList);
+    } else {
+      setRoles([]);
+    }
+
+    if (departmentResult.status === "fulfilled") {
+      setDepartments(listData(departmentResult.value));
+    } else {
+      setDepartments([]);
+    }
+
+    if (designationResult.status === "fulfilled") {
+      setDesignations(listData(designationResult.value));
+    } else {
+      setDesignations([]);
+    }
+
+    const dropdownFailures = [roleResult, departmentResult, designationResult].filter((r) => r.status === "rejected");
+    if (dropdownFailures.length === 3) {
+      setError("Unable to load dropdown options right now. Please refresh the page or check the backend API.");
+    }
+    setLookupsLoaded(true);
+  };
 
   const load = async (page = 1) => {
     try {
       setLoading(true);
-      setError("");
+      if (!lookupsLoaded) {
+        setError("");
+      }
 
       const params = new URLSearchParams();
       params.set("page", String(page));
@@ -3314,39 +3380,9 @@ export function HrStaffDirectoryPanel() {
         params.set("status", "inactive");
       }
 
-      const [roleResult, departmentResult, designationResult, staffResult] = await Promise.allSettled([
-        apiGet<ApiList<Role>>("/api/v1/access-control/roles/"),
-        apiGet<ApiList<Department>>("/api/v1/hr/departments/?is_active=true"),
-        apiGet<ApiList<Designation>>("/api/v1/hr/designations/?is_active=true"),
+      const [staffResult] = await Promise.allSettled([
         apiGet<ApiList<Staff>>(`/api/v1/hr/staff/?${params.toString()}`),
       ]);
-
-      // Process roles
-      if (roleResult.status === "fulfilled") {
-        const payload = roleResult.value as { results?: Role[]; data?: Role[] } | Role[];
-        const roleList = Array.isArray(payload)
-          ? payload
-          : Array.isArray(payload.data)
-            ? payload.data
-            : payload.results || [];
-        setRoles(roleList);
-      } else {
-        setRoles([]);
-      }
-
-      // Process departments
-      if (departmentResult.status === "fulfilled") {
-        setDepartments(listData(departmentResult.value));
-      } else {
-        setDepartments([]);
-      }
-
-      // Process designations
-      if (designationResult.status === "fulfilled") {
-        setDesignations(listData(designationResult.value));
-      } else {
-        setDesignations([]);
-      }
 
       // Process staff
       if (staffResult.status === "fulfilled") {
@@ -3362,12 +3398,9 @@ export function HrStaffDirectoryPanel() {
         setTotalPages(1);
       }
 
-      const dropdownFailures = [roleResult, departmentResult, designationResult].filter((r) => r.status === "rejected");
       const staffFailed = staffResult.status === "rejected";
 
-      if (dropdownFailures.length === 3) {
-        setError("Unable to load dropdown options right now. Please refresh the page or check the backend API.");
-      } else if (staffFailed) {
+      if (staffFailed) {
         console.warn("Staff rows failed to load:", staffResult.status === "rejected" ? staffResult.reason : "Unknown error");
       }
     } catch (err) {
@@ -3377,6 +3410,12 @@ export function HrStaffDirectoryPanel() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!lookupsLoaded) {
+      void loadLookups();
+    }
+  }, [lookupsLoaded]);
 
   useEffect(() => {
     void load(currentPage);

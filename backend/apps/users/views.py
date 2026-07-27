@@ -58,18 +58,11 @@ class MeView(APIView):
 
     def get(self, request):
         user = request.user
-        role_rows = user.user_roles.select_related("role").all()
+        role_rows = user.user_roles.select_related("role").filter(role__is_active=True)
         role_names = [row.role.name for row in role_rows if row.role]
         role_ids = [row.role_id for row in role_rows if row.role_id]
 
-        # Derive portal_type from the user's first active role.
-        # Superusers and school admins always get the admin console.
-        portal_type = "admin"
-        if not user.is_superuser and not getattr(user, "is_school_admin", False):
-            for row in role_rows:
-                if row.role and row.role.portal_type and row.role.portal_type != "admin":
-                    portal_type = row.role.portal_type
-                    break
+        portal_type = user.resolve_portal_type()
 
         school = user.school
         school_name = school.name if school else None

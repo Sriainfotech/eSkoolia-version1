@@ -191,129 +191,7 @@ const HELP_CONTENT: Record<Tab, HelpContent> = {
   },
 };
 
-const DEFAULT_TERMS: TermConfig[] = [
-  { name: "Term 1 (Apr–Jul)", startDate: "2026-04-01", endDate: "2026-07-31", dueDate: "2026-04-10" },
-  { name: "Term 2 (Aug–Nov)", startDate: "2026-08-01", endDate: "2026-11-30", dueDate: "2026-08-10" },
-  { name: "Term 3 (Dec–Mar)", startDate: "2026-12-01", endDate: "2027-03-31", dueDate: "2026-12-10" },
-  { name: "Term 4", startDate: "2027-04-01", endDate: "2027-05-31", dueDate: "2027-04-10" },
-];
-
-const ACADEMIC_TERMS = [
-  { label: "Term 1", range: "01 Jun 2025 → 09 Sept 2025" },
-  { label: "Term 2", range: "10 Sept 2025 → 19 Dec 2025" },
-  { label: "Term 3", range: "20 Dec 2025 → 30 Mar 2026" },
-  { label: "Term 4", range: "01 Apr 2026 → 31 May 2026" },
-];
-
-const FEE_GROUPS: FeeGroup[] = [
-  {
-    id: "day-scholar",
-    initials: "DS",
-    name: "Day Scholar",
-    bg: "#7C3AED",
-    summary: "6 fee types configured · ₹36,000 / yr + ₹5,000 custom + ₹2,000 custom + ₹4,500 / yr + ₹2,400 / yr + ₹3,000 custom",
-    feeTypes: [
-      {
-        id: "ds-tuition", name: "Tuition Fee", structure: "Term-wise",
-        amounts: [
-          { label: "T1", value: "₹12,000" }, { label: "T2", value: "₹12,000" },
-          { label: "T3", value: "₹12,000" }, { label: "T4", value: "₹12,000" },
-        ],
-        grace: "7 days", lateRule: "Rs. 50 daily, cap Rs. 1,500",
-      },
-      {
-        id: "ds-admission", name: "Admission Fee", structure: "Custom",
-        amounts: [{ label: "I1", value: "₹5,000 (01 Apr)" }],
-        grace: "0 days", lateRule: "None",
-      },
-      {
-        id: "ds-caution", name: "Caution Deposit", structure: "Custom",
-        amounts: [{ label: "I1", value: "₹2,000 (01 Apr)" }],
-        grace: "0 days", lateRule: "None",
-      },
-      {
-        id: "ds-admin", name: "Administrative Fee", structure: "Term-wise",
-        amounts: [
-          { label: "T1", value: "₹1,500" }, { label: "T2", value: "₹1,500" },
-          { label: "T3", value: "₹1,500" }, { label: "T4", value: "₹1,500" },
-        ],
-        grace: "10 days", lateRule: "Rs. 25 daily",
-      },
-      {
-        id: "ds-lab", name: "Lab Fee", structure: "Term-wise",
-        amounts: [
-          { label: "T1", value: "₹800" }, { label: "T2", value: "₹800" },
-          { label: "T3", value: "₹800" }, { label: "T4", value: "₹800" },
-        ],
-        grace: "10 days", lateRule: "None",
-      },
-      {
-        id: "ds-building", name: "Building Fund", structure: "Custom",
-        amounts: [
-          { label: "I1", value: "₹1,500 (01 Apr)" },
-          { label: "I2", value: "₹1,500 (01 Oct)" },
-        ],
-        grace: "15 days", lateRule: "None",
-      },
-    ],
-  },
-  {
-    id: "transport-users",
-    initials: "TU",
-    name: "Transport Users",
-    bg: "#0E7490",
-    summary: "1 fee type configured · ₹2,800 / mo",
-    feeTypes: [
-      {
-        id: "tu-transport", name: "Transport Fee", structure: "Monthly",
-        amounts: [{ label: "", value: "₹2,800/month" }],
-        grace: "5 days", lateRule: "Rs. 100 flat/week",
-      },
-    ],
-  },
-  {
-    id: "full-boarder",
-    initials: "FB",
-    name: "Full Boarder",
-    bg: "#16a34a",
-    summary: "4 fee types configured · ₹42,000 / yr + ₹54,000 / yr + ₹4,200 / mo + ₹15,000 custom",
-    feeTypes: [
-      {
-        id: "fb-tuition", name: "Tuition Fee", structure: "Term-wise",
-        amounts: [
-          { label: "T1", value: "₹14,000" }, { label: "T2", value: "₹14,000" },
-          { label: "T3", value: "₹14,000" }, { label: "T4", value: "₹14,000" },
-        ],
-        grace: "7 days", lateRule: "Rs. 50 daily, cap Rs. 1,500",
-      },
-      {
-        id: "fb-hostel", name: "Hostel Fee", structure: "Term-wise",
-        amounts: [
-          { label: "T1", value: "₹18,000" }, { label: "T2", value: "₹18,000" },
-          { label: "T3", value: "₹18,000" }, { label: "T4", value: "₹18,000" },
-        ],
-        grace: "7 days", lateRule: "Rs. 100 daily",
-      },
-      {
-        id: "fb-lunch", name: "Lunch Fee", structure: "Monthly",
-        amounts: [{ label: "", value: "₹4,200/month" }],
-        grace: "7 days", lateRule: "None",
-      },
-      {
-        id: "fb-development", name: "Development Fund", structure: "Custom",
-        amounts: [{ label: "I1", value: "₹15,000 (01 Jun)" }],
-        grace: "10 days", lateRule: "None",
-      },
-    ],
-  },
-];
-
-const FEE_GROUPS_DATA = [
-  { id: 1, name: "Day Scholar",        description: "Students attending regular day school",        students: "47 students", status: "Active" },
-  { id: 2, name: "Transport Users",    description: "Students using school transport service",       students: "31 students", status: "Active" },
-  { id: 3, name: "Full Boarder",       description: "Residential students on full board",           students: "12 students", status: "Active" },
-  { id: 4, name: "Scholarship Review", description: "Students under financial assistance review",   students: "8 students",  status: "Draft"  },
-];
+const DEFAULT_TERMS: TermConfig[] = [];
 
 const FEE_TAXABLE_OPTIONS: Array<"Yes" | "No"> = ["Yes", "No"];
 const FEE_STRUCTURE_OPTIONS: Array<string> = [
@@ -617,12 +495,12 @@ export default function FeeConfigurationPanel() {
 
   // ── Add Fee Schedule inline form ──
   const [showAddForm, setShowAddForm] = useState(false);
-  const [formGroup, setFormGroup] = useState(FEE_GROUPS[0].name);
-  const [formFeeType, setFormFeeType] = useState("Tuition Fee");
+  const [formGroup, setFormGroup] = useState("");
+  const [formFeeType, setFormFeeType] = useState("");
   const [formStructure, setFormStructure] = useState("Term-wise");
   const [formGrace, setFormGrace] = useState("7");
-  const [formLateRule, setFormLateRule] = useState("Rs. 50 daily, cap Rs. 1,500");
-  const [formAmounts, setFormAmounts] = useState<string[]>(["12000", "12000", "12000", "12000"]);
+  const [formLateRule, setFormLateRule] = useState("");
+  const [formAmounts, setFormAmounts] = useState<string[]>([]);
 
   const generateMonthlySlots = (): BreakdownSlot[] => {
     const year = academicYears.find(y => y.id === academicYearId);
@@ -654,12 +532,12 @@ export default function FeeConfigurationPanel() {
   };
 
   const resetAddForm = () => {
-    setFormGroup(FEE_GROUPS[0].name);
-    setFormFeeType("Tuition Fee");
+    setFormGroup(feeGroups[0]?.name || "");
+    setFormFeeType("");
     setFormStructure("Term-wise");
     setFormGrace("7");
-    setFormLateRule("Rs. 50 daily, cap Rs. 1,500");
-    setFormAmounts(["12000", "12000", "12000", "12000"]);
+    setFormLateRule("");
+    setFormAmounts(Array.from({ length: Math.max(1, numTerms) }, () => ""));
     setShowAddForm(false);
   };
 
@@ -743,6 +621,12 @@ export default function FeeConfigurationPanel() {
   useEffect(() => {
     fetchFeeGroups();
   }, []);
+
+  useEffect(() => {
+    if (!formGroup && feeGroups.length > 0) {
+      setFormGroup(feeGroups[0].name);
+    }
+  }, [feeGroups, formGroup]);
 
   function ghostBtn(small = false): React.CSSProperties {
     return {
@@ -978,8 +862,13 @@ export default function FeeConfigurationPanel() {
   // ── Term Settings functions ──────────────────────────────────────────────────
 
   const generateDefaultTerms = (year?: AcademicYear, count = 3): TermConfig[] => {
-    const startStr = year?.start_date || "2026-06-12";
-    const endStr = year?.end_date || "2027-03-14";
+    const now = new Date();
+    const fallbackStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const fallbackEnd = new Date(fallbackStart);
+    fallbackEnd.setFullYear(fallbackEnd.getFullYear() + 1);
+    fallbackEnd.setDate(fallbackEnd.getDate() - 1);
+    const startStr = year?.start_date || fallbackStart.toISOString().split("T")[0];
+    const endStr = year?.end_date || fallbackEnd.toISOString().split("T")[0];
     
     console.log(`[TermSettings] generateDefaultTerms called for year:`, year?.name, `start:`, startStr, `end:`, endStr, `count:`, count);
     const start = new Date(startStr);
@@ -2077,7 +1966,7 @@ export default function FeeConfigurationPanel() {
         gl_code: typeGlCode,
         taxable: typeTaxable,
         default_structure: typeStructure,
-        status: typeStatus,
+        status: typeStatus.toLowerCase(),
       });
       showToast("Fee type created successfully.");
       setTypeGroupId("");
@@ -2105,7 +1994,7 @@ export default function FeeConfigurationPanel() {
     setEditTypeGlCode(row.gl_code || "");
     setEditTypeTaxable((row.taxable || "No") as "Yes" | "No");
     setEditTypeStructure((row.default_structure || "Term-wise") as "Monthly" | "Quarterly" | "Term-wise" | "Yearly" | "Custom");
-    setEditTypeStatus((row.status || "Active") as "Active" | "Inactive");
+    setEditTypeStatus(String(row.status).toLowerCase() === "inactive" ? "Inactive" : "Active");
     setEditTypeErrors({});
     setIsEditTypeOpen(true);
   };
@@ -2134,7 +2023,7 @@ export default function FeeConfigurationPanel() {
         gl_code: editTypeGlCode,
         taxable: editTypeTaxable,
         default_structure: editTypeStructure,
-        status: editTypeStatus,
+        status: editTypeStatus.toLowerCase(),
       });
       showToast("Fee type updated successfully.");
       closeEditTypeModal();
@@ -2323,7 +2212,7 @@ export default function FeeConfigurationPanel() {
                   <td style={tdMuted}>{ft.gl_code}</td>
                   <td style={tdMuted}>{ft.taxable}</td>
                   <td style={tdMuted}>{ft.default_structure}</td>
-                  <td style={tdStyle}>{statusPill(ft.status)}</td>
+                  <td style={tdStyle}>{statusPill(String(ft.status).toLowerCase() === "active" ? "Active" : "Inactive")}</td>
                   <td style={tdStyle}>
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                       <button style={outlineBtn(true)} onClick={() => openEditTypeModal(ft)}>Edit</button>
@@ -3710,7 +3599,7 @@ export default function FeeConfigurationPanel() {
                   <td style={{ ...tdStyle, fontWeight: 600 }}>{r.name}</td>
                   <td style={tdMuted}>{r.applies_to || "—"}</td>
                   <td style={{ ...tdStyle, fontWeight: 600 }}>{r.discount_percentage != null ? `${r.discount_percentage}%` : "—"}</td>
-                  <td style={tdStyle}>{statusPill(r.status === "Active" ? "Active" : "Inactive")}</td>
+                  <td style={tdStyle}>{statusPill(String(r.status).toLowerCase() === "active" ? "Active" : "Inactive")}</td>
                   <td style={tdStyle}>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button style={outlineBtn(true)} onClick={() => handleEditConcessionClick(r)}>

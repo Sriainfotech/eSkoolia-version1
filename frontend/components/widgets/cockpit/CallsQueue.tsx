@@ -15,17 +15,20 @@ interface CallEntry {
   isEmergency: boolean;
   notes?: string;
   done?: boolean;
+  isExample?: boolean;
 }
 
-const MOCK: CallEntry[] = [
-  { id: '1', name: 'Mrs. Sharma', role: 'Parent', reason: "Aarav's Math performance (52%)", phone: '+919876543210', urgency: 'high', isEmergency: false, sourceLink: '/students/list' },
-  { id: '2', name: 'Raj Medical', role: 'Vendor', reason: 'Invoice #2847 pending for 14 days', phone: '+919811234567', urgency: 'normal', isEmergency: false },
-  { id: '3', name: 'Mr. Khan', role: 'Parent', reason: 'Aarav in sick bay – awaiting pickup', phone: '+919988776655', urgency: 'emergency', isEmergency: true, sourceLink: '/utilities/sick-bay/1' },
+// A single, clearly-labeled placeholder — not a real contact. No backend
+// exists yet for this queue (/api/ai/calls-queue/ 404s below), so real
+// entries only ever come from what the user adds themselves. Per CLAUDE.md:
+// no mock mode — never present fabricated names/phone numbers as live data.
+const EXAMPLE: CallEntry[] = [
+  { id: 'example-1', name: 'Example contact', role: 'Parent', reason: 'e.g. "Follow up on attendance concern"', phone: '', urgency: 'normal', isEmergency: false, isExample: true },
 ];
 
 const LS_KEY = 'eskoolia_calls_queue';
 function loadLS(): CallEntry[] {
-  try { const d = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); return Array.isArray(d) && d.length ? d : MOCK; } catch { return MOCK; }
+  try { const d = JSON.parse(localStorage.getItem(LS_KEY) || '[]'); return Array.isArray(d) && d.length ? d : EXAMPLE; } catch { return EXAMPLE; }
 }
 function saveLS(d: CallEntry[]) { try { localStorage.setItem(LS_KEY, JSON.stringify(d)); } catch {} }
 
@@ -174,7 +177,11 @@ export function CallsQueue() {
                   {c.notes && <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 3, background: '#FEF3C7', borderRadius: 4, padding: '2px 6px' }}>📝 {c.notes}</div>}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                  <span style={{ fontSize: 9.5, fontWeight: 600, background: ug.bg, color: ug.text, padding: '2px 7px', borderRadius: 20 }}>{c.urgency}</span>
+                  {c.isExample ? (
+                    <span style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--ink-3)', background: 'var(--bg-2)', border: '1px dashed var(--bd)', padding: '1px 6px', borderRadius: 20 }}>Example</span>
+                  ) : (
+                    <span style={{ fontSize: 9.5, fontWeight: 600, background: ug.bg, color: ug.text, padding: '2px 7px', borderRadius: 20 }}>{c.urgency}</span>
+                  )}
                   <button onClick={() => deleteCall(c.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#E0463A', display: 'flex', padding: 2 }} title="Remove">
                     <Trash2 size={10} strokeWidth={2} />
                   </button>

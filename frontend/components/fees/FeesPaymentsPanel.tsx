@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { feesApi, listData, StudentRow, FeesSummary } from "@/lib/fees-api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type FeedStatus = "Verified" | "Posted";
+type FeedStatus = string;
 
 type FeedItem = {
   id: string;
@@ -24,27 +24,26 @@ type Task = { id: string; color: string; title: string; desc: string; buttons: T
 type AuditItem = { id: string; initials: string; event: string; desc: string; date: string; bg: string };
 
 // ─── Static data ──────────────────────────────────────────────────────────────
-// KPIs are now dynamically fetched
 const INITIAL_FEED: FeedItem[] = [];
 
-// Simulate pool
-const SIM_POOL = [
-  { initials: "RN", name: "Riaan Nair", bg: "#3B82F6" },
-  { initials: "SN", name: "Sia Nair", bg: "#7C3AED" },
-  { initials: "KN", name: "Kiara Nair", bg: "#0E7490" },
-  { initials: "AN", name: "Atharv Nair", bg: "#9333EA" },
-  { initials: "RS", name: "Rohan Sharma", bg: "#6D28D9" },
-  { initials: "PS", name: "Priya Singh", bg: "#0f766e" },
-  { initials: "AK", name: "Arjun Kumar", bg: "#d97706" },
-  { initials: "VR", name: "Vihaan Reddy", bg: "#16a34a" },
-];
-const SIM_AMOUNTS = [5500, 7200, 8800, 9100, 10200, 11500, 12300, 13700, 14200, 15800];
-const SIM_METHODS = ["Cash", "Online", "Wallet", "Bank Transfer", "Cheque"];
-let simCounter = 100;
+const FEED_COLORS = ["#3B82F6", "#7C3AED", "#0E7490", "#16a34a", "#d97706", "#9333EA", "#0f766e", "#6D28D9"];
 
-function nowTime(): string {
-  return new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: false });
+function colorFromKey(key: string): string {
+  let hash = 0;
+  for (const ch of key) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return FEED_COLORS[hash % FEED_COLORS.length];
 }
+
+function normalizePaymentStatus(status: string): FeedStatus {
+  const raw = (status || "").toLowerCase();
+  if (raw === "posted") return "Posted";
+  if (raw === "pending_verification") return "Pending Verification";
+  if (raw === "pending_clearance") return "Pending Clearance";
+  if (raw === "pending_reconciliation") return "Pending Reconciliation";
+  if (raw === "reversed") return "Reversed";
+  return raw ? status.replace(/_/g, " ") : "Unknown";
+}
+
 function fmtAmt(n: number): string {
   return n.toLocaleString("en-IN");
 }
@@ -80,24 +79,6 @@ export default function FeesPaymentsPanel() {
     setTimeout(() => setToast(""), 3500);
   }, []);
 
-  const simulatePayment = useCallback(() => {
-    const p = SIM_POOL[Math.floor(Math.random() * SIM_POOL.length)];
-    const amount = SIM_AMOUNTS[Math.floor(Math.random() * SIM_AMOUNTS.length)];
-    const method = SIM_METHODS[Math.floor(Math.random() * SIM_METHODS.length)];
-    const status: FeedStatus = Math.random() > 0.3 ? "Verified" : "Posted";
-    const id = `sim-${++simCounter}`;
-    const item: FeedItem = {
-      id, initials: p.initials, name: p.name,
-      amount: fmtAmt(amount), method, time: nowTime(),
-      status, bg: p.bg, isNew: true,
-    };
-    setFeed(prev => [item, ...prev.slice(0, 19)]);
-    showToast(`Payment received: Rs. ${fmtAmt(amount)} from ${p.name} via ${method}.`);
-    setTimeout(() => {
-      setFeed(prev => prev.map(f => f.id === id ? { ...f, isNew: false } : f));
-    }, 800);
-  }, [showToast]);
-
   useEffect(() => {
     feesApi.assignmentsSummary().then(setKpiData).catch(console.error);
 
@@ -132,8 +113,8 @@ export default function FeesPaymentsPanel() {
           amount: fmtAmt(Number(p.amount_paid)),
           method: p.method,
           time,
-          status: "Posted",
-          bg: SIM_POOL[p.id % SIM_POOL.length].bg,
+          status: normalizePaymentStatus(p.status),
+          bg: colorFromKey(`${p.student}-${p.id}`),
           isNew: false
         };
       });
@@ -180,7 +161,10 @@ export default function FeesPaymentsPanel() {
             </p>
           </div>
           <button
-            onClick={simulatePayment}
+            onClick={() => {
+              fetchFeed();
+              showToast("Payment feed refreshed from live records.");
+            }}
             style={{
               height: 40, padding: "0 20px", flexShrink: 0, marginTop: 8,
               background: "var(--pu, #6D4AFF)", color: "#fff",
@@ -188,7 +172,7 @@ export default function FeesPaymentsPanel() {
               cursor: "pointer", boxShadow: "0 2px 8px rgba(109,74,255,0.28)",
             }}
           >
-            Simulate Incoming Payment
+            Refresh Payment Feed
           </button>
         </div>
 
@@ -269,7 +253,7 @@ export default function FeesPaymentsPanel() {
                   Live Payment Feed
                 </div>
                 <div style={{ fontSize: 13, color: "var(--ink-3, #A0A3B8)", lineHeight: 1.5 }}>
-                  Simulated webhook updates from app, bank transfer, and wallet payments.
+                  Live payment activity across collection methods.
                 </div>
               </div>
               <button
@@ -321,7 +305,7 @@ export default function FeesPaymentsPanel() {
                   </div>
                   <div style={{
                     fontSize: 12.5, fontWeight: 600, flexShrink: 0,
-                    color: item.status === "Verified" ? "#16a34a" : "var(--ink-3, #A0A3B8)",
+                    color: item.status === "Posted" ? "#16a34a" : "var(--ink-3, #A0A3B8)",
                   }}>
                     {item.status}
                   </div>

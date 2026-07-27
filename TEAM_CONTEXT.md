@@ -1,5 +1,218 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — GitHub Copilot (27/07/2026)
+
+**Area:** Multi-module Platform Hardening, Student Portal Delivery, Broadcast/Notes, Fees & Performance Improvements
+
+### 1. Core Platform + Tenancy + Routing
+
+**Backend routing/app registration**
+- Added Notes and AI Brief API routes and enabled student portal API include:
+  - `backend/config/settings/base.py`
+  - `backend/config/urls.py`
+  - `backend/config/urls_tenant.py`
+
+**Tenancy model and super-admin consistency**
+- Added direct tenant-to-school link for canonical school sync:
+  - `backend/apps/tenancy/models.py`
+  - `backend/apps/tenancy/migrations/0019_schooltenant_school.py`
+- Super-admin provisioning/update/archive now keeps `SchoolTenant.school` and `School.is_active` in sync:
+  - `backend/apps/super_admin/views.py`
+
+### 2. Auth, Roles, Portal Resolution, Access Controls
+
+**User portal resolution + active-role filtering**
+- Added deterministic `resolve_portal_type()` and active-role permission filtering:
+  - `backend/apps/users/models.py`
+- Login and `/me` now derive portal type from `resolve_portal_type()`:
+  - `backend/apps/users/serializers.py`
+  - `backend/apps/users/views.py`
+
+**Frontend auth gate + module visibility policy**
+- Student portal redirect support and cross-portal restrictions; teacher admin-route access now permission-visible-module aware:
+  - `frontend/components/layout/AuthGate.tsx`
+- Removed local module toggles from visibility logic and standardized permission-driven visibility:
+  - `frontend/hooks/useVisibleModules.ts`
+  - `frontend/lib/portal-modules.ts`
+  - `frontend/lib/routes.ts`
+- Removed module-toggle UI/storage implementation:
+  - `frontend/components/nav/ModuleManager.tsx` (deleted)
+  - `frontend/lib/moduleStore.ts` (deleted)
+
+### 3. Communication: Real Quick Broadcast + Notification UX
+
+**Broadcast backend capability (new)**
+- Added broadcast data model and migration:
+  - `backend/apps/communication/models.py`
+  - `backend/apps/communication/migrations/0004_broadcastmessage.py`
+- Added audience options + broadcast dispatch endpoints:
+  - `backend/apps/communication/views.py`
+  - `backend/apps/communication/urls.py`
+- Added shared broadcast service logic + celery task integration:
+  - `backend/apps/communication/broadcast.py` (new)
+  - `backend/apps/communication/tasks.py` (new)
+
+**Notification scoping and frontend integration**
+- Personal communication querysets are now consistently user-scoped (including superusers for personal views):
+  - `backend/apps/communication/views.py`
+- Added reusable notification bell component and integrated into topbars/layouts:
+  - `frontend/components/nav/NotificationBell.tsx` (new)
+  - `frontend/components/nav/TopBar.tsx`
+  - `frontend/app/(teacher-portal)/layout.tsx`
+  - `frontend/app/(parent-portal)/layout.tsx`
+
+**Quick Broadcast widget upgraded to real APIs**
+- Audience/teacher class restrictions, scheduling, channel handling, and API wiring:
+  - `frontend/components/widgets/cockpit/QuickBroadcast.tsx`
+
+### 4. Notes Module: Backend API + Frontend Contract Alignment
+
+**New Notes app**
+- Added full Notes backend (model, serializer, viewset, routes, migration):
+  - `backend/apps/notes/apps.py`
+  - `backend/apps/notes/models.py`
+  - `backend/apps/notes/serializers.py`
+  - `backend/apps/notes/views.py`
+  - `backend/apps/notes/urls.py`
+  - `backend/apps/notes/migrations/0001_initial.py`
+
+**Frontend notes behavior alignment**
+- Sticky notes now follow local persistence semantics and stable controlled editing:
+  - `frontend/components/notes/StickyNoteCard.tsx`
+- Added proxy rewrite path for notes API:
+  - `frontend/next.config.mjs`
+
+### 5. Student Portal: End-to-End Delivery (Backend + Frontend)
+
+**Backend student portal APIs (new)**
+- Added student-only permission guard and complete student portal endpoints:
+  - `backend/apps/student_portal/permissions.py` (new)
+  - `backend/apps/student_portal/urls.py` (new)
+  - `backend/apps/student_portal/views.py` (new)
+
+**Frontend student portal (new)**
+- Added student portal layout and all major pages:
+  - `frontend/app/(student-portal)/layout.tsx` (new)
+  - `frontend/app/(student-portal)/student/home/page.tsx` (new)
+  - `frontend/app/(student-portal)/student/academics/page.tsx` (new)
+  - `frontend/app/(student-portal)/student/attendance/page.tsx` (new)
+  - `frontend/app/(student-portal)/student/results/page.tsx` (new)
+  - `frontend/app/(student-portal)/student/fees/page.tsx` (new)
+  - `frontend/app/(student-portal)/student/notices/page.tsx` (new)
+  - `frontend/app/(student-portal)/student/profile/page.tsx` (new)
+- Added student API client and module registry:
+  - `frontend/lib/api/student.ts` (new)
+  - `frontend/lib/student-routes.ts` (new)
+- Login routing now supports student home redirect:
+  - `frontend/app/login/page.tsx`
+
+### 6. Fees Module: Tenancy Hardening + Year-End + Live Data
+
+**Serializer tenancy and validation hardening**
+- School-scoped querysets and cross-year/entity validation for fees serializers:
+  - `backend/apps/fees/serializers.py`
+
+**New fees endpoints and year-end execution**
+- Added year-end rollover and today fees summary routes:
+  - `backend/apps/fees/urls.py`
+- Added year-end rollover execution API and real today summary widget API:
+  - `backend/apps/fees/views.py`
+
+**Frontend fees pages/components cleanup**
+- Year-end page now dynamic and wired to rollover flow:
+  - `frontend/app/(dashboard)/fees/year-end/page.tsx`
+- Removed static/mock assumptions and aligned status handling:
+  - `frontend/components/fees/FeeConfigurationPanel.tsx`
+  - `frontend/components/fees/FeesCollectionPanel.tsx`
+  - `frontend/components/fees/FeesDuesRemindersPanel.tsx`
+  - `frontend/components/fees/FeesPaymentsPanel.tsx`
+  - `frontend/components/students/StudentFeesStep.tsx`
+  - `frontend/lib/fees-api.ts`
+
+### 7. Performance + Query Optimization Passes
+
+**Backend API efficiency improvements**
+- Attendance list filtering consolidated to single dict-based filter application:
+  - `backend/apps/attendance/views.py`
+- Chat member add flow optimized with preloaded users and in-memory existing member checks:
+  - `backend/apps/chat/views.py`
+- Dashboard KPI query reductions + real AI Brief API:
+  - `backend/apps/dashboard/views.py`
+- Fees dues/reminder and year-end CSV aggregation optimizations:
+  - `backend/apps/fees/views.py`
+- HR count/summary/query optimizations and role scoping improvements:
+  - `backend/apps/hr/views.py`
+- Student admission number validation now DB-constraint consistent including soft-deleted rows:
+  - `backend/apps/students/views.py`
+
+**Frontend performance/reload optimization**
+- Academic upload lookups memoized across mounts:
+  - `frontend/components/academics/UploadContentPanels.tsx`
+- HR panels reduce repeated lookup calls and improve next-staff-no generation flow:
+  - `frontend/components/hr/HrPanels.tsx`
+
+### 8. HR Onboarding + School Header UX Refinements
+
+- HR onboarding staff code generation now join-date aware and safer for create flow:
+  - `frontend/app/(dashboard)/hr/onboard/page.tsx`
+- School header settings UI expanded and embedded into verification workflow:
+  - `frontend/components/hr/SchoolHeaderPopover.tsx`
+  - `frontend/components/hr/StaffVerificationForm.tsx`
+
+### 9. Parent/Teacher Dashboard and Widget Data Quality
+
+- Parent home now uses dynamic school/year and visible-module filtered tiles:
+  - `frontend/app/(parent-portal)/parent/home/page.tsx`
+- Teacher home now module-filtered and supports broadcast widget visibility:
+  - `frontend/app/(teacher-portal)/teacher/home/page.tsx`
+- Greeting chips now fetch live school and academic year:
+  - `frontend/components/home/Greeting.tsx`
+- `useCurrentAcademicYear` now fetches current/most recent year via API:
+  - `frontend/hooks/useCurrentAcademicYear.ts`
+- Permissions cache now supports forced refresh on focus/visibility and richer code matching:
+  - `frontend/hooks/usePermissions.ts`
+
+### 10. Widget Integrity: Remove Misleading Mock Behavior
+
+- Calls queue mock entries replaced with labeled example semantics:
+  - `frontend/components/widgets/cockpit/CallsQueue.tsx`
+- Smart todo mock list replaced with labeled example semantics:
+  - `frontend/components/widgets/cockpit/SmartTodoList.tsx`
+- Week Ahead mock readiness/events removed; conditional rendering for real data:
+  - `frontend/components/widgets/cockpit/WeekAhead.tsx`
+- Notifications widget now bound to communication notifications API:
+  - `frontend/components/widgets/cockpit/NotificationsInbox.tsx`
+- FeesToday widget now initializes with empty state and conditional trend chip:
+  - `frontend/components/widgets/pulse/FeesToday.tsx`
+- Pinned notes shape aligned to `updated_at` key:
+  - `frontend/components/widgets/cockpit/PinnedNotes.tsx`
+- Widget store updated to include teacher broadcast access by default:
+  - `frontend/lib/widgetStore.ts`
+
+### 11. Super Admin UI Behavior Changes
+
+- Removed unsupported permanent delete action from school management confirm flows:
+  - `frontend/app/(dashboard)/super-admin/schools/page.tsx`
+
+### 12. Verification / Utility Scripts Added
+
+- Added RBAC/portal flow and student portal verification scripts:
+  - `backend/scripts/verify_rbac_portal_flow.py` (new)
+  - `backend/scripts/verify_student_portal.py` (new)
+
+### 13. Documentation / Miscellaneous File Changes
+
+- Project guidance updated with explicit "do not proactively start servers" convention:
+  - `CLAUDE.md`
+- Build artifact updated in worktree (non-source generated file):
+  - `frontend/tsconfig.tsbuildinfo`
+
+### Status
+
+✅ **IMPLEMENTED (WORKTREE CHANGES PRESENT)** — Changes span tenancy/auth, communication, notes, student portal, fees, HR, dashboards/widgets, and performance hardening.
+
+⚠️ **Validation pending:** final integrated regression pass (backend tests + frontend lint/build + portal smoke tests for admin/teacher/parent/student) before merge.
+
 ## Update — GitHub Copilot (23/07/2026)
 
 **Area:** HR Onboarding UX + PDF Flow, Tenancy Public Path Auth, and Data Entry Reliability Fixes

@@ -51,8 +51,8 @@ function isCacheValid() {
   return _cache !== null && Date.now() - _cacheAt < CACHE_TTL_MS;
 }
 
-function fetchMe(): Promise<MeData> {
-  if (isCacheValid()) return Promise.resolve(_cache!);
+function fetchMe(force = false): Promise<MeData> {
+  if (!force && isCacheValid()) return Promise.resolve(_cache!);
   // Cache expired or absent — start a fresh request (deduplicated via _promise)
   if (!_promise) {
     _promise = apiRequestWithRefresh<MeData>('/api/v1/auth/me/')
@@ -104,14 +104,16 @@ export function usePermissions() {
   // (e.g. assigning a new module to a teacher) are picked up within one TTL cycle
   // without requiring a full page reload.
   useEffect(() => {
+    const refreshNow = () => fetchMe(true).then(setMe);
     const onVisible = () => {
-      if (document.visibilityState === 'visible') {
-        // fetchMe() respects the TTL — only hits the network when cache is stale
-        fetchMe().then(setMe);
-      }
+      if (document.visibilityState === 'visible') refreshNow();
     };
     document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', refreshNow);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', refreshNow);
+    };
   }, []);
 
   function can(code: string): boolean {
@@ -119,7 +121,7 @@ export function usePermissions() {
     if (me.is_superuser) return true;
     if (me.is_school_admin) return true; // school admins have access to all modules
     const codes = me.permission_codes;
-    return codes.includes('*') || codes.includes(code);
+    return codes.some((c) => c === '*' || c === code || c.startsWith(`${code}.`));
   }
 
   function canAnyPrefix(prefix: string): boolean {

@@ -1,15 +1,20 @@
+from datetime import timedelta
+
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db.models import Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.core.models import AcademicYear
 
 from .models import (
+    BroadcastMessage,
     CommunicationNotification,
     CommunicationPreference,
     EmailMessageLog,
@@ -92,8 +97,9 @@ class CommunicationNotificationViewSet(BaseCommunicationViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = CommunicationNotification.objects.select_related("recipient", "created_by")
-        if user.is_superuser:
-            return queryset
+        # Personal notifications — always scoped to the requesting user, even
+        # for superusers (see CLAUDE.md tenancy policy: no is_superuser bypass
+        # on ordinary per-user/per-school data views).
         return queryset.filter(recipient=user)
 
     def perform_create(self, serializer):
@@ -135,8 +141,8 @@ class InAppMessageViewSet(BaseCommunicationViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = InAppMessage.objects.select_related("sender", "recipient")
-        if user.is_superuser:
-            return queryset
+        # Personal messages — always scoped to sender/recipient, even for
+        # superusers (see CLAUDE.md tenancy policy).
         return queryset.filter(Q(sender=user) | Q(recipient=user))
 
     def perform_create(self, serializer):
@@ -177,8 +183,7 @@ class EmailMessageLogViewSet(BaseCommunicationViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = EmailMessageLog.objects.select_related("recipient", "created_by")
-        if user.is_superuser:
-            return queryset
+        # Scoped to sender/recipient, even for superusers (CLAUDE.md tenancy policy).
         return queryset.filter(Q(created_by=user) | Q(recipient=user))
 
     def create(self, request, *args, **kwargs):
@@ -298,3 +303,164 @@ class HolidayCalendarViewSet(BaseCommunicationViewSet):
             school=self.request.user.school,
             academic_year=academic_year,
         )
+
+
+class BroadcastAudienceOptionsView(APIView):
+    """Tells the frontend which audience types + classes this user may
+    target. Teachers only ever see their own class-teacher class(es)."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from apps.communication.broadcast import teacher_assigned_class_ids
+        from apps.core.models import Class
+
+        user = request.user
+        school = user.school
+        if not school:
+            return Response({"is_teacher": False, "audience_types": [], "classes": []})
+
+        is_teacher = user.resolve_portal_type() == "teacher" if hasattr(user, "resolve_portal_type") else False
+
+        if is_teacher:
+            class_ids = teacher_assigned_class_ids(user)
+            classes = list(Class.objects.filter(id__in=class_ids, school_id=school.id).values("id", "name"))
+            return Response({
+                "is_teacher": True,
+                "audience_types": [BroadcastMessage.AUDIENCE_CLASS_PARENTS],
+                "classes": classes,
+            })
+
+        classes = list(
+            Class.objects.filter(school_id=school.id, is_active=True)
+            .values("id", "name")
+            .order_by("numeric_order", "name")
+        )
+        return Response({
+            "is_teacher": False,
+            "audience_types": [
+                BroadcastMessage.AUDIENCE_ALL_PARENTS,
+                BroadcastMessage.AUDIENCE_CLASS_PARENTS,
+                BroadcastMessage.AUDIENCE_TEACHERS,
+                BroadcastMessage.AUDIENCE_ALL_STAFF,
+            ],
+            "classes": classes,
+        })
+
+
+class BroadcastMessageView(APIView):
+    """POST: resolve the audience, create the BroadcastMessage, and either
+    dispatch immediately or schedule it via Celery for `scheduled_at`."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        from apps.communication.broadcast import dispatch_broadcast, resolve_recipient_user_ids, teacher_assigned_class_ids
+
+        user = request.user
+        school = user.school
+        if not school:
+            return Response({"error": "No school on this account."}, status=status.HTTP_400_BAD_REQUEST)
+
+        message = (request.data.get("message") or "").strip()
+        if not message:
+            return Response({"error": "Message is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        template = (request.data.get("template") or "").strip()
+        audience_type = request.data.get("audience_type")
+        class_ids = request.data.get("class_ids") or []
+        channels = [c for c in (request.data.get("channels") or []) if c in {"sms", "push", "email"}]
+        scheduled_at_raw = request.data.get("scheduled_at")
+
+        is_teacher = user.resolve_portal_type() == "teacher" if hasattr(user, "resolve_portal_type") else False
+        if is_teacher:
+            # Server-side enforcement — never trust the client for this.
+            # A teacher may only ever broadcast to parents of their own
+            # class-teacher class(es).
+            allowed_class_ids = set(teacher_assigned_class_ids(user))
+            class_ids = [cid for cid in class_ids if cid in allowed_class_ids]
+            audience_type = BroadcastMessage.AUDIENCE_CLASS_PARENTS
+            if not class_ids:
+                return Response(
+                    {"error": "You are not assigned as class teacher for any class."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        elif audience_type not in dict(BroadcastMessage.AUDIENCE_CHOICES):
+            return Response({"error": "Invalid audience_type."}, status=status.HTTP_400_BAD_REQUEST)
+
+        scheduled_at = None
+        if scheduled_at_raw:
+            parsed = parse_datetime(scheduled_at_raw)
+            if not parsed:
+                return Response({"error": "scheduled_at must be an ISO datetime."}, status=status.HTTP_400_BAD_REQUEST)
+            if timezone.is_naive(parsed):
+                parsed = timezone.make_aware(parsed)
+            now = timezone.now()
+            if parsed <= now:
+                return Response({"error": "scheduled_at must be in the future."}, status=status.HTTP_400_BAD_REQUEST)
+            one_year_out = now + timedelta(days=366)
+            if parsed > one_year_out:
+                return Response(
+                    {"error": "scheduled_at must be within 1 year from today."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            scheduled_at = parsed
+
+        recipient_count = len(resolve_recipient_user_ids(school, audience_type, class_ids))
+
+        broadcast = BroadcastMessage.objects.create(
+            school=school,
+            created_by=user,
+            template=template,
+            message=message,
+            audience_type=audience_type,
+            audience_class_ids=class_ids,
+            channels=channels,
+            scheduled_at=scheduled_at,
+            recipient_count=recipient_count,
+        )
+
+        if scheduled_at:
+            # Scheduling genuinely requires Celery to be installed AND a
+            # running worker + broker (same infra apps.admissions already
+            # depends on for bulk jobs). If either isn't available, say so
+            # honestly instead of pretending the message is scheduled when
+            # nothing will ever send it.
+            try:
+                from apps.communication.tasks import dispatch_broadcast_task
+                dispatch_broadcast_task.apply_async(args=[broadcast.id], eta=scheduled_at)
+            except Exception:
+                broadcast.status = BroadcastMessage.STATUS_FAILED
+                broadcast.error = "Could not reach the task queue (Celery/Redis) to schedule this send."
+                broadcast.save(update_fields=["status", "error"])
+                return Response(
+                    {"error": "Scheduling is unavailable right now — the background task queue isn't reachable. Try Send Now instead, or try again once the worker is running."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            return Response({
+                "id": broadcast.id,
+                "status": "scheduled",
+                "scheduled_at": scheduled_at.isoformat(),
+                "recipient_count": recipient_count,
+                "message": f"Scheduled for {recipient_count} recipient(s) at {scheduled_at.strftime('%d %b, %I:%M %p')}.",
+            }, status=status.HTTP_201_CREATED)
+
+        # Immediate send — dispatch synchronously so it works even without a
+        # Celery worker running (no reason "Send Now" should depend on infra
+        # that a future send needs but an instant one doesn't).
+        try:
+            dispatch_broadcast(broadcast.id)
+        except Exception:
+            pass  # dispatch_broadcast already recorded status=failed + error
+        broadcast.refresh_from_db()
+        if broadcast.status == BroadcastMessage.STATUS_FAILED:
+            return Response(
+                {"error": broadcast.error or "Broadcast failed to send."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response({
+            "id": broadcast.id,
+            "status": "sent",
+            "recipient_count": broadcast.recipient_count,
+            "message": f"Sent to {broadcast.recipient_count} recipient(s).",
+        }, status=status.HTTP_201_CREATED)

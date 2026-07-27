@@ -989,13 +989,27 @@ class GroupChatViewSet(ChatPermissionMixin, viewsets.ModelViewSet):
         user_ids = request.data.get("user_ids", [])
         if not user_ids:
             raise ValidationError("user_ids is required")
+
+        normalized_user_ids = []
+        for raw_id in user_ids:
+            try:
+                normalized_user_ids.append(int(raw_id))
+            except (TypeError, ValueError):
+                raise ValidationError("All user_ids must be valid integers")
+
+        existing_member_ids = set(
+            group.members.filter(deleted_at__isnull=True).values_list("user_id", flat=True)
+        )
+        users_by_id = User.objects.in_bulk(normalized_user_ids)
+        if len(users_by_id) != len(set(normalized_user_ids)):
+            raise ValidationError("One or more users were not found")
         
         added_count = 0
-        for user_id in user_ids:
-            user = get_object_or_404(User, id=user_id)
+        for user_id in normalized_user_ids:
+            user = users_by_id[user_id]
             
             # Check if already member
-            if group.members.filter(user=user, deleted_at__isnull=True).exists():
+            if user.id in existing_member_ids:
                 continue
             
             # Add as member
@@ -1005,6 +1019,7 @@ class GroupChatViewSet(ChatPermissionMixin, viewsets.ModelViewSet):
                 role=GroupUser.ROLE_MEMBER,
                 added_by=current_user
             )
+            existing_member_ids.add(user.id)
             added_count += 1
         
         return Response({

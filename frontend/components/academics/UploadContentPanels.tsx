@@ -28,6 +28,15 @@ type ContentType = "as" | "st" | "sy" | "ot";
 
 type ApiList<T> = T[] | { results?: T[]; next?: string | null };
 
+type LookupBundle = {
+  years: AcademicYear[];
+  classes: SchoolClass[];
+  sections: Section[];
+};
+
+let lookupCache: LookupBundle | null = null;
+let lookupPromise: Promise<LookupBundle> | null = null;
+
 function listData<T>(value: ApiList<T>): T[] {
   return Array.isArray(value) ? value : value.results || [];
 }
@@ -118,16 +127,35 @@ function useLookups() {
   const [sections, setSections] = useState<Section[]>([]);
 
   useEffect(() => {
+    if (lookupCache) {
+      setYears(lookupCache.years);
+      setClasses(lookupCache.classes);
+      setSections(lookupCache.sections);
+      return;
+    }
+
     const load = async () => {
-      const [yearData, classData, sectionData] = await Promise.all([
-        fetchAllPages<AcademicYear>("/api/v1/core/academic-years/?page_size=100"),
-        fetchAllPages<SchoolClass>("/api/v1/core/classes/?page_size=100"),
-        fetchAllPages<Section>("/api/v1/core/sections/?page_size=100"),
-      ]);
-      const orderedClasses = sortAcademicsClasses(classData);
-      setYears(yearData);
-      setClasses(orderedClasses);
-      setSections(sortSectionsByClassAndName(sectionData, orderedClasses));
+      if (!lookupPromise) {
+        lookupPromise = (async () => {
+          const [yearData, classData, sectionData] = await Promise.all([
+            fetchAllPages<AcademicYear>("/api/v1/core/academic-years/?page_size=100"),
+            fetchAllPages<SchoolClass>("/api/v1/core/classes/?page_size=100"),
+            fetchAllPages<Section>("/api/v1/core/sections/?page_size=100"),
+          ]);
+          const orderedClasses = sortAcademicsClasses(classData);
+          return {
+            years: yearData,
+            classes: orderedClasses,
+            sections: sortSectionsByClassAndName(sectionData, orderedClasses),
+          };
+        })();
+      }
+
+      const data = await lookupPromise;
+      lookupCache = data;
+      setYears(data.years);
+      setClasses(data.classes);
+      setSections(data.sections);
     };
     void load();
   }, []);

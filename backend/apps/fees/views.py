@@ -1,5 +1,6 @@
 import re
 from django.shortcuts import get_object_or_404
+from django.db import transaction
 from django.db.models import Sum, Q, F, Value, ExpressionWrapper, DecimalField, Subquery, OuterRef
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse
@@ -7,7 +8,8 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from decimal import Decimal
-from datetime import date
+from datetime import date, timedelta
+from zoneinfo import ZoneInfo
 import csv
 from django.utils import timezone
 
@@ -382,6 +384,9 @@ class FeeAssignmentDuesRemindersAPIView(BaseFeeAPIView):
         per_student = {}
         total_net_all = Decimal("0.00")
         total_paid_all = Decimal("0.00")
+        worst = None
+        worst_due = Decimal("0.00")
+        worst_days = -1
 
         for a in assignments_qs:
             net = (a.amount or Decimal("0.00")) - (a.discount_amount or Decimal("0.00")) - (a.concession_amount or Decimal("0.00"))
@@ -393,6 +398,10 @@ class FeeAssignmentDuesRemindersAPIView(BaseFeeAPIView):
             # Only overdue, still-owing charges contribute to the dues list.
             if due <= Decimal("0.00") or not a.due_date or a.due_date >= today:
                 continue
+
+            days_overdue = (today - a.due_date).days
+            if days_overdue > worst_days:
+                worst, worst_due, worst_days = a, due, days_overdue
 
             st = a.student
             entry = per_student.setdefault(st.id, {
@@ -473,15 +482,26 @@ class FeeAssignmentDuesRemindersAPIView(BaseFeeAPIView):
         # ── Class sections (counts) ────────────────────────────────────────────
         classes_payload = []
         all_classes = Class.objects.filter(school=school).order_by("numeric_order", "name")
-        for cls in all_classes:
-            total = cls.students.filter(is_deleted=False).count()
-            assigned = (
-                FeeAssignment.objects.filter(
-                    student__current_class=cls,
-                    **({"academic_year": current_year} if current_year else {}),
+        class_totals = {
+            row["id"]: row["total"]
+            for row in (
+                all_classes.values("id").annotate(
+                    total=Count("students", filter=Q(students__is_deleted=False), distinct=True)
                 )
-                .values("student").distinct().count()
             )
+            if row.get("id") is not None
+        }
+        assignment_class_qs = FeeAssignment.objects.filter(student__current_class__school=school)
+        if current_year:
+            assignment_class_qs = assignment_class_qs.filter(academic_year=current_year)
+        assigned_by_class = {
+            row["student__current_class"]: row["assigned"]
+            for row in assignment_class_qs.values("student__current_class").annotate(assigned=Count("student", distinct=True))
+            if row.get("student__current_class") is not None
+        }
+        for cls in all_classes:
+            total = class_totals.get(cls.id, 0)
+            assigned = assigned_by_class.get(cls.id, 0)
             classes_payload.append({
                 "id": f"cls-{cls.id}",
                 "name": cls.name,
@@ -512,18 +532,6 @@ class FeeAssignmentDuesRemindersAPIView(BaseFeeAPIView):
         rule = LateFeeRule.objects.filter(
             academic_year__school=school, status="active", is_deleted=False
         ).order_by("name").first()
-        # Pick the single worst overdue assignment to illustrate the rule.
-        worst = None
-        worst_due = Decimal("0.00")
-        worst_days = -1
-        for data in per_student.values():
-            for a in data["assignments"]:
-                net = (a.amount or 0) - (a.discount_amount or 0) - (a.concession_amount or 0)
-                paid = sum((p.amount_paid for p in a.payments.all() if p.status == "posted"), Decimal("0.00"))
-                due = net - paid
-                d = (today - a.due_date).days
-                if due > 0 and d > worst_days:
-                    worst, worst_due, worst_days = a, due, d
 
         if worst is not None:
             grace = rule.grace_period_days if rule else 0
@@ -1301,14 +1309,20 @@ class YearEndReportCSVAPIView(BaseFeeAPIView):
 
         if report_type == 'fee_collection_summary':
             writer.writerow(['Fee Type', 'Total Assigned (₹)', 'Total Collected (₹)', 'Total Outstanding (₹)', 'No. of Students'])
+            posted_sum = Subquery(
+                Payment.objects.filter(
+                    assignment=OuterRef('pk'),
+                    status='posted',
+                ).values('assignment').annotate(s=Sum('amount_paid')).values('s')
+            )
             qs = (FeeAssignment.objects
                   .filter(academic_year__school=school)
                   .select_related('fees_type')
-                  .prefetch_related('payments'))
+                  .annotate(total_posted=Coalesce(posted_sum, Decimal('0.00'))))
             fee_map: dict = {}
             for a in qs:
                 ft = a.fees_type.name if a.fees_type else '—'
-                paid = sum(p.amount_paid for p in a.payments.all() if p.status == 'posted')
+                paid = a.total_posted
                 net  = a.amount - a.discount_amount - a.concession_amount
                 due  = max(Decimal('0.00'), net - paid)
                 if ft not in fee_map:
@@ -1322,14 +1336,20 @@ class YearEndReportCSVAPIView(BaseFeeAPIView):
 
         elif report_type == 'class_wise_report':
             writer.writerow(['Class', 'No. of Students', 'Total Assigned (₹)', 'Total Collected (₹)', 'Total Outstanding (₹)'])
+            posted_sum = Subquery(
+                Payment.objects.filter(
+                    assignment=OuterRef('pk'),
+                    status='posted',
+                ).values('assignment').annotate(s=Sum('amount_paid')).values('s')
+            )
             qs = (FeeAssignment.objects
                   .filter(academic_year__school=school)
                   .select_related('student__current_class')
-                  .prefetch_related('payments'))
+                  .annotate(total_posted=Coalesce(posted_sum, Decimal('0.00'))))
             cls_map: dict = {}
             for a in qs:
                 cls = a.student.current_class.name if a.student.current_class else '—'
-                paid = sum(p.amount_paid for p in a.payments.all() if p.status == 'posted')
+                paid = a.total_posted
                 net  = a.amount - a.discount_amount - a.concession_amount
                 due  = max(Decimal('0.00'), net - paid)
                 if cls not in cls_map:
@@ -1550,4 +1570,156 @@ class YearEndGroupAmountsAPIView(BaseFeeAPIView):
             'updated_count': len(updated),
             'errors': errors,
             'message': f'New amounts staged for {len(updated)} fee type(s). Will be applied when rollover executes.',
+        })
+
+
+class YearEndRolloverAPIView(BaseFeeAPIView):
+    """Execute the year-end rollover: creates the next AcademicYear and
+    copies selected FeesGroup shells (name + applicable classes) forward.
+
+    FeesType/FeeSchedule line items are NOT auto-copied: FeesType.clean()
+    enforces gl_code uniqueness per-school (not per-year), so a literal
+    duplicate would always fail validation — see FeesType.clean() in
+    apps/fees/models.py. Copying those requires a deliberate decision on
+    how gl_code should behave across years, so this endpoint reports the
+    skipped fee type count instead of silently working around that
+    constraint. The new (empty) FeesGroup is left for the admin to
+    populate via the normal Fee Configuration screen.
+    """
+
+    def post(self, request):
+        school = request.user.school
+        if not school:
+            return Response({'error': 'No school on this account.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        next_year_name = (request.data.get('next_year_name') or '').strip()
+        rollover_date_raw = (request.data.get('rollover_date') or '').strip()
+        group_ids = request.data.get('group_ids') or []
+
+        if not next_year_name:
+            return Response({'error': 'next_year_name is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not rollover_date_raw:
+            return Response({'error': 'rollover_date is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            rollover_date = date.fromisoformat(rollover_date_raw)
+        except ValueError:
+            return Response({'error': 'rollover_date must be YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+
+        current_year = AcademicYear.objects.filter(school=school, is_current=True).order_by('-start_date').first()
+        if not current_year:
+            return Response({'error': 'No current academic year is set for this school.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if AcademicYear.objects.filter(school=school, name=next_year_name).exists():
+            return Response(
+                {'error': f'Academic year "{next_year_name}" already exists.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        span_days = (current_year.end_date - current_year.start_date).days
+        next_end_date = rollover_date + timedelta(days=span_days)
+
+        groups_copied = 0
+        fee_types_skipped = 0
+
+        with transaction.atomic():
+            new_year = AcademicYear.objects.create(
+                school=school,
+                name=next_year_name,
+                board=current_year.board,
+                number_of_terms=current_year.number_of_terms,
+                start_date=rollover_date,
+                end_date=next_end_date,
+                is_current=True,
+                is_active=True,
+            )
+            AcademicYear.objects.filter(pk=current_year.pk).update(is_current=False)
+
+            if group_ids:
+                old_groups = FeesGroup.objects.filter(
+                    id__in=group_ids, academic_year=current_year,
+                ).prefetch_related('applicable_classes', 'fee_types')
+
+                for old_group in old_groups:
+                    new_group = FeesGroup.objects.create(
+                        academic_year=new_year,
+                        name=old_group.name,
+                        description=old_group.description,
+                        is_active=old_group.is_active,
+                        created_by=request.user,
+                    )
+                    new_group.applicable_classes.set(old_group.applicable_classes.all())
+                    groups_copied += 1
+                    fee_types_skipped += old_group.fee_types.filter(is_deleted=False).count()
+
+        return Response({
+            'success': True,
+            'academic_year': {'id': new_year.id, 'name': new_year.name, 'start_date': str(new_year.start_date), 'end_date': str(new_year.end_date)},
+            'archived_year': current_year.name,
+            'groups_copied': groups_copied,
+            'fee_types_skipped': fee_types_skipped,
+            'message': (
+                f'{next_year_name} created and set as current. {groups_copied} fee group(s) copied over — '
+                f'{fee_types_skipped} fee type(s) need to be re-added manually in Fee Configuration '
+                f'(GL codes must stay unique per school, so they cannot be auto-duplicated).'
+                if fee_types_skipped else
+                f'{next_year_name} created and set as current. {groups_copied} fee group(s) copied over.'
+            ),
+        }, status=status.HTTP_201_CREATED)
+
+
+class TodayFeesSummaryAPIView(BaseFeeAPIView):
+    """School-scoped 'Today's Fees' pulse widget — real collections, not mock
+    data. Django's TIME_ZONE is UTC (server/infra convention), but this app
+    only serves Indian schools, so "today" and the weekday comparison must
+    be computed in India's actual local time.
+    """
+
+    def get(self, request):
+        school = request.user.school
+        if not school:
+            return Response({'error': 'No school on this account.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        ist = ZoneInfo("Asia/Kolkata")
+        today = timezone.now().astimezone(ist).date()
+        lookback_start = today - timedelta(days=56)  # ~8 weeks of same-weekday history
+
+        rows = (
+            Payment.objects.filter(
+                student__school=school,
+                status='posted',
+                paid_at__date__gte=lookback_start,
+                paid_at__date__lte=today,
+            )
+            .values_list('paid_at', 'amount_paid')
+        )
+
+        daily_totals: dict = {}
+        daily_counts: dict = {}
+        for paid_at, amount in rows:
+            d = paid_at.astimezone(ist).date()
+            daily_totals[d] = daily_totals.get(d, Decimal('0')) + amount
+            daily_counts[d] = daily_counts.get(d, 0) + 1
+
+        today_total = daily_totals.get(today, Decimal('0'))
+        today_count = daily_counts.get(today, 0)
+
+        same_weekday_totals = [
+            float(total) for d, total in daily_totals.items()
+            if d != today and d.weekday() == today.weekday()
+        ]
+        avg = sum(same_weekday_totals) / len(same_weekday_totals) if same_weekday_totals else 0
+        vs_avg_percent = round(((float(today_total) - avg) / avg) * 100) if avg > 0 else 0
+
+        sparkline7d = [
+            float(daily_totals.get(today - timedelta(days=i), Decimal('0')))
+            for i in range(6, -1, -1)
+        ]
+
+        return Response({
+            'collectedAmount': float(today_total),
+            'transactionCount': today_count,
+            'vsAvgPercent': vs_avg_percent,
+            'vsAvgDay': today.strftime('%a'),
+            'sparkline7d': sparkline7d,
         })

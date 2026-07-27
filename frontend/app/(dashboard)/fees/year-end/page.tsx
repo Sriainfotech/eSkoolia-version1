@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react';
-import { feesApi, DueStudent, DuesClassGroup, FeesSummary, FeesGroup, YearEndFeeAmountRow } from '@/lib/fees-api';
+import { feesApi, listData, DueStudent, DuesClassGroup, FeesSummary, FeesGroup, YearEndFeeAmountRow, AcademicYear } from '@/lib/fees-api';
 
 type EditModalState = { groupId: number; groupName: string } | null;
 
@@ -72,6 +72,77 @@ export default function YearEndPage() {
   const [hikePercent, setHikePercent] = useState('');
   const [savingModal, setSavingModal] = useState(false);
 
+  const [currentYear, setCurrentYear] = useState<AcademicYear | null>(null);
+  const [nextYearName, setNextYearName] = useState('');
+  const [rolloverDate, setRolloverDate] = useState('');
+  const [selectedGroupIds, setSelectedGroupIds] = useState<Set<number>>(new Set());
+  const [rollingOver, setRollingOver] = useState(false);
+  const [schoolName, setSchoolName] = useState('School');
+
+  const currentYearLabel = currentYear?.name || '—';
+
+  useEffect(() => {
+    feesApi.listAcademicYears()
+      .then(data => {
+        const years = listData<AcademicYear>(data);
+        const current = years.find(y => y.is_current) || years[0] || null;
+        setCurrentYear(current);
+        if (current) {
+          const m = /^(\d{4})-(\d{2,4})$/.exec(current.name);
+          if (m) {
+            const startYear = parseInt(m[1]!, 10);
+            const suffixLen = m[2]!.length;
+            const nextStart = startYear + 1;
+            const nextSuffix = suffixLen === 4 ? String(nextStart + 1) : String((nextStart + 1) % 100).padStart(2, '0');
+            setNextYearName(`${nextStart}-${nextSuffix}`);
+          }
+          if (current.end_date) {
+            const end = new Date(current.end_date);
+            end.setDate(end.getDate() + 1);
+            setRolloverDate(end.toISOString().slice(0, 10));
+          }
+        }
+      })
+      .catch(() => {});
+
+    feesApi.getMySchoolInfo()
+      .then(data => {
+        const name = (data as { name?: string })?.name?.trim();
+        if (name) setSchoolName(name);
+      })
+      .catch(() => {});
+  }, []);
+
+  const toggleGroupSelected = (id: number) =>
+    setSelectedGroupIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+
+  const executeRollover = async () => {
+    if (!nextYearName.trim() || !rolloverDate) {
+      toast_('Set the next academic year and rollover date first.');
+      return;
+    }
+    setRollingOver(true);
+    try {
+      const res = await feesApi.yearEndRollover({
+        next_year_name: nextYearName.trim(),
+        rollover_date: rolloverDate,
+        group_ids: Array.from(selectedGroupIds),
+      });
+      toast_(res.message);
+      setWizardStep(1);
+      setFeeGroups([]);
+      setSelectedGroupIds(new Set());
+    } catch (err) {
+      toast_(err instanceof Error ? err.message : 'Rollover failed.');
+    } finally {
+      setRollingOver(false);
+    }
+  };
+
   const toast_ = (m: string) => { setToast(m); setTimeout(() => setToast(''), 3200); };
 
   const fetchData = useCallback(async () => {
@@ -124,9 +195,9 @@ export default function YearEndPage() {
             const existing = seen.get(g.name);
             if (!existing || g.id > existing.id) seen.set(g.name, g);
           }
-          setFeeGroups(
-            Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name))
-          );
+          const sorted = Array.from(seen.values()).sort((a, b) => a.name.localeCompare(b.name));
+          setFeeGroups(sorted);
+          setSelectedGroupIds(new Set(sorted.map(g => g.id)));
         })
         .catch(() => {})
         .finally(() => setGrpLoading(false));
@@ -234,7 +305,7 @@ export default function YearEndPage() {
       doc.setTextColor(255, 255, 255);
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(16);
-      doc.text('ESKOOLIA — Year-End Report', 28, 26);
+      doc.text(`${schoolName} - Year-End Report`, 28, 26);
       doc.setFontSize(10);
       doc.setFont('helvetica', 'normal');
       doc.text(reportName, 28, 42);
@@ -298,7 +369,7 @@ export default function YearEndPage() {
       } else {
         // Summary stats page for other report types
         doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(24, 27, 42);
-        doc.text('2025-26 Academic Year Summary', 28, y); y += 24;
+        doc.text(`${currentYearLabel} Academic Year Summary`, 28, y); y += 24;
 
         const STATS: [string, string, [number,number,number]][] = [
           ['COLLECTED',   `Rs. ${collected.toLocaleString('en-IN')}`,          [16, 185, 129]],
@@ -323,7 +394,7 @@ export default function YearEndPage() {
       doc.rect(0, H - 22, W, 22, 'F');
       doc.setTextColor(160, 163, 184);
       doc.setFontSize(7.5); doc.setFont('helvetica', 'normal');
-      doc.text('Eskoolia School ERP — Confidential', 28, H - 8);
+      doc.text(`${schoolName} ERP - Confidential`, 28, H - 8);
       doc.text(`Page 1 of ${doc.getNumberOfPages()}`, W - 80, H - 8);
 
       doc.save(`${reportType}.pdf`);
@@ -360,7 +431,7 @@ export default function YearEndPage() {
           <div style={{ padding: '16px 20px', borderBottom: '1px solid #E8E8EE', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <span style={{ fontSize: 15, fontWeight: 700, color: '#181B2A' }}>Carry Forward </span>
-              <span style={{ fontSize: 12.5, color: '#A0A3B8', fontWeight: 500 }}>2024-25 outstanding balances</span>
+              <span style={{ fontSize: 12.5, color: '#A0A3B8', fontWeight: 500 }}>{currentYearLabel} outstanding balances</span>
               <div style={{ marginTop: 4, fontSize: 12.5 }}>
                 <span style={{ color: '#D97706', fontWeight: 600 }}>{pendingCount} pending resolution</span>
                 <span style={{ color: '#E8E8EE', margin: '0 8px' }}>·</span>
@@ -549,7 +620,7 @@ export default function YearEndPage() {
 
             {wizardStep === 1 && (
               <div style={{ padding: '16px' }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: '#181B2A', marginBottom: 14 }}>Review 2025-26 final totals</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#181B2A', marginBottom: 14 }}>Review {currentYearLabel} final totals</div>
 
                 {/* 3 stat boxes side-by-side */}
                 <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
@@ -580,11 +651,11 @@ export default function YearEndPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                   <div>
                     <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', color: '#A0A3B8', marginBottom: 6 }}>NEXT ACADEMIC YEAR</div>
-                    <input defaultValue="2026-27" style={{ width: '100%', height: 38, border: '1px solid #E8E8EE', borderRadius: 8, padding: '0 12px', fontSize: 13, boxSizing: 'border-box' as const, outline: 'none' }}/>
+                    <input value={nextYearName} onChange={e => setNextYearName(e.target.value)} style={{ width: '100%', height: 38, border: '1px solid #E8E8EE', borderRadius: 8, padding: '0 12px', fontSize: 13, boxSizing: 'border-box' as const, outline: 'none' }}/>
                   </div>
                   <div>
                     <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.07em', color: '#A0A3B8', marginBottom: 6 }}>ROLLOVER DATE</div>
-                    <input type="date" defaultValue="2026-04-01" style={{ width: '100%', height: 38, border: '1px solid #E8E8EE', borderRadius: 8, padding: '0 12px', fontSize: 13, boxSizing: 'border-box' as const, outline: 'none' }}/>
+                    <input type="date" value={rolloverDate} onChange={e => setRolloverDate(e.target.value)} style={{ width: '100%', height: 38, border: '1px solid #E8E8EE', borderRadius: 8, padding: '0 12px', fontSize: 13, boxSizing: 'border-box' as const, outline: 'none' }}/>
                   </div>
                 </div>
               </div>
@@ -603,7 +674,7 @@ export default function YearEndPage() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {feeGroups.map(group => (
                       <div key={group.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 10px', border: '1px solid #E8E8EE', borderRadius: 8 }}>
-                        <input type="checkbox" defaultChecked style={{ accentColor: '#6D4AFF', width: 14, height: 14, flexShrink: 0, cursor: 'pointer' }}/>
+                        <input type="checkbox" checked={selectedGroupIds.has(group.id)} onChange={() => toggleGroupSelected(group.id)} style={{ accentColor: '#6D4AFF', width: 14, height: 14, flexShrink: 0, cursor: 'pointer' }}/>
                         <span style={{ fontSize: 11.5, color: '#A0A3B8', flexShrink: 0 }}>Copy</span>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 12.5, fontWeight: 700, color: '#181B2A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{group.name}</div>
@@ -624,11 +695,11 @@ export default function YearEndPage() {
               <div style={{ padding: '16px' }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: '#181B2A', marginBottom: 10 }}>Execute rollover</div>
                 <div style={{ padding: '11px 13px', background: '#FEF3C7', border: '1px solid #FCD34D', borderRadius: 8, fontSize: 12, color: '#92400E', lineHeight: 1.6, marginBottom: 14 }}>
-                  ⚠️ This will archive 2025-26 and create the 2026-27 academic year. This action cannot be undone.
+                  ⚠️ This will archive {currentYearLabel} and create the {nextYearName || '—'} academic year. This action cannot be undone.
                 </div>
-                <button onClick={() => toast_('Rollover executed — 2026-27 created successfully.')}
-                  style={{ width: '100%', height: 38, background: '#DC2626', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer', boxShadow: '0 2px 8px rgba(220,38,38,0.2)' }}>
-                  Execute Rollover
+                <button onClick={executeRollover} disabled={rollingOver}
+                  style={{ width: '100%', height: 38, background: '#DC2626', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: rollingOver ? 'not-allowed' : 'pointer', opacity: rollingOver ? 0.6 : 1, boxShadow: '0 2px 8px rgba(220,38,38,0.2)' }}>
+                  {rollingOver ? 'Executing…' : 'Execute Rollover'}
                 </button>
               </div>
             )}
@@ -669,7 +740,7 @@ export default function YearEndPage() {
             <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #E8E8EE', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexShrink: 0 }}>
               <div>
                 <div style={{ fontSize: 18, fontWeight: 700, color: '#181B2A' }}>Edit Fee Amounts — {editModal.groupName}</div>
-                <div style={{ fontSize: 13, color: '#A0A3B8', marginTop: 3 }}>New-year (2026-27) amounts. Changes are staged and applied when rollover executes.</div>
+                <div style={{ fontSize: 13, color: '#A0A3B8', marginTop: 3 }}>New-year ({nextYearName || 'next year'}) amounts. Changes are staged and applied when rollover executes.</div>
               </div>
               <button onClick={closeModal} style={{ width: 32, height: 32, border: 'none', background: '#F3F4F6', borderRadius: 8, cursor: 'pointer', fontSize: 18, color: '#6B7280', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
             </div>
@@ -709,7 +780,7 @@ export default function YearEndPage() {
                       <th style={{ ...TH, width: '22%' }}>FEE TYPE</th>
                       <th style={{ ...TH, width: '30%' }}>CURRENT BREAKDOWN</th>
                       <th style={{ ...TH, width: '16%' }}>CURRENT TOTAL</th>
-                      <th style={{ ...TH, width: '20%' }}>NEW AMOUNT (2026-27)</th>
+                      <th style={{ ...TH, width: '20%' }}>NEW AMOUNT ({nextYearName || 'next year'})</th>
                       <th style={{ ...TH, width: '12%', textAlign: 'center' }}>CHANGE</th>
                     </tr>
                   </thead>

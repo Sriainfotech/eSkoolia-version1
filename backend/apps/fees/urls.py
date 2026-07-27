@@ -32,6 +32,8 @@ from .views import (
     DuesExportCSVAPIView,
     YearEndReportCSVAPIView,
     YearEndGroupAmountsAPIView,
+    YearEndRolloverAPIView,
+    TodayFeesSummaryAPIView,
 )
 
 app_name = 'fees'
@@ -94,4 +96,6 @@ urlpatterns = [
     # Year-End
     path('year-end/report/', YearEndReportCSVAPIView.as_view(), name='year-end-report'),
     path('year-end/group-amounts/', YearEndGroupAmountsAPIView.as_view(), name='year-end-group-amounts'),
+    path('year-end/rollover/', YearEndRolloverAPIView.as_view(), name='year-end-rollover'),
+    path('today-summary/', TodayFeesSummaryAPIView.as_view(), name='today-fees-summary'),
 ]

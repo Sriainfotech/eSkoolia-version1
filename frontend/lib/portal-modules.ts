@@ -15,6 +15,7 @@
 import { MODULES, type ModuleRoute } from './routes';
 import { TEACHER_MODULES } from './teacher-routes';
 import { PARENT_MODULES } from './parent-routes';
+import { STUDENT_MODULES } from './student-routes';
 import type { MeData } from '@/hooks/usePermissions';
 
 // ── Registry — extend this map to support new portals ─────────────────────────
@@ -23,14 +24,14 @@ const PORTAL_MODULES: Partial<Record<string, ModuleRoute[]>> = {
   admin:   MODULES,
   teacher: TEACHER_MODULES,
   parent:  PARENT_MODULES,
-  // student: STUDENT_MODULES,  ← uncomment when student portal is built
+  student: STUDENT_MODULES,
   // accountant: ACCOUNTANT_MODULES,
   custom:  MODULES,   // custom roles default to admin modules, filtered by permissions
 };
 
 // ── IDs treated as "home" tiles — hidden unless includeHome=true ───────────────
 
-const HOME_IDS = new Set(['teacher-home', 'parent-home']);
+const HOME_IDS = new Set(['teacher-home', 'parent-home', 'student-home']);
 
 // ── Internal permission matcher (mirrors usePermissions.canAnyPrefix) ─────────
 
@@ -45,6 +46,17 @@ function hasPermission(permission: string | undefined, me: MeData): boolean {
   );
 }
 
+function hasModuleAccess(module: ModuleRoute, me: MeData): boolean {
+  if (module.permission) return hasPermission(module.permission, me);
+
+  const subPermissions = module.sub
+    .map((s) => s.permission)
+    .filter((p): p is string => Boolean(p));
+
+  if (subPermissions.length === 0) return true;
+  return subPermissions.some((perm) => hasPermission(perm, me));
+}
+
 // ── Options ────────────────────────────────────────────────────────────────────
 
 export interface GetModulesOptions {
@@ -53,11 +65,6 @@ export interface GetModulesOptions {
    * already navigates home so the pill is usually omitted from the grid).
    */
   includeHome?: boolean;
-  /**
-   * Admin portal only: apply the user's module-toggle preference from
-   * moduleStore so hidden modules stay off the home grid.
-   */
-  isModuleEnabled?: (id: string) => boolean;
 }
 
 // ── Main export ────────────────────────────────────────────────────────────────
@@ -86,9 +93,7 @@ export function getModulesForUser(
     // superuserOnly gates apply to everyone
     if (m.superuserOnly && !(me.is_superuser || me.role_names?.includes('super_admin'))) return false;
     // Permission filtering only for admin-like portals
-    if (isAdminLike && !hasPermission(m.permission, me)) return false;
-    // Admin module-toggle preference (moduleStore) — admin only
-    if (options.isModuleEnabled && !options.isModuleEnabled(m.id)) return false;
+    if (isAdminLike && !hasModuleAccess(m, me)) return false;
     return true;
   });
 
@@ -103,8 +108,7 @@ export function getModulesForUser(
     const basePaths = new Set(baseList.map((m) => m.path));
     const extra = MODULES.filter(
       (m) =>
-        m.permission &&
-        hasPermission(m.permission, me) &&
+        hasModuleAccess(m, me) &&
         !baseIds.has(m.id) &&    // deduplicate by id
         !basePaths.has(m.path),  // deduplicate by path (e.g. prevents two Attendance tiles)
     );

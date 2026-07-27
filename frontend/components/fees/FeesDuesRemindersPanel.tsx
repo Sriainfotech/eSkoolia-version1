@@ -105,6 +105,7 @@ export default function FeesDuesRemindersPanel() {
   const [agreedAmt,    setAgreedAmt]    = useState("");
   const [agreedDate,   setAgreedDate]   = useState("");
   const [saving,       setSaving]       = useState(false);
+  const [schoolName, setSchoolName] = useState("School");
 
   const toast_ = (m: string) => { setToast(m); setTimeout(() => setToast(""), 3200); };
 
@@ -126,6 +127,15 @@ export default function FeesDuesRemindersPanel() {
   }, []);
 
   useEffect(() => { fetchData(activeTier); }, [activeTier, fetchData]);
+
+  useEffect(() => {
+    feesApi.getMySchoolInfo()
+      .then(data => {
+        const name = (data as { name?: string })?.name?.trim();
+        if (name) setSchoolName(name);
+      })
+      .catch(() => {});
+  }, []);
 
   // Apply resolved filter per group
   const filteredGroups = useMemo(() =>
@@ -340,7 +350,7 @@ export default function FeesDuesRemindersPanel() {
       for (let p = 1; p <= total; p++) {
         doc.setPage(p);
         doc.setTextColor(180, 180, 195); doc.setFontSize(7); doc.setFont("helvetica", "normal");
-        doc.text(`Eskoolia School ERP  ·  Dues & Reminders Report  ·  Page ${p} of ${total}`, PW / 2, PH - 4, { align: "center" });
+        doc.text(`${schoolName} ERP  ·  Dues & Reminders Report  ·  Page ${p} of ${total}`, PW / 2, PH - 4, { align: "center" });
       }
 
       const dateStr = new Date().toISOString().split("T")[0];

@@ -3,6 +3,7 @@ from django.conf import settings
 from django.urls import include, path, re_path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from apps.core.media_views import serve_media
+from apps.dashboard.views import AIBriefView
 from apps.users.views import HealthView
 
 urlpatterns = [
@@ -34,10 +35,13 @@ urlpatterns = [
     path("api/super-admin/", include("apps.super_admin.urls")),
     path("api/v1/super-admin/", include("apps.super_admin.urls")),
     path("api/chat/", include("apps.chat.urls")),
+    path("api/notes/", include("apps.notes.urls")),
+    path("api/ai/brief/", AIBriefView.as_view(), name="ai-brief"),
     path("api/v1/utilities/communication/", include("apps.communication.urls")),
     path("api/v1/competitions/", include("apps.competitions.urls")),
     path("api/v1/teacher/", include("apps.teacher_portal.urls")),
     path("api/v1/parent/", include("apps.parent_portal.urls")),
+    path("api/v1/student/", include("apps.student_portal.urls")),
 ]
 
 

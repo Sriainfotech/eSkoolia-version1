@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'react-toastify';
 import {
   Archive, BookOpen, Bus, Calendar, ChevronDown, Check, CheckCheck, Copy, Download,
-  Edit2, ExternalLink, FileText, Filter, Info, Pause, Plus, RefreshCw, RotateCcw, Shield, Trash2,
+  Edit2, ExternalLink, FileText, Filter, Info, Pause, Plus, RefreshCw, RotateCcw, Shield,
   Users, BarChart2, DollarSign, Bell, X,
 } from 'lucide-react';
 import { getSchools, impersonateSchool, provisionSchool, updateSchool, deleteSchool, uploadSchoolLogo, getLLMStates, toggleSchoolLLM, getSchoolFormChoices } from '@/lib/api/super-admin/schools';
@@ -629,7 +629,7 @@ function EditSchoolModal({
 function ConfirmDialog({
   type, school, busy, onConfirm, onCancel,
 }: {
-  type: 'suspend' | 'archive' | 'restore' | 'reactivate' | 'permanent_delete';
+  type: 'suspend' | 'archive' | 'restore' | 'reactivate';
   school: SchoolTenant;
   busy: boolean;
   onConfirm: () => void;
@@ -639,12 +639,11 @@ function ConfirmDialog({
     type === 'suspend'        ? 'Suspend school?'           :
     type === 'archive'        ? 'Archive school?'           :
     type === 'restore'        ? 'Restore school?'           :
-    type === 'reactivate'     ? 'Reactivate school?'        :
-                                'Permanently delete school?';
+                                'Reactivate school?';
 
   const confirmLabel = busy
-    ? ({ suspend: 'Suspending\u2026', archive: 'Archiving\u2026', restore: 'Restoring\u2026', reactivate: 'Reactivating\u2026', permanent_delete: 'Deleting\u2026' }[type])
-    : ({ suspend: 'Yes, suspend', archive: 'Yes, archive', restore: 'Yes, restore', reactivate: 'Yes, reactivate', permanent_delete: 'Yes, delete permanently' }[type]);
+    ? ({ suspend: 'Suspending\u2026', archive: 'Archiving\u2026', restore: 'Restoring\u2026', reactivate: 'Reactivating\u2026' }[type])
+    : ({ suspend: 'Yes, suspend', archive: 'Yes, archive', restore: 'Yes, restore', reactivate: 'Yes, reactivate' }[type]);
 
   const btnCls = (type === 'restore' || type === 'reactivate')
     ? 'rounded-xl bg-[#059669] px-4 py-2 text-sm font-[600] text-white hover:opacity-90 disabled:opacity-50 transition-opacity'
@@ -668,10 +667,6 @@ function ConfirmDialog({
           )}
           {type === 'reactivate' && (
             <><strong>{school.name}</strong> will be reactivated immediately — all users will regain access and the status will return to Active.</>
-          )}
-          {type === 'permanent_delete' && (
-            <><strong>{school.name}</strong> and <strong>all associated data</strong> will be permanently deleted.{' '}
-            This action cannot be undone.</>
           )}
         </p>
         <div className="flex justify-end gap-2">
@@ -799,7 +794,7 @@ export default function SuperAdminSchoolsPage() {
   const [llmToggling, setLlmToggling] = useState<Set<string>>(new Set());
   const [schoolTypes, setSchoolTypes] = useState<string[]>(FALLBACK_SCHOOL_TYPES);
   const [states, setStates] = useState<{ code: string; name: string }[]>([]);
-  const [confirmDialog, setConfirmDialog] = useState<{ type: 'suspend' | 'archive' | 'restore' | 'reactivate' | 'permanent_delete'; school: SchoolTenant } | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{ type: 'suspend' | 'archive' | 'restore' | 'reactivate'; school: SchoolTenant } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [editSchool, setEditSchool] = useState<SchoolTenant | null>(null);
   const [editBusy, setEditBusy] = useState(false);
@@ -1158,11 +1153,6 @@ export default function SuperAdminSchoolsPage() {
       } else if (type === 'reactivate') {
         await updateSchool(school.tenant_id, { status: 'active' });
         toast.success(`${school.name} reactivated successfully.`);
-      } else {
-        toast.error('Permanent delete is not yet available \u2014 contact system administrator.');
-        setConfirmDialog(null);
-        setConfirmBusy(false);
-        return;
       }
       setConfirmDialog(null);
       await loadSchools();
@@ -2451,7 +2441,6 @@ export default function SuperAdminSchoolsPage() {
                               { title: 'Open',             icon: <ExternalLink size={13} />, action: () => window.open(`/super-admin/schools/${school.tenant_id}`, '_blank') },
                               { title: 'Restore',          icon: <RotateCcw size={13} />,   action: () => setConfirmDialog({ type: 'restore', school }) },
                               { title: 'Audit Logs',       icon: <FileText size={13} />,    action: () => window.open(`/super-admin/schools/${school.tenant_id}/audit`, '_blank') },
-                              { title: 'Permanent Delete', icon: <Trash2 size={13} />,      action: () => setConfirmDialog({ type: 'permanent_delete', school }) },
                             ] : school.status === 'suspended' ? [
                               { title: 'Open',        icon: <ExternalLink size={13} />, action: () => window.open(`/super-admin/schools/${school.tenant_id}`, '_blank') },
                               { title: 'Edit',        icon: <Edit2 size={13} />,        action: () => handleEditInForm(school) },

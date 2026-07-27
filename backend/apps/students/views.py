@@ -1706,9 +1706,12 @@ class StudentViewSet(TenantScopedModelViewSet):
 
         year = date.today().year
         prefix = f"ADM{year}"
-        qs = self.get_queryset().filter(admission_no__startswith=prefix).values_list(
-            "admission_no", flat=True
-        )
+        # Scan ALL rows for this school (including soft-deleted) — the
+        # school+admission_no uniqueness constraint doesn't exempt soft-deleted
+        # students, so a suggestion that ignores them can collide on save.
+        qs = Student.objects.filter(
+            school_id=request.user.school_id, admission_no__startswith=prefix
+        ).values_list("admission_no", flat=True)
         max_num = 0
         for value in qs:
             if not value:
@@ -1759,7 +1762,13 @@ class StudentViewSet(TenantScopedModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        queryset = self.get_queryset().filter(admission_no__iexact=admission_no)
+        # Match validate_admission_no's semantics exactly (school-scoped, ALL
+        # rows including soft-deleted) — the DB constraint (school, admission_no)
+        # doesn't exempt soft-deleted students, so this check must not either,
+        # or "available" here can still be rejected on submit.
+        queryset = Student.objects.filter(
+            school_id=request.user.school_id, admission_no__iexact=admission_no
+        )
         if exclude_id.isdigit():
             queryset = queryset.exclude(id=int(exclude_id))
 

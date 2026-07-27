@@ -40,6 +40,7 @@ cd frontend && npm run dev      # http://localhost:3000
 | Design tokens | `frontend/styles/tokens.css` |
 
 ## Conventions
+- **Do not start the backend or frontend dev server proactively.** The user runs servers themselves and does their own visual/manual checks after a build — only start one if explicitly asked to.
 - `Role` model lives in `apps/access_control`, NOT `apps/users`. User→Role join is via `UserRole` (also `apps/access_control`).
 - Module visibility: always `useVisibleModules()` — never filter module lists manually at the call site.
 - `usePermissions` has a 5-min TTL + `visibilitychange` refresh; never seed from stale cache.

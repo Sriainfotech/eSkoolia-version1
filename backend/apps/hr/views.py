@@ -1,10 +1,11 @@
+from datetime import date
 from decimal import Decimal
 import json
 import re
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, Q
 from django.db.models.functions import Coalesce
 from django.contrib.auth import get_user_model
 from django.http import Http404
@@ -18,7 +19,7 @@ from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from apps.access_control.models import UserRole
-from apps.core.models import Class as SchoolClass, Section
+from apps.core.models import AcademicYear, Class as SchoolClass, Section
 from apps.students.models import Student
 
 from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, Offboarding, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft
@@ -632,12 +633,14 @@ class StaffViewSet(SchoolScopedModelViewSet):
 
         school_id = request.user.school_id
 
-        role_qs = Role.objects.all().order_by("name")
+        role_qs = Role.objects.filter(is_active=True).order_by("name")
         dept_qs = Department.objects.filter(is_active=True).order_by("name")
         desg_qs = Designation.objects.filter(is_active=True).order_by("name")
 
         if school_id:
-            role_qs = role_qs.filter(school_id=school_id)
+            # Keep role scope aligned with Login Permission meta/users endpoints:
+            # staff can be assigned school-specific roles and global/system roles.
+            role_qs = role_qs.filter(Q(school_id=school_id) | Q(school__isnull=True))
             dept_qs = dept_qs.filter(school_id=school_id)
             desg_qs = desg_qs.filter(school_id=school_id)
 
@@ -656,8 +659,6 @@ class StaffViewSet(SchoolScopedModelViewSet):
 
     def get_queryset(self):
         """Return school staff members. Optionally filter by driver role for vehicle dropdown."""
-        from apps.access_control.models import Role
-        
         queryset = super().get_queryset()
         
         # Only filter by driver role if explicitly requested via query parameter
@@ -665,16 +666,8 @@ class StaffViewSet(SchoolScopedModelViewSet):
         role_param = self.request.query_params.get('role')
         
         if drivers_only and not role_param:
-            # Filter to driver role for vehicle dropdown
-            try:
-                driver_role = Role.objects.filter(name__iexact='driver').first()
-                if driver_role:
-                    queryset = queryset.filter(role=driver_role)
-                else:
-                    # If driver role doesn't exist, return empty queryset
-                    queryset = queryset.none()
-            except Exception:
-                queryset = queryset.none()
+            # Inline relation filter avoids an extra role lookup query.
+            queryset = queryset.filter(role__name__iexact='driver')
         
         return queryset.order_by("first_name", "last_name")
 
@@ -708,9 +701,25 @@ class StaffViewSet(SchoolScopedModelViewSet):
     def _ensure_staff_user(self, staff):
         User = get_user_model()
 
+        def sync_staff_roles_for_user(user_id):
+            # Staff onboarding uses a single primary role; remove stale non-student/
+            # non-parent mappings so portal + permissions stay in sync.
+            current_role_id = staff.role_id
+            existing_rows = UserRole.objects.select_related("role").filter(user_id=user_id)
+            for row in existing_rows:
+                role = row.role
+                role_name = (role.name or "").strip().lower() if role else ""
+                if role_name in {"student", "parent"}:
+                    continue
+                if current_role_id and row.role_id == current_role_id:
+                    continue
+                row.delete()
+
+            if current_role_id:
+                UserRole.objects.get_or_create(user_id=user_id, role_id=current_role_id)
+
         if staff.user_id:
-            if staff.role_id:
-                UserRole.objects.get_or_create(user_id=staff.user_id, role_id=staff.role_id)
+            sync_staff_roles_for_user(staff.user_id)
             return
 
         matched_user = None
@@ -761,25 +770,55 @@ class StaffViewSet(SchoolScopedModelViewSet):
         staff.user_id = matched_user.id
         staff.save(update_fields=["user", "updated_at"])
 
-        if staff.role_id:
-            UserRole.objects.get_or_create(user_id=matched_user.id, role_id=staff.role_id)
+        sync_staff_roles_for_user(matched_user.id)
 
-    def _generate_staff_no(self, school):
-        latest = (
-            Staff.objects.filter(school=school)
-            .order_by("-created_at", "-id")
-            .values_list("staff_no", flat=True)
-            .first()
-        )
+    def _resolve_joining_year(self, school, join_date_value=None):
+        # Primary source: current academic year configured in Academics → Foundation.
+        if school:
+            current_year = (
+                AcademicYear.objects.filter(school=school, is_current=True, is_active=True)
+                .order_by("-start_date")
+                .first()
+            )
+            if not current_year:
+                current_year = (
+                    AcademicYear.objects.filter(school=school, is_active=True)
+                    .order_by("-start_date")
+                    .first()
+                )
+            if current_year and current_year.start_date:
+                return int(current_year.start_date.year)
 
-        candidate_number = 1
-        if latest:
-            match = re.search(r"(\d+)$", latest)
+        # Fallback for schools not yet configured with an academic year.
+        if hasattr(join_date_value, "year") and getattr(join_date_value, "year", None):
+            return int(join_date_value.year)
+
+        join_date_text = str(join_date_value or "").strip()
+        if join_date_text:
+            try:
+                return date.fromisoformat(join_date_text).year
+            except ValueError:
+                pass
+
+        return timezone.localdate().year
+
+    def _generate_staff_no(self, school, join_date_value=None):
+        join_year = self._resolve_joining_year(school, join_date_value)
+        prefix = f"{join_year}"
+
+        max_seq = 0
+        existing_staff_nos = Staff.objects.filter(
+            school=school,
+            staff_no__startswith=prefix,
+        ).values_list("staff_no", flat=True)
+        for value in existing_staff_nos:
+            match = re.match(rf"^{join_year}(\d+)$", str(value or "").strip(), re.IGNORECASE)
             if match:
-                candidate_number = int(match.group(1)) + 1
+                max_seq = max(max_seq, int(match.group(1)))
 
+        candidate_number = max_seq + 1
         while True:
-            candidate = str(candidate_number)
+            candidate = f"{prefix}{candidate_number:04d}"
             if not Staff.objects.filter(school=school, staff_no=candidate).exists():
                 return candidate
             candidate_number += 1
@@ -792,7 +831,10 @@ class StaffViewSet(SchoolScopedModelViewSet):
 
         self._staff_creds = None
         submitted_staff_no = (serializer.validated_data.get("staff_no") or "").strip()
-        staff_no = submitted_staff_no or self._generate_staff_no(school)
+        staff_no = submitted_staff_no or self._generate_staff_no(
+            school,
+            join_date_value=serializer.validated_data.get("join_date"),
+        )
         staff = serializer.save(school=school, staff_no=staff_no)
         self._ensure_staff_user(staff)
 
@@ -829,7 +871,8 @@ class StaffViewSet(SchoolScopedModelViewSet):
         school = request.user.school or getattr(request, "school", None)
         if not school and not request.user.is_superuser:
             raise PermissionDenied("School context is required.")
-        return Response({"staff_no": self._generate_staff_no(school)})
+        join_date_value = request.query_params.get("joining_date") or request.query_params.get("join_date")
+        return Response({"staff_no": self._generate_staff_no(school, join_date_value=join_date_value)})
 
     @action(detail=True, methods=["patch"], url_path="set_status")
     def set_status(self, request, pk=None):
@@ -1363,12 +1406,23 @@ class StaffAttendanceViewSet(SchoolScopedModelViewSet):
     @action(detail=False, methods=["get"], url_path="report")
     def report(self, request):
         queryset = self.filter_queryset(self.get_queryset())
-        total = queryset.count()
-        by_type = {}
-        for code, _label in StaffAttendance.STATUS_CHOICES:
-            by_type[code] = queryset.filter(attendance_type=code).count()
+        totals = queryset.aggregate(
+            total=Count("id"),
+            present=Count("id", filter=Q(attendance_type="P")),
+            absent=Count("id", filter=Q(attendance_type="A")),
+            leave=Count("id", filter=Q(attendance_type="L")),
+            half_day=Count("id", filter=Q(attendance_type="F")),
+            holiday=Count("id", filter=Q(attendance_type="H")),
+        )
+        by_type = {
+            "P": totals.get("present", 0),
+            "A": totals.get("absent", 0),
+            "L": totals.get("leave", 0),
+            "F": totals.get("half_day", 0),
+            "H": totals.get("holiday", 0),
+        }
 
-        return Response({"total": total, "by_type": by_type})
+        return Response({"total": totals.get("total", 0), "by_type": by_type})
 
     def _active_staff_qs(self, request, department=None):
         """Active staff in the requesting user's school, optionally filtered by department."""
@@ -1393,19 +1447,26 @@ class StaffAttendanceViewSet(SchoolScopedModelViewSet):
         if department:
             records = records.filter(staff__department_id=department)
 
-        counts = {code: records.filter(attendance_type=code).count() for code, _ in StaffAttendance.STATUS_CHOICES}
-        present = counts["P"]
-        late_arrivals = records.exclude(arrival_time__isnull=True).count()
+        counts = records.aggregate(
+            present=Count("id", filter=Q(attendance_type="P")),
+            absent=Count("id", filter=Q(attendance_type="A")),
+            leave=Count("id", filter=Q(attendance_type="L")),
+            half_day=Count("id", filter=Q(attendance_type="F")),
+            holiday=Count("id", filter=Q(attendance_type="H")),
+            late_arrivals=Count("id", filter=Q(arrival_time__isnull=False)),
+            marked=Count("id"),
+        )
+        present = counts.get("present", 0)
 
         return Response({
             "total_staff": total_staff,
             "present": present,
-            "absent": counts["A"],
-            "leave": counts["L"],
-            "half_day": counts["F"],
-            "holiday": counts["H"],
-            "late_arrivals": late_arrivals,
-            "marked": records.count(),
+            "absent": counts.get("absent", 0),
+            "leave": counts.get("leave", 0),
+            "half_day": counts.get("half_day", 0),
+            "holiday": counts.get("holiday", 0),
+            "late_arrivals": counts.get("late_arrivals", 0),
+            "marked": counts.get("marked", 0),
             "present_pct": round((present / total_staff) * 100) if total_staff else 0,
         })
 
@@ -1553,18 +1614,21 @@ class PayrollRecordViewSet(SchoolScopedModelViewSet):
     @action(detail=False, methods=["get"], url_path="summary")
     def summary(self, request):
         queryset = self.filter_queryset(self.get_queryset())
-        total_basic = queryset.aggregate(total=Coalesce(Sum("basic_salary"), Decimal("0.00"))).get("total")
-        total_allowance = queryset.aggregate(total=Coalesce(Sum("allowance"), Decimal("0.00"))).get("total")
-        total_deduction = queryset.aggregate(total=Coalesce(Sum("deduction"), Decimal("0.00"))).get("total")
-        total_net = queryset.aggregate(total=Coalesce(Sum("net_salary"), Decimal("0.00"))).get("total")
+        totals = queryset.aggregate(
+            total_records=Count("id"),
+            total_basic=Coalesce(Sum("basic_salary"), Decimal("0.00")),
+            total_allowance=Coalesce(Sum("allowance"), Decimal("0.00")),
+            total_deduction=Coalesce(Sum("deduction"), Decimal("0.00")),
+            total_net=Coalesce(Sum("net_salary"), Decimal("0.00")),
+        )
 
         return Response(
             {
-                "total_records": queryset.count(),
-                "total_basic_salary": str(total_basic),
-                "total_allowance": str(total_allowance),
-                "total_deduction": str(total_deduction),
-                "total_net_salary": str(total_net),
+                "total_records": totals.get("total_records", 0),
+                "total_basic_salary": str(totals.get("total_basic", Decimal("0.00"))),
+                "total_allowance": str(totals.get("total_allowance", Decimal("0.00"))),
+                "total_deduction": str(totals.get("total_deduction", Decimal("0.00"))),
+                "total_net_salary": str(totals.get("total_net", Decimal("0.00"))),
             }
         )
 

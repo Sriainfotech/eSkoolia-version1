@@ -165,6 +165,8 @@ function LoginPage() {
           router.push("/teacher/home");
         } else if (portalType === "parent") {
           router.push("/parent/home");  // Sprint 7
+        } else if (portalType === "student") {
+          router.push("/student/home");
         } else {
           router.push("/home");
         }

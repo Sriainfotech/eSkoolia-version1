@@ -1,8 +1,6 @@
 'use client';
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { X, Pin, MoreHorizontal, GripHorizontal } from 'lucide-react';
-import { getAccessToken } from '@/lib/auth';
-import { API_BASE_URL } from '@/lib/api';
 
 const NOTE_COLORS = {
   yellow: { bg: '#FEF3C7', border: '#F59E0B', text: '#92400E' },
@@ -40,28 +38,16 @@ export function StickyNoteCard({ note, index, onDelete, onUpdate }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
 
   const nc = NOTE_COLORS[note.color] ?? NOTE_COLORS.yellow;
   const rotation = (index % 2 === 0 ? -1 : 1) * ((index % 3) * 0.8);
 
-  // Set initial text content once on mount — never let React manage contentEditable children
-  useEffect(() => {
-    if (bodyRef.current && bodyRef.current.textContent !== note.text) {
-      bodyRef.current.textContent = note.text;
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentionally empty — only run once on mount
-
+  // Notes persist to localStorage only (no backend Notes API exists yet), so a
+  // save is synchronous and always succeeds — stamp updated_at immediately
+  // rather than waiting on a round-trip that will never come.
   const save = useCallback((patch: Partial<NoteData>) => {
-    onUpdate(note.id, patch);
-    const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/notes/${note.id}/`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify(patch),
-    }).catch(() => {});
+    onUpdate(note.id, { ...patch, updated_at: new Date().toISOString() });
   }, [note.id, onUpdate]);
 
 
@@ -99,11 +85,6 @@ export function StickyNoteCard({ note, index, onDelete, onUpdate }: Props) {
 
   const deleteNote = () => {
     onDelete(note.id);
-    const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/notes/${note.id}/`, {
-      method: 'DELETE',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    }).catch(() => {});
   };
 
   return (
@@ -192,12 +173,10 @@ export function StickyNoteCard({ note, index, onDelete, onUpdate }: Props) {
       </div>
 
       {/* Text body */}
-      <div
-        ref={bodyRef}
-        contentEditable
-        suppressContentEditableWarning
-        onInput={e => {
-          const newText = (e.currentTarget as HTMLDivElement).textContent ?? '';
+      <textarea
+        value={text}
+        onChange={e => {
+          const newText = e.currentTarget.value;
           setText(newText);
           if (debounceRef.current) clearTimeout(debounceRef.current);
           debounceRef.current = setTimeout(() => save({ text: newText }), 600);
@@ -206,7 +185,8 @@ export function StickyNoteCard({ note, index, onDelete, onUpdate }: Props) {
           flex: 1, padding: '4px 12px 8px',
           fontSize: 12.5, lineHeight: 1.5, color: nc.text,
           outline: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          minHeight: 80,
+          minHeight: 80, resize: 'none', border: 'none', background: 'transparent',
+          fontFamily: 'inherit',
         }}
         onFocus={e => { (e.currentTarget.parentElement as HTMLDivElement).style.boxShadow = `0 12px 32px rgba(15,18,34,0.2), 0 0 0 2px ${nc.border}40`; }}
         onBlur={e => { (e.currentTarget.parentElement as HTMLDivElement).style.boxShadow = '0 8px 24px rgba(15,18,34,0.12)'; }}

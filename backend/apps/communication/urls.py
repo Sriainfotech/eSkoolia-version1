@@ -1,6 +1,9 @@
+from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    BroadcastAudienceOptionsView,
+    BroadcastMessageView,
     CommunicationNotificationViewSet,
     CommunicationPreferenceViewSet,
     EmailMessageLogViewSet,
@@ -19,4 +22,7 @@ router.register("email-logs", EmailSmsLogViewSet, basename="communication-email-
 router.register("notice-boards", NoticeBoardViewSet, basename="communication-notice-boards")
 router.register("holiday-calendars", HolidayCalendarViewSet, basename="communication-holiday-calendars")
 
-urlpatterns = router.urls
+urlpatterns = [
+    path("broadcast/audience-options/", BroadcastAudienceOptionsView.as_view(), name="broadcast-audience-options"),
+    path("broadcast/", BroadcastMessageView.as_view(), name="broadcast-send"),
+] + router.urls

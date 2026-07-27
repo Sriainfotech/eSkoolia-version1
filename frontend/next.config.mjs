@@ -25,6 +25,7 @@ const nextConfig = {
       { source: "/api/fees/:path*", destination: `${BACKEND_URL}/api/fees/:path*` },
       { source: "/api/super-admin/:path*", destination: `${BACKEND_URL}/api/super-admin/:path*` },
       { source: "/api/chat/:path*", destination: `${BACKEND_URL}/api/chat/:path*` },
+      { source: "/api/notes/:path*", destination: `${BACKEND_URL}/api/notes/:path*` },
       { source: "/admissions/:path*", destination: `${BACKEND_URL}/admissions/:path*` },
     ];
   },

@@ -35,29 +35,17 @@ const ACAD_COLORS = {
 } as const;
 
 interface ExamReadiness { daysLeft: number; pct: number; label: string; checks: Array<{ label: string; ok: boolean }>; }
-const MOCK_READINESS: ExamReadiness = {
-  daysLeft: 12, pct: 64, label: 'Term 1 exams begin',
-  checks: [{ label: 'Schedule', ok: true }, { label: 'Admit cards', ok: true }, { label: 'Syllabus 64%', ok: false }, { label: 'Results template', ok: false }],
-};
+// No exam-readiness backend exists yet (/api/exams/readiness/ 404s below) —
+// empty state (rendered conditionally where this is used) rather than a
+// fabricated stat, per CLAUDE.md: no mock mode.
+const EMPTY_READINESS: ExamReadiness = { daysLeft: 0, pct: 0, label: '', checks: [] };
 
-function buildMockAcadWeek(weekStart: Date): AcadDay[] {
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(weekStart); d.setDate(weekStart.getDate() + i);
-    const events: AcadEvent[] = [];
-    if (i === 1) events.push({ title: 'Class 10 Math', type: 'exam' });
-    if (i === 2) events.push({ title: 'Results due', type: 'submission' }, { title: 'Parent SMS', type: 'comms' });
-    if (i === 4) events.push({ title: 'Fire drill', type: 'ops' });
-    if (i === 5) events.push({ title: 'Class 8 Science', type: 'exam' });
-    return { date: d.toISOString(), events };
-  });
-}
-
-const AI_SUGGESTIONS: Omit<WeekEvent, 'id'>[] = [
-  { dayIndex: 0, time: '09:00', title: 'Morning attendance review',  category: 'academic',  aiGenerated: true },
-  { dayIndex: 0, time: '14:00', title: 'Staff sync — weekly goals',  category: 'meeting',   aiGenerated: true },
-  { dayIndex: 2, time: '10:30', title: 'Parent-teacher follow-ups',  category: 'admin',     aiGenerated: true },
-  { dayIndex: 3, time: '15:00', title: 'Fee collection review',      category: 'admin',     aiGenerated: true },
-  { dayIndex: 4, time: '09:30', title: 'Exam schedule finalisation', category: 'academic',  aiGenerated: true },
+// One clearly-labeled example event — not real data (see CLAUDE.md: no mock
+// mode). Real academic-calendar events come from /api/calendar/week-ahead/
+// once that endpoint exists; until then this widget shows the user's own
+// locally-saved planner events plus this single example suggestion.
+const AI_SUGGESTIONS: (Omit<WeekEvent, 'id'> & { isExample?: boolean })[] = [
+  { dayIndex: 0, time: '09:00', title: 'Example: Morning attendance review', category: 'academic', aiGenerated: false, isExample: true },
 ];
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -112,7 +100,7 @@ export function WeekAhead() {
   const [events, setEvents] = useState<WeekEvent[]>([]);
   const [showPlanner, setShowPlanner] = useState(false);
   const [acadWeek, setAcadWeek]       = useState<AcadDay[]>([]);
-  const [readiness, setReadiness]     = useState<ExamReadiness>(MOCK_READINESS);
+  const [readiness, setReadiness]     = useState<ExamReadiness>(EMPTY_READINESS);
 
   const weekStart = getWeekStart(weekOffset);
   const wk = weekKey(weekStart);
@@ -131,7 +119,7 @@ export function WeekAhead() {
 
   // Load academic events for current week
   useEffect(() => {
-    setAcadWeek(buildMockAcadWeek(weekStart));
+    setAcadWeek([]);
     const token = getAccessToken();
     Promise.all([
       fetch(`${API_BASE_URL}/api/calendar/week-ahead/`, { headers: token ? { Authorization: `Bearer ${token}` } : {} }).then(r => r.ok ? r.json() : null),
@@ -260,22 +248,24 @@ export function WeekAhead() {
           )}
         </div>
 
-        {/* Academic readiness section */}
-        <div style={{ margin: '0 12px 12px', padding: '10px 12px', background: 'var(--bg-0)', border: '1px solid var(--bd)', borderRadius: 10 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-1)', marginBottom: 5 }}>
-            📋 {readiness.label} in {readiness.daysLeft} days
+        {/* Academic readiness section — only shown once a real exam-readiness API supplies it */}
+        {readiness.label && (
+          <div style={{ margin: '0 12px 12px', padding: '10px 12px', background: 'var(--bg-0)', border: '1px solid var(--bd)', borderRadius: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-1)', marginBottom: 5 }}>
+              📋 {readiness.label} in {readiness.daysLeft} days
+            </div>
+            <div style={{ height: 4, background: '#EEEAFF', borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
+              <div style={{ height: '100%', width: `${readiness.pct}%`, background: 'var(--pu)', borderRadius: 3, transition: 'width 0.8s ease' }} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {readiness.checks.map((c, i) => (
+                <span key={i} style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 3, color: c.ok ? '#059669' : '#E0463A' }}>
+                  {c.ok ? '✓' : '✗'} {c.label}
+                </span>
+              ))}
+            </div>
           </div>
-          <div style={{ height: 4, background: '#EEEAFF', borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
-            <div style={{ height: '100%', width: `${readiness.pct}%`, background: 'var(--pu)', borderRadius: 3, transition: 'width 0.8s ease' }} />
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {readiness.checks.map((c, i) => (
-              <span key={i} style={{ fontSize: 10, display: 'flex', alignItems: 'center', gap: 3, color: c.ok ? '#059669' : '#E0463A' }}>
-                {c.ok ? '✓' : '✗'} {c.label}
-              </span>
-            ))}
-          </div>
-        </div>
+        )}
 
       </div>
 
@@ -365,12 +355,12 @@ function PlannerModal({ weekOffset, events, onClose, onSave, onWeekChange }: Pla
             <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--ink-1)' }}>Week Planner</div>
             <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{formatDate(weekStart)} – {formatDate(getDayDate(weekStart, 6))} · School hours 7 AM – 5 PM</div>
           </div>
-          {/* AI toggle */}
+          {/* Example-suggestion toggle */}
           <button
             onClick={() => setShowAI(v => !v)}
             style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 20, border: showAI ? '1px solid rgba(109,74,255,0.5)' : '1px solid var(--bd)', background: showAI ? 'var(--pu-soft)' : 'var(--bg-2)', color: showAI ? 'var(--pu)' : 'var(--ink-3)', cursor: 'pointer' }}
           >
-            <Sparkles size={11} strokeWidth={2} />AI Suggestions
+            <Sparkles size={11} strokeWidth={2} />Suggestion
           </button>
           {/* Week nav */}
           <button onClick={() => onWeekChange(weekOffset - 1)} style={{ width: 28, height: 28, borderRadius: 7, border: '1px solid var(--bd)', background: 'var(--bg-2)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -389,7 +379,7 @@ function PlannerModal({ weekOffset, events, onClose, onSave, onWeekChange }: Pla
         {showAI && (
           <div style={{ padding: '8px 16px 6px', borderBottom: '1px solid var(--bd)', background: 'rgba(109,74,255,0.025)', flexShrink: 0 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--pu)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5, display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Sparkles size={9} /> AI Suggestions for this week
+              <Sparkles size={9} /> Example — try adding a planner event like this
             </div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {AI_SUGGESTIONS.map((s, i) => {

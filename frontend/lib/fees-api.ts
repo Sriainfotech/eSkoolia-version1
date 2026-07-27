@@ -25,7 +25,10 @@ export type FeesType = {
   gl_code: string;
   taxable: "Yes" | "No";
   default_structure: "Monthly" | "Quarterly" | "Term-wise" | "Yearly" | "Custom";
-  status: "Active" | "Inactive";
+  // Backend (FeesTypeSerializer.status = CharField()) returns the raw model
+  // value — the lowercase STATUS_CHOICES key ("active"/"inactive") — not the
+  // capitalized display label. Callers must normalize before comparing.
+  status: string;
   amount?: string;
   description?: string;
   is_active?: boolean;
@@ -572,6 +575,20 @@ export const feesApi = {
         body: JSON.stringify({ group_id: groupId, amounts }),
       }
     ),
+
+  yearEndRollover: (payload: { next_year_name: string; rollover_date: string; group_ids: number[] }) =>
+    apiRequestWithRefresh<{
+      success: boolean;
+      academic_year: { id: number; name: string; start_date: string; end_date: string };
+      archived_year: string;
+      groups_copied: number;
+      fee_types_skipped: number;
+      message: string;
+    }>(`/api/v1/fees/year-end/rollover/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
 };
 
 export type YearEndFeeAmountRow = {

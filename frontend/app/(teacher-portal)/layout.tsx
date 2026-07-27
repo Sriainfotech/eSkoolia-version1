@@ -15,10 +15,11 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Search, Bell, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import AuthGate from "@/components/layout/AuthGate";
 import { ModulePill } from "@/components/nav/ModulePill";
 import { NoteTrigger } from "@/components/notes/NoteTrigger";
+import { NotificationBell } from "@/components/nav/NotificationBell";
 import { WidgetManager } from "@/components/home/WidgetManager";
 import { usePermissions, clearPermissionsCache } from "@/hooks/usePermissions";
 import { useVisibleModules } from "@/hooks/useVisibleModules";
@@ -194,13 +195,7 @@ function TeacherTopBar() {
           {isHome && <WidgetManager />}
 
           {/* Bell */}
-          <button style={{
-            width: 34, height: 34, borderRadius: 8, border: "none",
-            background: "transparent", color: "var(--ink-2)",
-            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-          }}>
-            <Bell size={17} strokeWidth={1.5} />
-          </button>
+          <NotificationBell />
 
           {/* Avatar */}
           <div ref={avatarRef} style={{ position: "relative", flexShrink: 0 }}>

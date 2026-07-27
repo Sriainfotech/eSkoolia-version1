@@ -57,6 +57,14 @@ class SchoolTenant(TenantMixin, models.Model):
     """
 
     tenant_id = models.CharField(max_length=32, unique=True)
+    school = models.OneToOneField(
+        "tenancy.School",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tenant_record",
+        help_text="The real ERP School row this tenant/billing record belongs to.",
+    )
     name = models.CharField(max_length=255)
     short_code = models.CharField(max_length=64, blank=True)
     subdomain_url = models.CharField(max_length=128, blank=True)

@@ -16,12 +16,34 @@ class FeesGroupSerializer(serializers.ModelSerializer):
         fields = ['id', 'academic_year', 'name', 'description', 'applicable_classes', 'is_active', 'created_at', 'created_by']
         read_only_fields = ['created_at', 'created_by']
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        if school_id:
+            self.fields['academic_year'].queryset = AcademicYear.objects.filter(school_id=school_id)
+            self.fields['applicable_classes'].queryset = Class.objects.filter(school_id=school_id)
+
     def validate_applicable_classes(self, value):
         if value is None:
             return value
         if len(value) == 0:
             raise serializers.ValidationError("Please select at least one applicable class.")
         return value
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
+        if school_id and academic_year and academic_year.school_id != school_id:
+            raise serializers.ValidationError({'academic_year': 'Academic year not found.'})
+
+        classes = attrs.get('applicable_classes')
+        if school_id and classes is not None:
+            bad = [c.id for c in classes if c.school_id != school_id]
+            if bad:
+                raise serializers.ValidationError({'applicable_classes': 'One or more classes do not belong to this school.'})
+        return attrs
 
 class FeesTypeSerializer(serializers.ModelSerializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, coerce_to_string=True, required=False)
@@ -65,6 +87,14 @@ class FeesTypeSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at', 'updated_at', 'created_by']
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        if school_id:
+            self.fields['academic_year'].queryset = AcademicYear.objects.filter(school_id=school_id)
+            self.fields['fees_group'].queryset = FeesGroup.objects.filter(academic_year__school_id=school_id)
+
     def validate_name(self, value):
         cleaned = (value or '').strip()
         if len(cleaned) < 3:
@@ -91,7 +121,11 @@ class FeesTypeSerializer(serializers.ModelSerializer):
         if not re.match(r'^[0-9]{4}-[A-Z0-9]+$', code):
             raise serializers.ValidationError('Invalid GL Code format. Use XXXX-CODE (e.g., 4001-TUITION).')
 
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
         queryset = FeesType.objects.filter(is_deleted=False, gl_code=code)
+        if school_id:
+            queryset = queryset.filter(academic_year__school_id=school_id)
         if self.instance:
             queryset = queryset.exclude(pk=self.instance.pk)
         if queryset.exists():
@@ -99,6 +133,8 @@ class FeesTypeSerializer(serializers.ModelSerializer):
 
         account_number = code.split('-')[0]
         account_qs = FeesType.objects.filter(is_deleted=False, gl_code__startswith=f'{account_number}-')
+        if school_id:
+            account_qs = account_qs.filter(academic_year__school_id=school_id)
         if self.instance:
             account_qs = account_qs.exclude(pk=self.instance.pk)
         if account_qs.exists():
@@ -131,6 +167,8 @@ class FeesTypeSerializer(serializers.ModelSerializer):
         school_id = getattr(user, 'school_id', None)
 
         academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
+        if school_id and academic_year and academic_year.school_id != school_id:
+            raise serializers.ValidationError({'academic_year': 'Academic year not found.'})
         if not academic_year:
             if school_id:
                 academic_year = AcademicYear.objects.filter(school_id=school_id, is_current=True).first() or AcademicYear.objects.filter(school_id=school_id).first()
@@ -140,6 +178,10 @@ class FeesTypeSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'academic_year': ['is required.']})
 
         fees_group = attrs.get('fees_group') or getattr(self.instance, 'fees_group', None)
+        if school_id and fees_group and fees_group.academic_year.school_id != school_id:
+            raise serializers.ValidationError({'fees_group': 'Fee group not found.'})
+        if fees_group and academic_year and fees_group.academic_year_id != academic_year.id:
+            raise serializers.ValidationError({'fees_group': 'Fee group must belong to the selected academic year.'})
         if not fees_group and attrs.get('academic_year'):
             default_group, _ = FeesGroup.objects.get_or_create(
                 academic_year=attrs['academic_year'],
@@ -200,6 +242,15 @@ class FeeAssignmentSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at', 'created_by', 'status', 'total_paid', 'net_due', 'fees_type_name']
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        if school_id:
+            self.fields['academic_year'].queryset = AcademicYear.objects.filter(school_id=school_id)
+            self.fields['student'].queryset = self.fields['student'].queryset.filter(school_id=school_id)
+            self.fields['fees_type'].queryset = self.fields['fees_type'].queryset.filter(academic_year__school_id=school_id)
+
     def validate(self, attrs):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
@@ -249,6 +300,13 @@ class PaymentSerializer(serializers.ModelSerializer):
         # Never let the client override these — it would break FeeService.post_payment().
         read_only_fields = ['student', 'status', 'collected_by', 'created_at']
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        if school_id:
+            self.fields['assignment'].queryset = self.fields['assignment'].queryset.filter(academic_year__school_id=school_id)
+
     def validate(self, attrs):
         request = self.context.get('request')
         user = getattr(request, 'user', None)
@@ -278,6 +336,13 @@ class TermSettingsSerializer(serializers.ModelSerializer):
             'created_by',
         ]
         read_only_fields = ['created_at', 'updated_at', 'created_by']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        if school_id:
+            self.fields['academic_year'].queryset = AcademicYear.objects.filter(school_id=school_id)
 
     def validate_term_name(self, value):
         cleaned = (value or '').strip()
@@ -361,6 +426,15 @@ class FeeScheduleSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at', 'updated_at', 'created_by']
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        if school_id:
+            self.fields['academic_year'].queryset = AcademicYear.objects.filter(school_id=school_id)
+            self.fields['fee_group'].queryset = FeesGroup.objects.filter(academic_year__school_id=school_id)
+            self.fields['fee_type'].queryset = FeesType.objects.filter(academic_year__school_id=school_id, is_deleted=False)
+
     def validate_amount(self, value):
         if value is None or value <= 0:
             raise serializers.ValidationError('Amount must be greater than 0.')
@@ -395,6 +469,14 @@ class FeeScheduleSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({'fee_type': 'Fee type is required.'})
         if not academic_year:
             raise serializers.ValidationError({'academic_year': 'Academic year is required.'})
+        if school_id and academic_year.school_id != school_id:
+            raise serializers.ValidationError({'academic_year': 'Academic year not found.'})
+        if school_id and fee_type.academic_year.school_id != school_id:
+            raise serializers.ValidationError({'fee_type': 'Fee type not found.'})
+        if fee_type.academic_year_id != academic_year.id:
+            raise serializers.ValidationError({'fee_type': 'Fee type must belong to the selected academic year.'})
+        if fee_group is not None and fee_group.academic_year_id != academic_year.id:
+            raise serializers.ValidationError({'fee_group': 'Fee group must belong to the selected academic year.'})
 
         # Build query for duplicate check - fee_group is now optional
         qs = FeeSchedule.objects.filter(is_deleted=False, academic_year=academic_year, fee_type=fee_type)
@@ -447,6 +529,8 @@ class _CurrentYearScopedMixin:
         school_id = getattr(user, 'school_id', None)
 
         academic_year = attrs.get('academic_year') or getattr(self.instance, 'academic_year', None)
+        if school_id and academic_year and academic_year.school_id != school_id:
+            raise serializers.ValidationError({'academic_year': 'Academic year not found.'})
         if not academic_year and school_id:
             academic_year = (
                 AcademicYear.objects.filter(school_id=school_id, is_current=True).first()
@@ -491,6 +575,13 @@ class ConcessionRuleSerializer(_CurrentYearScopedMixin, serializers.ModelSeriali
         read_only_fields = ['created_at', 'updated_at', 'created_by']
         validators = []  # disable auto unique_together validator; handled in validate()
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        if school_id:
+            self.fields['academic_year'].queryset = AcademicYear.objects.filter(school_id=school_id)
+
     def validate_name(self, value):
         cleaned = (value or '').strip()
         if not cleaned:
@@ -533,6 +624,13 @@ class LateFeeRuleSerializer(_CurrentYearScopedMixin, serializers.ModelSerializer
         ]
         read_only_fields = ['created_at', 'updated_at', 'created_by']
         validators = []  # disable auto unique_together validator; handled in validate()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        if school_id:
+            self.fields['academic_year'].queryset = AcademicYear.objects.filter(school_id=school_id)
 
     def validate_name(self, value):
         cleaned = (value or '').strip()

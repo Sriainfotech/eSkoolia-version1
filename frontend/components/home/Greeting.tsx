@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react';
 import { getAccessToken } from '@/lib/auth';
 import { API_BASE_URL } from '@/lib/api';
 
-interface MeData { first_name?: string; last_name?: string; username?: string; }
+interface MeData { first_name?: string; last_name?: string; username?: string; school_name?: string | null; }
+interface AcademicYearRow { name: string; is_current?: boolean; }
 
 function getTimeWord() {
   const h = new Date().getHours();
@@ -34,6 +35,8 @@ function Chip({ label, value }: { label: string; value: string }) {
 
 export function Greeting() {
   const [name, setName] = useState('');
+  const [schoolName, setSchoolName] = useState('');
+  const [academicYear, setAcademicYear] = useState('');
   const [attentionCount, setAttentionCount] = useState<number | null>(null);
   const [visible, setVisible] = useState(false);
 
@@ -53,6 +56,20 @@ export function Greeting() {
           ? `${d.first_name}${d.last_name ? ' ' + d.last_name : ''}`
           : (d.username || '');
         setName(n);
+        if (d.school_name) setSchoolName(d.school_name);
+      })
+      .catch(() => {});
+
+    // Same source of truth as Academics → Foundation (useFoundationData.ts):
+    // the AcademicYear row with is_current=True.
+    fetch(`${API_BASE_URL}/api/v1/core/academic-years/?page_size=200`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(r => r.json())
+      .then((d: AcademicYearRow[] | { results?: AcademicYearRow[] }) => {
+        const years = Array.isArray(d) ? d : (d.results ?? []);
+        const current = years.find(y => y.is_current);
+        if (current) setAcademicYear(current.name);
       })
       .catch(() => {});
 
@@ -90,8 +107,8 @@ export function Greeting() {
         </p>
       </div>
       <div className="flex gap-3 items-center flex-shrink-0 flex-wrap">
-        <Chip label="Academic Year" value="2025–26" />
-        <Chip label="School" value="Eskoolia Public" />
+        <Chip label="Academic Year" value={academicYear || '—'} />
+        <Chip label="School" value={schoolName || '—'} />
       </div>
     </section>
   );

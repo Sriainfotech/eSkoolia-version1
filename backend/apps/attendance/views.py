@@ -114,24 +114,28 @@ class StudentAttendanceListCreateAPIView(AttendanceTenantMixin, APIView):
             if year_int < 2000 or year_int > 2100:
                 return Response({"detail": "year must be a valid 4-digit year."}, status=status.HTTP_400_BAD_REQUEST)
 
+        filters = {}
         if params.get("class_id"):
-            queryset = queryset.filter(class_id=params["class_id"])
+            filters["class_id"] = params["class_id"]
         if params.get("section_id"):
-            queryset = queryset.filter(section_id=params["section_id"])
+            filters["section_id"] = params["section_id"]
         if params.get("student_id"):
-            queryset = queryset.filter(student_id=params["student_id"])
+            filters["student_id"] = params["student_id"]
         if params.get("date"):
-            queryset = queryset.filter(attendance_date=params["date"])
+            filters["attendance_date"] = params["date"]
         if params.get("month"):
-            queryset = queryset.filter(attendance_date__month=params["month"])
+            filters["attendance_date__month"] = params["month"]
         if params.get("year"):
-            queryset = queryset.filter(attendance_date__year=params["year"])
+            filters["attendance_date__year"] = params["year"]
         if params.get("academic_year_id"):
-            queryset = queryset.filter(academic_year_id=params["academic_year_id"])
+            filters["academic_year_id"] = params["academic_year_id"]
         if params.get("date_from"):
-            queryset = queryset.filter(attendance_date__gte=params["date_from"])
+            filters["attendance_date__gte"] = params["date_from"]
         if params.get("date_to"):
-            queryset = queryset.filter(attendance_date__lte=params["date_to"])
+            filters["attendance_date__lte"] = params["date_to"]
+
+        if filters:
+            queryset = queryset.filter(**filters)
 
         ordered_queryset = queryset.order_by("-attendance_date", "student_id")
         paginator = ApiPageNumberPagination()

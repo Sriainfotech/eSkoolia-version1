@@ -14,6 +14,9 @@ import { ParentAttendanceWidget } from "@/components/widgets/parent/ParentAttend
 import { ParentResultsWidget }    from "@/components/widgets/parent/ParentResultsWidget";
 import { ParentNoticesWidget }    from "@/components/widgets/parent/ParentNoticesWidget";
 import { ParentFeesWidget }       from "@/components/widgets/parent/ParentFeesWidget";
+import { useCurrentAcademicYear } from "@/hooks/useCurrentAcademicYear";
+import { usePermissions } from "@/hooks/usePermissions";
+import { useVisibleModules } from "@/hooks/useVisibleModules";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -162,8 +165,22 @@ function ModTile({ mod }: { mod: TileDef }) {
 
 // ── Center content ────────────────────────────────────────────────────────────
 
-function ParentCenter({ me, childLabel }: { me: ReturnType<typeof useParentChild>["me"]; childLabel: string }) {
+function ParentCenter({
+  me,
+  childLabel,
+  academicYear,
+  schoolName,
+}: {
+  me: ReturnType<typeof useParentChild>["me"];
+  childLabel: string;
+  academicYear: string;
+  schoolName: string;
+}) {
   const [recents, setRecents] = useState<RecentItem[]>([]);
+  const visibleModules = useVisibleModules({ includeHome: true });
+  const visiblePaths = new Set(visibleModules.map((m) => m.path));
+  const quickTiles = QUICK.filter((mod) => visiblePaths.has(mod.path));
+  const allModules = ALL_MODULES.filter((mod) => visiblePaths.has(mod.path));
   useEffect(() => { setRecents(getRecents()); }, []);
 
   const firstName = me?.name.split(" ")[0] ?? "…";
@@ -188,7 +205,11 @@ function ParentCenter({ me, childLabel }: { me: ReturnType<typeof useParentChild
         <div style={{ display: "flex", gap: 0, border: "1px solid var(--bd)", borderRadius: 9, overflow: "hidden", background: "#fff", flexShrink: 0 }}>
           <div style={{ padding: "8px 14px", borderRight: "1px solid var(--bd)" }}>
             <div style={{ fontSize: 9.5, fontWeight: 700, color: "var(--ink-3)", letterSpacing: "0.08em", textTransform: "uppercase" }}>Academic Year</div>
-            <div style={{ fontFamily: "var(--font-mono,'JetBrains Mono',ui-monospace,monospace)", fontSize: 13, fontWeight: 600, color: "var(--ink-1)", marginTop: 3 }}>2025–26</div>
+            <div style={{ fontFamily: "var(--font-mono,'JetBrains Mono',ui-monospace,monospace)", fontSize: 13, fontWeight: 600, color: "var(--ink-1)", marginTop: 3 }}>{academicYear || "-"}</div>
+          </div>
+          <div style={{ padding: "8px 14px", borderRight: "1px solid var(--bd)" }}>
+            <div style={{ fontSize: 9.5, fontWeight: 700, color: "var(--ink-3)", letterSpacing: "0.08em", textTransform: "uppercase" }}>School</div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink-1)", marginTop: 3 }}>{schoolName || "-"}</div>
           </div>
           {childLabel && (
             <div style={{ padding: "8px 14px" }}>
@@ -200,9 +221,9 @@ function ParentCenter({ me, childLabel }: { me: ReturnType<typeof useParentChild
       </section>
 
       {/* Quick Access */}
-      <SecHeader icon={Star} label="Quick Access" count={`${QUICK.length} PINNED`} />
+      <SecHeader icon={Star} label="Quick Access" count={`${quickTiles.length} PINNED`} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(195px, 1fr))", gap: 10, marginBottom: 4 }}>
-        {QUICK.map(t => <QuickTile key={t.n} mod={t} />)}
+        {quickTiles.map(t => <QuickTile key={t.n} mod={t} />)}
       </div>
 
       {/* Recently Visited */}
@@ -216,9 +237,9 @@ function ParentCenter({ me, childLabel }: { me: ReturnType<typeof useParentChild
       )}
 
       {/* All Modules */}
-      <SecHeader icon={GraduationCap} label="All Modules" count={`${ALL_MODULES.length} GROUPS`} />
+      <SecHeader icon={GraduationCap} label="All Modules" count={`${allModules.length} GROUPS`} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(108px, 1fr))", gap: 8 }}>
-        {ALL_MODULES.map(m => <ModTile key={m.n} mod={m} />)}
+        {allModules.map(m => <ModTile key={m.n} mod={m} />)}
       </div>
     </div>
   );
@@ -228,6 +249,8 @@ function ParentCenter({ me, childLabel }: { me: ReturnType<typeof useParentChild
 
 export default function ParentHomePage() {
   const { me, selectedChild } = useParentChild();
+  const { me: authMe } = usePermissions();
+  const { year: academicYear } = useCurrentAcademicYear("-");
   const [detail, setDetail] = useState<ChildDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const { isEnabled } = useWidgetStore();
@@ -272,7 +295,12 @@ export default function ParentHomePage() {
       </div>
 
       {/* Center */}
-      <ParentCenter me={me} childLabel={childLabel} />
+      <ParentCenter
+        me={me}
+        childLabel={childLabel}
+        academicYear={academicYear}
+        schoolName={authMe?.school_name ?? "-"}
+      />
 
       {/* Right rail */}
       <div className="home-right-rail" style={{ minWidth: 0, overflow: "hidden" }}>

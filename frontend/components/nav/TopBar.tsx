@@ -3,15 +3,15 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Search, Bell, ChevronLeft, ChevronDown, ChevronRight } from "lucide-react";
+import { Search, ChevronLeft, ChevronDown, ChevronRight } from "lucide-react";
 import { clearAuthTokens, getAccessToken, getRefreshToken } from "@/lib/auth";
 import { clearPermissionsCache, usePermissions } from "@/hooks/usePermissions";
 import { useVisibleModules } from "@/hooks/useVisibleModules";
 import { API_BASE_URL } from "@/lib/api";
 import { ModulePill } from "./ModulePill";
-import { ModuleManager } from "./ModuleManager";
 import { NoteTrigger } from "@/components/notes/NoteTrigger";
 import { WidgetManager } from "@/components/home/WidgetManager";
+import { NotificationBell } from "./NotificationBell";
 
 function getInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
@@ -34,7 +34,7 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
   // Shared identity + permission cache — no duplicate fetch
   const { me } = usePermissions();
 
-  // All modules visible to this user (permission-filtered + moduleStore-filtered)
+  // All modules visible to this user (permission-filtered)
   const activeModules = useVisibleModules({ includeHome: true });
 
   useEffect(() => {
@@ -164,12 +164,9 @@ export function TopBarNew({ onCmdK }: { onCmdK: () => void }) {
 
             <NoteTrigger />
 
-            {isHome && <div className="hidden md:block"><ModuleManager /></div>}
             {isHome && <div className="hidden md:block"><WidgetManager /></div>}
 
-            <button style={{ width: 34, height: 34, borderRadius: 8, border: "none", background: "transparent", color: "var(--ink-2)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <Bell size={17} strokeWidth={1.5} />
-            </button>
+            <NotificationBell />
 
             <div ref={avatarRef} style={{ position: "relative", flexShrink: 0 }}>
               <button onClick={() => setAvatarOpen(v => !v)}

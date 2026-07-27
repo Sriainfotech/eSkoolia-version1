@@ -328,3 +328,62 @@ class HolidayCalendar(TimestampedModel):
 
     def __str__(self):
         return self.holiday_title
+
+
+class BroadcastMessage(TimestampedModel):
+    """A message sent by an admin/teacher to a chosen audience.
+
+    Delivery: an in-app CommunicationNotification is created for every
+    resolved recipient (covers both the web notification bell and any
+    mobile client hitting the same API — there's no separate mobile-only
+    channel). If 'email' is in channels, a real email is sent via
+    EmailMessageLog's existing send_mail path. If 'sms' is in channels, an
+    EmailSmsLog row is recorded per recipient but NOT actually dispatched —
+    no SMS provider is wired up for general broadcast (only apps.admissions
+    has a Twilio adapter, scoped to admissions follow-ups). This is
+    intentional: better to log honestly than fake a "sent" SMS.
+    """
+
+    AUDIENCE_ALL_PARENTS = "all_parents"
+    AUDIENCE_CLASS_PARENTS = "class_parents"
+    AUDIENCE_TEACHERS = "teachers"
+    AUDIENCE_ALL_STAFF = "all_staff"
+
+    AUDIENCE_CHOICES = [
+        (AUDIENCE_ALL_PARENTS, "All Parents"),
+        (AUDIENCE_CLASS_PARENTS, "Class Parents"),
+        (AUDIENCE_TEACHERS, "Teachers"),
+        (AUDIENCE_ALL_STAFF, "All Staff"),
+    ]
+
+    STATUS_SCHEDULED = "scheduled"
+    STATUS_SENT = "sent"
+    STATUS_FAILED = "failed"
+
+    STATUS_CHOICES = [
+        (STATUS_SCHEDULED, "Scheduled"),
+        (STATUS_SENT, "Sent"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="broadcast_messages")
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="broadcast_messages"
+    )
+    template = models.CharField(max_length=32, blank=True)
+    message = models.TextField()
+    audience_type = models.CharField(max_length=20, choices=AUDIENCE_CHOICES)
+    audience_class_ids = models.JSONField(default=list, blank=True)
+    channels = models.JSONField(default=list, blank=True)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_SCHEDULED)
+    scheduled_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    recipient_count = models.IntegerField(default=0)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "communication_broadcast_messages"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Broadcast({self.id}) {self.audience_type} · {self.status}"

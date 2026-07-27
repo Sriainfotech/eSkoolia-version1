@@ -31,6 +31,7 @@ urlpatterns = [
     path("api/chat/", include("apps.chat.urls")),
     path("api/v1/utilities/communication/", include("apps.communication.urls")),
     path("api/v1/competitions/", include("apps.competitions.urls")),
+    path("api/v1/student/", include("apps.student_portal.urls")),
     # Legacy compatibility
     path("admissions/", include("apps.admissions.urls")),
 ]

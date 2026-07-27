@@ -13,12 +13,12 @@ interface FeesSummary {
   sparkline7d: number[];
 }
 
-const MOCK: FeesSummary = {
-  collectedAmount: 214800,
-  transactionCount: 48,
-  vsAvgPercent: 18,
-  vsAvgDay: 'Tue',
-  sparkline7d: [158000, 174000, 143000, 198000, 211000, 189000, 214800],
+const EMPTY: FeesSummary = {
+  collectedAmount: 0,
+  transactionCount: 0,
+  vsAvgPercent: 0,
+  vsAvgDay: '',
+  sparkline7d: [],
 };
 
 function formatINR(n: number) {
@@ -62,7 +62,7 @@ function Sparkline({ data }: { data: number[] }) {
 }
 
 export function FeesToday() {
-  const [data, setData] = useState<FeesSummary>(MOCK);
+  const [data, setData] = useState<FeesSummary>(EMPTY);
   const router = useRouter();
 
   const fetchData = useCallback(() => {
@@ -107,16 +107,18 @@ export function FeesToday() {
         <span style={{ fontSize: 11.5, color: 'var(--ink-2)' }}>
           {data.transactionCount} transactions
         </span>
-        <span style={{
-          display: 'flex', alignItems: 'center', gap: 3,
-          fontSize: 10.5, fontWeight: 600,
-          color: positive ? '#059669' : '#E0463A',
-          background: positive ? '#D1FAE5' : '#FEE2E2',
-          padding: '2px 6px', borderRadius: 20,
-        }}>
-          {positive ? <TrendingUp size={9} strokeWidth={2} /> : <TrendingDown size={9} strokeWidth={2} />}
-          {positive ? '+' : ''}{data.vsAvgPercent}% vs avg {data.vsAvgDay}
-        </span>
+        {data.vsAvgDay && data.vsAvgPercent !== 0 && (
+          <span style={{
+            display: 'flex', alignItems: 'center', gap: 3,
+            fontSize: 10.5, fontWeight: 600,
+            color: positive ? '#059669' : '#E0463A',
+            background: positive ? '#D1FAE5' : '#FEE2E2',
+            padding: '2px 6px', borderRadius: 20,
+          }}>
+            {positive ? <TrendingUp size={9} strokeWidth={2} /> : <TrendingDown size={9} strokeWidth={2} />}
+            {positive ? '+' : ''}{data.vsAvgPercent}% vs avg {data.vsAvgDay}
+          </span>
+        )}
       </div>
 
       <Sparkline data={data.sparkline7d} />

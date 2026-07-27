@@ -14,6 +14,16 @@ interface Notification {
   link?: string;
 }
 
+interface ApiNotification {
+  id: number;
+  title: string;
+  body: string;
+  notification_type: 'system' | 'announcement' | 'reminder' | 'message';
+  link_url?: string | null;
+  is_read: boolean;
+  created_at: string;
+}
+
 const TYPE_COLORS = {
   info:    '#3B82F6',
   warn:    '#F59E0B',
@@ -21,11 +31,23 @@ const TYPE_COLORS = {
   success: '#22C55E',
 };
 
-const MOCK: Notification[] = [
-  { id: '1', text: 'Exam schedule for Class 10 published', type: 'info', createdAt: new Date(Date.now() - 18 * 60000).toISOString(), read: false, link: '/exams/schedule' },
-  { id: '2', text: '3 new admission inquiries received', type: 'success', createdAt: new Date(Date.now() - 42 * 60000).toISOString(), read: false, link: '/admissions/queries' },
-  { id: '3', text: 'Fee payment reminder sent to 12 parents', type: 'info', createdAt: new Date(Date.now() - 90 * 60000).toISOString(), read: true, link: '/fees/payments' },
-];
+const NOTIFICATION_TYPE_MAP: Record<ApiNotification['notification_type'], Notification['type']> = {
+  system: 'info',
+  announcement: 'success',
+  reminder: 'warn',
+  message: 'info',
+};
+
+function mapNotification(n: ApiNotification): Notification {
+  return {
+    id: String(n.id),
+    text: n.title || n.body,
+    type: NOTIFICATION_TYPE_MAP[n.notification_type] ?? 'info',
+    createdAt: n.created_at,
+    read: n.is_read,
+    link: n.link_url || undefined,
+  };
+}
 
 function relativeTime(iso: string) {
   const diff = Date.now() - new Date(iso).getTime();
@@ -37,19 +59,24 @@ function relativeTime(iso: string) {
 }
 
 export function NotificationsInbox() {
-  const [notifs, setNotifs] = useState<Notification[]>(MOCK);
+  const [notifs, setNotifs] = useState<Notification[]>([]);
 
   useEffect(() => {
     const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/notifications/?limit=3`, {
+    fetch(`${API_BASE_URL}/api/v1/utilities/communication/notifications/?page_size=3&ordering=-created_at`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (Array.isArray(d)) setNotifs(d); else if (d?.results) setNotifs(d.results); })
+      .then((d: ApiNotification[] | { results?: ApiNotification[] } | null) => {
+        const rows = Array.isArray(d) ? d : (d?.results ?? []);
+        setNotifs(rows.map(mapNotification));
+      })
       .catch(() => {});
   }, []);
 
   const unread = notifs.filter(n => !n.read).length;
+
+  if (notifs.length === 0) return null;
 
   return (
     <div style={{ background: '#fff', border: '1px solid var(--bd)', borderRadius: 16, padding: 14, boxShadow: 'var(--sh-1)' }}>

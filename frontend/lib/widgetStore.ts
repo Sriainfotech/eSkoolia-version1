@@ -33,7 +33,7 @@ export const ALL_WIDGETS: WidgetDef[] = [
   { id: 'calls-queue',   name: 'Calls Queue',           description: 'Pending parent & vendor call-backs, AI-ranked',     rail: 'right', icon: '📞', defaultEnabled: true,  roles: ['admin'] },
   { id: 'drafts',        name: 'Drafts Pending',        description: 'Communications awaiting your approval',             rail: 'right', icon: '📝', defaultEnabled: false, roles: ['admin'], disabled: true },
   { id: 'academic-strip',name: 'Academic Calendar',     description: 'Merged into Week Ahead widget',                     rail: 'right', icon: '📅', defaultEnabled: false, roles: ['admin'], disabled: true },
-  { id: 'broadcast',     name: 'Quick Broadcast',       description: 'Send announcements to parents & students',          rail: 'right', icon: '📢', defaultEnabled: false, roles: ['admin'] },
+  { id: 'broadcast',     name: 'Quick Broadcast',       description: 'Send announcements to parents, teachers & staff',   rail: 'right', icon: '📢', defaultEnabled: true,  roles: ['admin', 'teacher'] },
 
   // ── Parent-only — Left rail ────────────────────────────────────────────────
   { id: 'parent-attendance', name: "Child's Attendance",  description: 'Attendance ring & stats for the selected child',     rail: 'left',  icon: '📅', defaultEnabled: true,  roles: ['parent'] },

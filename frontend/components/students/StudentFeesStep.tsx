@@ -194,7 +194,7 @@ const StudentFeesStep = forwardRef<StudentFeesStepHandle, Props>(function Studen
     return types.filter(
       (t) =>
         String(t.fees_group) === value.feeGroupId &&
-        (t.status ?? "Active") === "Active" &&
+        (t.status ?? "active").toLowerCase() === "active" &&
         (!t.academic_year || String(t.academic_year) === academicYearId)
     );
   }, [types, value.feeGroupId, academicYearId]);

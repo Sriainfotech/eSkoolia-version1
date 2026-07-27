@@ -76,6 +76,16 @@ function parseDateTimeToISO(dateStr: string): string {
   return `${yyyy}-${mm}-${dd}T${timePart || "00:00"}:00`;
 }
 
+function currentDateTimeInput(): string {
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, "0");
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const yyyy = String(now.getFullYear());
+  const hh = String(now.getHours()).padStart(2, "0");
+  const min = String(now.getMinutes()).padStart(2, "0");
+  return `${dd}-${mm}-${yyyy} ${hh}:${min}`;
+}
+
 export default function FeesCollectionPanel() {
   const [studentsData, setStudentsData] = useState<any[]>([]);
   const [assignments, setAssignments] = useState<any[]>([]);
@@ -87,7 +97,7 @@ export default function FeesCollectionPanel() {
   const [showReconModal, setShowReconModal] = useState(false);
   const [reconForm, setReconForm] = useState({ reference:"", amount:"", method:"bank", date:"", status:"review", match_note:"", notes:"" });
   const [reconSaving, setReconSaving] = useState(false);
-  const [schoolHeader, setSchoolHeader] = useState({ name:"Eskoolia School", address:"123 School Lane, City — 000000", email:"admissions@eskoolia.in", logo_url:"" });
+  const [schoolHeader, setSchoolHeader] = useState({ name:"", address:"", email:"", logo_url:"" });
   const [showHeaderModal, setShowHeaderModal] = useState(false);
   const [headerDraft, setHeaderDraft] = useState<typeof schoolHeader>(schoolHeader);
   // Store only the selected student ID; derive the full record reactively from STUDENTS.
@@ -113,7 +123,7 @@ export default function FeesCollectionPanel() {
     if (schoolRes.status === "fulfilled") {
       const s = schoolRes.value as any;
       setSchoolHeader({
-        name:     s.name     || "Eskoolia School",
+        name:     s.name     || "",
         address:  s.address  || "",
         email:    s.email    || "",
         logo_url: s.logo_url || "",
@@ -286,7 +296,7 @@ export default function FeesCollectionPanel() {
   const [checked,     setChecked]     = useState<Set<string>>(new Set());
   const [amtPaid,     setAmtPaid]     = useState("0");
   const [method,      setMethod]      = useState("Cash");
-  const [dateTime,    setDateTime]    = useState("27-05-2026 10:30");
+  const [dateTime,    setDateTime]    = useState(currentDateTimeInput());
   const [note,        setNote]        = useState("Parent requested receipt copy by email.");
   // payments is derived from INIT_PAYMENTS (reactive memo) — no separate state needed
   const [rcptN,       setRcptN]       = useState(5315);
@@ -888,8 +898,8 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#181B2A}
               <div style={{border:"1px solid #E8E8EE",borderRadius:10,padding:"18px 20px"}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}>
                   <div>
-                    <div style={{fontSize:20,fontWeight:700,color:"#181B2A",lineHeight:1.2}}>Eskoolia</div>
-                    <div style={{fontSize:12,color:"#A0A3B8",marginTop:2}}>Aravali Public School</div>
+                    <div style={{fontSize:20,fontWeight:700,color:"#181B2A",lineHeight:1.2}}>{schoolHeader.name || "School"}</div>
+                    <div style={{fontSize:12,color:"#A0A3B8",marginTop:2}}>{schoolHeader.address || ""}</div>
                   </div>
                   <div style={{textAlign:"right"}}>
                     <div style={{fontSize:12.5,fontWeight:600,color:"#181B2A"}}>{nextR}</div>
@@ -1383,9 +1393,9 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#181B2A}
             </div>
 
             {[
-              {label:"School Name",    key:"name",    placeholder:"e.g. Eskoolia School"},
-              {label:"Address",        key:"address", placeholder:"e.g. 123 School Lane, City — 000000"},
-              {label:"Email / Contact",key:"email",   placeholder:"e.g. admissions@eskoolia.in"},
+              {label:"School Name",    key:"name",    placeholder:"e.g. Greenwood High School"},
+              {label:"Address",        key:"address", placeholder:"e.g. MG Road, Bengaluru"},
+              {label:"Email / Contact",key:"email",   placeholder:"e.g. finance@school.edu"},
             ].map(f=>(
               <div key={f.key} style={{marginBottom:14}}>
                 <div style={{fontSize:12,fontWeight:600,color:"#5B5E72",marginBottom:6}}>{f.label}</div>

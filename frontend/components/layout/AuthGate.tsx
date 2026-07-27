@@ -5,6 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { API_BASE_URL } from "@/lib/api";
 import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from "@/lib/auth";
 import { refreshAccessToken } from "@/lib/api-auth";
+import { getModulesForUser } from "@/lib/portal-modules";
+import type { MeData } from "@/hooks/usePermissions";
 
 type AuthGateProps = { children: ReactNode };
 
@@ -14,7 +16,7 @@ const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK === 'true';
 const PORTAL_HOMES: Partial<Record<string, string>> = {
   teacher: '/teacher/home',
   parent:  '/parent/home',
-  // student: '/student/home',  ← add when student portal is built
+  student: '/student/home',
 };
 
 /**
@@ -57,6 +59,17 @@ type MeShape = {
   permission_codes?: string[];
 };
 
+function routeMatches(pathname: string, routePath: string): boolean {
+  return pathname === routePath || pathname.startsWith(`${routePath}/`);
+}
+
+function canAccessPathFromVisibleModules(me: MeShape, pathname: string): boolean {
+  const visibleModules = getModulesForUser(me as MeData, { includeHome: true });
+  return visibleModules.some(
+    (m) => routeMatches(pathname, m.path) || m.sub.some((s) => routeMatches(pathname, s.path)),
+  );
+}
+
 /**
  * Applies all portal-based redirect rules given a resolved /me response.
  * Returns true if a redirect was issued (caller should return early).
@@ -69,15 +82,41 @@ function applyPortalRedirects(
   const redirect = nonAdminHome(me.portal_type);
 
   if (redirect) {
-    // User has a built portal — block admin routes and cross-portal access.
+    // User has a built portal — block cross-portal access.
     const isWrongPortal =
-      isAdminRoute(pathname) ||
       (me.portal_type === 'teacher' && pathname.startsWith('/parent')) ||
-      (me.portal_type === 'parent'  && pathname.startsWith('/teacher'));
+      (me.portal_type === 'teacher' && pathname.startsWith('/student')) ||
+      (me.portal_type === 'parent'  && pathname.startsWith('/teacher')) ||
+      (me.portal_type === 'parent'  && pathname.startsWith('/student')) ||
+      (me.portal_type === 'student' && pathname.startsWith('/teacher')) ||
+      (me.portal_type === 'student' && pathname.startsWith('/parent'));
     if (isWrongPortal) {
       router.replace(redirect);
       return true;
     }
+
+    // Teacher portal can access admin routes only when those routes are in the
+    // permission-resolved visible module list (e.g. granted Fees module).
+    if (me.portal_type === 'teacher' && isAdminRoute(pathname)) {
+      if (!canAccessPathFromVisibleModules(me, pathname)) {
+        router.replace(redirect);
+        return true;
+      }
+      return false;
+    }
+
+    // Parent portal never enters admin-console routes.
+    if (me.portal_type === 'parent' && isAdminRoute(pathname)) {
+      router.replace(redirect);
+      return true;
+    }
+
+    // Student portal never enters admin-console routes.
+    if (me.portal_type === 'student' && isAdminRoute(pathname)) {
+      router.replace(redirect);
+      return true;
+    }
+
     return false;
   }
 

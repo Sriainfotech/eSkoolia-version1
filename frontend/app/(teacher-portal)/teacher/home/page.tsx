@@ -19,6 +19,7 @@ import { TeacherDayPlanner } from "@/components/widgets/teacher/TeacherDayPlanne
 import { WeekAhead }         from "@/components/widgets/cockpit/WeekAhead";
 import { SmartTodoList }     from "@/components/widgets/cockpit/SmartTodoList";
 import { PinnedNotes }       from "@/components/widgets/cockpit/PinnedNotes";
+import { QuickBroadcast }    from "@/components/widgets/cockpit/QuickBroadcast";
 import { Greeting }          from "@/components/home/Greeting";
 import { SectionLabel }      from "@/components/home/SectionLabel";
 import { RecentsRow }        from "@/components/home/RecentsRow";
@@ -168,6 +169,8 @@ function TeacherCenter({ me }: { me: TeacherMe }) {
   // Dynamically built by the portal registry: teacher-specific modules +
   // any admin modules granted via Roles & Permissions
   const visibleModules = useVisibleModules();
+  const visiblePaths = new Set(visibleModules.map((m) => m.path));
+  const quickTiles = TEACHER_QUICK.filter((tile) => visiblePaths.has(tile.path));
 
   return (
     <div style={{ minWidth: 0 }}>
@@ -191,9 +194,9 @@ function TeacherCenter({ me }: { me: TeacherMe }) {
       )}
 
       {/* Quick Access */}
-      <SectionLabel title="Quick Access" pinned={TEACHER_QUICK.length} />
+      <SectionLabel title="Quick Access" pinned={quickTiles.length} />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(195px, 1fr))", gap: 10, marginBottom: 4 }}>
-        {TEACHER_QUICK.map(t => <QuickTile key={t.path} tile={t} />)}
+        {quickTiles.map(t => <QuickTile key={t.path} tile={t} />)}
       </div>
 
       {/* Recently Visited */}
@@ -233,7 +236,7 @@ export default function TeacherHomePage() {
   }, []);
 
   const showLeft  = isEnabled("teacher-day-plan") || isEnabled("pinned-notes");
-  const showRight = isEnabled("week-ahead") || isEnabled("smart-todo");
+  const showRight = isEnabled("week-ahead") || isEnabled("smart-todo") || isEnabled("broadcast");
 
   if (loading) {
     return (
@@ -280,6 +283,7 @@ export default function TeacherHomePage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {isEnabled("week-ahead") && <WeekAhead />}
             {isEnabled("smart-todo") && <SmartTodoList />}
+            {isEnabled("broadcast") && <QuickBroadcast />}
           </div>
         )}
       </div>

@@ -150,6 +150,10 @@ export function StaffVerificationForm({ onClose, staff, onSavePdf, saving }: Sta
           </div>
         )}
 
+        {headerOpen && (
+          <SchoolHeaderPopover onClose={() => { setHeaderOpen(false); setHeader(loadSchoolHeader()); }} />
+        )}
+
         <div className="sv-body">
           <div className="sv-school-header">
             {header.logoDataUrl ? (
@@ -264,10 +268,6 @@ export function StaffVerificationForm({ onClose, staff, onSavePdf, saving }: Sta
           </div>
         </div>
       </div>
-
-      {headerOpen && (
-        <SchoolHeaderPopover onClose={() => { setHeaderOpen(false); setHeader(loadSchoolHeader()); }} />
-      )}
 
       <style jsx>{`
         .sv-backdrop {

@@ -814,6 +814,8 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                     subdomain=subdomain,
                     is_active=True,
                 )
+                tenant.school = erp_school
+                tenant.save(update_fields=["school"])
 
                 # 3a. Create Domain record so school_info_view can resolve this subdomain
                 Domain.objects.get_or_create(
@@ -937,9 +939,9 @@ class SchoolTenantDetailView(SuperAdminBaseAPIView):
         updated = serializer.save()
 
         # Keep School.is_active in sync with the tenant status.
-        if "status" in serializer.validated_data:
+        if "status" in serializer.validated_data and updated.school_id:
             is_active = updated.status in ("active", "trial")
-            School.objects.filter(subdomain__iexact=updated.subdomain_url).update(is_active=is_active)
+            School.objects.filter(pk=updated.school_id).update(is_active=is_active)
 
         log_audit(
             action="school.update",
@@ -956,12 +958,17 @@ class SchoolTenantDetailView(SuperAdminBaseAPIView):
         return Response(SchoolTenantDetailSerializer(updated).data)
 
     def delete(self, request, tenant_id):
+        """Archive a school. This is intentionally reversible (see `restore` via
+        PATCH status=active) — schools are never hard-deleted here, since a
+        school can leave and come back at any time."""
         tenant = self.get_object(tenant_id)
         if tenant.status == "archived":
             return Response({"detail": "School is already archived."}, status=status.HTTP_400_BAD_REQUEST)
         tenant.status = "archived"
         tenant.api_access = False
         tenant.save(update_fields=["status", "api_access"])
+        if tenant.school_id:
+            School.objects.filter(pk=tenant.school_id).update(is_active=False)
 
         log_audit(
             action="school.archive",

@@ -13,6 +13,7 @@ interface TodoItem {
   aiGenerated: boolean;
   aiReason?: string;
   completed: boolean;
+  isExample?: boolean;
 }
 
 type Tab = 'all' | 'academic' | 'ops' | 'comms' | 'personal';
@@ -25,13 +26,13 @@ const TABS: { key: Tab; label: string; color: string; bg: string }[] = [
   { key: 'personal', label: 'Personal', color: '#DB2777', bg: '#FCE7F3' },
 ];
 
-const MOCK_TODOS: TodoItem[] = [
-  { id: '1', text: 'Class 10 syllabus at 64% — Term 1 exam in 18 days', category: 'academic', priority: 'high', dueAt: null, aiGenerated: true, aiReason: 'Syllabus completion stuck for 5 days', completed: false },
-  { id: '2', text: '5 students failed Math mid-term — schedule remedial?', category: 'academic', priority: 'normal', dueAt: null, aiGenerated: true, aiReason: 'Identified from mid-term result sheet', completed: false },
-  { id: '3', text: 'Bus Route 7 maintenance overdue (8 days)', category: 'ops', priority: 'high', dueAt: null, aiGenerated: true, aiReason: 'Last maintenance logged 8 days ago', completed: false },
-  { id: '4', text: '12 fees overdue — send reminder?', category: 'ops', priority: 'normal', dueAt: null, aiGenerated: true, aiReason: 'Fee due date passed 3 days ago', completed: false },
-  { id: '5', text: '5 parent callbacks queued', category: 'comms', priority: 'high', dueAt: null, aiGenerated: false, completed: false },
-  { id: '6', text: 'Term holiday SMS — schedule for Friday', category: 'comms', priority: 'normal', dueAt: 'Fri', aiGenerated: false, completed: false },
+// A single, clearly-labeled placeholder — not real data. Shown only until
+// the user adds their own task or a real per-user todos API exists
+// (this widget currently has no backend; see /api/user/todos/ 404 handling
+// below). Per CLAUDE.md: no mock mode — never show fabricated data as if
+// it were live.
+const EXAMPLE_TODOS: TodoItem[] = [
+  { id: 'example-1', text: 'e.g. "Follow up with Class 8 fee dues"', category: 'ops', priority: 'normal', dueAt: null, aiGenerated: false, completed: false, isExample: true },
 ];
 
 function formatDue(due: string | null) {
@@ -51,7 +52,7 @@ export function SmartTodoList() {
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     try { return (localStorage.getItem('eskoolia_todoTab') as Tab) || 'all'; } catch { return 'all'; }
   });
-  const [todos, setTodos] = useState<TodoItem[]>(MOCK_TODOS);
+  const [todos, setTodos] = useState<TodoItem[]>(EXAMPLE_TODOS);
   const [input, setInput] = useState('');
   const [tooltip, setTooltip] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -199,6 +200,11 @@ export function SmartTodoList() {
                   </span>
                   {due && (
                     <span style={{ fontSize: 9.5, fontFamily: 'monospace', color: due === 'Overdue' ? '#E0463A' : 'var(--ink-3)' }}>{due}</span>
+                  )}
+                  {t.isExample && (
+                    <span style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--ink-3)', background: 'var(--bg-2)', border: '1px dashed var(--bd)', padding: '1px 6px', borderRadius: 20 }}>
+                      Example
+                    </span>
                   )}
                   {t.aiGenerated && (
                     <span
