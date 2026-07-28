@@ -553,12 +553,12 @@ export const feesApi = {
 
   exportDuesCSV: () =>
     fetch("/api/v1/fees/dues/export-csv/", {
-      headers: { Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("access_token") || "" : ""}` },
+      headers: { Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("school_erp_access_token") || "" : ""}` },
     }),
 
   yearEndReportCSV: (reportType: string) =>
     fetch(`/api/v1/fees/year-end/report/?report_type=${reportType}`, {
-      headers: { Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("access_token") || "" : ""}` },
+      headers: { Authorization: `Bearer ${typeof window !== "undefined" ? localStorage.getItem("school_erp_access_token") || "" : ""}` },
     }),
 
   yearEndGroupAmounts: (groupId: number) =>

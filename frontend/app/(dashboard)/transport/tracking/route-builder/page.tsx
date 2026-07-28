@@ -89,7 +89,7 @@ export default function RouteBuilderPage() {
 
     setSaving(true);
     try {
-      const token = localStorage.getItem('access_token');
+      const token = localStorage.getItem('school_erp_access_token');
 
       // Create route
       const routeRes = await fetch('/api/v1/core/transport-routes/', {

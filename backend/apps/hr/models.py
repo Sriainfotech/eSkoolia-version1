@@ -225,6 +225,21 @@ class StaffDocument(models.Model):
     DOCUMENT_AADHAR_CARD = "aadhar_card"
     DOCUMENT_DRIVING_LICENSE = "driving_license"
     DOCUMENT_OTHER = "other"
+    # Added to cover every document type collected by the staff onboarding
+    # wizard (StaffOnboardDocument.doc_key) so its uploads can be copied here
+    # verbatim when onboarding completes — see StaffOnboardDocument docstring.
+    DOCUMENT_SIGNATURE = "signature"
+    DOCUMENT_PAN = "pan"
+    DOCUMENT_PASSPORT_PHOTO = "passport_photo"
+    DOCUMENT_BANK_PROOF = "bank_proof"
+    DOCUMENT_ADDRESS_PROOF = "address_proof"
+    DOCUMENT_DEGREE = "degree"
+    DOCUMENT_BED = "bed"
+    DOCUMENT_EXPERIENCE = "experience"
+    DOCUMENT_NOC = "noc"
+    DOCUMENT_MEDICAL_CERT = "medical_cert"
+    DOCUMENT_POLICE_VERIFICATION = "police_verification"
+    DOCUMENT_SIGNED_ONBOARDING_FORM = "signed_onboarding_form"
     DOCUMENT_TYPE_CHOICES = [
         (DOCUMENT_RESUME, "Resume"),
         (DOCUMENT_JOINING_LETTER, "Joining Letter"),
@@ -232,6 +247,18 @@ class StaffDocument(models.Model):
         (DOCUMENT_ELEVENTH_CERTIFICATE, "Eleventh Certificate"),
         (DOCUMENT_AADHAR_CARD, "Aadhar Card"),
         (DOCUMENT_DRIVING_LICENSE, "Driving License"),
+        (DOCUMENT_SIGNATURE, "Signature (scanned image)"),
+        (DOCUMENT_PAN, "PAN Card"),
+        (DOCUMENT_PASSPORT_PHOTO, "Passport-size photograph"),
+        (DOCUMENT_BANK_PROOF, "Bank cancelled cheque or passbook copy"),
+        (DOCUMENT_ADDRESS_PROOF, "Address proof"),
+        (DOCUMENT_DEGREE, "Degree / graduation certificate"),
+        (DOCUMENT_BED, "B.Ed / D.El.Ed certificate"),
+        (DOCUMENT_EXPERIENCE, "Experience letter (previous employer)"),
+        (DOCUMENT_NOC, "No-objection certificate (previous employer)"),
+        (DOCUMENT_MEDICAL_CERT, "Medical fitness certificate"),
+        (DOCUMENT_POLICE_VERIFICATION, "Police verification certificate"),
+        (DOCUMENT_SIGNED_ONBOARDING_FORM, "Signed Onboarding Acknowledgment"),
         (DOCUMENT_OTHER, "Other"),
     ]
 
@@ -490,6 +517,15 @@ class StaffOnboardDocument(models.Model):
     """
 
     MANDATORY_KEYS = frozenset(["aadhaar"])
+
+    # doc_key -> StaffDocument.document_type, for the few keys that predate this
+    # model and already had a differently-named legacy choice. Any doc_key not
+    # listed here is used as-is (it's now a matching StaffDocument choice).
+    TO_STAFF_DOCUMENT_TYPE = {
+        "aadhaar": "aadhar_card",
+        "marksheet_10": "tenth_certificate",
+        "marksheet_12": "eleventh_certificate",
+    }
 
     uploaded_by = models.ForeignKey(
         "users.User",

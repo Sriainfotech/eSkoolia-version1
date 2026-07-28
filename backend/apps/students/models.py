@@ -100,6 +100,7 @@ class Student(models.Model):
     admission_no = models.CharField(max_length=40)
     roll_no = models.CharField(max_length=40, blank=True)
     first_name = models.CharField(max_length=80)
+    middle_name = models.CharField(max_length=80, blank=True, default="")
     last_name = models.CharField(max_length=80, blank=True)
     date_of_birth = models.DateField(null=True, blank=True)
     academic_year = models.ForeignKey(
@@ -315,12 +316,30 @@ class StudentMultiClassRecord(models.Model):
 
 
 class StudentSubjectAssignment(models.Model):
+    CATEGORY_FIRST_LANGUAGE = "first_language"
+    CATEGORY_SECOND_LANGUAGE = "second_language"
+    CATEGORY_THIRD_LANGUAGE = "third_language"
+    CATEGORY_SPORT = "sport"
+    CATEGORY_CLUB = "club"
+    CATEGORY_CO_CURRICULAR = "co_curricular"
+    CATEGORY_OPTIONAL = "optional"
+    CATEGORY_CHOICES = [
+        (CATEGORY_FIRST_LANGUAGE, "First Language"),
+        (CATEGORY_SECOND_LANGUAGE, "Second Language"),
+        (CATEGORY_THIRD_LANGUAGE, "Third Language"),
+        (CATEGORY_SPORT, "Sports"),
+        (CATEGORY_CLUB, "Clubs"),
+        (CATEGORY_CO_CURRICULAR, "Co-curricular"),
+        (CATEGORY_OPTIONAL, "Optional Subjects"),
+    ]
+
     student = models.ForeignKey(Student, on_delete=models.CASCADE, related_name="subject_assignments")
     subject = models.ForeignKey("core.Subject", on_delete=models.CASCADE, related_name="student_assignments")
     academic_year = models.ForeignKey("core.AcademicYear", on_delete=models.CASCADE, related_name="student_subject_assignments")
     school_class = models.ForeignKey("core.Class", on_delete=models.CASCADE, related_name="student_subject_assignments")
     section = models.ForeignKey("core.Section", on_delete=models.CASCADE, related_name="student_subject_assignments")
     is_optional = models.BooleanField(default=False)
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, blank=True)
     assigned_at = models.DateTimeField(auto_now_add=True)
     assigned_by = models.ForeignKey(
         "users.User",

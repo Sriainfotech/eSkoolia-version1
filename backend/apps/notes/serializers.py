@@ -10,6 +10,7 @@ class NoteSerializer(serializers.ModelSerializer):
         model = Note
         fields = [
             'id', 'route', 'color', 'text', 'position_x', 'position_y',
+            'width', 'height',
             'pinned', 'archived', 'created_at', 'updated_at', 'author_initials',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']

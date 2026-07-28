@@ -4,6 +4,14 @@ import { usePathname } from 'next/navigation';
 import { StickyNote, ChevronDown, ChevronUp } from 'lucide-react';
 import { StickyNoteCard, NoteData } from './StickyNoteCard';
 import { getAccessToken } from '@/lib/auth';
+import { API_BASE_URL } from '@/lib/api';
+
+function isSyncedId(id: string | number) {
+  // Backend note IDs come back as plain numbers (DRF's default PK
+  // serialization) — only locally-created, not-yet-synced notes have a
+  // string "local-<timestamp>" id.
+  return !String(id).startsWith('local-');
+}
 
 const LS_KEY = (route: string) => `eskoolia_notes_${route.replace(/\//g, '_')}`;
 
@@ -21,8 +29,9 @@ export function PageNotesPanel() {
 
   const fetchNotes = useCallback(() => {
     const token = getAccessToken();
-    fetch(`/api/notes/?route=${encodeURIComponent(pathname)}`, {
+    fetch(`${API_BASE_URL}/api/notes/?route=${encodeURIComponent(pathname)}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(8000),
     })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
@@ -82,6 +91,13 @@ export function PageNotesPanel() {
       saveLocalNotes(pathname, next);
       return next;
     });
+    if (!isSyncedId(id)) return; // not yet assigned a server id — creation sync will carry the latest local state
+    const token = getAccessToken();
+    fetch(`${API_BASE_URL}/api/notes/${id}/`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(patch),
+    }).catch(() => { /* local copy already updated; will retry on next edit */ });
   }, [pathname]);
 
   const deleteNote = useCallback((id: string) => {
@@ -90,6 +106,12 @@ export function PageNotesPanel() {
       saveLocalNotes(pathname, next);
       return next;
     });
+    if (!isSyncedId(id)) return;
+    const token = getAccessToken();
+    fetch(`${API_BASE_URL}/api/notes/${id}/`, {
+      method: 'DELETE',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }).catch(() => { /* local copy already removed */ });
   }, [pathname]);
 
   if (notes.length === 0) return null;

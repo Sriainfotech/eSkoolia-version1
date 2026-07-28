@@ -183,7 +183,10 @@ class StudentAcademicsView(APIView):
                         school_class_id=student.current_class_id,
                         exam_date__gte=date.today(),
                     )
-                    .filter(Q(section_id=student.current_section_id) | Q(section__isnull=True))
+                    .filter(
+                        Q(section_id=student.current_section_id)
+                        | Q(section__isnull=True)
+                    )
                     .order_by("exam_date", "start_time", "id")
                 )
 
@@ -194,9 +197,15 @@ class StudentAcademicsView(APIView):
                         {
                             "exam": row.exam.name if row.exam else "",
                             "subject": row.subject.name if row.subject else "",
-                            "date": row.exam_date.isoformat() if row.exam_date else None,
-                            "start_time": row.start_time.strftime("%H:%M") if row.start_time else None,
-                            "end_time": row.end_time.strftime("%H:%M") if row.end_time else None,
+                            "date": row.exam_date.isoformat()
+                            if row.exam_date
+                            else None,
+                            "start_time": row.start_time.strftime("%H:%M")
+                            if row.start_time
+                            else None,
+                            "end_time": row.end_time.strftime("%H:%M")
+                            if row.end_time
+                            else None,
                             "room": row.room or "",
                         }
                     )
@@ -206,9 +215,15 @@ class StudentAcademicsView(APIView):
 
         return Response(
             {
-                "class_name": student.current_class.name if student.current_class else "",
-                "section_name": student.current_section.name if student.current_section else "",
-                "academic_year": student.academic_year.name if student.academic_year else None,
+                "class_name": student.current_class.name
+                if student.current_class
+                else "",
+                "section_name": student.current_section.name
+                if student.current_section
+                else "",
+                "academic_year": student.academic_year.name
+                if student.academic_year
+                else None,
                 "subjects": sorted(subject_names),
                 "upcoming_exams": upcoming_exams,
             }
@@ -231,7 +246,9 @@ class StudentResultsView(APIView):
         from apps.exams.models import ExamMark
 
         marks_qs = (
-            ExamMark.objects.select_related("exam", "exam__exam_type", "schedule", "schedule__subject")
+            ExamMark.objects.select_related(
+                "exam", "exam__exam_type", "schedule", "schedule__subject"
+            )
             .filter(student=student, school_id=student.school_id)
             .order_by("-schedule__exam_date", "-id")
         )
@@ -241,7 +258,11 @@ class StudentResultsView(APIView):
         total_full = Decimal("0")
 
         for mark in marks_qs[:80]:
-            full_marks = Decimal(str(mark.schedule.full_marks or 0)) if mark.schedule else Decimal("0")
+            full_marks = (
+                Decimal(str(mark.schedule.full_marks or 0))
+                if mark.schedule
+                else Decimal("0")
+            )
             obtained_marks = Decimal(str(mark.obtained_marks or 0))
             score_pct = None
             if not mark.absent and full_marks > 0:
@@ -252,18 +273,30 @@ class StudentResultsView(APIView):
             rows.append(
                 {
                     "exam": mark.exam.name if mark.exam else "",
-                    "term": mark.exam.exam_type.title if mark.exam and mark.exam.exam_type else "",
-                    "subject": mark.schedule.subject.name if mark.schedule and mark.schedule.subject else "",
-                    "date": mark.schedule.exam_date.isoformat() if mark.schedule and mark.schedule.exam_date else None,
+                    "term": mark.exam.exam_type.title
+                    if mark.exam and mark.exam.exam_type
+                    else "",
+                    "subject": mark.schedule.subject.name
+                    if mark.schedule and mark.schedule.subject
+                    else "",
+                    "date": mark.schedule.exam_date.isoformat()
+                    if mark.schedule and mark.schedule.exam_date
+                    else None,
                     "obtained": float(obtained_marks),
                     "full_marks": float(full_marks),
-                    "pass_marks": float(mark.schedule.pass_marks) if mark.schedule and mark.schedule.pass_marks is not None else None,
+                    "pass_marks": float(mark.schedule.pass_marks)
+                    if mark.schedule and mark.schedule.pass_marks is not None
+                    else None,
                     "absent": bool(mark.absent),
                     "score_pct": score_pct,
                 }
             )
 
-        overall_pct = round(float((total_obtained / total_full) * 100), 1) if total_full > 0 else None
+        overall_pct = (
+            round(float((total_obtained / total_full) * 100), 1)
+            if total_full > 0
+            else None
+        )
 
         return Response(
             {
@@ -271,7 +304,9 @@ class StudentResultsView(APIView):
                     "overall_pct": overall_pct,
                     "total_obtained": float(total_obtained),
                     "total_full_marks": float(total_full),
-                    "subjects_count": len({f"{r['exam']}::{r['subject']}" for r in rows}),
+                    "subjects_count": len(
+                        {f"{r['exam']}::{r['subject']}" for r in rows}
+                    ),
                 },
                 "marks": rows,
             }
@@ -304,12 +339,15 @@ class StudentFeesView(APIView):
         posted_payments_by_assignment = {}
         if assignment_ids:
             payment_totals = (
-                Payment.objects.filter(assignment_id__in=assignment_ids, status="posted")
+                Payment.objects.filter(
+                    assignment_id__in=assignment_ids, status="posted"
+                )
                 .values("assignment_id")
                 .annotate(total=Coalesce(Sum("amount_paid"), Decimal("0")))
             )
             posted_payments_by_assignment = {
-                row["assignment_id"]: Decimal(str(row["total"] or 0)) for row in payment_totals
+                row["assignment_id"]: Decimal(str(row["total"] or 0))
+                for row in payment_totals
             }
 
         today = date.today()
@@ -336,13 +374,21 @@ class StudentFeesView(APIView):
 
             assignment_rows.append(
                 {
-                    "fee_type": assignment.fees_type.name if assignment.fees_type else "",
-                    "academic_year": assignment.academic_year.name if assignment.academic_year else "",
-                    "due_date": assignment.due_date.isoformat() if assignment.due_date else None,
+                    "fee_type": assignment.fees_type.name
+                    if assignment.fees_type
+                    else "",
+                    "academic_year": assignment.academic_year.name
+                    if assignment.academic_year
+                    else "",
+                    "due_date": assignment.due_date.isoformat()
+                    if assignment.due_date
+                    else None,
                     "amount": float(net),
                     "paid": float(paid),
                     "due": float(due),
-                    "status": "paid" if due <= 0 else ("partial" if paid > 0 else "unpaid"),
+                    "status": "paid"
+                    if due <= 0
+                    else ("partial" if paid > 0 else "unpaid"),
                 }
             )
 
@@ -353,7 +399,9 @@ class StudentFeesView(APIView):
         )
         payment_rows = [
             {
-                "fee_type": row.assignment.fees_type.name if row.assignment and row.assignment.fees_type else "",
+                "fee_type": row.assignment.fees_type.name
+                if row.assignment and row.assignment.fees_type
+                else "",
                 "amount_paid": float(row.amount_paid or 0),
                 "method": row.method,
                 "status": row.status,
@@ -426,9 +474,14 @@ class StudentNoticesView(APIView):
                     "id": notice.id,
                     "title": notice.notice_title,
                     "message": notice.notice_message,
-                    "notice_date": notice.notice_date.isoformat() if notice.notice_date else None,
-                    "publish_on": notice.publish_on.isoformat() if notice.publish_on else None,
-                    "author": author or (notice.created_by.username if notice.created_by else ""),
+                    "notice_date": notice.notice_date.isoformat()
+                    if notice.notice_date
+                    else None,
+                    "publish_on": notice.publish_on.isoformat()
+                    if notice.publish_on
+                    else None,
+                    "author": author
+                    or (notice.created_by.username if notice.created_by else ""),
                 }
             )
 
@@ -468,7 +521,9 @@ class StudentProfileView(APIView):
                 "last_name": student.last_name,
                 "admission_no": student.admission_no,
                 "roll_no": student.roll_no,
-                "date_of_birth": student.date_of_birth.isoformat() if student.date_of_birth else None,
+                "date_of_birth": student.date_of_birth.isoformat()
+                if student.date_of_birth
+                else None,
                 "gender": student.gender,
                 "blood_group": student.blood_group,
                 "phone": student.phone,
@@ -481,14 +536,24 @@ class StudentProfileView(APIView):
                     "pincode": student.pincode,
                 },
                 "school_name": student.school.name if student.school else None,
-                "class_name": student.current_class.name if student.current_class else "",
-                "section_name": student.current_section.name if student.current_section else "",
-                "class_section": f"{student.current_class.name if student.current_class else ''}-{student.current_section.name if student.current_section else ''}".strip("-"),
-                "academic_year": student.academic_year.name if student.academic_year else None,
+                "class_name": student.current_class.name
+                if student.current_class
+                else "",
+                "section_name": student.current_section.name
+                if student.current_section
+                else "",
+                "class_section": f"{student.current_class.name if student.current_class else ''}-{student.current_section.name if student.current_section else ''}".strip(
+                    "-"
+                ),
+                "academic_year": student.academic_year.name
+                if student.academic_year
+                else None,
                 "photo_url": student.photo or None,
                 "guardian": guardian_payload,
                 "transport": {
-                    "route": student.transport_route.title if student.transport_route else None,
+                    "route": student.transport_route.title
+                    if student.transport_route
+                    else None,
                     "vehicle": student.vehicle.vehicle_no if student.vehicle else None,
                 },
             }

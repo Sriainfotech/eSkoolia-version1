@@ -589,6 +589,7 @@ class StudentSubjectAssignmentSerializer(serializers.ModelSerializer):
             "school_class",
             "section",
             "is_optional",
+            "category",
             "assigned_at",
             "assigned_by",
         ]
@@ -911,6 +912,7 @@ class StudentSerializer(serializers.ModelSerializer):
             "admission_no",
             "roll_no",
             "first_name",
+            "middle_name",
             "last_name",
             "date_of_birth",
             "academic_year",
@@ -970,6 +972,7 @@ class StudentListSerializer(serializers.ModelSerializer):
             "admission_no",
             "roll_no",
             "first_name",
+            "middle_name",
             "last_name",
             "date_of_birth",
             "gender",

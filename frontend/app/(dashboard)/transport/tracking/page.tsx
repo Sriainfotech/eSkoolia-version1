@@ -41,7 +41,7 @@ export default function LiveTrackingPage() {
   useEffect(() => {
     const fetchBuses = async () => {
       try {
-        const token = localStorage.getItem('access_token');
+        const token = localStorage.getItem('school_erp_access_token');
         const response = await fetch('/api/v1/core/vehicles/', {
           headers: { Authorization: `Bearer ${token}` },
         });
@@ -61,7 +61,7 @@ export default function LiveTrackingPage() {
   useEffect(() => {
     const fetchAlerts = async () => {
       try {
-        const token = localStorage.getItem('access_token');
+        const token = localStorage.getItem('school_erp_access_token');
         const response = await fetch('/api/v1/core/transport-alerts/?limit=10', {
           headers: { Authorization: `Bearer ${token}` },
         });

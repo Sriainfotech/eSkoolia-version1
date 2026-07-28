@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useEffect } from "react";
 import type { ChangeEvent, ReactNode } from "react";
+import { apiRequestWithRefresh } from "@/lib/api-auth";
 
 export type GuardianDraft = {
   clientId: string;
@@ -186,14 +187,6 @@ export function StudentGuardiansStep({
     setSiblingSearchResults([]);
     
     try {
-      // Get auth token
-      const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') : null;
-      if (!token) {
-        setSiblingSearchError("Authentication required. Please log in again.");
-        setSiblingLinkLoading(false);
-        return;
-      }
-      
       const params = new URLSearchParams({
         search: siblingSearchName.trim(),
         limit: '20',
@@ -201,22 +194,13 @@ export function StudentGuardiansStep({
       if (siblingSearchClass.trim()) {
         params.append('class_name', siblingSearchClass.trim());
       }
-      
-      const response = await fetch(`/api/v1/students/students/?${params.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Search failed: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      const results = Array.isArray(data) ? data : (data.results || []);
-      setSiblingSearchResults(results);
-      
+
+      const data = await apiRequestWithRefresh<{ results?: unknown[] } | unknown[]>(
+        `/api/v1/students/students/?${params.toString()}`,
+      );
+      const results = Array.isArray(data) ? data : (data.results ?? []);
+      setSiblingSearchResults(results as typeof siblingSearchResults);
+
       if (results.length === 0) {
         setSiblingSearchError("No students found with that name/class");
       }

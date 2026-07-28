@@ -24,6 +24,8 @@ class Note(models.Model):
     text = models.TextField(blank=True, default='')
     position_x = models.IntegerField(default=80)
     position_y = models.IntegerField(default=120)
+    width = models.IntegerField(default=240)
+    height = models.IntegerField(default=160)
     pinned = models.BooleanField(default=False)
     archived = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

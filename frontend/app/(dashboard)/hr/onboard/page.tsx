@@ -3044,6 +3044,16 @@ const ALL_DOCS = [
 
 const MANDATORY_DOC_KEYS = ALL_DOCS.filter((d) => d.required).map((d) => d.key);
 
+// StaffDocument.document_type -> onboarding doc_key, for the few document types that
+// predate the onboarding wizard and kept their original legacy names (backend mirror:
+// StaffOnboardDocument.TO_STAFF_DOCUMENT_TYPE in apps/hr/models.py). Every other
+// document_type value now matches its doc_key 1:1.
+const STAFF_DOCUMENT_TYPE_TO_ONBOARD_KEY: Record<string, string> = {
+  aadhar_card: "aadhaar",
+  tenth_certificate: "marksheet_10",
+  eleventh_certificate: "marksheet_12",
+};
+
 type OnboardDocRecord = { id: number; doc_key: string; file_name: string; status: string };
 
 function StepDocuments({
@@ -3060,6 +3070,9 @@ function StepDocuments({
   const { toast } = useHrToast();
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const externalDocMapRef = useRef<Record<string, StaffDocument>>({});
+  // Guards against a slower, earlier "Preview" fetch (e.g. Aadhaar) resolving after a
+  // newer action and overwriting the shared previewUrl/previewMime with stale content.
+  const activePreviewKeyRef = useRef<string | null>(null);
 
   // Load existing uploads on mount
   useEffect(() => {
@@ -3084,8 +3097,12 @@ function StepDocuments({
     // build lookup and merge into uploads without overwriting existing onboard uploads
     const lookup: Record<string, StaffDocument> = {};
     for (const d of externalDocs) {
-      const key = (d.doc_type || d.name || "").toString();
-      if (!key) continue;
+      const rawKey = (d.doc_type || d.name || "").toString();
+      if (!rawKey) continue;
+      // StaffDocument.document_type predates a few onboarding doc_keys and still
+      // uses its own legacy names for them (e.g. "aadhar_card" vs "aadhaar") —
+      // translate those back so already-uploaded staff documents are recognized.
+      const key = STAFF_DOCUMENT_TYPE_TO_ONBOARD_KEY[rawKey] ?? rawKey;
       lookup[key] = d;
     }
     externalDocMapRef.current = lookup;
@@ -3175,6 +3192,7 @@ function StepDocuments({
   async function handlePreview(doc: { key: string }) {
     const record = uploads[doc.key];
     if (!record) return;
+    activePreviewKeyRef.current = doc.key;
     try {
       if (record.id < 0) {
         // external staff document — open file_url in new tab when available
@@ -3192,6 +3210,10 @@ function StepDocuments({
       );
       if (!res.ok) { toast("Preview not available.", "error"); return; }
       const blob = await res.blob();
+      // A slower, earlier preview request (e.g. Aadhaar) can resolve after the
+      // user has already moved on (e.g. uploaded Signature) — discard it so it
+      // doesn't clobber whatever is now the active preview.
+      if (activePreviewKeyRef.current !== doc.key) return;
       setPreviewMime(blob.type || "application/pdf");
       setPreviewUrl(URL.createObjectURL(blob));
     } catch {
@@ -3200,6 +3222,7 @@ function StepDocuments({
   }
 
   function closePreview() {
+    activePreviewKeyRef.current = null;
     if (previewUrl) URL.revokeObjectURL(previewUrl);
     setPreviewUrl(null);
   }

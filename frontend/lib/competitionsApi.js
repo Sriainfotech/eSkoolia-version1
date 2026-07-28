@@ -11,6 +11,7 @@ const api = axios.create({
 api.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
     const token =
+      localStorage.getItem('school_erp_access_token') ||
       localStorage.getItem('access_token') ||
       localStorage.getItem('token') ||
       sessionStorage.getItem('access_token');

@@ -1,5 +1,19 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — GitHub Copilot (28/07/2026)
+
+**Area:** Backend quality pass, student portal hardening, and lint/format cleanup
+
+### 1. Backend Quality Pass
+- Ran Ruff lint and format checks for the student portal backend app and resolved the identified formatting issues.
+- Verified the following commands successfully:
+  - `python -m ruff check apps/student_portal`
+  - `python -m ruff format --check apps/student_portal`
+- Reformatted the affected files in the student portal module to keep the codebase consistent with project style.
+
+### Status
+✅ **CURRENTLY CLEAN** — Student portal backend lint and formatting checks are passing.
+
 ## Update — GitHub Copilot (27/07/2026)
 
 **Area:** Multi-module Platform Hardening, Student Portal Delivery, Broadcast/Notes, Fees & Performance Improvements

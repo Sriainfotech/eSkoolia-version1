@@ -607,12 +607,22 @@ class ClassSubjectEntry(models.Model):
     """Simplified per-class subject catalog used during Foundation setup."""
 
     TYPE_CORE = "core"
+    TYPE_FIRST_LANGUAGE = "first_language"
+    TYPE_SECOND_LANGUAGE = "second_language"
+    TYPE_THIRD_LANGUAGE = "third_language"
+    TYPE_SPORT = "sport"
+    TYPE_CLUB = "club"
     TYPE_CO_CURRICULAR = "co_curricular"
     TYPE_OPTIONAL = "optional"
     TYPE_CHOICES = [
-        (TYPE_CORE, "Core"),
+        (TYPE_CORE, "Mandatory"),
+        (TYPE_FIRST_LANGUAGE, "First Language"),
+        (TYPE_SECOND_LANGUAGE, "Second Language"),
+        (TYPE_THIRD_LANGUAGE, "Third Language"),
+        (TYPE_SPORT, "Sports"),
+        (TYPE_CLUB, "Clubs"),
         (TYPE_CO_CURRICULAR, "Co-curricular"),
-        (TYPE_OPTIONAL, "Optional"),
+        (TYPE_OPTIONAL, "Optional Subjects"),
     ]
 
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="class_subject_entries")

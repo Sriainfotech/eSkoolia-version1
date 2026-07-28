@@ -444,7 +444,7 @@ export function StudentCategoryPanel() {
       if (statusFilter === "active" || statusFilter === "inactive") params.set("status", statusFilter);
       if (statusFilter === "attention") params.set("attention", "1");
 
-      const token = typeof window !== "undefined" ? localStorage.getItem("access_token") : "";
+      const token = typeof window !== "undefined" ? localStorage.getItem("school_erp_access_token") : "";
       const response = await fetch(`/api/v1/students/categories/export/?${params.toString()}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });

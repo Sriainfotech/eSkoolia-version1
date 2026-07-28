@@ -16,15 +16,25 @@ interface Props {
 type SubjectType = ClassSubjectEntryType;
 
 const TYPE_LABELS: Record<SubjectType, string> = {
-  core:          "Core",
-  co_curricular: "Co-curricular",
-  optional:      "Optional",
+  core:            "Mandatory",
+  first_language:  "First Language",
+  second_language: "Second Language",
+  third_language:  "Third Language",
+  sport:           "Sports",
+  club:            "Clubs",
+  co_curricular:   "Co-curricular",
+  optional:        "Optional Subjects",
 };
 
 const TYPE_CHIP: Record<SubjectType, string> = {
-  core:          "bg-[#DBEAFE] text-[#1D4ED8]",
-  co_curricular: "bg-[#D1FAE5] text-[#065F46]",
-  optional:      "bg-[#EDE9FE] text-[#5B21B6]",
+  core:            "bg-[#DBEAFE] text-[#1D4ED8]",
+  first_language:  "bg-[#FEF3C7] text-[#92400E]",
+  second_language: "bg-[#FFE4E6] text-[#9F1239]",
+  third_language:  "bg-[#E0F2FE] text-[#0369A1]",
+  sport:           "bg-[#FEE2E2] text-[#991B1B]",
+  club:            "bg-[#FCE7F3] text-[#9D174D]",
+  co_curricular:   "bg-[#D1FAE5] text-[#065F46]",
+  optional:        "bg-[#EDE9FE] text-[#5B21B6]",
 };
 
 /* Code pill colours — deterministic hash from code string */
@@ -675,9 +685,14 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
               onChange={(e) => setFtype(e.target.value as SubjectType)}
               className="h-9 px-2 rounded-lg border border-[#E8ECEF] text-[13px] text-[#1A1D1F] focus:outline-none focus:border-[#5B4FCF] bg-white transition-colors"
             >
-              <option value="core">Core</option>
+              <option value="core">Mandatory</option>
+              <option value="first_language">First Language</option>
+              <option value="second_language">Second Language</option>
+              <option value="third_language">Third Language</option>
+              <option value="sport">Sports</option>
+              <option value="club">Clubs</option>
               <option value="co_curricular">Co-curricular</option>
-              <option value="optional">Optional</option>
+              <option value="optional">Optional Subjects</option>
             </select>
           </div>
 
@@ -842,9 +857,14 @@ export default function SubjectsPane({ classes, showToast, onBack, onComplete }:
                           onChange={(e) => setEditType(e.target.value as SubjectType)}
                           className="h-8 px-2 rounded-md border border-[#E8ECEF] bg-white text-[12px] text-[#1A1D1F] focus:outline-none focus:border-[#5B4FCF]"
                         >
-                          <option value="core">Core</option>
+                          <option value="core">Mandatory</option>
+                          <option value="first_language">First Language</option>
+                          <option value="second_language">Second Language</option>
+                          <option value="third_language">Third Language</option>
+                          <option value="sport">Sports</option>
+                          <option value="club">Clubs</option>
                           <option value="co_curricular">Co-curricular</option>
-                          <option value="optional">Optional</option>
+                          <option value="optional">Optional Subjects</option>
                         </select>
                       </div>
                       <div className="flex justify-end gap-2">

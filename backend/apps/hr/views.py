@@ -4,7 +4,7 @@ import json
 import re
 
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db.models import Sum, Count, Q
 from django.db.models.functions import Coalesce
 from django.contrib.auth import get_user_model
@@ -837,6 +837,33 @@ class StaffViewSet(SchoolScopedModelViewSet):
         )
         staff = serializer.save(school=school, staff_no=staff_no)
         self._ensure_staff_user(staff)
+        self._copy_onboard_documents(staff, user)
+
+    def _copy_onboard_documents(self, staff, user):
+        """Copy this user's onboarding-wizard uploads into the permanent
+        StaffDocument record now that the Staff row exists, then drop the
+        temporary rows — the behavior promised by StaffOnboardDocument's
+        docstring but never previously implemented."""
+        onboard_docs = list(StaffOnboardDocument.objects.filter(uploaded_by=user))
+        if not onboard_docs:
+            return
+        valid_types = dict(StaffDocument.DOCUMENT_TYPE_CHOICES)
+        with transaction.atomic():
+            for doc in onboard_docs:
+                document_type = StaffOnboardDocument.TO_STAFF_DOCUMENT_TYPE.get(doc.doc_key, doc.doc_key)
+                if document_type not in valid_types:
+                    document_type = StaffDocument.DOCUMENT_OTHER
+                StaffDocument.objects.create(
+                    school=staff.school,
+                    staff=staff,
+                    document_type=document_type,
+                    file_path=doc.file.name,
+                    file_name=doc.file_name,
+                    file_size=doc.file_size,
+                )
+            # Only the temporary rows are removed — the underlying stored file
+            # (referenced by StaffDocument.file_path above) is left in place.
+            StaffOnboardDocument.objects.filter(uploaded_by=user).delete()
 
     def create(self, request, *args, **kwargs):
         try:

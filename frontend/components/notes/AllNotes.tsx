@@ -62,6 +62,7 @@ export function AllNotes({ open, onClose }: { open: boolean; onClose: () => void
       if (showArchived) params.set('archived', 'true');
       const r = await fetch(`${API_BASE_URL}/api/notes/?${params}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(8000),
       });
       if (r.ok) setNotes(await r.json());
       else setNotes(MOCK_NOTES);

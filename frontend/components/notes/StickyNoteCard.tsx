@@ -17,10 +17,15 @@ export interface NoteData {
   text: string;
   position_x: number;
   position_y: number;
+  width?: number;
+  height?: number;
   pinned: boolean;
   updated_at?: string;
   author_initials?: string;
 }
+
+const MIN_WIDTH = 200;
+const MIN_HEIGHT = 140;
 
 interface Props {
   note: NoteData;
@@ -34,7 +39,9 @@ const COLOR_SWATCHES = Object.entries(NOTE_COLORS).map(([key]) => key as keyof t
 export function StickyNoteCard({ note, index, onDelete, onUpdate }: Props) {
   const [text, setText] = useState(note.text);
   const [pos, setPos] = useState({ x: note.position_x, y: note.position_y });
+  const [size, setSize] = useState({ width: note.width ?? 240, height: note.height ?? 160 });
   const [dragging, setDragging] = useState(false);
+  const [resizing, setResizing] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -43,9 +50,8 @@ export function StickyNoteCard({ note, index, onDelete, onUpdate }: Props) {
   const nc = NOTE_COLORS[note.color] ?? NOTE_COLORS.yellow;
   const rotation = (index % 2 === 0 ? -1 : 1) * ((index % 3) * 0.8);
 
-  // Notes persist to localStorage only (no backend Notes API exists yet), so a
-  // save is synchronous and always succeeds — stamp updated_at immediately
-  // rather than waiting on a round-trip that will never come.
+  // Stamp updated_at optimistically; onUpdate (PageNotesPanel) mirrors the
+  // patch to localStorage immediately and to the backend in the background.
   const save = useCallback((patch: Partial<NoteData>) => {
     onUpdate(note.id, { ...patch, updated_at: new Date().toISOString() });
   }, [note.id, onUpdate]);
@@ -76,6 +82,33 @@ export function StickyNoteCard({ note, index, onDelete, onUpdate }: Props) {
     document.addEventListener('mouseup', up);
   };
 
+  const startResize = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setResizing(true);
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startW = size.width;
+    const startH = size.height;
+
+    const move = (me: MouseEvent) => {
+      const nw = Math.max(MIN_WIDTH, startW + (me.clientX - startX));
+      const nh = Math.max(MIN_HEIGHT, startH + (me.clientY - startY));
+      setSize({ width: nw, height: nh });
+    };
+    const up = () => {
+      setResizing(false);
+      setSize(s => {
+        save({ width: s.width, height: s.height });
+        return s;
+      });
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  };
+
   const changeColor = (color: keyof typeof NOTE_COLORS) => {
     save({ color });
     setMenuOpen(false);
@@ -93,15 +126,15 @@ export function StickyNoteCard({ note, index, onDelete, onUpdate }: Props) {
       style={{
         position: 'fixed',
         left: pos.x, top: pos.y,
-        width: 240, minHeight: 160,
+        width: size.width, height: size.height,
         background: nc.bg,
         border: `1px solid ${nc.border}40`,
         borderRadius: 14,
         boxShadow: '0 8px 24px rgba(15,18,34,0.12)',
         transform: `rotate(${rotation}deg)`,
-        zIndex: dragging ? 410 : 400,
-        transition: dragging ? 'none' : 'box-shadow 0.15s, transform 0.15s',
-        userSelect: dragging ? 'none' : 'auto',
+        zIndex: dragging || resizing ? 410 : 400,
+        transition: dragging || resizing ? 'none' : 'box-shadow 0.15s, transform 0.15s',
+        userSelect: dragging || resizing ? 'none' : 'auto',
         cursor: dragging ? 'grabbing' : 'default',
         display: 'flex', flexDirection: 'column',
       }}
@@ -192,12 +225,15 @@ export function StickyNoteCard({ note, index, onDelete, onUpdate }: Props) {
         onBlur={e => { (e.currentTarget.parentElement as HTMLDivElement).style.boxShadow = '0 8px 24px rgba(15,18,34,0.12)'; }}
       />
 
-      {/* Resize handle (visual only) */}
-      <div style={{
-        position: 'absolute', right: 4, bottom: 4, width: 10, height: 10,
-        borderRight: `2px solid ${nc.border}80`, borderBottom: `2px solid ${nc.border}80`,
-        cursor: 'se-resize', borderRadius: 1,
-      }} />
+      {/* Resize handle */}
+      <div
+        onMouseDown={startResize}
+        style={{
+          position: 'absolute', right: 4, bottom: 4, width: 14, height: 14,
+          borderRight: `2px solid ${nc.border}80`, borderBottom: `2px solid ${nc.border}80`,
+          cursor: 'se-resize', borderRadius: 1,
+        }}
+      />
 
       {/* Footer */}
       <div style={{ padding: '0 10px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

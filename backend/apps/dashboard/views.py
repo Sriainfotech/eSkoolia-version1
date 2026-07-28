@@ -82,6 +82,43 @@ class DashboardKPIView(APIView):
         )
 
 
+class AttentionCountView(APIView):
+    """Count of genuinely pending/overdue items for the Greeting widget's
+    "N items need your attention" line.
+
+    Reuses the same real, already-established "pending" signals as
+    DashboardKPIView / AIBriefView — no invented metric:
+    - open admission inquiries awaiting a decision
+    - homework submitted but not yet evaluated
+    - fee assignments past their due date and not fully paid
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        school = getattr(request.user, "school", None)
+        if not school:
+            return Response({"count": 0})
+
+        today = date.today()
+
+        from apps.academics.models import Homework
+        from apps.admissions.models import AdmissionInquiry
+        from apps.fees.models import FeeAssignment
+
+        open_admissions = AdmissionInquiry.objects.filter(school=school, active_status=1).count()
+        pending_homework = Homework.objects.filter(
+            school=school, active_status=True, evaluation_date__isnull=True
+        ).count()
+
+        overdue_assignments = FeeAssignment.objects.filter(
+            academic_year__school=school, due_date__lt=today
+        ).prefetch_related("payments")
+        overdue_fees = sum(1 for a in overdue_assignments if a.status != "paid")
+
+        return Response({"count": open_admissions + pending_homework + overdue_fees})
+
+
 def _fmt_inr(amount) -> str:
     amount = int(amount or 0)
     if amount >= 100000:

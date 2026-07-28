@@ -141,6 +141,16 @@ async function fetchWithRetry(input: RequestInfo | URL, init?: RequestInit): Pro
   }
 }
 
+// Fired before the hard /login redirect below so pages with unsaved work
+// (e.g. the multi-step student enrollment form) can persist a draft and drop
+// their `beforeunload` guard — otherwise the browser's native "Leave site?"
+// dialog blocks this app-initiated redirect and looks like the request hung.
+function redirectToLogin() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event("eskoolia:session-expired"));
+  window.location.href = "/login";
+}
+
 export interface RequestOptions extends RequestInit {
   /**
    * Suppress the global redirect-to-login side effect on a 401 response.
@@ -157,8 +167,8 @@ async function requestWithRefreshResponse(path: string, options?: RequestOptions
   if (!token) {
     const refreshed = await refreshAccessToken(silent401);
     if (!refreshed) {
-      if (!silent401 && typeof window !== "undefined") {
-        window.location.href = "/login";
+      if (!silent401) {
+        redirectToLogin();
       }
       throw new Error("401");
     }
@@ -198,9 +208,7 @@ async function requestWithRefreshResponse(path: string, options?: RequestOptions
     const body = await response.json().catch(() => ({}));
     if (response.status === 401 && !silent401) {
       clearAuthTokens();
-      if (typeof window !== "undefined") {
-        window.location.href = "/login";
-      }
+      redirectToLogin();
     }
     const apiError = new Error(extractApiErrorMessage(body, response.status)) as Error & {
       details?: unknown;
@@ -239,9 +247,7 @@ async function _doRefresh(silent401 = false): Promise<string | null> {
   if (!res.ok) {
     if (!silent401) {
       clearAuthTokens();
-      if (typeof window !== "undefined") {
-        window.location.href = "/login";
-      }
+      redirectToLogin();
     }
     return null;
   }
@@ -250,9 +256,7 @@ async function _doRefresh(silent401 = false): Promise<string | null> {
   if (!data.access) {
     if (!silent401) {
       clearAuthTokens();
-      if (typeof window !== "undefined") {
-        window.location.href = "/login";
-      }
+      redirectToLogin();
     }
     return null;
   }

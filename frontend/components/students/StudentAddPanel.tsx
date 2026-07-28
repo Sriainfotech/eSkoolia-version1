@@ -51,6 +51,7 @@ type StudentCreatePayload = {
   admission_no: string;
   roll_no?: string;
   first_name: string;
+  middle_name?: string;
   last_name: string;
   date_of_birth?: string;
   academic_year: number;
@@ -91,6 +92,7 @@ type StudentDetail = {
   admission_no: string;
   roll_no?: string;
   first_name: string;
+  middle_name?: string;
   last_name: string;
   date_of_birth?: string;
   academic_year?: number;
@@ -704,6 +706,7 @@ export function StudentAddPanel() {
   const [isManualEdit, setIsManualEdit] = useState(false);
   const [rollNo, setRollNo] = useState("");
   const [firstName, setFirstName] = useState("");
+  const [middleName, setMiddleName] = useState("");
   const [lastName, setLastName] = useState("");
   const [dateOfBirth, setDateOfBirth] = useState("");
   const [academicYearId, setAcademicYearId] = useState("");
@@ -1080,12 +1083,11 @@ export function StudentAddPanel() {
   useEffect(() => {
     const name = guardianDrafts[0]?.fullName?.trim() || "";
     const ph = guardianDrafts[0]?.phone?.trim() || "";
-    // Fill if empty OR if only 1 char was previously set (safeguard against partial fill)
     if (name && (!emergencyName || emergencyName.length <= 1)) {
       setEmergencyName(name);
       setEmergencyCopiedFromGuardian(true);
     }
-    if (ph && (!emergencyPhone || emergencyPhone.length <= 1)) {
+    if (ph && isValidPhone(ph) && (!emergencyPhone || emergencyPhone.length <= 1)) {
       setEmergencyPhone(ph);
       setEmergencyCopiedFromGuardian(true);
     }
@@ -1217,6 +1219,7 @@ export function StudentAddPanel() {
       newlyCreatedStudentId,
       rollNo,
       firstName,
+      middleName,
       lastName,
       dateOfBirth,
       academicYearId,
@@ -1289,6 +1292,7 @@ export function StudentAddPanel() {
       }
       setRollNo(String(draft.rollNo || ""));
       setFirstName(String(draft.firstName || ""));
+      setMiddleName(String(draft.middleName || ""));
       setLastName(String(draft.lastName || ""));
       setDateOfBirth(String(draft.dateOfBirth || ""));
       setAcademicYearId(String(draft.academicYearId || ""));
@@ -1455,6 +1459,7 @@ export function StudentAddPanel() {
     setIsManualEdit(false);
     setRollNo(String(data.roll_no || ""));
     setFirstName(String(data.first_name || ""));
+    setMiddleName(String(data.middle_name || ""));
     setLastName(String(data.last_name || ""));
     setDateOfBirth(String(data.date_of_birth || ""));
     setAcademicYearId(data.academic_year ? String(data.academic_year) : "");
@@ -1922,8 +1927,11 @@ export function StudentAddPanel() {
     if (!primary) return;
     const name = primary.fullName?.trim() || "";
     const ph = primary.phone?.trim() || "";
-    if (!emergencyName && !emergencyPhone && (name || ph)) {
+    if (!emergencyName && name) {
       setEmergencyName(name);
+      setEmergencyCopiedFromGuardian(true);
+    }
+    if (!emergencyPhone && ph && isValidPhone(ph)) {
       setEmergencyPhone(ph);
       setEmergencyCopiedFromGuardian(true);
     }
@@ -2054,6 +2062,7 @@ export function StudentAddPanel() {
     admissionNoInitRequestedRef.current = false;
     setRollNo("");
     setFirstName("");
+    setMiddleName("");
     setLastName("");
     setDateOfBirth("");
     setAcademicYearId("");
@@ -2146,6 +2155,7 @@ export function StudentAddPanel() {
   };
 
   // ---- Dirty form detection & navigation guard ----
+  const bypassUnloadGuardRef = useRef(false);
   const isFormDirty = useMemo(() => {
     if (isViewMode) return false;
     return Boolean(
@@ -2181,11 +2191,25 @@ export function StudentAddPanel() {
   useEffect(() => {
     if (!isFormDirty) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (bypassUnloadGuardRef.current) return;
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isFormDirty]);
+
+  // A session-expiry redirect (api-auth.ts) is an app-initiated navigation,
+  // not an accidental one — save progress and let the redirect through instead
+  // of letting the browser's native "Leave site?" dialog swallow it, which
+  // makes the redirect look stuck and risks losing the in-progress form.
+  useEffect(() => {
+    const onSessionExpired = () => {
+      if (isFormDirty) saveDraftSnapshot();
+      bypassUnloadGuardRef.current = true;
+    };
+    window.addEventListener('eskoolia:session-expired', onSessionExpired);
+    return () => window.removeEventListener('eskoolia:session-expired', onSessionExpired);
   }, [isFormDirty]);
 
   // App-level guard: BackButton checks window.__navGuard
@@ -3025,6 +3049,7 @@ export function StudentAddPanel() {
         admission_no: snapshot.admission_no || "",
         roll_no: rollNo.trim() || undefined,
         first_name: snapshot.first_name,
+        middle_name: sanitizeText(middleName) || undefined,
         last_name: snapshot.last_name,
         date_of_birth: snapshot.date_of_birth || undefined,
         academic_year: academicYearNum,
@@ -3581,6 +3606,7 @@ export function StudentAddPanel() {
         admission_no: sanitizeText(admissionNo).replace(/-/g, ""),
         roll_no: rollNo.trim() || undefined,
         first_name: sanitizeText(firstName),
+        middle_name: sanitizeText(middleName) || undefined,
         last_name: sanitizeText(lastName),
         date_of_birth: dateOfBirth || undefined,
         academic_year: Number(academicYearId),
@@ -4010,7 +4036,7 @@ export function StudentAddPanel() {
 
               <div className="grid-3 mt-20">
                 <div className="field-wrapper"><label className="field-label">First name <span className="req">*</span></label><input aria-describedby="first_name-error" className={fieldErrors.first_name ? "field-input error" : "field-input"} value={firstName} onChange={(e) => { setFirstName(sanitizeNameInput(e.target.value)); setSingleFieldError('first_name', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setFirstName(val); if (val.trim() && !isProperName(val)) { setSingleFieldError('first_name', 'Enter a valid first name (letters only)'); } }} placeholder="e.g. Rahul" />{fieldErrors.first_name ? <span id="first_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.first_name}</span> : null}</div>
-                <div className="field-wrapper"><label className="field-label">Middle name <span className="badge badge-optional">OPTIONAL</span></label><input className="field-input" title="Middle name" value={customGender} onChange={(e) => setCustomGender(e.target.value)} placeholder="e.g. Kumar" /></div>
+                <div className="field-wrapper"><label className="field-label">Middle name <span className="badge badge-optional">OPTIONAL</span></label><input className="field-input" title="Middle name" value={middleName} onChange={(e) => setMiddleName(e.target.value)} placeholder="e.g. Kumar" /></div>
                 <div className="field-wrapper"><label className="field-label">Last name <span className="req">*</span></label><input aria-describedby="last_name-error" className={fieldErrors.last_name ? "field-input error" : "field-input"} value={lastName} onChange={(e) => { setLastName(sanitizeNameInput(e.target.value)); setSingleFieldError('last_name', ''); }} onBlur={(e) => { const val = toTitleCase(e.target.value); setLastName(val); if (val.trim() && !isProperName(val)) { setSingleFieldError('last_name', 'Enter a valid last name (letters only)'); } }} placeholder="e.g. Sharma" />{fieldErrors.last_name ? <span id="last_name-error" role="alert" aria-live="polite" className="error-msg">{fieldErrors.last_name}</span> : null}</div>
               </div>
 

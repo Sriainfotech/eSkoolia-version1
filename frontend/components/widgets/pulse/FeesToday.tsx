@@ -39,7 +39,7 @@ function Sparkline({ data }: { data: number[] }) {
     const y = H - ((v - min) / range) * H;
     return `${x},${y}`;
   }).join(' ');
-  const area = `M0,${H} L${pts.split(' ').map(p => `L${p}`).join(' ')} L${W},${H} Z`;
+  const area = `M0,${H} ${pts.split(' ').map(p => `L${p}`).join(' ')} L${W},${H} Z`;
 
   return (
     <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ marginTop: 8 }}>

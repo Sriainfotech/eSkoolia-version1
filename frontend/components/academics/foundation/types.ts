@@ -60,7 +60,15 @@ export interface ClassSubjectAssignment {
   academic_year: number | null;
 }
 
-export type ClassSubjectEntryType = "core" | "co_curricular" | "optional";
+export type ClassSubjectEntryType =
+  | "core"
+  | "first_language"
+  | "second_language"
+  | "third_language"
+  | "sport"
+  | "club"
+  | "co_curricular"
+  | "optional";
 
 export interface ClassSubjectEntry {
   id: number;

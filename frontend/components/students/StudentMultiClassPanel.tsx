@@ -6,7 +6,7 @@ import { API_BASE_URL } from "@/lib/api";
 
 interface EnrolledStudent { name:string; admissionNo:string; rollNo:string; className:string; sectionName:string; academicYear:string; }
 interface AISuggestion { lang2:string; lang3:string; sport:string; art:string; }
-interface MockStudent { id:number; name:string; admNo:string; rollNo:string; lang2:string; lang3:string; sport:string; art:string; status:"done"|"partial"|"empty"; optionalSubjects?:string[]; }
+interface MockStudent { id:number; name:string; admNo:string; rollNo:string; status:"done"|"partial"|"empty"; optionalSubjects?:string[]; optionalByCategory?:Record<string,string[]>; }
 interface MockSection {
   id:number;
   letter:string;
@@ -19,20 +19,56 @@ interface MockClass { id:number; label:string; sections:MockSection[]; }
 interface KpiStats { enrolled:number; assigned:number; partial:number; pending:number; }
 type Tab = "assign"|"filter"|"browse";
 
-const MANDATORY_DEFAULT = ["English","Maths","Science","Social","Computers","PT","Art & Craft"];
+/* Subject categories now come from what the school admin configured in
+   Academics ▸ Foundation ▸ Subjects (ClassSubjectEntry.subject_type), fetched
+   per class via /api/v1/students/students/subject-categories/?class_id=. */
+type CategoryKey = "first_language"|"second_language"|"third_language"|"sport"|"club"|"co_curricular"|"optional";
+const CATEGORY_ORDER: CategoryKey[] = ["first_language","second_language","third_language","sport","club","co_curricular","optional"];
+const CATEGORY_META: Record<CategoryKey, {title:string; tag:string; multi:boolean; cssVar:string}> = {
+  first_language:  { title:"First Language",    tag:"L1", multi:false, cssVar:"--tag-l1" },
+  second_language: { title:"Second Language",   tag:"L2", multi:false, cssVar:"--tag-l2" },
+  third_language:  { title:"Third Language",    tag:"L3", multi:false, cssVar:"--tag-l3" },
+  sport:           { title:"Sports",            tag:"SP", multi:true,  cssVar:"--tag-sp" },
+  club:            { title:"Clubs",             tag:"CL", multi:true,  cssVar:"--tag-cl" },
+  co_curricular:   { title:"Co-curricular",     tag:"CC", multi:true,  cssVar:"--tag-cc" },
+  optional:        { title:"Optional Subjects", tag:"OP", multi:true,  cssVar:"--tag-op" },
+};
+type CategoryConfig = { mandatory:string[] } & Record<CategoryKey, string[]>;
+const EMPTY_CATEGORY_CONFIG: CategoryConfig = {
+  mandatory:[], first_language:[], second_language:[], third_language:[],
+  sport:[], club:[], co_curricular:[], optional:[],
+};
 
-function getMandatoryForClass(label:string):string[] {
-  if(/Nursery|LKG|UKG/i.test(label))
-    return ["General Studies","Drawing & Crafts","Stories & Rhymes","Play & Motor Skills","Music","PT & Games"];
-  if(/Class [1-5]$/i.test(label))
-    return ["English","Maths","Science","Social Studies","EVS","PT & Games","Art & Craft"];
-  if(/Class [6-8]$/i.test(label))
-    return ["English","Maths","Science","Social Studies","Computers","PT & Games","Art & Craft"];
-  if(/Class 9|Class 10/i.test(label))
-    return ["English","Maths","Physics","Chemistry","Biology","Social Science","Computer Science"];
-  if(/Class 11|Class 12/i.test(label))
-    return ["English","Mathematics","Physics","Chemistry","Computer Science","PT"];
-  return MANDATORY_DEFAULT;
+/** Fetch the subject-category catalog configured for a class (Foundation ▸ Subjects). */
+function useCategoryConfig(classId:number|null) {
+  const [data,setData] = useState<CategoryConfig|null>(null);
+  const [loading,setLoading] = useState(false);
+  useEffect(()=>{
+    if(!classId){setData(null);return;}
+    let cancelled=false;
+    (async()=>{
+      setLoading(true);
+      try{
+        const token=typeof window!=="undefined"?localStorage.getItem("school_erp_access_token")??"":"";
+        const res=await fetch(`${API_BASE_URL}/api/v1/students/students/subject-categories/?class_id=${classId}`,{
+          headers:{Authorization:`Bearer ${token}`},cache:"no-store"
+        });
+        if(res.ok){
+          const json=await res.json();
+          if(!cancelled)setData({ ...EMPTY_CATEGORY_CONFIG, ...json });
+        }
+      }catch{}finally{if(!cancelled)setLoading(false);}
+    })();
+    return()=>{cancelled=true;};
+  },[classId]);
+  return {catConfig:data, catLoading:loading};
+}
+
+function buildCardDefs(catConfig:CategoryConfig|null) {
+  if(!catConfig) return [] as {id:CategoryKey;title:string;options:string[]}[];
+  return CATEGORY_ORDER
+    .filter(key=>catConfig[key]?.length)
+    .map(key=>({ id:key, title:CATEGORY_META[key].title, options:catConfig[key] }));
 }
 const AVATARS = ["#6c4cf1","#1eb980","#f5a623","#2c56a1","#a0264a","#5638d4","#915a1a","#e5534b"];
 const initials = (n:string) => n.split(" ").map(x=>x[0]).join("").slice(0,2).toUpperCase();
@@ -72,17 +108,30 @@ function SubBadge({tag,value,color,dim,err}:{tag:string;value:string;color:strin
 }
 
 // ─ PreviewBadges ─
-function PreviewBadges({lang2,lang3,sports,arts}:{lang2:string;lang3:string;sports:string[];arts:string[]}) {
-  const total = 7 + (lang2?1:0) + (lang3?1:0) + sports.length + arts.length;
+function PreviewBadges({mandatoryCount,selections}:{mandatoryCount:number;selections:Record<string,string|string[]>}) {
+  const activeCats = CATEGORY_ORDER.filter(k=>k in selections);
+  const optCount = activeCats.reduce((acc,k)=>{
+    const v = selections[k];
+    return acc + (Array.isArray(v) ? v.length : (v ? 1 : 0));
+  }, 0);
+  const total = mandatoryCount + optCount;
   return (
     <div>
       <div className={s.previewLabel}>WILL BE ASSIGNED</div>
       <div className={s.badgeRow}>
-        <SubBadge tag="MAN" value="+7" color="var(--tag-m)" dim />
-        {lang2 ? <SubBadge tag="L2" value={lang2} color="var(--tag-l2)" /> : <SubBadge tag="L2" value="missing" color="var(--tag-err)" err />}
-        {lang3 ? <SubBadge tag="L3" value={lang3} color="var(--tag-l3)" /> : <SubBadge tag="L3" value="missing" color="var(--tag-err)" err />}
-        {sports.map(sp=><SubBadge key={sp} tag="SP" value={sp} color="var(--tag-sp)" />)}
-        {arts.map(ar=><SubBadge key={ar} tag="AR" value={ar} color="var(--tag-ar)" />)}
+        <SubBadge tag="MAN" value={`+${mandatoryCount}`} color="var(--tag-m)" dim />
+        {activeCats.map(k=>{
+          const meta = CATEGORY_META[k];
+          const v = selections[k];
+          if(meta.multi){
+            const arr = Array.isArray(v) ? v : [];
+            return arr.map(name=><SubBadge key={`${k}-${name}`} tag={meta.tag} value={name} color={`var(${meta.cssVar})`} />);
+          }
+          const val = typeof v === "string" ? v : "";
+          return val
+            ? <SubBadge key={k} tag={meta.tag} value={val} color={`var(${meta.cssVar})`} />
+            : <SubBadge key={k} tag={meta.tag} value="missing" color="var(--tag-err)" err />;
+        })}
         <span className={s.badgeTotal}>{total} total</span>
       </div>
     </div>
@@ -229,8 +278,8 @@ function ModuleCard({cardDef,icon,chipLabel,chipClass,multi,value,onChange,onCar
 }
 
 // ─ StudentRow ─
-function StudentRow({student,classLabel,onEdit}:{student:MockStudent;classLabel:string;onEdit:()=>void}) {
-  const mandCount=getMandatoryForClass(classLabel).length;
+function StudentRow({student,mandatoryCount,onEdit}:{student:MockStudent;mandatoryCount:number;onEdit:()=>void}) {
+  const byCat = student.optionalByCategory ?? {};
   return (
     <div className={s.tblRow}>
       <span/>
@@ -241,11 +290,13 @@ function StudentRow({student,classLabel,onEdit}:{student:MockStudent;classLabel:
       <span className={s.admNo}>{student.admNo}</span>
       <span className={s.rollNo}>{student.rollNo}</span>
       <div className={s.badgeRow}>
-        <SubBadge tag="MAN" value={`+${mandCount}`} color="var(--tag-m)" dim/>
-        {student.lang2&&<SubBadge tag="L2" value={student.lang2} color="var(--tag-l2)"/>}
-        {student.lang3&&<SubBadge tag="L3" value={student.lang3} color="var(--tag-l3)"/>}
-        {student.sport&&<SubBadge tag="SP" value={student.sport} color="var(--tag-sp)"/>}
-        {student.art&&<SubBadge tag="AR" value={student.art} color="var(--tag-ar)"/>}
+        <SubBadge tag="MAN" value={`+${mandatoryCount}`} color="var(--tag-m)" dim/>
+        {CATEGORY_ORDER.flatMap(k=>{
+          const meta = CATEGORY_META[k];
+          return (byCat[k]??[]).map(name=>
+            <SubBadge key={`${k}-${name}`} tag={meta.tag} value={name} color={`var(${meta.cssVar})`}/>
+          );
+        })}
       </div>
       <div className={s.tblLastCol}>
         <span className={`${s.statusChip} ${student.status==="done"?s.sDone:student.status==="partial"?s.sPartial:s.sEmpty}`}>
@@ -301,6 +352,8 @@ function buildPageList(current:number,total:number):(number|"…")[] {
 
 function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;defaultOpen?:boolean;onEdit:(cl:MockClass,st:MockStudent)=>void;}) {
   const [open,setOpen]=useState(!!defaultOpen);
+  const {catConfig}=useCategoryConfig(open?cls.id:null);
+  const mandatoryCount=catConfig?.mandatory.length??0;
   const [activeSecIdx,setActiveSecIdx]=useState(0);
   const [page,setPage]=useState(1);
   // Per-section page cache: { [sectionId]: { [pageNumber]: students } }
@@ -413,7 +466,7 @@ function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;def
                   {pageLoading&&visibleStudents.length===0?(
                     <div style={{padding:"16px 14px",fontSize:12,color:"var(--ink-ghost)",textAlign:"center"}}>Loading…</div>
                   ):(
-                    visibleStudents.map(st=><StudentRow key={st.id} student={st} classLabel={cls.label} onEdit={()=>onEdit(cls,st)}/>)
+                    visibleStudents.map(st=><StudentRow key={st.id} student={st} mandatoryCount={mandatoryCount} onEdit={()=>onEdit(cls,st)}/>)
                   )}
                   {totalRows===0&&!pageLoading&&(
                     <div style={{padding:"16px 14px",fontSize:12,color:"var(--ink-ghost)",textAlign:"center"}}>No students in this section.</div>
@@ -464,30 +517,44 @@ function ClassAcc({cls,index,defaultOpen,onEdit}:{cls:MockClass;index:number;def
   );
 }
 
+// ─ Category icon / disabled-options helpers (shared by EditModal + main page) ─
+function iconForCategory(key:CategoryKey) {
+  if(key.endsWith("language")) return <LangIcon/>;
+  if(key==="sport") return <TrophyIcon/>;
+  if(key==="club") return <UsersIcon/>;
+  return <PaletteIcon/>;
+}
+function singlePickDisabledOptions(cardDefs:{id:CategoryKey}[], selections:Record<string,string|string[]>, currentId:CategoryKey) {
+  return cardDefs
+    .filter(cd=>!CATEGORY_META[cd.id].multi && cd.id!==currentId)
+    .map(cd=>selections[cd.id])
+    .filter((v):v is string=>typeof v==="string" && v.length>0);
+}
+
 // ─ EditModal ─
-interface SavedSubjects { lang2:string; lang3:string; sport:string; art:string; }
-function EditModal({cls,student,cardDefs,onCardChange,onClose,onSave}:{cls:MockClass|null;student:MockStudent|null;cardDefs:{id:string;title:string;options:string[]}[];onCardChange:(id:string,def:CardDef)=>void;onClose:()=>void;onSave:(studentId:number,saved:SavedSubjects)=>void;}) {
-  const [lang2,setLang2]=useState(student?.lang2??"");
-  const [lang3,setLang3]=useState(student?.lang3??"");
-  const [sports,setSports]=useState<string[]>(student?.sport?[student.sport]:[]);
-  const [arts,setArts]=useState<string[]>(student?.art?[student.art]:[]);
+function EditModal({cls,student,onClose,onSave}:{cls:MockClass|null;student:MockStudent|null;onClose:()=>void;onSave:(studentId:number,byCategory:Record<string,string[]>,status:"done"|"partial"|"empty")=>void;}) {
+  const {catConfig}=useCategoryConfig(cls?.id??null);
+  const [cardDefs,setCardDefs]=useState<{id:CategoryKey;title:string;options:string[]}[]>([]);
+  useEffect(()=>{ setCardDefs(buildCardDefs(catConfig)); },[catConfig]);
+  const updateCard=(id:CategoryKey,def:CardDef)=>setCardDefs(prev=>prev.map(c=>c.id===id?{...c,title:def.title,options:def.options}:c));
+
+  const [selections,setSelections]=useState<Record<string,string|string[]>>({});
   const [aiSug,setAiSug]=useState<AISuggestion|null>(null);
   const [aiLoading,setAiLoading]=useState(false);
   const [saving,setSaving]=useState(false);
   const [saveErr,setSaveErr]=useState("");
-  const l2Card=cardDefs.find(c=>c.id==="l2")!;
-  const l3Card=cardDefs.find(c=>c.id==="l3")!;
-  const spCard=cardDefs.find(c=>c.id==="sp")!;
-  const arCard=cardDefs.find(c=>c.id==="ar")!;
 
-  // Dynamic mandatory based on enrolled class
-  const mandatory=getMandatoryForClass(cls?.label??"");
+  const mandatory=catConfig?.mandatory??[];
 
   useEffect(()=>{
     if(!student||!cls)return;
-    setLang2(student.lang2??""); setLang3(student.lang3??"");
-    setSports(student.sport?[student.sport]:[]);
-    setArts(student.art?[student.art]:[]);
+    const initial:Record<string,string|string[]>={};
+    for(const key of CATEGORY_ORDER){
+      const meta=CATEGORY_META[key];
+      const existing=student.optionalByCategory?.[key]??[];
+      initial[key]=meta.multi?existing:(existing[0]??"");
+    }
+    setSelections(initial);
     setSaveErr("");
     const ctrl=new AbortController();
     const timer=setTimeout(()=>ctrl.abort(),3000);
@@ -500,34 +567,78 @@ function EditModal({cls,student,cardDefs,onCardChange,onClose,onSave}:{cls:MockC
     })();
     return()=>{ctrl.abort();clearTimeout(timer);};
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[student?.id]);
+  },[student?.id,cls?.id]);
 
   useEffect(()=>{
     const h=(e:KeyboardEvent)=>{if(e.key==="Escape")onClose();};
     window.addEventListener("keydown",h);return()=>window.removeEventListener("keydown",h);
   },[onClose]);
 
+  const applySuggestion=(sg:AISuggestion)=>{
+    setSelections(prev=>{
+      const next={...prev};
+      if("second_language" in next) next.second_language=sg.lang2;
+      if("third_language" in next) next.third_language=sg.lang3;
+      if("sport" in next) next.sport=[sg.sport];
+      if("co_curricular" in next) next.co_curricular=[sg.art];
+      return next;
+    });
+  };
+
+  const setSelection=(id:CategoryKey,v:string|string[])=>{
+    setSelections(prev=>{
+      const next={...prev,[id]:v};
+      const meta=CATEGORY_META[id];
+      if(!meta.multi && typeof v==="string" && v){
+        for(const cd of cardDefs){
+          if(cd.id!==id && !CATEGORY_META[cd.id].multi && next[cd.id]===v) next[cd.id]="";
+        }
+      }
+      return next;
+    });
+  };
+
   const handleSave=async()=>{
     if(!student||!cls)return;
     setSaving(true);setSaveErr("");
     try{
       const token=typeof window!=="undefined"?localStorage.getItem("school_erp_access_token")??"":"";
-      const optionalNames=[...(lang2?[lang2]:[]),...(lang3?[lang3]:[]),...sports,...arts];
+      const assignments:{category:string;subject_name:string}[]=[];
+      for(const key of CATEGORY_ORDER){
+        const v=selections[key];
+        if(Array.isArray(v)) v.forEach(name=>assignments.push({category:key,subject_name:name}));
+        else if(v) assignments.push({category:key,subject_name:v});
+      }
       const res=await fetch(`${API_BASE_URL}/api/v1/students/subject-assignments/upsert-optional/`,{
         method:"POST",
         headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`},
-        body:JSON.stringify({student_id:student.id,subject_names:optionalNames}),
+        body:JSON.stringify({student_id:student.id,assignments}),
       });
       let json:{success?:boolean;message?:string}={};
       try{json=await res.json();}catch{}
       if(!res.ok){setSaveErr(json.message||`Save failed (${res.status})`);return;}
-      onSave(student.id, {lang2, lang3, sport:sports[0]??"", art:arts[0]??""});
+      const byCategory:Record<string,string[]>={};
+      for(const key of CATEGORY_ORDER){
+        const v=selections[key];
+        byCategory[key]=Array.isArray(v)?v:(v?[v]:[]);
+      }
+      const filledCount=cardDefs.filter(cd=>{
+        const v=selections[cd.id];
+        return Array.isArray(v)?v.length>0:!!v;
+      }).length;
+      const newStatus:"done"|"partial"|"empty" =
+        cardDefs.length===0||filledCount>=cardDefs.length?"done":filledCount>0?"partial":"empty";
+      onSave(student.id, byCategory, newStatus);
       onClose();
     }catch(e){setSaveErr("Network error. Please try again.");}
     finally{setSaving(false);}
   };
 
   if(!student||!cls)return null;
+  const allFilled = cardDefs.every(cd=>{
+    const v=selections[cd.id];
+    return Array.isArray(v) ? v.length>0 : !!v;
+  });
   return (
     <div className={s.backdrop} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
       <div className={s.modal} onClick={e=>e.stopPropagation()}>
@@ -540,7 +651,7 @@ function EditModal({cls,student,cardDefs,onCardChange,onClose,onSave}:{cls:MockC
           </div>
         </div>
         <div className={s.modalBody}>
-          <AIBanner suggestion={aiSug} loading={aiLoading} className={cls.label} section="A" onApply={sg=>{setLang2(sg.lang2);setLang3(sg.lang3);setSports([sg.sport]);setArts([sg.art]);}}/>
+          <AIBanner suggestion={aiSug} loading={aiLoading} className={cls.label} section="A" onApply={applySuggestion}/>
           <div className={s.mandatoryCard}>
             <div className={s.moduleHeader}>
               <span className={s.moduleTitle}><LockIcon/> Mandatory subjects <span className={s.moduleTitleSub}>(auto-checked, locked)</span></span>
@@ -553,20 +664,32 @@ function EditModal({cls,student,cardDefs,onCardChange,onClose,onSave}:{cls:MockC
               </label>
             ))}</div>
           </div>
-          <div className={s.langGrid}>
-            <ModuleCard cardDef={l2Card} icon={<LangIcon/>} chipLabel="pick 1" chipClass={s.chipBlue} multi={false} value={lang2} onChange={v=>{setLang2(v as string);if(lang3===v)setLang3("");}} onCardChange={d=>onCardChange("l2",d)}/>
-            <ModuleCard cardDef={l3Card} icon={<LangIcon/>} chipLabel="pick 1" chipClass={s.chipBlue} multi={false} value={lang3} onChange={v=>setLang3(v as string)} onCardChange={d=>onCardChange("l3",d)} disabledOptions={lang2?[lang2]:[]}/>
-          </div>
-          <div className={s.actGrid}>
-            <ModuleCard cardDef={spCard} icon={<TrophyIcon/>} chipLabel="1+ pick" chipClass={s.chipRed} multi={true} value={sports} onChange={v=>setSports(v as string[])} onCardChange={d=>onCardChange("sp",d)}/>
-            <ModuleCard cardDef={arCard} icon={<PaletteIcon/>} chipLabel="1+ pick" chipClass={s.chipPurp} multi={true} value={arts} onChange={v=>setArts(v as string[])} onCardChange={d=>onCardChange("ar",d)}/>
+          <div className={s.optGrid}>
+            {cardDefs.map(cd=>{
+              const meta=CATEGORY_META[cd.id];
+              const value=selections[cd.id]??(meta.multi?[]:"");
+              return (
+                <ModuleCard
+                  key={cd.id}
+                  cardDef={cd}
+                  icon={iconForCategory(cd.id)}
+                  chipLabel={meta.multi?"1+ pick":"pick 1"}
+                  chipClass={meta.multi?s.chipRed:s.chipBlue}
+                  multi={meta.multi}
+                  value={value}
+                  onChange={v=>setSelection(cd.id,v)}
+                  onCardChange={d=>updateCard(cd.id,d)}
+                  disabledOptions={singlePickDisabledOptions(cardDefs,selections,cd.id)}
+                />
+              );
+            })}
           </div>
           <div className={s.previewCardInner}>
             <div className={s.previewCardTopRow}>
               <span className={s.previewLabel}>WILL BE ASSIGNED</span>
-              {lang2&&lang3&&sports.length>0&&arts.length>0&&<span className={s.readyLabel}>Ready</span>}
+              {allFilled && cardDefs.length>0 && <span className={s.readyLabel}>Ready</span>}
             </div>
-            <PreviewBadges lang2={lang2} lang3={lang3} sports={sports} arts={arts}/>
+            <PreviewBadges mandatoryCount={mandatory.length} selections={selections}/>
           </div>
           {saveErr&&<div className={s.saveErrMsg}>{saveErr}</div>}
         </div>
@@ -591,17 +714,16 @@ export function StudentMultiClassPanel() {
   },[]);
 
   const [kpi,setKpi]=useState<KpiStats|null>(null);
-  useEffect(()=>{
-    (async()=>{
-      try{
-        const token=typeof window!=="undefined"?localStorage.getItem("school_erp_access_token")??"":"";
-        const res=await fetch(`${API_BASE_URL}/api/v1/students/students/subject-assignment-stats/`,{
-          headers:{Authorization:`Bearer ${token}`},cache:"no-store"
-        });
-        if(res.ok)setKpi(await res.json());
-      }catch{}
-    })();
+  const refreshKpi=useCallback(async()=>{
+    try{
+      const token=typeof window!=="undefined"?localStorage.getItem("school_erp_access_token")??"":"";
+      const res=await fetch(`${API_BASE_URL}/api/v1/students/students/subject-assignment-stats/`,{
+        headers:{Authorization:`Bearer ${token}`},cache:"no-store"
+      });
+      if(res.ok)setKpi(await res.json());
+    }catch{}
   },[]);
+  useEffect(()=>{ void refreshKpi(); },[refreshKpi]);
 
   const [classList,setClassList]=useState<MockClass[]>([]);
   const [classListLoading,setClassListLoading]=useState(true);
@@ -630,6 +752,12 @@ export function StudentMultiClassPanel() {
   },[]);
 
   const [activeTab,setActiveTab]=useState<Tab>("assign");
+  // Collapsed until a student arrives here via the Student Enroll ▸ Submit redirect
+  // (localStorage "eskoolia_last_enrolled_student") — no point showing a half-empty
+  // "Class: —" form on a cold visit to this page.
+  const hasEnrolledContext=!!(enrolled.name||enrolled.admissionNo);
+  const [assignOpen,setAssignOpen]=useState(false);
+  useEffect(()=>{ if(hasEnrolledContext) setAssignOpen(true); },[hasEnrolledContext]);
   const [filterOpen,setFilterOpen]=useState(false);
   const assignSecRef=useRef<HTMLDivElement|null>(null);
   const filterSecRef=useRef<HTMLDivElement|null>(null);
@@ -639,29 +767,26 @@ export function StudentMultiClassPanel() {
     if(el)el.scrollIntoView({behavior:"smooth",block:"start"});
   };
   const [filterChips,setFilterChips]=useState<string[]>([]);
-  const [lang2,setLang2]=useState("");const[lang3,setLang3]=useState("");
-  const [sports,setSports]=useState<string[]>([]);const[arts,setArts]=useState<string[]>([]);
+  const [selections,setSelections]=useState<Record<string,string|string[]>>({});
 
-  const [mandatory,setMandatory]=useState<string[]>(MANDATORY_DEFAULT);
-  const [editMandIdx,setEditMandIdx]=useState<number|null>(null);
-  const [editMandVal,setEditMandVal]=useState("");
-  const commitMand=(idx:number)=>{
-    const v=editMandVal.trim();
-    if(v)setMandatory(prev=>prev.map((s,i)=>i===idx?v:s));
-    setEditMandIdx(null);
+  const enrolledClassId=classList.find(c=>c.label===enrolled.className)?.id ?? null;
+  const {catConfig}=useCategoryConfig(enrolledClassId);
+  const mandatory=catConfig?.mandatory??[];
+  const [cardDefs,setCardDefs]=useState<{id:CategoryKey;title:string;options:string[]}[]>([]);
+  useEffect(()=>{ setCardDefs(buildCardDefs(catConfig)); },[catConfig]);
+  const updateCard=(id:CategoryKey,def:CardDef)=>setCardDefs(prev=>prev.map(c=>c.id===id?{...c,title:def.title,options:def.options}:c));
+  const setSelection=(id:CategoryKey,v:string|string[])=>{
+    setSelections(prev=>{
+      const next={...prev,[id]:v};
+      if(!CATEGORY_META[id].multi && typeof v==="string" && v){
+        for(const cd of cardDefs){
+          if(cd.id!==id && !CATEGORY_META[cd.id].multi && next[cd.id]===v) next[cd.id]="";
+        }
+      }
+      return next;
+    });
   };
-
-  const [cardDefs,setCardDefs]=useState([
-    {id:"l2",title:"2nd Language",options:["Hindi","Telugu"]},
-    {id:"l3",title:"3rd Language",options:["Hindi","Telugu","French"]},
-    {id:"sp",title:"Sports",options:["Football","Cricket","Basketball","Badminton"]},
-    {id:"ar",title:"Arts",options:["Music","Dance","Instruments","FM Radio","NGC Club"]},
-  ]);
-  const updateCard=(id:string,def:CardDef)=>setCardDefs(prev=>prev.map(c=>c.id===id?{...c,...def}:c));
-  const l2Card=cardDefs.find(c=>c.id==="l2")!;
-  const l3Card=cardDefs.find(c=>c.id==="l3")!;
-  const spCard=cardDefs.find(c=>c.id==="sp")!;
-  const arCard=cardDefs.find(c=>c.id==="ar")!;
+  const resetSelections=()=>setSelections({});
   const [aiSug,setAiSug]=useState<AISuggestion|null>(null);const[aiLoading,setAiLoading]=useState(false);
   const [editStudent,setEditStudent]=useState<MockStudent|null>(null);
   const [editClass,setEditClass]=useState<MockClass|null>(null);
@@ -709,20 +834,41 @@ export function StudentMultiClassPanel() {
 
   useEffect(()=>{if(enrolled.className&&enrolled.sectionName)fetchAI(enrolled.className,enrolled.sectionName);},[enrolled.className,enrolled.sectionName,fetchAI]);
 
-  // Derive sports/arts/clubs counts from loaded classList (updates reactively after each save)
   const allStudents=classList.flatMap(cl=>cl.sections.flatMap(sec=>sec.students));
-  const countSubject=(name:string)=>allStudents.filter(st=>(st.optionalSubjects??[st.sport,st.art,st.lang2,st.lang3].filter(Boolean)).some(s=>s.toLowerCase()===name.toLowerCase())).length;
-  const totalAssigned=allStudents.length||1; // avoid divide-by-zero
-  const mkRow=(name:string,color:string)=>{const count=countSubject(name);return{name,count,color,fill:Math.round((count/totalAssigned)*100)};};
 
-  const SPORTS_ROW=[
-    mkRow("Football","#f05a28"),mkRow("Cricket","#12a670"),
-    mkRow("Badminton","#d94f7e"),mkRow("Basketball","#7c4df5"),
-  ];
-  const ARTS_ROW=[
-    mkRow("Music","#4c6ef5"),mkRow("Dance","#e8890c"),mkRow("Instruments","#0ea0c0"),
-  ];
-  const CLUBS_ROW=[mkRow("NGC Club","#b5376e"),mkRow("FM Radio","#2aab72")];
+  // School-wide activity ticker: every sport/club/co_curricular/optional subject configured in
+  // Academics ▸ Foundation ▸ Subjects, with its real assigned-student count (0 if none yet).
+  // Fetched separately (not derived from the paginated classList) so newly-added subjects show
+  // up immediately and counts aren't limited to whichever students happen to be loaded.
+  const TICKER_CATEGORIES:CategoryKey[]=["sport","club","co_curricular","optional"];
+  const TICKER_PALETTE=["#f05a28","#12a670","#d94f7e","#7c4df5","#4c6ef5","#e8890c","#0ea0c0","#b5376e"];
+  const [tickerData,setTickerData]=useState<Record<string,{name:string;count:number}[]>|null>(null);
+  const refreshTicker=useCallback(async()=>{
+    try{
+      const token=typeof window!=="undefined"?localStorage.getItem("school_erp_access_token")??"":"";
+      const res=await fetch(`${API_BASE_URL}/api/v1/students/students/subject-categories-summary/`,{
+        headers:{Authorization:`Bearer ${token}`},cache:"no-store"
+      });
+      if(res.ok)setTickerData(await res.json());
+    }catch{}
+  },[]);
+  useEffect(()=>{ void refreshTicker(); },[refreshTicker]);
+  const totalEnrolled=kpi?.enrolled||1; // avoid divide-by-zero
+  const tickerRows=TICKER_CATEGORIES.map(key=>{
+    const rows=tickerData?.[key]??[];
+    const items=rows.map((it,i)=>({
+      name:it.name, count:it.count,
+      color:TICKER_PALETTE[i%TICKER_PALETTE.length],
+      fill:Math.round((it.count/totalEnrolled)*100),
+    }));
+    return {label:CATEGORY_META[key].title, icon:iconForCategory(key), items};
+  }).filter(row=>row.items.length>0);
+
+  // Subject names configured per category, for the (display-only) Smart Filter dropdowns
+  const filterOptionsFor=(key:CategoryKey)=>{
+    if(tickerData && key in tickerData) return tickerData[key].map(it=>it.name);
+    return Array.from(new Set(allStudents.flatMap(st=>st.optionalByCategory?.[key]??[])));
+  };
 
   return (
     <div className={s.root}>
@@ -759,7 +905,7 @@ export function StudentMultiClassPanel() {
           </div>
         </div>
         <div className={s.activityTicker}>
-          {[{label:"Sports",icon:<TrophyIcon/>,items:SPORTS_ROW},{label:"Arts",icon:<PaletteIcon/>,items:ARTS_ROW},{label:"Clubs",icon:<UsersIcon/>,items:CLUBS_ROW}].map(row=>(
+          {tickerRows.map(row=>(
             <div key={row.label} className={s.tickerRow}>
               <span className={s.tickerLabel}>{row.icon} {row.label}</span>
               {row.items.map(item=>(
@@ -780,7 +926,7 @@ export function StudentMultiClassPanel() {
         <div className={s.actionNav}>
           {([{id:"assign" as Tab,step:"01",label:"Assign subjects",icon:<PlusIcon/>},{id:"filter" as Tab,step:"02",label:"Smart filter",icon:<FunnelIcon/>},{id:"browse" as Tab,step:"03",label:"Browse & edit",icon:<DocIcon/>}]).map(t=>(
             <button key={t.id} className={`${s.navTab} ${activeTab===t.id?s.navTabActive:""}`}
-              onClick={()=>{setActiveTab(t.id);if(t.id==="filter")setFilterOpen(true);scrollToTab(t.id);}}>
+              onClick={()=>{setActiveTab(t.id);if(t.id==="filter")setFilterOpen(true);if(t.id==="assign")setAssignOpen(true);scrollToTab(t.id);}}>
               <span className={s.navTabStep}>{t.step}</span>{t.icon} {t.label}
             </button>
           ))}
@@ -788,19 +934,36 @@ export function StudentMultiClassPanel() {
 
         {/* Section 01 */}
         <div className={s.assignCard} ref={assignSecRef}>
-          <div className={s.assignCardTop}>
+          <div className={s.assignCardTop} style={{cursor:"pointer"}} onClick={()=>setAssignOpen(v=>!v)}>
             <div>
               <div className={s.assignCardTitle}>Assign subjects to enrolled student</div>
-              <div className={s.assignCardSub}>Details auto-populate from enrollment. Pick optional subjects — AI suggests based on class &amp; peer patterns.</div>
+              <div className={s.assignCardSub}>
+                {hasEnrolledContext
+                  ?<>Details auto-populate from enrollment. Pick optional subjects — AI suggests based on class &amp; peer patterns.</>
+                  :<>Opens automatically when a student is redirected here from Student Enroll &middot; Submit.</>}
+              </div>
             </div>
-            {enrolled.name&&<span className={s.enrollChip}><LinkIcon/> From enrollment: {enrolled.name}</span>}
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {enrolled.name&&<span className={s.enrollChip}><LinkIcon/> From enrollment: {enrolled.name}</span>}
+              <ChevronIcon open={assignOpen}/>
+            </div>
           </div>
+          {assignOpen&&<>
           <div className={s.roGrid}>
             {[{label:"Student Name",value:enrolled.name||"—",mono:false},{label:"Admission No.",value:enrolled.admissionNo||"—",mono:true},{label:"Roll No.",value:enrolled.rollNo||"—",mono:true},{label:"Class",value:enrolled.className||"—",mono:false},{label:"Section",value:enrolled.sectionName||"—",mono:false},{label:"Academic Year",value:enrolled.academicYear||"2026-27",mono:false}].map(f=>(
               <div key={f.label} className={s.roField}><label>{f.label}</label><input readOnly value={f.value} className={`${s.roInput} ${f.mono?s.roInputMono:""}`}/></div>
             ))}
           </div>
-          <AIBanner suggestion={aiSug} loading={aiLoading} className={enrolled.className||"Grade 8"} section={enrolled.sectionName||"A"} onApply={sg=>{setLang2(sg.lang2);setLang3(sg.lang3);setSports([sg.sport]);setArts([sg.art]);}}/>
+          <AIBanner suggestion={aiSug} loading={aiLoading} className={enrolled.className||"Grade 8"} section={enrolled.sectionName||"A"} onApply={sg=>{
+            setSelections(prev=>{
+              const next={...prev};
+              if("second_language" in next) next.second_language=sg.lang2;
+              if("third_language" in next) next.third_language=sg.lang3;
+              if("sport" in next) next.sport=[sg.sport];
+              if("co_curricular" in next) next.co_curricular=[sg.art];
+              return next;
+            });
+          }}/>
           <div className={s.modulesCol}>
             <div className={s.mandatoryCard}>
               <div className={s.moduleHeader}>
@@ -808,39 +971,42 @@ export function StudentMultiClassPanel() {
                 <span className={`${s.moduleChip} ${s.chipGreen}`}>{mandatory.length} / {mandatory.length}</span>
               </div>
               <div className={s.mandatoryGrid}>{mandatory.map((sub,idx)=>
-                editMandIdx===idx
-                  ?<span key={idx} className={s.lockedItem}>
-                      <span className={s.checkLocked}><CheckIcon/></span>
-                      <input autoFocus className={s.mandEditInput} value={editMandVal}
-                        onChange={e=>setEditMandVal(e.target.value)}
-                        onBlur={()=>commitMand(idx)}
-                        onKeyDown={e=>{if(e.key==="Enter")commitMand(idx);if(e.key==="Escape")setEditMandIdx(null);}}
-                      />
-                    </span>
-                  :<label key={idx} className={s.lockedItem}>
-                      <span className={s.checkLocked}><CheckIcon/></span>
-                      <span className={s.mandLabelWrap}>
-                        {sub}
-                        <button className={s.mandPencil} onClick={()=>{setEditMandIdx(idx);setEditMandVal(sub);}} title="Rename"><EditPenIcon size={11}/></button>
-                      </span>
-                    </label>
+                <label key={idx} className={s.lockedItem}>
+                  <span className={s.checkLocked}><CheckIcon/></span>
+                  {sub}
+                </label>
               )}</div>
             </div>
             <div className={s.optGrid}>
-              <ModuleCard cardDef={l2Card} icon={<LangIcon/>} chipLabel="pick 1" chipClass={s.chipBlue} multi={false} value={lang2} onChange={v=>{setLang2(v as string);if(lang3===v)setLang3("");}} onCardChange={d=>updateCard("l2",d)}/>
-              <ModuleCard cardDef={l3Card} icon={<LangIcon/>} chipLabel="pick 1" chipClass={s.chipBlue} multi={false} value={lang3} onChange={v=>setLang3(v as string)} onCardChange={d=>updateCard("l3",d)} disabledOptions={lang2?[lang2]:[]}/>
-              <ModuleCard cardDef={spCard} icon={<TrophyIcon/>} chipLabel="1+ pick" chipClass={s.chipRed} multi={true} value={sports} onChange={v=>setSports(v as string[])} onCardChange={d=>updateCard("sp",d)}/>
-              <ModuleCard cardDef={arCard} icon={<PaletteIcon/>} chipLabel="1+ pick" chipClass={s.chipPurp} multi={true} value={arts} onChange={v=>setArts(v as string[])} onCardChange={d=>updateCard("ar",d)}/>
+              {cardDefs.map(cd=>{
+                const meta=CATEGORY_META[cd.id];
+                const value=selections[cd.id]??(meta.multi?[]:"");
+                return (
+                  <ModuleCard
+                    key={cd.id}
+                    cardDef={cd}
+                    icon={iconForCategory(cd.id)}
+                    chipLabel={meta.multi?"1+ pick":"pick 1"}
+                    chipClass={meta.multi?s.chipRed:s.chipBlue}
+                    multi={meta.multi}
+                    value={value}
+                    onChange={v=>setSelection(cd.id,v)}
+                    onCardChange={d=>updateCard(cd.id,d)}
+                    disabledOptions={singlePickDisabledOptions(cardDefs,selections,cd.id)}
+                  />
+                );
+              })}
             </div>
           </div>
           <hr className={s.previewDivider}/>
           <div className={s.saveRow}>
-            <PreviewBadges lang2={lang2} lang3={lang3} sports={sports} arts={arts}/>
+            <PreviewBadges mandatoryCount={mandatory.length} selections={selections}/>
             <div className={s.saveButtons}>
-              <button className={s.btnReset} onClick={()=>{setLang2("");setLang3("");setSports([]);setArts([]);}}>Reset</button>
+              <button className={s.btnReset} onClick={resetSelections}>Reset</button>
               <button className={s.btnSave} onClick={()=>{if(typeof window!=="undefined")localStorage.removeItem("eskoolia_last_enrolled_student");router.push("/students/list");}}><CheckIcon/> Save &amp; assign to student</button>
             </div>
           </div>
+          </>}
         </div>
 
         {/* Section 02 Smart Filter */}
@@ -861,10 +1027,14 @@ export function StudentMultiClassPanel() {
                 <label className={s.fLbl}><span>Search</span><input className={s.filterInput} placeholder="Search students..."/></label>
                 <label className={s.fLbl}><span>Class</span><select className={s.filterInput}>{["Nursery","LKG","UKG",...Array.from({length:10},(_,i)=>`Grade ${i+1}`)].map(o=><option key={o}>{o}</option>)}</select></label>
                 <label className={s.fLbl}><span>Section</span><select className={s.filterInput}><option>All sections</option><option>A</option><option>B</option><option>C</option></select></label>
-                <label className={s.fLbl}><span>2nd Language</span><select className={s.filterInput}><option>Any 2nd lang</option><option>Hindi</option><option>Telugu</option></select></label>
-                <label className={s.fLbl}><span>3rd Language</span><select className={s.filterInput}><option>Any 3rd lang</option><option>Hindi</option><option>Telugu</option><option>French</option></select></label>
-                <label className={s.fLbl}><span>Sport</span><select className={s.filterInput}><option>Any sport</option><option>Football</option><option>Cricket</option><option>Basketball</option><option>Badminton</option></select></label>
-                <label className={s.fLbl}><span>Art</span><select className={s.filterInput}><option>Any art</option><option>Music</option><option>Dance</option><option>Instruments</option><option>FM Radio</option><option>NGC Club</option></select></label>
+                {(["first_language","second_language","third_language","sport","club","co_curricular","optional"] as CategoryKey[]).map(key=>(
+                  <label key={key} className={s.fLbl}><span>{CATEGORY_META[key].title}</span>
+                    <select className={s.filterInput}>
+                      <option>{`Any ${CATEGORY_META[key].title.toLowerCase()}`}</option>
+                      {filterOptionsFor(key).map(name=><option key={name}>{name}</option>)}
+                    </select>
+                  </label>
+                ))}
               </div>
               <div className={s.filterBottom}>
                 <div style={{display:"flex",gap:6}}>{filterChips.map(c=><span key={c} className={s.darkChip}>{c} <span className={s.darkChipX} onClick={()=>setFilterChips(fc=>fc.filter(x=>x!==c))}>&#215;</span></span>)}</div>
@@ -882,7 +1052,7 @@ export function StudentMultiClassPanel() {
             <span className={s.sectionSub}>&mdash; click any class, then a section to expand.</span>
           </div>
           <div className={s.legendCard}>
-            {[{tag:"MAN",color:"var(--tag-m)",label:"Mandatory"},{tag:"L2",color:"var(--tag-l2)",label:"2nd Language"},{tag:"L3",color:"var(--tag-l3)",label:"3rd Language"},{tag:"SP",color:"var(--tag-sp)",label:"Sport"},{tag:"AR",color:"var(--tag-ar)",label:"Art"}].map(item=>(
+            {[{tag:"MAN",color:"var(--tag-m)",label:"Mandatory"},...CATEGORY_ORDER.map(key=>({tag:CATEGORY_META[key].tag,color:`var(${CATEGORY_META[key].cssVar})`,label:CATEGORY_META[key].title}))].map(item=>(
               <span key={item.tag} style={{display:"flex",alignItems:"center",gap:5}}>
                 <span className={s.badgeTag} style={{background:item.color}}>{item.tag}</span>
                 <span>{item.label}</span>
@@ -904,19 +1074,12 @@ export function StudentMultiClassPanel() {
       </div>
 
       {/* Edit Modal */}
-      {editStudent&&editClass&&<EditModal cls={editClass} student={editStudent} cardDefs={cardDefs} onCardChange={updateCard} onClose={()=>{setEditStudent(null);setEditClass(null);}} onSave={(studentId, saved)=>{
-        // Refresh KPI stats
-        (async()=>{
-          try{
-            const token=typeof window!=="undefined"?localStorage.getItem("school_erp_access_token")??"":"";
-            const res=await fetch(`${API_BASE_URL}/api/v1/students/students/subject-assignment-stats/`,{headers:{Authorization:`Bearer ${token}`},cache:"no-store"});
-            if(res.ok)setKpi(await res.json());
-          }catch{}
-        })();
+      {editStudent&&editClass&&<EditModal cls={editClass} student={editStudent} onClose={()=>{setEditStudent(null);setEditClass(null);}} onSave={(studentId, byCategory, newStatus)=>{
+        void refreshKpi();
+        void refreshTicker();
         // Update student row with new subject values and recompute status
-        const optCount=[saved.lang2,saved.lang3,saved.sport,saved.art].filter(Boolean).length;
-        const newStatus:MockStudent["status"]=optCount>=4?"done":optCount>0?"partial":"empty";
-        setClassList(prev=>prev.map(cl=>({...cl,sections:cl.sections.map(sec=>({...sec,students:sec.students.map(st=>st.id===studentId?{...st,...saved,status:newStatus}:st)}))})));
+        const optionalSubjects=Object.values(byCategory).flat();
+        setClassList(prev=>prev.map(cl=>({...cl,sections:cl.sections.map(sec=>({...sec,students:sec.students.map(st=>st.id===studentId?{...st,optionalByCategory:byCategory,optionalSubjects,status:newStatus}:st)}))})));
       }}/>}
       </div>{/* pageCard */}
     </div>

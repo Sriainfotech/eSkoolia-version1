@@ -2423,26 +2423,52 @@ class StudentViewSet(TenantScopedModelViewSet):
 
         return Response({"success": True, "message": "Student permanently deleted successfully"}, status=status.HTTP_200_OK)
 
+    _OPTIONAL_CATEGORY_TYPES = (
+        "first_language", "second_language", "third_language", "sport", "club", "co_curricular", "optional",
+    )
+
+    @classmethod
+    def _configured_category_counts_by_class(cls, school_id):
+        """{class_id: number of distinct non-empty optional categories configured}."""
+        from apps.academics.models import ClassSubjectEntry
+
+        rows = (
+            ClassSubjectEntry.objects.filter(
+                school_id=school_id,
+                subject_type__in=cls._OPTIONAL_CATEGORY_TYPES,
+                active_status=True,
+            )
+            .values("school_class_id", "subject_type")
+            .distinct()
+        )
+        counts: dict = {}
+        for row in rows:
+            counts[row["school_class_id"]] = counts.get(row["school_class_id"], 0) + 1
+        return counts
+
     @action(detail=False, methods=["get"], url_path="subject-assignment-stats")
     def subject_assignment_stats(self, request):
         """Return KPI counts for the Multi Subject Assignment page."""
         user = request.user
-        base_qs = Student.objects.filter(is_deleted=False, school_id=user.school_id)
+        base_qs = Student.objects.filter(is_deleted=False, school_id=user.school_id).select_related(
+            "current_class"
+        ).prefetch_related("subject_assignments")
 
         enrolled = base_qs.count()
-        # Each student gets annotated with how many *optional* subject
-        # assignments they have.  4 = at least one per category (L2, L3,
-        # sport, art) → "Assigned".  1-3 → "Partial".  0 → "Pending".
-        annotated = base_qs.annotate(
-            opt_count=Count(
-                "subject_assignments",
-                filter=Q(subject_assignments__is_optional=True),
-                distinct=True,
-            )
-        )
-        pending = annotated.filter(opt_count=0).count()
-        assigned = annotated.filter(opt_count__gte=4).count()
-        partial = max(0, enrolled - pending - assigned)
+        category_counts = self._configured_category_counts_by_class(user.school_id)
+
+        assigned = partial = pending = 0
+        for st in base_qs:
+            required = category_counts.get(st.current_class_id, 0)
+            filled = {
+                a.category for a in st.subject_assignments.all() if a.is_optional and a.category
+            }
+            if required == 0 or len(filled) >= required:
+                assigned += 1
+            elif filled:
+                partial += 1
+            else:
+                pending += 1
 
         return Response(
             {
@@ -2455,26 +2481,102 @@ class StudentViewSet(TenantScopedModelViewSet):
         )
 
     @staticmethod
-    def _serialize_assignment_student(st):
-        opt_subs = [
-            a.subject.name
-            for a in st.subject_assignments.all()
-            if a.is_optional
-        ]
-        count = len(opt_subs)
-        sstatus = "done" if count >= 4 else ("partial" if count > 0 else "empty")
+    def _serialize_assignment_student(st, required_categories=None):
+        optional_assignments = [a for a in st.subject_assignments.all() if a.is_optional]
+        by_category: dict = {}
+        for a in optional_assignments:
+            if not a.category:
+                continue
+            by_category.setdefault(a.category, []).append(a.subject.name)
+        opt_subs = [a.subject.name for a in optional_assignments]
+
+        required = required_categories if required_categories is not None else len(by_category)
+        filled = len(by_category)
+        if required == 0 or filled >= required:
+            sstatus = "done"
+        elif filled > 0:
+            sstatus = "partial"
+        else:
+            sstatus = "empty"
+
         return {
             "id": st.id,
             "name": f"{st.first_name} {st.last_name}".strip(),
             "admNo": st.admission_no,
             "rollNo": st.roll_no or "",
-            "lang2": opt_subs[0] if len(opt_subs) > 0 else "",
-            "lang3": opt_subs[1] if len(opt_subs) > 1 else "",
-            "sport": opt_subs[2] if len(opt_subs) > 2 else "",
-            "art":   opt_subs[3] if len(opt_subs) > 3 else "",
+            "optionalByCategory": by_category,
             "optionalSubjects": opt_subs,
             "status": sstatus,
         }
+
+    @action(detail=False, methods=["get"], url_path="subject-categories")
+    def subject_categories(self, request):
+        """Return subjects configured in Academics ▸ Foundation ▸ Subjects for a class,
+        grouped by category, for the Multi Subject Assignment page to render dynamically."""
+        from apps.academics.models import ClassSubjectEntry
+
+        user = request.user
+        class_id = request.query_params.get("class_id")
+        if not class_id:
+            return Response({"detail": "class_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        qs = ClassSubjectEntry.objects.filter(
+            school_class_id=class_id, active_status=True
+        ).order_by("name")
+        if user.school_id:
+            qs = qs.filter(school_id=user.school_id)
+
+        grouped: dict = {"mandatory": []}
+        for key in StudentViewSet._OPTIONAL_CATEGORY_TYPES:
+            grouped[key] = []
+
+        for entry in qs:
+            key = "mandatory" if entry.subject_type == ClassSubjectEntry.TYPE_CORE else entry.subject_type
+            if key in grouped:
+                grouped[key].append(entry.name)
+
+        return Response(grouped, status=status.HTTP_200_OK)
+
+    _TICKER_CATEGORY_TYPES = ("sport", "club", "co_curricular", "optional")
+
+    @action(detail=False, methods=["get"], url_path="subject-categories-summary")
+    def subject_categories_summary(self, request):
+        """School-wide activity ticker data: every sport/club/co_curricular/optional
+        subject configured anywhere in Academics ▸ Foundation ▸ Subjects, each with
+        its real assigned-student count (0 if none yet). Unlike deriving this from
+        the paginated class/section tree, this always reflects the full catalog and
+        true counts regardless of how many students have been loaded client-side."""
+        from apps.academics.models import ClassSubjectEntry
+
+        user = request.user
+        school_id = user.school_id
+
+        catalog_qs = ClassSubjectEntry.objects.filter(
+            school_id=school_id, active_status=True,
+            subject_type__in=self._TICKER_CATEGORY_TYPES,
+        ).values("subject_type", "name").distinct()
+
+        names_by_type: dict = {}
+        for row in catalog_qs:
+            names_by_type.setdefault(row["subject_type"], set()).add(row["name"])
+
+        counts = (
+            StudentSubjectAssignment.objects.filter(
+                student__school_id=school_id,
+                is_optional=True,
+                category__in=self._TICKER_CATEGORY_TYPES,
+            )
+            .values("category", "subject__name")
+            .annotate(n=Count("student_id", distinct=True))
+        )
+        count_map = {(row["category"], row["subject__name"]): row["n"] for row in counts}
+
+        result = {}
+        for cat in self._TICKER_CATEGORY_TYPES:
+            names = sorted(names_by_type.get(cat, []))
+            result[cat] = [{"name": n, "count": count_map.get((cat, n), 0)} for n in names]
+
+        return Response(result, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"], url_path="class-section-tree")
     def class_section_tree(self, request):
@@ -2501,6 +2603,7 @@ class StudentViewSet(TenantScopedModelViewSet):
         if school_id:
             cls_qs = cls_qs.filter(school_id=school_id)
         cls_qs = cls_qs.prefetch_related("sections")
+        category_counts = self._configured_category_counts_by_class(school_id)
 
         # Fetch all students with their optional subject assignments. We still
         # load all students up-front because we need accurate per-section
@@ -2528,8 +2631,9 @@ class StudentViewSet(TenantScopedModelViewSet):
                 students_here = section_map.get((cls.id, sec.id), [])
                 total = len(students_here)
                 first_page = students_here[:page_size]
+                required = category_counts.get(cls.id, 0)
                 students_out = [
-                    self._serialize_assignment_student(st) for st in first_page
+                    self._serialize_assignment_student(st, required) for st in first_page
                 ]
                 sections_out.append({
                     "id": sec.id,
@@ -2598,8 +2702,9 @@ class StudentViewSet(TenantScopedModelViewSet):
         total_pages = max(1, (total + page_size - 1) // page_size)
         page = min(page, total_pages)
         offset = (page - 1) * page_size
+        required = self._configured_category_counts_by_class(school_id).get(class_id, 0)
         students_out = [
-            self._serialize_assignment_student(st)
+            self._serialize_assignment_student(st, required)
             for st in qs[offset:offset + page_size]
         ]
 
@@ -3527,16 +3632,20 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
     @action(detail=False, methods=["post"], url_path="upsert-optional")
     def upsert_optional(self, request):
         """
-        Upsert optional subjects for one student by subject name.
+        Upsert optional (category-tagged) subjects for one student.
         Replaces all existing optional assignments.
-        Payload: { student_id, subject_names: [...] }
+        Payload: { student_id, assignments: [{category, subject_name}, ...] }
         """
         import traceback
         from apps.core.models import AcademicYear, Subject
 
+        valid_categories = dict(StudentSubjectAssignment.CATEGORY_CHOICES)
+
         try:
             student_id = request.data.get("student_id")
-            subject_names = request.data.get("subject_names", [])
+            raw_assignments = request.data.get("assignments", [])
+            if not isinstance(raw_assignments, list):
+                raw_assignments = []
 
             if not student_id:
                 return Response({"success": False, "message": "student_id is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -3562,18 +3671,28 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
             if not year:
                 return Response({"success": False, "message": "No active academic year found"}, status=status.HTTP_400_BAD_REQUEST)
 
+            # Clean incoming {category, subject_name} pairs
+            cleaned = []
+            for item in raw_assignments:
+                if not isinstance(item, dict):
+                    continue
+                category = (item.get("category") or "").strip()
+                name = (item.get("subject_name") or "").strip()
+                if not name or category not in valid_categories:
+                    continue
+                cleaned.append((category, name))
+
             # Resolve subjects by name (bulk lookup + get-or-create for missing)
-            names_clean = [n.strip() for n in subject_names if n.strip()]
-            subjects = []
+            names_clean = list({name for _, name in cleaned})
+            subj_by_lower = {}
             if names_clean:
                 existing = {
                     s.name.lower(): s
                     for s in Subject.objects.filter(school_id=school_id, name__in=names_clean)
                 }
-                # Case-insensitive fallback for names not matched exactly
-                lower_map = {k.lower(): v for k, v in existing.items()}
+                subj_by_lower = {k.lower(): v for k, v in existing.items()}
                 for name in names_clean:
-                    subj = lower_map.get(name.lower())
+                    subj = subj_by_lower.get(name.lower())
                     if not subj:
                         try:
                             subj, _ = Subject.objects.get_or_create(
@@ -3584,9 +3703,13 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
                         except Exception:
                             subj = Subject.objects.filter(school_id=school_id, name__iexact=name).first()
                         if subj:
-                            lower_map[name.lower()] = subj
-                    if subj:
-                        subjects.append(subj)
+                            subj_by_lower[name.lower()] = subj
+
+            resolved = [
+                (category, subj_by_lower[name.lower()])
+                for category, name in cleaned
+                if name.lower() in subj_by_lower
+            ]
 
             with transaction.atomic():
                 # Remove previous optional assignments for this student + academic year
@@ -3596,7 +3719,7 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
                     is_optional=True,
                 ).delete()
 
-                if subjects and student.current_class and student.current_section:
+                if resolved and student.current_class and student.current_section:
                     # Exclude subjects already assigned as non-optional (unique constraint guard)
                     non_optional_ids = set(
                         StudentSubjectAssignment.objects.filter(
@@ -3613,15 +3736,16 @@ class StudentSubjectAssignmentViewSet(TenantScopedModelViewSet):
                             school_class=student.current_class,
                             section=student.current_section,
                             is_optional=True,
+                            category=category,
                             assigned_by=user,
                         )
-                        for subj in subjects if subj.id not in non_optional_ids
+                        for category, subj in resolved if subj.id not in non_optional_ids
                     ]
                     if new_assignments:
                         StudentSubjectAssignment.objects.bulk_create(new_assignments, ignore_conflicts=True)
 
             return Response(
-                {"success": True, "message": "Optional subjects updated", "assigned_count": len(subjects)},
+                {"success": True, "message": "Optional subjects updated", "assigned_count": len(resolved)},
                 status=status.HTTP_200_OK,
             )
 
