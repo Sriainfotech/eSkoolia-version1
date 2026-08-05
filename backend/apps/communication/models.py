@@ -288,6 +288,12 @@ class EmailSmsLog(TimestampedModel):
 
 
 class HolidayCalendar(TimestampedModel):
+    """Deprecated — superseded by core.Holiday, which Foundation, Settings,
+    Exams, the Parent Portal, and this app's own HolidayCalendarViewSet all
+    read/write now. Kept only so any historical FK/data isn't orphaned;
+    nothing in the codebase creates new rows here anymore. Safe to drop in a
+    future migration once confirmed nothing external depends on this table."""
+
     holiday_title = models.CharField(max_length=255)
     holiday_date = models.DateField()
     end_date = models.DateField(null=True, blank=True)

@@ -80,7 +80,8 @@ def export_pdf(rows: Iterable[dict], columns: Sequence[tuple[str, str]], filenam
     )
 
     story = [Paragraph(title, styles["Heading2"]), Spacer(1, 12), table]
-    
+    document.build(story)
+
     output.seek(0)
 
     response = HttpResponse(output.getvalue(), content_type="application/pdf")

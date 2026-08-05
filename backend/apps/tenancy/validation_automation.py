@@ -181,8 +181,8 @@ DETAILED RESULTS
             report += f"  Duplicates found: {result['duplicate_records']}\n"
     
     if validation.mismatches:
-        report += f"\n=============================================================================\n"
+        report += "\n=============================================================================\n"
         report += f"MISMATCHES: {', '.join(validation.mismatches)}\n"
-        report += f"=============================================================================\n"
+        report += "=============================================================================\n"
     
     return report

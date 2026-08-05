@@ -1,7 +1,6 @@
 import json
 import calendar
 from datetime import date, timedelta
-from django.db.models import Sum
 from django.core.validators import FileExtensionValidator
 import re
 from django.utils import timezone
@@ -235,6 +234,17 @@ class DepartmentSerializer(serializers.ModelSerializer):
             attrs["is_active"] = False
         elif status == "active":
             attrs["is_active"] = True
+
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        if school_id:
+            head = attrs.get("head")
+            if head is not None and head.school_id != school_id:
+                raise serializers.ValidationError({"head_id": "Staff not found."})
+            deputy_head = attrs.get("deputy_head")
+            if deputy_head is not None and deputy_head.school_id != school_id:
+                raise serializers.ValidationError({"deputy_head_id": "Staff not found."})
+
         return attrs
 
 
@@ -362,7 +372,7 @@ class StaffDocumentSerializer(serializers.ModelSerializer):
         """Validate file size (max 50MB)."""
         max_size = 50 * 1024 * 1024  # 50MB
         if value > max_size:
-            raise serializers.ValidationError(f"File size exceeds maximum allowed size of 50MB.")
+            raise serializers.ValidationError("File size exceeds maximum allowed size of 50MB.")
         if value <= 0:
             raise serializers.ValidationError("File size must be greater than 0.")
         return value
@@ -1917,8 +1927,11 @@ class StaffSerializer(serializers.ModelSerializer):
 class LeaveTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = LeaveType
-        fields = ["id", "school", "name", "max_days_per_year", "is_paid", "is_active", "created_at"]
-        read_only_fields = ["id", "school", "created_at"]
+        # Policy fields (LeaveType.POLICY_FIELDS) are designed via Settings >
+        # Leave Policy (apps.settings), which is now the primary place leave
+        # types are created/edited/deleted — read-only here for display.
+        fields = ["id", "school", "name", "max_days_per_year", "is_paid", "is_active", "is_builtin", "created_at"] + LeaveType.POLICY_FIELDS
+        read_only_fields = ["id", "school", "is_builtin", "created_at"] + LeaveType.POLICY_FIELDS
 
     def validate_name(self, value):
         normalized = (value or "").strip()
@@ -2242,13 +2255,46 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"to_date": "To date cannot be earlier than From date."})
 
         if leave_type and from_date and to_date:
-            requested_days = (to_date - from_date).days + 1
+            from .holiday_utils import compute_leave_days
+            requested_days = compute_leave_days(school_id, leave_type, from_date, to_date)
             max_allowed = int(getattr(leave_type, "max_days_per_year", 0) or 0)
-            if requested_days > max_allowed:
+            # 0 = no annual cap (e.g. Loss of Pay, which is tracking-only —
+            # a hard 0-day cap would make it impossible to ever request).
+            if max_allowed > 0 and requested_days > max_allowed:
                 raise serializers.ValidationError(
                     {"to_date": "Leave limit exceeded"}
                 )
-        
+
+        # Eligibility rules from Settings > Leave Policy (LeaveType policy
+        # fields) — e.g. Maternity Leave is female-only, requires 6 months
+        # of prior service; Paternity Leave is male-only. Enforced here since
+        # this is the actual point of use, not just a display field.
+        if staff and leave_type:
+            import datetime as _dt
+
+            if leave_type.applicable_gender != LeaveType.GENDER_ALL and staff.gender != leave_type.applicable_gender:
+                raise serializers.ValidationError(
+                    {"leave_type": f"{leave_type.name} is only available to {leave_type.get_applicable_gender_display().lower()} staff."}
+                )
+            if leave_type.applicable_departments and str(staff.department_id) not in [str(d) for d in leave_type.applicable_departments]:
+                raise serializers.ValidationError({"leave_type": f"{leave_type.name} is not applicable to your department."})
+            if leave_type.applicable_designations and str(staff.designation_id) not in [str(d) for d in leave_type.applicable_designations]:
+                raise serializers.ValidationError({"leave_type": f"{leave_type.name} is not applicable to your designation."})
+            if leave_type.applicable_employment_types and staff.contract_type not in leave_type.applicable_employment_types:
+                raise serializers.ValidationError({"leave_type": f"{leave_type.name} is not applicable to your employment type."})
+            if leave_type.minimum_service_period and staff.join_date:
+                months_served = (_dt.date.today().year - staff.join_date.year) * 12 + (_dt.date.today().month - staff.join_date.month)
+                if months_served < leave_type.minimum_service_period:
+                    raise serializers.ValidationError(
+                        {"leave_type": f"{leave_type.name} requires at least {leave_type.minimum_service_period} months of service (you have {max(months_served, 0)})."}
+                    )
+            if leave_type.minimum_notice_period and from_date:
+                notice_days = (from_date - _dt.date.today()).days
+                if notice_days < leave_type.minimum_notice_period:
+                    raise serializers.ValidationError(
+                        {"from_date": f"{leave_type.name} requires at least {leave_type.minimum_notice_period} days' notice."}
+                    )
+
         # Validate school associations
         if school_id and staff and staff.school_id != school_id:
             raise serializers.ValidationError({"staff": "Selected staff member does not belong to your school."})
@@ -2308,6 +2354,17 @@ class StaffAttendanceSerializer(serializers.ModelSerializer):
 
         if school_id and staff and staff.school_id != school_id:
             raise serializers.ValidationError({"staff": "Selected staff does not belong to your school."})
+
+        attendance_date = attrs.get("attendance_date") or getattr(self.instance, "attendance_date", None)
+        if school_id and staff and attendance_date:
+            from .holiday_utils import resolve_staff_holiday_attendance
+            resolved = resolve_staff_holiday_attendance(school_id, staff.id, attendance_date)
+            if resolved is not None:
+                forced_type, holiday_name = resolved
+                attrs["attendance_type"] = forced_type
+                if not attrs.get("note") and not (self.instance and self.instance.note):
+                    attrs["note"] = f"Leave ({holiday_name})" if forced_type == "L" else "Holiday"
+
         return attrs
 
 
@@ -2534,6 +2591,14 @@ class OffboardingSerializer(serializers.ModelSerializer):
         model = Offboarding
         fields = "__all__"
         read_only_fields = ["school", "completed_at", "created_at"]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        staff = attrs.get("staff") or getattr(self.instance, "staff", None)
+        if school_id and staff is not None and staff.school_id != school_id:
+            raise serializers.ValidationError({"staff": "Staff not found."})
+        return attrs
 
     def get_staff_name(self, obj):
         return f"{obj.staff.first_name} {obj.staff.last_name}".strip()

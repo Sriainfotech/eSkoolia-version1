@@ -286,12 +286,123 @@ class StaffDocument(models.Model):
 
 
 class LeaveType(models.Model):
+    CARRY_FORWARD_LIMITED = "limited"
+    CARRY_FORWARD_UNLIMITED = "unlimited"
+    CARRY_FORWARD_TYPE_CHOICES = [
+        (CARRY_FORWARD_LIMITED, "Limited"),
+        (CARRY_FORWARD_UNLIMITED, "Unlimited"),
+    ]
+
+    CARRY_FORWARD_AUTOMATIC = "automatic"
+    CARRY_FORWARD_MANUAL = "manual"
+    CARRY_FORWARD_MODE_CHOICES = [
+        (CARRY_FORWARD_AUTOMATIC, "Automatic"),
+        (CARRY_FORWARD_MANUAL, "Manual"),
+    ]
+
+    GENDER_ALL = "all"
+    GENDER_MALE = "male"
+    GENDER_FEMALE = "female"
+    APPLICABLE_GENDER_CHOICES = [
+        (GENDER_ALL, "All"),
+        (GENDER_MALE, "Male"),
+        (GENDER_FEMALE, "Female"),
+    ]
+
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="leave_types")
     name = models.CharField(max_length=80)
     max_days_per_year = models.PositiveSmallIntegerField(default=0)
     is_paid = models.BooleanField(default=True)
+    # Auto-seeded per school (see apps.settings.leave_seed) — cannot be
+    # deleted, only its policy fields edited, matching Royal HRMS's
+    # "built-in leave types cannot be deleted" rule.
+    is_builtin = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # --- Settings > Leave Policy fields (school-wide policy on top of the
+    # allocation above; edited only via apps.settings, not the HR leave-type
+    # CRUD screen, which still owns name/max_days_per_year/is_paid/is_active) ---
+    can_carry_forward = models.BooleanField(default=False)
+    max_carry_forward_days = models.PositiveSmallIntegerField(default=0)
+    carry_forward_type = models.CharField(
+        max_length=16, choices=CARRY_FORWARD_TYPE_CHOICES, default=CARRY_FORWARD_LIMITED
+    )
+    carry_forward_expiry_days = models.PositiveSmallIntegerField(
+        default=0, help_text="0 = carried-forward days never expire"
+    )
+    carry_forward_mode = models.CharField(
+        max_length=16, choices=CARRY_FORWARD_MODE_CHOICES, default=CARRY_FORWARD_AUTOMATIC
+    )
+    policy_note = models.TextField(blank=True, help_text="Free-text note shown to staff alongside this policy")
+    applicable_departments = models.JSONField(
+        default=list, blank=True, help_text="Department names/IDs this leave type applies to; empty = all"
+    )
+    applicable_designations = models.JSONField(
+        default=list, blank=True, help_text="Designation names/IDs this leave type applies to; empty = all"
+    )
+    applicable_employment_types = models.JSONField(
+        default=list, blank=True,
+        help_text="Staff.contract_type values this leave type applies to (e.g. permanent, contract); empty = all",
+    )
+    applicable_gender = models.CharField(max_length=16, choices=APPLICABLE_GENDER_CHOICES, default=GENDER_ALL)
+    minimum_service_period = models.PositiveSmallIntegerField(
+        default=0, help_text="Minimum months of service required before staff can use this leave type"
+    )
+    attachment_required = models.BooleanField(default=False)
+    medical_certificate_required = models.BooleanField(default=False)
+    medical_certificate_after_days = models.PositiveSmallIntegerField(
+        default=0, help_text="Medical certificate required if leave exceeds this many consecutive days; 0 = always required when medical_certificate_required is set"
+    )
+    minimum_notice_period = models.PositiveSmallIntegerField(
+        default=0, help_text="Minimum days' notice required before this leave can be applied for"
+    )
+    minimum_leave_duration = models.PositiveSmallIntegerField(default=0, help_text="Minimum days per request; 0 = no minimum")
+    maximum_leave_duration = models.PositiveSmallIntegerField(default=0, help_text="Maximum days per request; 0 = no maximum")
+    maximum_consecutive_days = models.PositiveSmallIntegerField(default=0, help_text="Maximum consecutive days allowed; 0 = no limit")
+    allow_half_day = models.BooleanField(default=True)
+    allow_backdated_leave = models.BooleanField(default=False)
+    maximum_backdated_days = models.PositiveSmallIntegerField(default=0)
+    allow_future_leave = models.BooleanField(default=True)
+    maximum_future_days = models.PositiveSmallIntegerField(default=0, help_text="0 = no limit on how far in advance leave can be applied")
+    sandwich_leave_enabled = models.BooleanField(
+        default=False, help_text="Count intervening holidays/week-offs as leave when leave is taken on both sides of them"
+    )
+    count_holidays_as_leave = models.BooleanField(default=False)
+    count_weekoffs_as_leave = models.BooleanField(default=False)
+    allow_negative_balance = models.BooleanField(default=False)
+    convert_to_lop = models.BooleanField(
+        default=True, help_text="Convert to Loss of Pay when balance is exhausted (if allow_negative_balance is off)"
+    )
+    allow_leave_cancellation = models.BooleanField(default=True)
+    cancellation_allowed_until = models.PositiveSmallIntegerField(
+        default=0, help_text="Days after leave start within which cancellation is allowed; 0 = anytime"
+    )
+    allow_probation_leave = models.BooleanField(default=False, help_text="Allow staff on probation to use this leave type")
+    allow_notice_period_leave = models.BooleanField(default=True, help_text="Allow staff serving notice period to use this leave type")
+    allow_leave_extension = models.BooleanField(default=True)
+    allow_leave_combination = models.BooleanField(
+        default=True, help_text="Allow combining with other leave types in one continuous stretch"
+    )
+
+    # Single source of truth for which fields are "Settings > Leave Policy"
+    # fields, referenced by both LeaveTypeSerializer (apps.hr, read-only) and
+    # LeavePolicySerializer (apps.settings, writable) so the two never drift
+    # out of sync as fields are added.
+    POLICY_FIELDS = [
+        "can_carry_forward", "max_carry_forward_days", "carry_forward_type", "carry_forward_expiry_days",
+        "carry_forward_mode", "policy_note",
+        "applicable_departments", "applicable_designations", "applicable_employment_types", "applicable_gender",
+        "minimum_service_period", "attachment_required", "medical_certificate_required",
+        "medical_certificate_after_days", "minimum_notice_period",
+        "minimum_leave_duration", "maximum_leave_duration", "maximum_consecutive_days",
+        "allow_half_day", "allow_backdated_leave", "maximum_backdated_days",
+        "allow_future_leave", "maximum_future_days",
+        "sandwich_leave_enabled", "count_holidays_as_leave", "count_weekoffs_as_leave",
+        "allow_negative_balance", "convert_to_lop",
+        "allow_leave_cancellation", "cancellation_allowed_until",
+        "allow_probation_leave", "allow_notice_period_leave", "allow_leave_extension", "allow_leave_combination",
+    ]
 
     class Meta:
         db_table = "hr_leave_types"
@@ -510,9 +621,15 @@ class StaffOnboardDraft(models.Model):
 class StaffOnboardDocument(models.Model):
     """Temporary documents uploaded during the staff onboarding wizard.
 
-    Each record is scoped to the uploading user + doc_key so there is at most
-    one file per document type per HR officer session.  When the wizard
-    completes and the Staff record is created the documents are copied to
+    Each record is scoped to the uploading user + doc_key + `related_staff` so
+    there is at most one file per document type per (HR officer, staff being
+    onboarded/edited). `related_staff` is null while onboarding a brand-new
+    hire (the Staff row doesn't exist yet at upload time) and set to the
+    target Staff id while editing an existing one. Without this, uploads were
+    scoped only to the uploading user — starting a second onboarding/edit
+    before finishing the first could silently overwrite or misattach a
+    document (e.g. a signature meant for staff A ending up on staff B's
+    record). When the wizard completes the matching documents are copied to
     StaffDocument and these rows are deleted.
     """
 
@@ -531,6 +648,14 @@ class StaffOnboardDocument(models.Model):
         "users.User",
         on_delete=models.CASCADE,
         related_name="onboard_documents",
+    )
+    related_staff = models.ForeignKey(
+        "Staff",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="onboard_documents_pending",
+        help_text="Set while editing an existing staff member; null while onboarding a brand-new hire.",
     )
     school = models.ForeignKey(
         "tenancy.School",
@@ -556,11 +681,17 @@ class StaffOnboardDocument(models.Model):
     class Meta:
         db_table = "hr_staff_onboard_documents"
         ordering = ["-created_at"]
-        # Enforce one file per (user, doc_key) – re-upload replaces the old record
+        # Enforce one file per (user, doc_key, related_staff) – re-upload replaces
+        # the old record. Note: Postgres treats NULLs as distinct in a unique
+        # index, so this doesn't stop the same user from having two NULL-scoped
+        # (brand-new-hire) rows for the same doc_key if they start onboarding two
+        # new hires without finishing either — the application-layer delete-then-
+        # create in the upload view is what actually enforces "one at a time" for
+        # that case; this constraint is the backstop for the common case.
         constraints = [
             models.UniqueConstraint(
-                fields=["uploaded_by", "doc_key"],
-                name="uq_hr_onboard_doc_user_key",
+                fields=["uploaded_by", "doc_key", "related_staff"],
+                name="uq_hr_onboard_doc_user_key_staff",
             )
         ]
 

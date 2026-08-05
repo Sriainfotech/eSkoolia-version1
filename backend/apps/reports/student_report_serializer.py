@@ -1,6 +1,6 @@
 
 from rest_framework import serializers
-from apps.core.models import SmStudent, StudentRecord
+from apps.core.models import StudentRecord
 
 class StudentReportSerializer(serializers.ModelSerializer):
     class Meta:

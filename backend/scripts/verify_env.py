@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 """Verification script for environment diagnostics."""
 import os
-import sys
 import django
 from pathlib import Path
 

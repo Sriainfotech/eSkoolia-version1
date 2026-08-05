@@ -6,6 +6,7 @@ import { toast } from 'react-toastify';
 import { ArrowLeft, Save } from 'lucide-react';
 import { getSchool, updateSchool } from '@/lib/api/super-admin/schools';
 import type { SchoolTenant } from '@/types/super-admin';
+import { MEDIUM_OF_INSTRUCTION_OPTIONS } from '@/lib/school-choices';
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
 const inputCls =
@@ -70,6 +71,25 @@ export default function EditSchoolPage({ params }: { params: { tenantId: string 
     storage_region:    '',
     backup_retention:  '30',
     sso_method:        'native',
+    // Contact & address
+    principal_name:    '',
+    principal_email:   '',
+    principal_phone:   '',
+    school_phone:      '',
+    school_email:      '',
+    website:           '',
+    campus_address:    '',
+    city:              '',
+    pin_code:          '',
+    country:           'India',
+    // Identity extras
+    school_type:            '',
+    medium_of_instruction:  '',
+    year_established:       '',
+    motto:                  '',
+    affiliation_number:     '',
+    logo_url:                '',
+    brand_color:             '',
   });
 
   const set = (k: keyof typeof form, v: string | boolean) =>
@@ -100,6 +120,23 @@ export default function EditSchoolPage({ params }: { params: { tenantId: string 
         storage_region:   data.storage_region   ?? '',
         backup_retention: data.backup_retention != null ? String(data.backup_retention) : '30',
         sso_method:       data.sso_method       ?? 'native',
+        principal_name:         data.principal_name         ?? '',
+        principal_email:        data.principal_email        ?? '',
+        principal_phone:        data.principal_phone        ?? '',
+        school_phone:           data.school_phone           ?? '',
+        school_email:           data.school_email           ?? '',
+        website:                data.website                ?? '',
+        campus_address:         data.campus_address         ?? '',
+        city:                   data.city                   ?? '',
+        pin_code:               data.pin_code                ?? '',
+        country:                data.country                || 'India',
+        school_type:            data.school_type            ?? '',
+        medium_of_instruction:  data.medium_of_instruction  ?? '',
+        year_established:       data.year_established != null ? String(data.year_established) : '',
+        motto:                  data.motto                  ?? '',
+        affiliation_number:     data.affiliation_number     ?? '',
+        logo_url:               data.logo_url               ?? '',
+        brand_color:            data.brand_color            ?? '',
       });
     } catch {
       toast.error('Could not load school data.');
@@ -133,6 +170,23 @@ export default function EditSchoolPage({ params }: { params: { tenantId: string 
         storage_region:   form.storage_region   || undefined,
         backup_retention: form.backup_retention ? Number(form.backup_retention) : undefined,
         sso_method:       form.sso_method       || undefined,
+        principal_name:         form.principal_name.trim()        || undefined,
+        principal_email:        form.principal_email.trim()       || undefined,
+        principal_phone:        form.principal_phone.trim()       || undefined,
+        school_phone:            form.school_phone.trim(),
+        school_email:            form.school_email.trim(),
+        website:                 form.website.trim(),
+        campus_address:          form.campus_address.trim()       || undefined,
+        city:                    form.city.trim()                 || undefined,
+        pin_code:                form.pin_code.trim()             || undefined,
+        country:                 form.country.trim()              || undefined,
+        school_type:             form.school_type                 || undefined,
+        medium_of_instruction:   form.medium_of_instruction,
+        year_established:       form.year_established ? Number(form.year_established) : undefined,
+        motto:                   form.motto,
+        affiliation_number:      form.affiliation_number.trim()   || undefined,
+        logo_url:                form.logo_url.trim()             || undefined,
+        brand_color:             form.brand_color.trim()          || undefined,
       });
       toast.success(`${form.name} updated successfully.`);
       router.push('/super-admin/schools');
@@ -347,6 +401,96 @@ export default function EditSchoolPage({ params }: { params: { tenantId: string 
           <Field label="Backup retention (days)">
             <input type="number" className={inputCls} value={form.backup_retention}
               onChange={e => set('backup_retention', e.target.value)} placeholder="30" min={1} max={365} />
+          </Field>
+        </div>
+      </div>
+
+      {/* ── 06 Contact & address ──────────────────────────────────────── */}
+      <div className="sa-panel p-5">
+        <SectionHead num="06">Contact &amp; address</SectionHead>
+        <div className="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
+          <Field label="Principal name">
+            <input className={inputCls} value={form.principal_name}
+              onChange={e => set('principal_name', e.target.value)} placeholder="Dr. Anjali Rao" />
+          </Field>
+          <Field label="Principal email">
+            <input type="email" className={inputCls} value={form.principal_email}
+              onChange={e => set('principal_email', e.target.value)} placeholder="principal@school.edu" />
+          </Field>
+          <Field label="Principal phone">
+            <input className={inputCls} value={form.principal_phone}
+              onChange={e => set('principal_phone', e.target.value)} placeholder="+91 98765 43210" />
+          </Field>
+          <Field label="Front-office phone">
+            <input className={inputCls} value={form.school_phone}
+              onChange={e => set('school_phone', e.target.value)} placeholder="+91 40 1234 5678" />
+          </Field>
+          <Field label="Front-office email">
+            <input type="email" className={inputCls} value={form.school_email}
+              onChange={e => set('school_email', e.target.value)} placeholder="info@school.edu" />
+          </Field>
+          <Field label="Website">
+            <input className={inputCls} value={form.website}
+              onChange={e => set('website', e.target.value)} placeholder="https://school.edu" />
+          </Field>
+          <Field label="Campus address" span="2">
+            <textarea className={inputCls + ' min-h-[72px] resize-y py-2'} value={form.campus_address}
+              onChange={e => set('campus_address', e.target.value)} placeholder="Street, area, landmark" />
+          </Field>
+          <Field label="City">
+            <input className={inputCls} value={form.city}
+              onChange={e => set('city', e.target.value)} placeholder="Hyderabad" />
+          </Field>
+          <Field label="PIN code">
+            <input className={inputCls} value={form.pin_code}
+              onChange={e => set('pin_code', e.target.value.replace(/\D/g, ''))} placeholder="500081" maxLength={6} inputMode="numeric" />
+          </Field>
+          <Field label="Country">
+            <input className={inputCls} value={form.country}
+              onChange={e => set('country', e.target.value)} placeholder="India" />
+          </Field>
+        </div>
+      </div>
+
+      {/* ── 07 Identity extras & branding ─────────────────────────────── */}
+      <div className="sa-panel p-5">
+        <SectionHead num="07">Identity extras &amp; branding</SectionHead>
+        <div className="grid grid-cols-2 gap-4 max-sm:grid-cols-1">
+          <Field label="School type">
+            <input className={inputCls} value={form.school_type}
+              onChange={e => set('school_type', e.target.value)} placeholder="K-12 · Day school" />
+          </Field>
+          <Field label="Medium of instruction">
+            <select className={selectCls} value={form.medium_of_instruction}
+              onChange={e => set('medium_of_instruction', e.target.value)} title="Medium of instruction">
+              <option value="">— Select —</option>
+              {MEDIUM_OF_INSTRUCTION_OPTIONS.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </Field>
+          <Field label="Year established">
+            <input type="number" className={inputCls} value={form.year_established}
+              onChange={e => set('year_established', e.target.value)} placeholder="1998" min={1800} max={2100} />
+          </Field>
+          <Field label="Board affiliation number">
+            <input className={inputCls} value={form.affiliation_number}
+              onChange={e => set('affiliation_number', e.target.value)} placeholder="e.g. 1234567" />
+          </Field>
+          <Field label="Motto / tagline" span="2">
+            <input className={inputCls} value={form.motto}
+              onChange={e => set('motto', e.target.value)} placeholder="Knowledge is Power" />
+          </Field>
+          <Field label="Logo URL">
+            <input className={inputCls} value={form.logo_url}
+              onChange={e => set('logo_url', e.target.value)} placeholder="https://…/logo.png" />
+          </Field>
+          <Field label="Brand color">
+            <div className="flex items-center gap-2">
+              <input type="color" value={form.brand_color || '#6d4aff'}
+                onChange={e => set('brand_color', e.target.value)}
+                className="h-9 w-11 flex-shrink-0 cursor-pointer rounded-lg border border-[var(--bd-2)] bg-[var(--bg-1)]" title="Brand color" />
+              <input className={inputCls} value={form.brand_color}
+                onChange={e => set('brand_color', e.target.value)} placeholder="#6d4aff" />
+            </div>
           </Field>
         </div>
       </div>

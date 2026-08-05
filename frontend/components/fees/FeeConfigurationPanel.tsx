@@ -869,8 +869,7 @@ export default function FeeConfigurationPanel() {
     fallbackEnd.setDate(fallbackEnd.getDate() - 1);
     const startStr = year?.start_date || fallbackStart.toISOString().split("T")[0];
     const endStr = year?.end_date || fallbackEnd.toISOString().split("T")[0];
-    
-    console.log(`[TermSettings] generateDefaultTerms called for year:`, year?.name, `start:`, startStr, `end:`, endStr, `count:`, count);
+
     const start = new Date(startStr);
     const end = new Date(endStr);
     const totalDuration = end.getTime() - start.getTime();
@@ -913,13 +912,11 @@ export default function FeeConfigurationPanel() {
 
   const fetchTermSettings = async (yearId: number) => {
     setIsLoadingTermSettings(true);
-    console.log(`[TermSettings] fetchTermSettings called for academic year: ${yearId}`);
     try {
       const payload = await feesApi.listTermSettings();
       const allSettings = listData(payload);
       const filtered = allSettings.filter(item => item.academic_year === yearId);
-      console.log(`[TermSettings] Loaded records for academic year ID ${yearId}:`, filtered);
-      
+
       setTermSettings(filtered);
       
       if (filtered.length > 0) {
@@ -954,14 +951,11 @@ export default function FeeConfigurationPanel() {
     }
 
     if (!hasTermSettingsChanged()) {
-      console.log("[TermSettings] [frontend/debug] Action: NO_CHANGE - No values changed since last load.");
       showToast("No changes detected.");
       return;
     }
 
     setIsSavingTermSettings(true);
-    const actionType = initialTerms.length === 0 ? "CREATE" : "UPDATE";
-    console.log(`[TermSettings] [frontend/debug] Action: ${actionType} - Changes detected. Preparing bulk payload...`);
 
     try {
       const payloadList = Array.from({ length: numTerms }).map((_, i) => {
@@ -995,10 +989,8 @@ export default function FeeConfigurationPanel() {
         return item;
       });
 
-      console.log("[TermSettings] Dispatching bulk API call with payload:", payloadList);
       await feesApi.createTermSettings(payloadList);
 
-      console.log("[TermSettings] Term settings successfully saved in bulk.");
       showToast("Term settings updated successfully.");
       
       // Reload from backend

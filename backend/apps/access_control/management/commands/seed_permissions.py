@@ -151,6 +151,17 @@ PERMISSIONS = [
     ("behaviour.assigned_incident.view", "Behaviour Assigned Incident", "behaviour"),
     ("behaviour.assigned_incident_comment.view", "Behaviour Assigned Incident Comment", "behaviour"),
     ("behaviour.record_setting.view", "Behaviour Record Setting", "behaviour"),
+
+    # Settings module (apps.settings) — distinct from the legacy, still-unused
+    # "settings_section" catalog above (tied to the old dead /setup routes).
+    ("settings.school_info.view", "School Info", "settings"),
+    ("settings.leave_policy.view", "Leave Policy", "settings"),
+    ("settings.holidays.view", "Staff Holiday Calendar", "settings"),
+    ("settings.smtp.view", "SMTP Settings", "settings"),
+    ("settings.audit_log.view", "Audit Log", "settings"),
+    ("settings.attendance_rules.view", "Attendance Rules", "settings"),
+    ("settings.documents.view", "Documents", "settings"),
+    ("settings.document_branding.view", "Document Branding", "settings"),
 ]
 
 

@@ -38,6 +38,7 @@ import {
   UserSearch,
   MapPin,
   Truck,
+  Palette,
   Route,
   Car,
   Store,
@@ -392,22 +393,25 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Blocked Users', path: '/utilities/blocked-users', icon: UserX },
     ],
   }, */
-  // HIDDEN - no backend yet
-  /* {
+  {
     id: 'settings',
     name: 'Settings',
-    path: '/setup',
+    path: '/settings/school-info',
     icon: Settings,
     bg: '#F1F5F9',
     ic: '#475569',
-    permission: 'settings_section',
+    permission: 'settings',
     sub: [
-      { label: 'General Settings', path: '/setup', icon: Settings },
-      { label: 'Schools', path: '/setup/schools', icon: School },
-      { label: 'Class Periods', path: '/setup/class-periods', icon: Calendar },
-      { label: 'Academic Year', path: '/academics/academic-year', icon: Calendar },
+      { label: 'School Info',       path: '/settings/school-info',       icon: Building2,     permission: 'settings.school_info' },
+      { label: 'Leave Policy',      path: '/settings/leave-policy',      icon: ClipboardList, permission: 'settings.leave_policy' },
+      { label: 'Holiday Calendar',  path: '/settings/holidays',          icon: Calendar,      permission: 'settings.holidays' },
+      { label: 'SMTP Settings',     path: '/settings/smtp',              icon: Mail,          permission: 'settings.smtp' },
+      { label: 'Audit Log',         path: '/settings/audit-log',         icon: ShieldCheck,   permission: 'settings.audit_log' },
+      { label: 'Attendance Rules',  path: '/settings/attendance-rules',  icon: UserCheck,     permission: 'settings.attendance_rules' },
+      { label: 'Documents',         path: '/settings/documents',         icon: FileText,      permission: 'settings.documents' },
+      { label: 'Document Branding', path: '/settings/document-branding', icon: Palette,       permission: 'settings.document_branding' },
     ],
-  }, */
+  },
 ];
 
 /** Flat list: module + all sub-routes — used by ⌘K and AI bot */

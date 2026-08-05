@@ -10,15 +10,12 @@ Permission classes that enforce:
 
 from rest_framework.permissions import BasePermission
 from rest_framework.exceptions import PermissionDenied
-from django.http import Http404
 from django.db import connection
 from apps.tenancy.context import (
     get_current_tenant,
-    get_current_tenant_id,
     is_tenant_mode,
 )
-from apps.tenancy.feature_flags import is_feature_enabled, get_tenant_plan
-from apps.tenancy.models import SchoolTenant
+from apps.tenancy.feature_flags import is_feature_enabled
 
 
 class TenantActive(BasePermission):

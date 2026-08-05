@@ -325,17 +325,18 @@ class ChildAttendanceCalendarView(APIView):
         }
 
         # ── Holidays ───────────────────────────────────────────────────────────
-        from apps.communication.models import HolidayCalendar
+        from apps.core.models import Holiday
 
-        holiday_qs = HolidayCalendar.objects.filter(
-            school=guardian.school,
-            is_active=True,
-            holiday_date__gte=month_start,
-            holiday_date__lte=month_end,
-        ).values("holiday_date", "holiday_title").order_by("holiday_date")
+        holiday_qs = Holiday.objects.filter(
+            Q(school=guardian.school) | Q(school__isnull=True),
+            active_status=True,
+            date__lte=month_end,
+        ).filter(
+            Q(end_date__isnull=True, date__gte=month_start) | Q(end_date__gte=month_start)
+        ).values("date", "name").order_by("date")
 
         holidays = [
-            {"date": str(h["holiday_date"]), "title": h["holiday_title"]}
+            {"date": str(h["date"]), "title": h["name"]}
             for h in holiday_qs
         ]
 
@@ -379,19 +380,19 @@ class ChildFeesView(APIView):
         except Student.DoesNotExist:
             return Response({"detail": "Not found."}, status=404)
 
-        from apps.fees.models import FeesAssignment, FeesPayment
+        from apps.fees.models import FeeAssignment, Payment
 
         # Aggregate paid per assignment in one query
         paid_sub = (
-            FeesPayment.objects.filter(assignment=OuterRef("pk"))
+            Payment.objects.filter(assignment=OuterRef("pk"))
             .values("assignment")
             .annotate(total=Sum("amount_paid"))
             .values("total")
         )
 
         assignments = (
-            FeesAssignment.objects.select_related("fees_type", "fees_type__fees_group")
-            .filter(student=student, school=student.school)
+            FeeAssignment.objects.select_related("fees_type", "fees_type__fees_group")
+            .filter(student=student)
             .annotate(paid_total=Coalesce(Subquery(paid_sub), Value(Decimal("0.00")), output_field=DecimalField()))
             .order_by("fees_type__fees_group__name", "due_date")
         )

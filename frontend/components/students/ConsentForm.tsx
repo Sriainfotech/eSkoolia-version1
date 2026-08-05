@@ -1,65 +1,9 @@
 "use client";
 import React, { useState, useEffect, useRef } from "react";
-
-const SCHOOL_HEADER_KEY = 'eskoolia:school:header:v2';
-
-type HeaderLayout = 'classic' | 'centered' | 'banner' | 'minimal' | 'letterhead';
-
-interface SchoolHeaderData {
-  schoolName: string;
-  schoolAddress: string;
-  schoolPhone: string;
-  schoolEmail: string;
-  schoolWebsite: string;
-  logoDataUrl: string;        // base64 uploaded file (preferred)
-  logoUrl: string;            // fallback URL
-  principalName: string;
-  schoolMotto: string;
-  affiliationNo: string;
-  letterheadBg: string;       // base64 background image for "letterhead" layout
-  headerLayout: HeaderLayout;
-  headerBgColor: string;
-  headerTextColor: string;
-  declarationText: string;    // editable declaration / T&C text
-}
+import { useDocumentBranding } from "@/hooks/useDocumentBranding";
+import { apiRequestWithRefresh } from "@/lib/api-auth";
 
 const DEFAULT_DECLARATION = `I, the undersigned parent / legal guardian of {studentName}, hereby confirm that all information provided in this admission form is accurate and complete to the best of my knowledge. I consent to the school collecting, storing, and using the student's personal data exclusively for educational, administrative, and legally mandated purposes in accordance with the Digital Personal Data Protection Act, 2023. I understand that any withdrawal of consent must be submitted in writing to the school administration.`;
-
-const DEFAULT_HEADER: SchoolHeaderData = {
-  schoolName: 'Eskoolia School',
-  schoolAddress: '123 School Lane, City — 000000',
-  schoolPhone: '',
-  schoolEmail: 'admissions@eskoolia.in',
-  schoolWebsite: '',
-  logoDataUrl: '',
-  logoUrl: '',
-  principalName: 'Principal',
-  schoolMotto: '',
-  affiliationNo: '',
-  letterheadBg: '',
-  headerLayout: 'classic',
-  headerBgColor: '#ffffff',
-  headerTextColor: '#111827',
-  declarationText: DEFAULT_DECLARATION,
-};
-
-function loadHeaderSettings(): SchoolHeaderData {
-  if (typeof window === 'undefined') return DEFAULT_HEADER;
-  try {
-    const raw = localStorage.getItem(SCHOOL_HEADER_KEY);
-    if (!raw) return DEFAULT_HEADER;
-    return { ...DEFAULT_HEADER, ...JSON.parse(raw) };
-  } catch { return DEFAULT_HEADER; }
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((res, rej) => {
-    const reader = new FileReader();
-    reader.onload = () => res(reader.result as string);
-    reader.onerror = rej;
-    reader.readAsDataURL(file);
-  });
-}
 
 export interface ConsentFormStudent {
   // DB identity
@@ -161,24 +105,38 @@ function val(v: string | undefined | null): string {
 }
 
 export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, initialAction }: ConsentFormProps) {
+  // Header image + declaration text now come from Settings > Document
+  // Branding (one central place, shared with every other print/PDF
+  // feature) instead of a per-browser localStorage blob — see
+  // useDocumentBranding for details.
+  const { headerImageDataUrl, declarationText: centralDeclaration } = useDocumentBranding(
+    'student_verification', DEFAULT_DECLARATION
+  );
   const [showSettings, setShowSettings] = useState<boolean>(openWithSettings ?? false);
   const [declarationText, setDeclarationText] = useState(DEFAULT_DECLARATION);
+  const [editingDeclaration, setEditingDeclaration] = useState(false);
   const [showAI, setShowAI] = useState(false);
-  const [header, setHeader] = useState<SchoolHeaderData>(DEFAULT_HEADER);
-  const [settingsForm, setSettingsForm] = useState<SchoolHeaderData>(DEFAULT_HEADER);
-  const [settingsSaved, setSettingsSaved] = useState(false);
-  const [settingsErrors, setSettingsErrors] = useState<Record<string, string>>({});
-  const [settingsTab, setSettingsTab] = useState<'identity' | 'layout' | 'import' | 'declaration'>('identity');
+  const [schoolBasicInfo, setSchoolBasicInfo] = useState({ name: 'School', phone: '', email: '' });
   const [hiddenSections, setHiddenSections] = useState<Set<string>>(new Set());
   const [accentColor, setAccentColor] = useState('#6c3ce1');
   const [layoutPreset, setLayoutPreset] = useState<'official' | 'minimal' | 'detailed'>('official');
-  const [inlineEditing, setInlineEditing] = useState(false);
-  const [inlineHeader, setInlineHeader] = useState<SchoolHeaderData>(DEFAULT_HEADER);
   const modalRef = useRef<HTMLDivElement>(null);
-  const logoInputRef = useRef<HTMLInputElement>(null);
-  const letterheadInputRef = useRef<HTMLInputElement>(null);
   const signedFormInputRef = useRef<HTMLInputElement>(null);
   const ocrInputRef = useRef<HTMLInputElement>(null);
+
+  // Basic school name/phone/email for filenames and share-message text
+  // (separate from the header image — those are plain-text-only contexts).
+  useEffect(() => {
+    apiRequestWithRefresh<{ name?: string; phone?: string; email?: string }>('/api/tenancy/my-school-info/')
+      .then((d) => setSchoolBasicInfo({ name: d.name || 'School', phone: d.phone || '', email: d.email || '' }))
+      .catch(() => {});
+  }, []);
+
+  // Once the central declaration loads, seed the (still per-submission
+  // editable) declaration textarea with it.
+  useEffect(() => {
+    if (centralDeclaration) setDeclarationText(centralDeclaration);
+  }, [centralDeclaration]);
 
   // ——— New-window print helper ———
   // Instead of calling window.print() on the current page (which prints the
@@ -255,14 +213,6 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
   const [ocrMissingFields, setOcrMissingFields] = useState<string[]>([]);
 
   useEffect(() => {
-    const h = loadHeaderSettings();
-    setHeader(h);
-    setSettingsForm(h);
-    setInlineHeader(h);
-    if (h.declarationText) setDeclarationText(h.declarationText);
-  }, []);
-
-  useEffect(() => {
     setShowSettings(openWithSettings ?? false);
   }, [openWithSettings]);
 
@@ -277,10 +227,10 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
       setTimeout(() => { downloadBlankForm({ blank: true, digital: true }); onClose(); }, 50);
     } else if (initialAction === 'blank-form-email') {
       setTimeout(() => {
-        const liveHeader = downloadDigitalFormAsFile();
-        const schoolName = liveHeader.schoolName || 'Your School';
-        const schoolPhone = liveHeader.schoolPhone || '';
-        const schoolEmail = liveHeader.schoolEmail || '';
+        downloadDigitalFormAsFile();
+        const schoolName = schoolBasicInfo.name || 'Your School';
+        const schoolPhone = schoolBasicInfo.phone || '';
+        const schoolEmail = schoolBasicInfo.email || '';
         const subject = encodeURIComponent(`Student Admission Form — ${schoolName}`);
         const body = encodeURIComponent(
           `Dear Parent,\n\nPlease find the admission form from ${schoolName} attached to this email.\n\nHow to fill and return:\n1. Open the attached .html file in any web browser (Chrome, Safari, Firefox)\n2. Fill all fields by clicking / tapping and typing\n3. Click "💾 Save as PDF" at the top of the form\n4. In the print dialog, select "Save as PDF" as the destination\n5. Email the saved PDF back to: ${schoolEmail || 'the school admissions office'}\n\nFor queries, please call: ${schoolPhone || 'the school office'}\n\nWarm regards,\n${schoolName} Admissions Team\n\nNote: The form file (.html) has been downloaded to your computer. Please attach it to this email before sending.`
@@ -290,10 +240,10 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
       }, 50);
     } else if (initialAction === 'blank-form-whatsapp') {
       setTimeout(() => {
-        const liveHeader = downloadDigitalFormAsFile();
-        const schoolName = liveHeader.schoolName || 'Your School';
-        const schoolPhone = liveHeader.schoolPhone || '';
-        const schoolEmail = liveHeader.schoolEmail || '';
+        downloadDigitalFormAsFile();
+        const schoolName = schoolBasicInfo.name || 'Your School';
+        const schoolPhone = schoolBasicInfo.phone || '';
+        const schoolEmail = schoolBasicInfo.email || '';
         const text = encodeURIComponent(
           `Dear Parent 👋\n\n*Admission Form* from *${schoolName}* is ready for you to fill.\n\n📋 *How to fill:*\n1. Open the downloaded form file (.html) in your browser\n2. Fill all fields by tapping and typing\n3. Tap *"💾 Save as PDF"* at the top\n4. Send the PDF back to us\n\n📧 Email: ${schoolEmail || 'school office'}\n📞 Call: ${schoolPhone || 'school office'}\n\n_The form file has been downloaded to your device. Please share it along with this message._`
         );
@@ -310,54 +260,6 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialAction]);
-
-  const saveSettings = () => {
-    // Validate required fields before saving
-    const errors: Record<string, string> = {};
-    if (!settingsForm.schoolName.trim()) errors.schoolName = 'School name is required';
-    if (!settingsForm.principalName.trim()) errors.principalName = 'Principal name is required';
-    const phoneDigits = settingsForm.schoolPhone.replace(/\D/g, '');
-    const localPhone = phoneDigits.startsWith('91') ? phoneDigits.slice(2) : phoneDigits;
-    if (settingsForm.schoolPhone && !/^[6-9]\d{9}$/.test(localPhone)) errors.schoolPhone = 'Enter a valid 10-digit Indian mobile number';
-    if (settingsForm.schoolEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(settingsForm.schoolEmail.trim())) errors.schoolEmail = 'Enter a valid email address';
-    if (Object.keys(errors).length > 0) { setSettingsErrors(errors); return; }
-    setSettingsErrors({});
-    localStorage.setItem(SCHOOL_HEADER_KEY, JSON.stringify(settingsForm));
-    setHeader(settingsForm);
-    setInlineHeader(settingsForm);
-    if (settingsForm.declarationText) setDeclarationText(settingsForm.declarationText);
-    setSettingsSaved(true);
-    setTimeout(() => { setSettingsSaved(false); setShowSettings(false); }, 1000);
-  };
-
-  const saveInlineHeader = () => {
-    localStorage.setItem(SCHOOL_HEADER_KEY, JSON.stringify(inlineHeader));
-    setHeader(inlineHeader);
-    setSettingsForm(inlineHeader);
-    setInlineEditing(false);
-  };
-
-  const handleLogoUpload = async (file: File, target: 'settings' | 'inline') => {
-    const dataUrl = await fileToBase64(file);
-    if (target === 'settings') setSettingsForm(p => ({ ...p, logoDataUrl: dataUrl, logoUrl: '' }));
-    else { const updated = { ...inlineHeader, logoDataUrl: dataUrl, logoUrl: '' }; setInlineHeader(updated); setHeader(updated); localStorage.setItem(SCHOOL_HEADER_KEY, JSON.stringify(updated)); }
-  };
-
-  const handleLetterheadUpload = async (file: File) => {
-    const dataUrl = await fileToBase64(file);
-    setSettingsForm(p => ({ ...p, letterheadBg: dataUrl, headerLayout: 'letterhead' as HeaderLayout }));
-  };
-
-  const clearLogo = (target: 'settings' | 'inline') => {
-    if (target === 'settings') setSettingsForm(p => ({ ...p, logoDataUrl: '', logoUrl: '' }));
-    else { const updated = { ...inlineHeader, logoDataUrl: '', logoUrl: '' }; setInlineHeader(updated); setHeader(updated); localStorage.setItem(SCHOOL_HEADER_KEY, JSON.stringify(updated)); }
-  };
-
-  const clearLetterhead = () => setSettingsForm(p => ({ ...p, letterheadBg: '', headerLayout: 'classic' as HeaderLayout }));
-
-  const resetToDefault = () => {
-    setSettingsForm(DEFAULT_HEADER);
-  };
 
   const handleSignedFormUpload = async (file: File) => {
     if (!student.studentId) {
@@ -397,12 +299,9 @@ export function ConsentForm({ onClose, student, openWithSettings, onOcrApply, in
   const buildBlankFormHtml = (opts?: { blank?: boolean; digital?: boolean }): string => {
     const blankMode = opts?.blank === true;
     const digitalMode = opts?.digital === true;
-    const liveHeader = loadHeaderSettings();
-    const schoolName = liveHeader.schoolName || 'Your School';
-    const schoolAddress = liveHeader.schoolAddress || '';
-    const schoolPhone = liveHeader.schoolPhone || '';
-    const schoolEmail = liveHeader.schoolEmail || '';
-    const affiliationNo = liveHeader.affiliationNo || '';
+    const schoolName = schoolBasicInfo.name || 'Your School';
+    const schoolPhone = schoolBasicInfo.phone || '';
+    const schoolEmail = schoolBasicInfo.email || '';
     const admNo = blankMode ? 'TO BE ASSIGNED' : (student.admissionNo || 'PENDING');
 
     const fields = [
@@ -481,6 +380,7 @@ ${digitalMode ? '<meta name="viewport" content="width=device-width, initial-scal
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Segoe UI',Arial,sans-serif;background:${digitalMode ? '#f8f7ff' : '#fff'};color:#111;font-size:12px;${digitalMode ? '' : 'padding:24px'}}
   .page{max-width:750px;margin:${digitalMode ? '0 auto' : '0 auto'};${digitalMode ? 'padding:16px 16px 40px' : ''}}
+  .doc-header-img{display:block;width:100%;max-height:100px;object-fit:contain;object-position:left center;margin-bottom:8px}
   .top-bar{background:#1a0540;color:#fff;padding:10px 16px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:center}
   .school-name{font-size:15px;font-weight:700;display:block}
   .school-meta{font-size:10px;color:#c4b5fd;display:block;margin-top:2px}
@@ -543,12 +443,11 @@ ${digitalMode ? `<div class="action-bar no-print">
   <button class="btn-save-pdf" onclick="window.print()">💾 Save as PDF</button>
 </div>` : ''}
 <div class="page">
+  ${headerImageDataUrl ? `<img src="${headerImageDataUrl}" alt="${schoolName}" class="doc-header-img" />` : ''}
   <div class="top-bar">
     <div>
       <span class="school-name">📚 ${schoolName}</span>
-      ${schoolAddress ? `<span class="school-meta">${schoolAddress}</span>` : ''}
       ${(schoolPhone || schoolEmail) ? `<span class="school-meta">${[schoolPhone, schoolEmail].filter(Boolean).join(' · ')}</span>` : ''}
-      ${affiliationNo ? `<span class="school-meta">Affiliation No: ${affiliationNo}</span>` : ''}
     </div>
     <span class="adm-badge">${blankMode ? 'BLANK COPY' : `ADM #${admNo}`}</span>
   </div>
@@ -658,8 +557,7 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
 
   // ——— Download digital form as a .html file so it can be shared as an email/WhatsApp attachment ———
   const downloadDigitalFormAsFile = () => {
-    const liveHeader = loadHeaderSettings();
-    const schoolName = liveHeader.schoolName || 'School';
+    const schoolName = schoolBasicInfo.name || 'School';
     const html = buildBlankFormHtml({ blank: true, digital: true });
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -670,7 +568,6 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 4000);
-    return liveHeader;
   };
 
   // ——— OCR / Scan to auto-fill ———
@@ -839,9 +736,7 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
   interface AiTip { tone: TipTone; icon: string; title: string; body: string; action?: { label: string; run: () => void }; }
   const aiTips: AiTip[] = [];
 
-  if (!header.logoDataUrl && !header.logoUrl) aiTips.push({ tone: 'info', icon: '🖼️', title: 'Add a school logo', body: 'Upload your logo (PNG/JPG) or paste a URL. It appears at the top of every printed form.', action: { label: 'Upload logo', run: () => { setShowAI(false); setShowSettings(true); setSettingsTab('identity'); } } });
-  if (header.schoolName === DEFAULT_HEADER.schoolName) aiTips.push({ tone: 'warn', icon: '🏫', title: 'Update school name', body: 'Still showing the default "Eskoolia School". Set your real school name in header settings.', action: { label: 'Open settings', run: () => { setShowAI(false); setShowSettings(true); setSettingsTab('identity'); } } });
-  if (!header.principalName || header.principalName === 'Principal') aiTips.push({ tone: 'info', icon: '✍️', title: "Set principal's name", body: 'The signature line reads "Principal". Add the full name for a polished, official document.', action: { label: 'Open settings', run: () => { setShowAI(false); setShowSettings(true); setSettingsTab('identity'); } } });
+  if (!headerImageDataUrl) aiTips.push({ tone: 'info', icon: '🖼️', title: 'School header not configured', body: 'Set up your school logo, name and address once in Settings → Document Branding — it appears on every printed form automatically.', action: { label: 'Open settings', run: () => { setShowAI(false); window.open('/settings/document-branding', '_blank'); } } });
   if (!student.photo) aiTips.push({ tone: 'warn', icon: '📷', title: 'No student photo', body: 'A photo in Section 1 helps verify identity. Upload one in the Documents step of the enrollment form.' });
   if (!student.firstName || !student.lastName) aiTips.push({ tone: 'warn', icon: '👤', title: 'Student name incomplete', body: 'First or last name is missing. Go back to Identity step to fill it in.' });
   if (!student.admissionNo) aiTips.push({ tone: 'warn', icon: '🔢', title: 'No admission number', body: 'Admission number is required for official records. It should be auto-generated in Step 1.' });
@@ -851,8 +746,7 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
 
   // Completeness score
   const checks = [
-    !!(header.logoDataUrl || header.logoUrl), header.schoolName !== DEFAULT_HEADER.schoolName,
-    !!(header.principalName && header.principalName !== 'Principal'),
+    !!headerImageDataUrl,
     !!student.photo, !!(student.firstName && student.lastName),
     !!student.admissionNo, !!student.dateOfBirth, !!student.classId,
     !!student.phone, !!(student.guardians && student.guardians.length > 0),
@@ -897,7 +791,7 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
               AI Assist
               {aiTips.some(t => t.tone === 'warn') && <span className="cf-tb-dot" aria-hidden="true"/>}
             </button>
-            <button type="button" className={`cf-tb-btn cf-tb-settings${showSettings ? ' cf-tb-settings-active' : ''}`} onClick={() => { setShowSettings(s => !s); setShowAI(false); }} title="Customize school header">
+            <button type="button" className={`cf-tb-btn cf-tb-settings${showSettings ? ' cf-tb-settings-active' : ''}`} onClick={() => { setShowSettings(s => !s); setShowAI(false); }} title="Where the header is configured">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               Header
             </button>
@@ -911,6 +805,21 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
             </button>
           </div>
         </div>
+
+        {/* ——— Header info banner ——— */}
+        {showSettings && (
+          <div className="cf-header-info-banner no-print">
+            <span>
+              The header, logo and declaration text shown on this form are configured centrally in{' '}
+              <strong>Settings → Document Branding</strong> — changes there apply to every printed/PDF document,
+              not just this form.
+            </span>
+            <button type="button" onClick={() => window.open('/settings/document-branding', '_blank')}>
+              Open Document Branding
+            </button>
+            <button type="button" className="cf-header-info-close" onClick={() => setShowSettings(false)} aria-label="Dismiss">✕</button>
+          </div>
+        )}
 
         {/* ——— AI Assistant Panel ——— */}
         {showAI && (
@@ -1024,513 +933,19 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
           </div>
         )}
 
-        {/* ===== Settings Panel ===== */}
-        {showSettings && (
-          <div className="cf-settings-panel">
-            {/* Hidden file inputs */}
-            <input ref={logoInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { if (e.target.files?.[0]) handleLogoUpload(e.target.files[0], 'settings'); e.target.value = ''; }} />
-            <input ref={letterheadInputRef} type="file" accept="image/*,application/pdf" style={{ display: 'none' }} onChange={e => { if (e.target.files?.[0]) handleLetterheadUpload(e.target.files[0]); e.target.value = ''; }} />
-
-            <div className="cf-sp-header">
-              <div>
-                <h4 className="cf-settings-title">Header Settings</h4>
-                <p className="cf-settings-desc">Changes save to this browser and appear on every printed form.</p>
-              </div>
-              <div className="cf-sp-tabs">
-                {(['identity', 'layout', 'import', 'declaration'] as const).map(tab => (
-                  <button key={tab} type="button" className={`cf-sp-tab${settingsTab === tab ? ' active' : ''}`} onClick={() => setSettingsTab(tab)}>
-                    {tab === 'identity' ? '🏫 School Info' : tab === 'layout' ? '🎨 Logo & Layout' : tab === 'import' ? '📄 Import Letterhead' : '📝 Declaration'}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* ── Tab: School Info ── */}
-            {settingsTab === 'identity' && (() => {
-              const titleCase = (s: string) => s.replace(/\b\w/g, c => c.toUpperCase());
-              const setErr = (field: string, msg: string) => setSettingsErrors(prev => ({ ...prev, [field]: msg }));
-              const clearErr = (field: string) => setSettingsErrors(prev => { const n = { ...prev }; delete n[field]; return n; });
-
-              return (
-              <div className="cf-settings-grid">
-                {/* School Name */}
-                <div className="cf-settings-field" style={{ gridColumn: '1 / -1' }}>
-                  <label className="cf-settings-label">School Name *</label>
-                  <input
-                    className={`cf-settings-input${settingsErrors.schoolName ? ' cf-input-error' : ''}`}
-                    value={settingsForm.schoolName}
-                    placeholder="e.g. Sunshine Public School"
-                    onChange={e => setSettingsForm(prev => ({ ...prev, schoolName: titleCase(e.target.value) }))}
-                    onBlur={() => {
-                      if (!settingsForm.schoolName.trim()) setErr('schoolName', 'School name is required');
-                      else clearErr('schoolName');
-                    }}
-                  />
-                  {settingsErrors.schoolName && <span className="cf-inline-err">{settingsErrors.schoolName}</span>}
-                </div>
-
-                {/* Address */}
-                <div className="cf-settings-field" style={{ gridColumn: '1 / -1' }}>
-                  <label className="cf-settings-label">Address</label>
-                  <input
-                    className="cf-settings-input"
-                    value={settingsForm.schoolAddress}
-                    placeholder="Street, City, PIN"
-                    onChange={e => setSettingsForm(prev => ({ ...prev, schoolAddress: titleCase(e.target.value) }))}
-                  />
-                </div>
-
-                {/* Phone */}
-                <div className="cf-settings-field">
-                  <label className="cf-settings-label">Phone</label>
-                  <input
-                    className={`cf-settings-input${settingsErrors.schoolPhone ? ' cf-input-error' : ''}`}
-                    value={settingsForm.schoolPhone}
-                    placeholder="+91 98765 43210"
-                    onChange={e => {
-                      let v = e.target.value.replace(/[^\d\s+\-()]/g, '');
-                      if (v && !v.startsWith('+')) v = '+91 ' + v.replace(/^\+?91\s*/, '');
-                      setSettingsForm(prev => ({ ...prev, schoolPhone: v }));
-                    }}
-                    onBlur={() => {
-                      const digits = settingsForm.schoolPhone.replace(/\D/g, '');
-                      const local = digits.startsWith('91') ? digits.slice(2) : digits;
-                      if (settingsForm.schoolPhone && !/^[6-9]\d{9}$/.test(local)) {
-                        setErr('schoolPhone', 'Enter a valid 10-digit Indian mobile number');
-                      } else clearErr('schoolPhone');
-                    }}
-                  />
-                  {settingsErrors.schoolPhone && <span className="cf-inline-err">{settingsErrors.schoolPhone}</span>}
-                </div>
-
-                {/* Email */}
-                <div className="cf-settings-field">
-                  <label className="cf-settings-label">Email</label>
-                  <input
-                    className={`cf-settings-input${settingsErrors.schoolEmail ? ' cf-input-error' : ''}`}
-                    value={settingsForm.schoolEmail}
-                    placeholder="admissions@school.in"
-                    onChange={e => setSettingsForm(prev => ({ ...prev, schoolEmail: e.target.value.trim() }))}
-                    onBlur={() => {
-                      const e = settingsForm.schoolEmail.trim();
-                      if (e && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e)) setErr('schoolEmail', 'Enter a valid email address');
-                      else clearErr('schoolEmail');
-                    }}
-                  />
-                  {settingsErrors.schoolEmail && <span className="cf-inline-err">{settingsErrors.schoolEmail}</span>}
-                </div>
-
-                {/* Website */}
-                <div className="cf-settings-field">
-                  <label className="cf-settings-label">Website</label>
-                  <input
-                    className="cf-settings-input"
-                    value={settingsForm.schoolWebsite}
-                    placeholder="www.schoolname.in"
-                    onChange={e => setSettingsForm(prev => ({ ...prev, schoolWebsite: e.target.value.trim() }))}
-                  />
-                </div>
-
-                {/* Principal Name */}
-                <div className="cf-settings-field">
-                  <label className="cf-settings-label">Principal Name *</label>
-                  <input
-                    className={`cf-settings-input${settingsErrors.principalName ? ' cf-input-error' : ''}`}
-                    value={settingsForm.principalName}
-                    placeholder="Full name for signature line"
-                    onChange={e => {
-                      const v = e.target.value.replace(/[^A-Za-z\s'.,-]/g, '');
-                      setSettingsForm(prev => ({ ...prev, principalName: v }));
-                    }}
-                    onBlur={() => {
-                      const v = settingsForm.principalName.trim();
-                      const tc = titleCase(v);
-                      if (tc !== settingsForm.principalName) setSettingsForm(prev => ({ ...prev, principalName: tc }));
-                      if (!v) setErr('principalName', 'Principal name is required');
-                      else clearErr('principalName');
-                    }}
-                  />
-                  {settingsErrors.principalName && <span className="cf-inline-err">{settingsErrors.principalName}</span>}
-                </div>
-
-                {/* Affiliation No */}
-                <div className="cf-settings-field">
-                  <label className="cf-settings-label">Affiliation / Reg No.</label>
-                  <input
-                    className={`cf-settings-input${settingsErrors.affiliationNo ? ' cf-input-error' : ''}`}
-                    value={settingsForm.affiliationNo}
-                    placeholder="CBSE / State board ref"
-                    onChange={e => {
-                      const v = e.target.value.replace(/[^A-Za-z0-9\s/\-]/g, '');
-                      setSettingsForm(prev => ({ ...prev, affiliationNo: v }));
-                    }}
-                    onBlur={() => {
-                      const v = settingsForm.affiliationNo.trim();
-                      if (v && !/^[A-Za-z0-9\s/\-]{3,30}$/.test(v)) setErr('affiliationNo', 'Enter a valid affiliation/registration number');
-                      else clearErr('affiliationNo');
-                    }}
-                  />
-                  {settingsErrors.affiliationNo && <span className="cf-inline-err">{settingsErrors.affiliationNo}</span>}
-                </div>
-
-                {/* Motto */}
-                <div className="cf-settings-field" style={{ gridColumn: '1 / -1' }}>
-                  <label className="cf-settings-label">Motto / Tagline</label>
-                  <input
-                    className="cf-settings-input"
-                    value={settingsForm.schoolMotto}
-                    placeholder="Shown under school name"
-                    onChange={e => setSettingsForm(prev => ({ ...prev, schoolMotto: e.target.value }))}
-                  />
-                </div>
-              </div>
-              );
-            })()}
-
-            {/* ── Tab: Logo & Layout ── */}
-            {settingsTab === 'layout' && (
-              <div className="cf-layout-tab">
-                {/* Logo upload zone */}
-                <div className="cf-field-group">
-                  <p className="cf-field-group-label">SCHOOL LOGO</p>
-                  <div className="cf-logo-zone" onDrop={e => { e.preventDefault(); const file = e.dataTransfer.files?.[0]; if (file && file.type.startsWith('image/')) handleLogoUpload(file, 'settings'); }} onDragOver={e => e.preventDefault()}>
-                    {settingsForm.logoDataUrl || settingsForm.logoUrl ? (
-                      <div className="cf-logo-preview-wrap">
-                        <img src={settingsForm.logoDataUrl || settingsForm.logoUrl} alt="Logo preview" className="cf-logo-preview-img" />
-                        <div className="cf-logo-preview-actions">
-                          <button type="button" className="cf-logo-change-btn" onClick={() => logoInputRef.current?.click()}>Change</button>
-                          <button type="button" className="cf-logo-remove-btn" onClick={() => clearLogo('settings')}>Remove</button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="cf-logo-empty" onClick={() => logoInputRef.current?.click()}>
-                        <span className="cf-logo-upload-icon">
-                          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="1.5" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                        </span>
-                        <p className="cf-logo-empty-title">Drag &amp; drop or click to upload</p>
-                        <p className="cf-logo-empty-hint">PNG, JPG, SVG, WebP — transparent background recommended</p>
-                        <button type="button" className="cf-logo-browse-btn" onClick={e => { e.stopPropagation(); logoInputRef.current?.click(); }}>Browse files</button>
-                      </div>
-                    )}
-                  </div>
-                  <div className="cf-logo-url-row">
-                    <span className="cf-logo-url-or">or paste URL</span>
-                    <input className="cf-settings-input cf-logo-url-input" value={settingsForm.logoUrl} onChange={e => setSettingsForm(p => ({ ...p, logoUrl: e.target.value, logoDataUrl: '' }))} placeholder="https://yourschool.in/logo.png" />
-                  </div>
-                </div>
-
-                {/* Header layout picker */}
-                <div className="cf-field-group">
-                  <p className="cf-field-group-label">HEADER LAYOUT <span className="cf-field-group-hint">— previews update with your chosen colours</span></p>
-                  <div className="cf-layout-picker">
-                    {((): Array<{id:HeaderLayout;label:string;desc:string;preview:(bg:string,tx:string)=>React.ReactNode}> => {
-                      const bg = settingsForm.headerBgColor || '#ffffff';
-                      const tx = settingsForm.headerTextColor || '#111827';
-                      return [
-                        {
-                          id: 'classic',
-                          label: 'Classic',
-                          desc: 'Logo left · text right',
-                          preview: (b,t) => (
-                            <svg viewBox="0 0 84 44" width="76" height="40" style={{display:'block',borderRadius:4}}>
-                              <rect width="84" height="44" fill={b} rx="4"/>
-                              {/* logo box */}
-                              <rect x="6" y="9" width="17" height="17" fill={t} opacity="0.15" rx="2.5"/>
-                              <rect x="9" y="12" width="11" height="11" fill={t} opacity="0.2" rx="1.5"/>
-                              {/* text lines */}
-                              <rect x="29" y="10" width="42" height="5" fill={t} opacity="0.65" rx="2"/>
-                              <rect x="29" y="19" width="30" height="3.5" fill={t} opacity="0.35" rx="1.5"/>
-                              <rect x="29" y="25.5" width="22" height="3" fill={t} opacity="0.2" rx="1.5"/>
-                            </svg>
-                          ),
-                        },
-                        {
-                          id: 'centered',
-                          label: 'Centered',
-                          desc: 'Logo top · text below centered',
-                          preview: (b,t) => (
-                            <svg viewBox="0 0 84 44" width="76" height="40" style={{display:'block',borderRadius:4}}>
-                              <rect width="84" height="44" fill={b} rx="4"/>
-                              {/* logo centered */}
-                              <rect x="33" y="4" width="18" height="16" fill={t} opacity="0.15" rx="2.5"/>
-                              <rect x="36" y="7" width="12" height="10" fill={t} opacity="0.2" rx="1.5"/>
-                              {/* centered text */}
-                              <rect x="12" y="24" width="60" height="5" fill={t} opacity="0.65" rx="2"/>
-                              <rect x="20" y="32.5" width="44" height="3.5" fill={t} opacity="0.3" rx="1.5"/>
-                            </svg>
-                          ),
-                        },
-                        {
-                          id: 'banner',
-                          label: 'Banner',
-                          desc: 'Full-width colour band',
-                          preview: (b,t) => (
-                            <svg viewBox="0 0 84 44" width="76" height="40" style={{display:'block',borderRadius:4}}>
-                              {/* full colored bg */}
-                              <rect width="84" height="44" fill={b === '#ffffff' ? '#6c3ce1' : b} rx="4"/>
-                              {/* subtle inner glow */}
-                              <rect x="0" y="0" width="84" height="44" fill="white" opacity="0.05" rx="4"/>
-                              {/* logo */}
-                              <rect x="7" y="12" width="15" height="15" fill={t === '#111827' ? '#fff' : t} opacity="0.25" rx="2.5"/>
-                              <rect x="10" y="15" width="9" height="9" fill={t === '#111827' ? '#fff' : t} opacity="0.35" rx="1.5"/>
-                              {/* text */}
-                              <rect x="28" y="13" width="40" height="5" fill={t === '#111827' ? '#fff' : t} opacity="0.85" rx="2"/>
-                              <rect x="28" y="22" width="28" height="3.5" fill={t === '#111827' ? '#fff' : t} opacity="0.5" rx="1.5"/>
-                            </svg>
-                          ),
-                        },
-                        {
-                          id: 'minimal',
-                          label: 'Minimal',
-                          desc: 'Clean text only · no logo',
-                          preview: (b,t) => (
-                            <svg viewBox="0 0 84 44" width="76" height="40" style={{display:'block',borderRadius:4}}>
-                              <rect width="84" height="44" fill={b} rx="4"/>
-                              {/* just lines, clean */}
-                              <rect x="8" y="12" width="54" height="5.5" fill={t} opacity="0.7" rx="2"/>
-                              <rect x="8" y="21" width="40" height="3.5" fill={t} opacity="0.4" rx="1.5"/>
-                              <rect x="8" y="28" width="28" height="3" fill={t} opacity="0.22" rx="1.5"/>
-                              {/* thin bottom rule */}
-                              <rect x="8" y="36" width="68" height="1" fill={t} opacity="0.12" rx="0.5"/>
-                            </svg>
-                          ),
-                        },
-                        {
-                          id: 'letterhead',
-                          label: 'Letterhead',
-                          desc: 'Imported school image',
-                          preview: (_b,_t) => (
-                            <svg viewBox="0 0 84 44" width="76" height="40" style={{display:'block',borderRadius:4}}>
-                              <defs>
-                                <linearGradient id="lh-thumb-grad" x1="0" y1="0" x2="1" y2="1">
-                                  <stop offset="0%" stopColor="#ede9fe"/>
-                                  <stop offset="60%" stopColor="#f3e8ff"/>
-                                  <stop offset="100%" stopColor="#fce7f3"/>
-                                </linearGradient>
-                              </defs>
-                              <rect width="84" height="44" fill="url(#lh-thumb-grad)" rx="4"/>
-                              {/* photo frame icon */}
-                              <rect x="18" y="6" width="48" height="28" fill="none" stroke="#7c3aed" strokeWidth="1.5" rx="3" opacity="0.5"/>
-                              {/* mountain + sun like real photo */}
-                              <circle cx="30" cy="17" r="5" fill="#7c3aed" opacity="0.2"/>
-                              <path d="M18 28 L30 20 L40 26 L50 18 L66 28" fill="#7c3aed" opacity="0.18" strokeWidth="0" fillRule="nonzero"/>
-                              {/* image icon symbol */}
-                              <path d="M38 13 L44 13 L46 10 L48 13 L54 13" fill="none" stroke="#7c3aed" strokeWidth="1" opacity="0.3"/>
-                              {/* "your letterhead" label */}
-                              <rect x="20" y="37" width="44" height="3" fill="#7c3aed" opacity="0.15" rx="1"/>
-                            </svg>
-                          ),
-                        },
-                      ];
-                    })().map(l => (
-                      <button key={l.id} type="button" className={`cf-layout-option${settingsForm.headerLayout === l.id ? ' active' : ''}`} onClick={() => { setSettingsForm(p => ({ ...p, headerLayout: l.id })); setHeader(prev => ({ ...prev, headerLayout: l.id })); }}>
-                        <span className="cf-layout-thumb">{l.preview(settingsForm.headerBgColor || '#ffffff', settingsForm.headerTextColor || '#111827')}</span>
-                        <span className="cf-layout-name">{l.label}</span>
-                        <span className="cf-layout-desc">{l.desc}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Colors */}
-                <div className="cf-field-group">
-                  <p className="cf-field-group-label">HEADER COLOURS</p>
-                  <div className="cf-color-pair">
-                    <div className="cf-color-item">
-                      <label className="cf-settings-label">Background</label>
-                      <div className="cf-color-input-wrap">
-                        <input type="color" value={settingsForm.headerBgColor} onChange={e => setSettingsForm(p => ({ ...p, headerBgColor: e.target.value }))} />
-                        <span>{settingsForm.headerBgColor}</span>
-                      </div>
-                    </div>
-                    <div className="cf-color-item">
-                      <label className="cf-settings-label">Text</label>
-                      <div className="cf-color-input-wrap">
-                        <input type="color" value={settingsForm.headerTextColor} onChange={e => setSettingsForm(p => ({ ...p, headerTextColor: e.target.value }))} />
-                        <span>{settingsForm.headerTextColor}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* ── Tab: Import Letterhead ── */}
-            {settingsTab === 'import' && (
-              <div className="cf-import-tab">
-                <div className="cf-import-info">
-                  <p className="cf-import-how-title">How it works</p>
-                  <ol className="cf-import-steps">
-                    <li>Upload a scan or photo of your school&apos;s official letterhead (top portion).</li>
-                    <li>We&apos;ll set it as the header background image.</li>
-                    <li>The header layout automatically switches to <strong>Letterhead</strong> mode — your image fills the top, then student data flows below.</li>
-                    <li>On print, the letterhead is preserved exactly as-is.</li>
-                  </ol>
-                  <p className="cf-import-tip">💡 Tip — crop the image to show just the top 80–120px header strip for best results.</p>
-                </div>
-
-                <div className="cf-lh-zone" onDrop={e => { e.preventDefault(); const file = e.dataTransfer.files?.[0]; if (file) handleLetterheadUpload(file); }} onDragOver={e => e.preventDefault()}>
-                  {settingsForm.letterheadBg ? (
-                    <div className="cf-lh-preview-wrap">
-                      <img src={settingsForm.letterheadBg} alt="Letterhead preview" className="cf-lh-preview-img" />
-                      <div className="cf-lh-preview-actions">
-                        <button type="button" className="cf-logo-change-btn" onClick={() => letterheadInputRef.current?.click()}>Replace</button>
-                        <button type="button" className="cf-logo-remove-btn" onClick={clearLetterhead}>Remove</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="cf-logo-empty" onClick={() => letterheadInputRef.current?.click()}>
-                      <span className="cf-logo-upload-icon">
-                        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#8b5cf6" strokeWidth="1.5" strokeLinecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>
-                      </span>
-                      <p className="cf-logo-empty-title">Upload your official letterhead</p>
-                      <p className="cf-logo-empty-hint">PNG, JPG, or PDF page screenshot • Any size — we&apos;ll scale it</p>
-                      <button type="button" className="cf-logo-browse-btn" onClick={e => { e.stopPropagation(); letterheadInputRef.current?.click(); }}>Browse files</button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* ── Tab: Declaration / T&C ── */}
-            {settingsTab === 'declaration' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                <div style={{ background: '#f5f3ff', border: '1px solid #ede9fe', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#6d28d9', lineHeight: 1.6 }}>
-                  <strong>💡 Tips:</strong>
-                  <ul style={{ margin: '6px 0 0 0', paddingLeft: 18 }}>
-                    <li>Use <code style={{ background: '#ede9fe', padding: '1px 4px', borderRadius: 3 }}>{'{studentName}'}</code> — it will be replaced with the student&apos;s full name when printed.</li>
-                    <li>You can add school-specific terms, fee policies, conduct clauses, or data privacy notices.</li>
-                    <li>Changes are saved with your header settings and applied to all future printed forms.</li>
-                  </ul>
-                </div>
-
-                <div className="cf-settings-field" style={{ gridColumn: '1 / -1' }}>
-                  <label className="cf-settings-label" style={{ marginBottom: 6 }}>
-                    Declaration / Terms &amp; Conditions
-                    <span style={{ fontWeight: 400, color: '#9ca3af', marginLeft: 8, fontSize: 11 }}>
-                      ({(settingsForm.declarationText || '').length} chars)
-                    </span>
-                  </label>
-                  <textarea
-                    className="cf-settings-input"
-                    rows={12}
-                    style={{ resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.7, fontSize: 13 }}
-                    value={settingsForm.declarationText ?? DEFAULT_DECLARATION}
-                    onChange={e => setSettingsForm(prev => ({ ...prev, declarationText: e.target.value }))}
-                    placeholder="Enter your school's declaration text, terms and conditions, or consent statement..."
-                  />
-                </div>
-
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button
-                    type="button"
-                    style={{ fontSize: 12, color: '#6b7280', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
-                    onClick={() => setSettingsForm(prev => ({ ...prev, declarationText: DEFAULT_DECLARATION }))}
-                  >
-                    ↺ Reset to default declaration
-                  </button>
-                </div>
-
-                {/* Live preview */}
-                <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '14px 16px' }}>
-                  <p style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Preview</p>
-                  <p style={{ fontSize: 13, color: '#374151', lineHeight: 1.75, margin: 0, whiteSpace: 'pre-wrap' }}>
-                    {(settingsForm.declarationText || DEFAULT_DECLARATION).replace('{studentName}', student.firstName ? `${student.firstName} ${student.lastName}` : '[Student Name]')}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <div className="cf-settings-actions">
-              <button type="button" onClick={resetToDefault} className="cf-settings-reset" title="Reset all header settings to defaults">Reset defaults</button>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button type="button" onClick={() => setShowSettings(false)} className="cf-settings-cancel">Cancel</button>
-                <button type="button" onClick={saveSettings} className="cf-settings-save">
-                  {settingsSaved ? '✓ Applied!' : 'Apply & save'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Printable body */}
         <div className="cf-body">
           {/* Generated-on note (print only) */}
           <p className="cf-print-date">Generated on: {generatedOn}</p>
 
-          {/* School header */}
-          {header.headerLayout === 'letterhead' && header.letterheadBg ? (
-            <div className="cf-lh-header-wrap">
-              <img src={header.letterheadBg} alt="School letterhead" className="cf-lh-header-img" />
-              {inlineEditing && (
-                <div className="cf-inline-edit-bar">
-                  <span className="cf-inline-badge">✏️ Editing letterhead info</span>
-                  <button type="button" className="cf-inline-save-btn" onClick={saveInlineHeader}>Save</button>
-                  <button type="button" className="cf-inline-cancel-btn" onClick={() => { setInlineEditing(false); setInlineHeader(header); }}>Cancel</button>
-                </div>
-              )}
-            </div>
+          {/* School header — pulled from Settings > Document Branding, the
+              one place every print/PDF feature in the app gets its header
+              from. See useDocumentBranding. */}
+          {headerImageDataUrl ? (
+            <img src={headerImageDataUrl} alt="School header" className="cf-header-img" />
           ) : (
-            <div
-              className={`cf-school-header cf-header-${header.headerLayout}`}
-              style={{ background: header.headerBgColor || '#fff', color: header.headerTextColor || '#111827' }}
-            >
-              {/* Logo zone */}
-              {header.headerLayout !== 'minimal' && (
-                <div className="cf-logo-zone-header" onClick={() => inlineEditing && logoInputRef.current?.click()} title={inlineEditing ? 'Click to change logo' : ''} style={{ cursor: inlineEditing ? 'pointer' : 'default' }}>
-                  {(inlineEditing ? inlineHeader : header).logoDataUrl || (inlineEditing ? inlineHeader : header).logoUrl ? (
-                    <img
-                      src={(inlineEditing ? inlineHeader : header).logoDataUrl || (inlineEditing ? inlineHeader : header).logoUrl}
-                      alt="School logo"
-                      className="cf-school-logo-img"
-                    />
-                  ) : (
-                    <div className="cf-school-logo-placeholder" style={{ color: header.headerTextColor }}>
-                      {inlineEditing ? <span title="Click to upload logo">🖼️<span style={{fontSize:10,display:'block'}}>Upload</span></span> : '🏫'}
-                    </div>
-                  )}
-                  {inlineEditing && <input ref={logoInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { if (e.target.files?.[0]) handleLogoUpload(e.target.files[0], 'inline'); e.target.value = ''; }} />}
-                </div>
-              )}
-
-              {/* Text zone */}
-              <div className="cf-header-text-zone">
-                {inlineEditing ? (
-                  <>
-                    <input className="cf-inline-input cf-inline-name" value={inlineHeader.schoolName} onChange={e => setInlineHeader(p => ({ ...p, schoolName: e.target.value }))} placeholder="School name" style={{ color: inlineHeader.headerTextColor }} />
-                    {inlineHeader.schoolMotto && <input className="cf-inline-input cf-inline-motto" value={inlineHeader.schoolMotto} onChange={e => setInlineHeader(p => ({ ...p, schoolMotto: e.target.value }))} placeholder="Motto" style={{ color: inlineHeader.headerTextColor, opacity: 0.75 }} />}
-                    <input className="cf-inline-input cf-inline-addr" value={inlineHeader.schoolAddress} onChange={e => setInlineHeader(p => ({ ...p, schoolAddress: e.target.value }))} placeholder="Address" style={{ color: inlineHeader.headerTextColor, opacity: 0.75 }} />
-                    <div className="cf-inline-row">
-                      <input className="cf-inline-input" value={inlineHeader.schoolPhone} onChange={e => setInlineHeader(p => ({ ...p, schoolPhone: e.target.value }))} placeholder="Phone" style={{ color: inlineHeader.headerTextColor, opacity: 0.75, flex:1 }} />
-                      <input className="cf-inline-input" value={inlineHeader.schoolEmail} onChange={e => setInlineHeader(p => ({ ...p, schoolEmail: e.target.value }))} placeholder="Email" style={{ color: inlineHeader.headerTextColor, opacity: 0.75, flex:2 }} />
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <h1 className="cf-school-name" style={{ color: header.headerTextColor }}>{header.schoolName}</h1>
-                    {header.schoolMotto && <p className="cf-school-motto" style={{ color: header.headerTextColor }}>{header.schoolMotto}</p>}
-                    <p className="cf-school-address" style={{ color: header.headerTextColor, opacity: 0.75 }}>
-                      {header.schoolAddress}
-                      {header.schoolPhone ? ` · ${header.schoolPhone}` : ''}
-                      {header.schoolEmail ? ` · ${header.schoolEmail}` : ''}
-                      {header.affiliationNo ? ` · Affil. No: ${header.affiliationNo}` : ''}
-                    </p>
-                  </>
-                )}
-              </div>
-
-              {/* Inline edit toggle (screen only, not printed) */}
-              {!inlineEditing ? (
-                <button type="button" className="cf-inline-edit-trigger" onClick={() => { setInlineEditing(true); setInlineHeader(header); }} title="Edit header directly">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                  Edit header
-                </button>
-              ) : (
-                <div className="cf-inline-actions">
-                  <button type="button" className="cf-inline-save-btn" onClick={saveInlineHeader}>✓ Save</button>
-                  <button type="button" className="cf-inline-cancel-btn" onClick={() => { setInlineEditing(false); setInlineHeader(header); }}>✕</button>
-                </div>
-              )}
+            <div className="cf-header-img-placeholder">
+              <span>School header not configured yet — set it up in Settings → Document Branding.</span>
             </div>
           )}
 
@@ -1734,11 +1149,23 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
           </div>
           )}
 
-          {/* Section 10: Declaration */}
+          {/* Section 10: Declaration — starts from the school's central
+              declaration text (Settings > Document Branding) but stays
+              editable per-submission here, e.g. for a one-off wording tweak. */}
           {isVisible('declaration') && (
           <div className="cf-section">
-            <h3 className="cf-section-heading" style={{ color: accentColor, borderColor: accentColor + '33' }}>10. Declaration</h3>
-            {inlineEditing ? (
+            <h3 className="cf-section-heading" style={{ color: accentColor, borderColor: accentColor + '33' }}>
+              10. Declaration
+              <button
+                type="button"
+                className="no-print"
+                onClick={() => setEditingDeclaration((v) => !v)}
+                style={{ marginLeft: 10, fontSize: 11, fontWeight: 600, color: accentColor, background: 'none', border: 'none', cursor: 'pointer' }}
+              >
+                {editingDeclaration ? 'Done' : 'Edit'}
+              </button>
+            </h3>
+            {editingDeclaration ? (
               <div style={{ position: 'relative' }}>
                 <textarea
                   className="field-input"
@@ -1768,7 +1195,7 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
             </div>
             <div className="cf-sig-block">
               <div className="cf-sig-line"></div>
-              <p className="cf-sig-label">{header.principalName} / Authorised Signatory</p>
+              <p className="cf-sig-label">Principal / Authorised Signatory</p>
             </div>
             <div className="cf-sig-block">
               <div className="cf-sig-line"></div>
@@ -2929,6 +2356,57 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
 
         .cf-body {
           padding: 36px 48px;
+        }
+        .cf-header-info-banner {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin: 0 20px;
+          padding: 12px 16px;
+          background: #f5f3ff;
+          border: 1px solid #ddd6fe;
+          border-radius: 10px;
+          font-size: 12.5px;
+          color: #4c1d95;
+          line-height: 1.5;
+        }
+        .cf-header-info-banner button {
+          flex-shrink: 0;
+          background: #6c3ce1;
+          color: #fff;
+          border: none;
+          border-radius: 6px;
+          padding: 7px 12px;
+          font-size: 12px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .cf-header-info-close {
+          background: transparent !important;
+          color: #6c3ce1 !important;
+          padding: 4px 8px !important;
+        }
+        .cf-header-img {
+          display: block;
+          width: 100%;
+          max-height: 140px;
+          object-fit: contain;
+          object-position: left center;
+          margin-bottom: 16px;
+        }
+        .cf-header-img-placeholder {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          min-height: 80px;
+          margin-bottom: 16px;
+          border: 1.5px dashed #d1d5db;
+          border-radius: 8px;
+          background: #f9fafb;
+          color: #9ca3af;
+          font-size: 12.5px;
+          text-align: center;
+          padding: 12px;
         }
 
         .cf-print-date {

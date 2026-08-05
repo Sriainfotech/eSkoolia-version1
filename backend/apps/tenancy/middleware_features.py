@@ -5,17 +5,12 @@ Runs after tenant resolution and authentication.
 """
 
 from django.utils.deprecation import MiddlewareMixin
-from django.http import JsonResponse, Http404
+from django.http import JsonResponse
 from apps.tenancy.context import (
     get_current_tenant,
     is_tenant_mode,
 )
 from apps.tenancy.feature_flags import is_feature_enabled
-from apps.tenancy.helpers import (
-    tenant_is_active,
-    tenant_is_suspended,
-    tenant_api_allowed,
-)
 
 
 class TenantFeatureValidationMiddleware(MiddlewareMixin):
@@ -179,7 +174,6 @@ class TenantFeatureGateMiddleware(MiddlewareMixin):
             if re.match(url_pattern, request.path):
                 # Check if feature is enabled
                 if not is_feature_enabled(feature_id):
-                    tenant = get_current_tenant()
                     feature_name = feature_id.replace("_enabled", "").title()
                     
                     return JsonResponse(

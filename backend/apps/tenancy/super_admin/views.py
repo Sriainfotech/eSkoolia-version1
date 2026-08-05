@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime
 
 from django.core.cache import cache
 from django.db import connection
@@ -370,7 +369,7 @@ class SchoolLogoUploadView(SuperAdminBaseView):
         return Response({"logo_url": logo_url})
 
 
-
+class SchoolActivateView(SuperAdminBaseView):
     def post(self, request, tenant_id: str):
         tenant = get_object_or_404(SchoolTenant, tenant_id=tenant_id)
         tenant.status = "active"

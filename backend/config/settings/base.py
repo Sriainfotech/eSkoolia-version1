@@ -3,6 +3,7 @@ import os
 import socket
 import struct
 import random
+from datetime import timedelta
 from dotenv import load_dotenv
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -138,6 +139,7 @@ INSTALLED_APPS = [
     "apps.notes",
     "apps.todos",
     "apps.calls_queue",
+    "apps.settings",
 ]
 
 # Guarded django-tenants integration
@@ -229,7 +231,7 @@ if MULTI_TENANCY_ENABLED:
     # Basic static validations
     try:
         _validate_tenancy_middleware_order(MIDDLEWARE)
-    except RuntimeError as exc:
+    except RuntimeError:
         # Raise loudly during startup to avoid misconfigured deployments
         raise
 
@@ -469,7 +471,6 @@ SIMPLE_JWT = {
 }
 
 # Convert minutes to timedelta for django-rest-simplejwt
-from datetime import timedelta
 try:
     SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"] = timedelta(
         minutes=int(SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"])

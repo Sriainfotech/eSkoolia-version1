@@ -17,7 +17,7 @@ from rest_framework import viewsets, status, serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Count, Q
+from django.db.models import Count
 from django.utils import timezone
 from datetime import timedelta
 
@@ -31,7 +31,6 @@ from apps.tenancy.models import (
 from apps.tenancy.permissions import IsSuperAdminOnly
 from apps.tenancy.audit_features import (
     get_tenant_feature_audit_log,
-    get_plan_change_history,
 )
 
 

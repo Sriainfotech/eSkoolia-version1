@@ -212,12 +212,6 @@ export function IdCardPanel() {
       return;
     }
 
-    console.log(`[IdCard Upload] Field: "${field}"`);
-    console.log(`[IdCard Upload] onChange fired ✓`);
-    console.log(`[IdCard Upload] File name: ${file.name}`);
-    console.log(`[IdCard Upload] File type: ${file.type}`);
-    console.log(`[IdCard Upload] File size: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
-
     const normalizedType = file.type.toLowerCase();
     if (!acceptedTypes.includes(normalizedType)) {
       console.warn(`[IdCard Upload] REJECTED — invalid type: "${file.type}"`);
@@ -236,16 +230,13 @@ export function IdCardPanel() {
     }
 
     const url = URL.createObjectURL(file);
-    console.log(`[IdCard Upload] URL.createObjectURL() → ${url}`);
 
     const reader = new FileReader();
-    reader.onload = () => console.log(`[IdCard Upload] FileReader OK ✓ — "${file.name}" is readable`);
     reader.onerror = () => console.error(`[IdCard Upload] FileReader FAILED ✗ — "${file.name}" could not be read`);
     reader.readAsDataURL(file);
 
     setFile(file);
     setPreview(prev => { if (prev) URL.revokeObjectURL(prev); return url; });
-    console.log(`[IdCard Upload] State updated ✓ — preview set for "${field}"`);
   };
 
   const edit = (row: IdCardRow) => {
@@ -352,15 +343,12 @@ export function IdCardPanel() {
       setSuccess("");
       setFieldErrors({});
       setTitleError("");
-      console.log(`[IdCard Save] Sending ${editingId ? "PATCH" : "POST"} — title="${title.trim()}", layout="${layout}", roles=${JSON.stringify(parseRoleIds())}, files: bg=${!!backgroundUpload}, bgBack=${!!profileUpload}, logo=${!!logoUpload}, sig=${!!signatureUpload}`);
       if (editingId) {
         await apiForm(`/api/v1/admissions/id-card-templates/${editingId}/`, "PATCH", formData);
-        console.log("[IdCard Save] ✓ PATCH success — ID card updated");
         setSuccess("ID card updated successfully.");
         setSaveFeedback({ type: "success", text: "ID card updated successfully." });
       } else {
         await apiForm("/api/v1/admissions/id-card-templates/", "POST", formData);
-        console.log("[IdCard Save] ✓ POST success — ID card created");
         setSuccess("ID card saved successfully.");
         setSaveFeedback({ type: "success", text: "ID card saved successfully." });
       }

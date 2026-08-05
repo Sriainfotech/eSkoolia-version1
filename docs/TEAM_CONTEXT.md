@@ -1,5 +1,70 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — GitHub Copilot (31/07/2026 — Session 2)
+
+**Area:** Document Branding settings — full feature build, advanced UI, and live preview
+
+### 1. Document Branding backend — new fields, styles, and preview API
+
+**Model & migration additions** (`backend/apps/settings/`)
+- Added 10 new fields to `DocumentBrandingSettings`: `accent_color`, `header_size` (compact/standard/tall), `logo_position`, `show_divider`, `divider_style` (none/solid/double/dashed/thick_rule), `show_watermark`, `watermark_text`, `show_logo`, `declaration_fee_receipt`, `declaration_transfer_certificate`, `declaration_admission`.
+- Three new header styles added: `executive`, `letterpress`, `banner` — each designed for crisp B&W print.
+- Migrations: `0005_documentbrandingsettings_advanced`, `0006_documentbrandingsettings_show_logo`. Both applied.
+
+**Branding renderer** (`backend/apps/settings/branding.py`)
+- Refactored `render_generated_header_png` to accept `branding_override=None` for preview-without-save.
+- Added six separate style renderer functions; `_draw_divider` (5 styles); `_add_watermark` (22 % opacity diagonal); dynamic height from `header_size`; logo skipped when `show_logo=False`.
+
+**Preview endpoint** (`backend/apps/settings/views.py` + `urls.py`)
+- New `POST /api/v1/settings/document-branding/preview/` — renders PNG from posted layout params without touching the DB.
+
+**Serializer** (`backend/apps/settings/serializers.py`)
+- All new fields exposed; both color fields validated as `#RRGGBB`.
+
+### 2. Document Branding frontend — advanced studio UI
+
+**Component** (`frontend/components/settings/DocumentBrandingPanel.tsx`)
+- Dark-sidebar studio layout: dark `#0e0e1c` left sidebar + lavender-gradient right preview panel.
+- 420 ms debounced live preview via new preview endpoint — dot turns amber while rendering.
+- A4 paper mock: `width:100%; height:auto` gives natural A4-proportional header height; multi-layer shadow + simulated page-content lines.
+- 6 horizontal style rows each with a 38×26 px whiteboard-style mini diagram in the sidebar.
+- Logo toggle button (shows school logo thumbnail, fetched from school-info API); B&W CSS filter toggle.
+- Declarations accordion: 6 document types, one expands at a time, filled indicator dot per row.
+- All new fields included in PATCH save payload and live-preview payload.
+
+### Key files changed (31/07 Session 2)
+- `backend/apps/settings/models.py`, `serializers.py`, `branding.py`, `views.py`, `urls.py`
+- `backend/apps/settings/migrations/0005_documentbrandingsettings_advanced.py`
+- `backend/apps/settings/migrations/0006_documentbrandingsettings_show_logo.py`
+- `frontend/components/settings/DocumentBrandingPanel.tsx`
+
+### Status
+✅ **COMPLETE** — Document Branding rebuilt end-to-end. Migrations applied; backend syntax clean; frontend TypeScript zero errors.
+
+⚠️ **Next steps**: verify PDF downloads across fees receipts, staff onboarding forms, and student verification to confirm header picks up new settings.
+
+## Update — GitHub Copilot (31/07/2026)
+
+**Area:** Fees tenancy safety, HR onboarding consistency, and permission-driven portal rendering
+
+### 1. Fees module tenancy hardening
+- Fees serializers now scope related foreign-key querysets by the current school context, preventing cross-tenant leakage in academic year, fee-group, fee-type, student, class, and assignment lookups.
+- GL code uniqueness checks and fee-schedule validation now enforce school ownership plus academic-year consistency.
+- Frontend fee dashboards now rely on tenancy school metadata and the live current academic year instead of hardcoded school/year labels.
+
+### 2. HR onboarding and role-scope alignment
+- HR onboarding role options now come from the shared form-options endpoint and include both school roles and global/system roles so valid roles such as Receptionist remain available.
+- Staff number generation now follows the agreed format of `<academic year start><4-digit sequence>`, scoped per school and academic-year bucket.
+
+### 3. Portal permissions and module rendering
+- Teacher and parent portal visibility now resolves from effective permissions and active roles rather than brittle hardcoded assumptions.
+- Portal type resolution is now deterministic and based on active roles only, while module tiles and route visibility use the permission-aware rendering flow.
+
+### Status
+✅ **CURRENT FOCUS** — The team is consolidating tenancy-safe fees behavior, HR onboarding consistency, and permission-driven portal access for the next validation round.
+
+⚠️ **Validation still pending** — no fresh end-to-end regression run is recorded in this handoff update.
+
 > This file is the merged context from both feature branches.
 > - **Tenancy Team** (branch: `tenancy`): Multi-tenancy, Super Admin Console, Billing
 > - **Roles Team** (branch: `roles`): Frontend Cleanup, Login Permission Module, Access Control Fixes

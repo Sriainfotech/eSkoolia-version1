@@ -7,7 +7,6 @@ All logs stored in PUBLIC schema for cross-tenant audit trail visibility.
 from typing import Optional, Dict, Any
 from django.utils import timezone
 from apps.tenancy.models import TenantFeatureAudit
-from apps.tenancy.context import get_current_tenant
 
 
 def log_feature_changed(

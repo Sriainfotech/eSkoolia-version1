@@ -3,14 +3,14 @@ Base ViewSet classes with common functionality for the API.
 Provides filtering, pagination, error handling, and tenant scoping.
 """
 
-from django.db.models import Q, QuerySet
+from django.db.models import Q
 from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 
-from .exceptions import SchoolNotFound, InvalidQueryParams
+from .exceptions import InvalidQueryParams
 from .responses import APIResponseMixin
 
 

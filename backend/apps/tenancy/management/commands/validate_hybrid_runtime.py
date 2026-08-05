@@ -1,7 +1,6 @@
 """Management command to validate hybrid runtime (migrated vs non-migrated schools)."""
 
 from django.core.management.base import BaseCommand
-from django.db import connection
 
 from apps.tenancy.models import SchoolTenant, School
 
@@ -22,20 +21,20 @@ class Command(BaseCommand):
 
         # Check existing schools
         schools = School.objects.all()
-        self.stdout.write(f"\nExisting schools in monolithic DB:")
+        self.stdout.write("\nExisting schools in monolithic DB:")
         for school in schools:
             self.stdout.write(f"  - {school.name} (id={school.id}, code={school.code})")
 
         # Check existing tenants
         tenants = SchoolTenant.objects.all()
-        self.stdout.write(f"\nExisting tenants in PUBLIC schema:")
+        self.stdout.write("\nExisting tenants in PUBLIC schema:")
         for tenant in tenants:
             self.stdout.write(
                 f"  - {tenant.name} (tenant_id={tenant.tenant_id}, schema={tenant.schema_name}, status={tenant.status})"
             )
 
         # Validate routing
-        self.stdout.write(f"\n" + "=" * 80)
+        self.stdout.write("\n" + "=" * 80)
         self.stdout.write("Validation Results:")
 
         if migrated_school_id:

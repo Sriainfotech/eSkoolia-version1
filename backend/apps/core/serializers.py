@@ -119,6 +119,11 @@ class SectionSerializer(serializers.ModelSerializer):
         name = (attrs.get("name") or getattr(self.instance, "name", "") or "").strip()
         capacity = attrs.get("capacity", getattr(self.instance, "capacity", None))
 
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        if school_class and school_id and school_class.school_id != school_id:
+            raise serializers.ValidationError({"school_class": "Invalid class."})
+
         if capacity in (None, ""):
             raise serializers.ValidationError({"capacity": "Enter valid section capacity"})
         try:
@@ -890,7 +895,7 @@ class HolidaySerializer(serializers.ModelSerializer):
         model = Holiday
         fields = [
             "id", "school", "academic_year", "name", "date", "end_date",
-            "holiday_type", "type_label", "description",
+            "holiday_type", "type_label", "description", "audience", "is_optional",
             "active_status", "duration_days",
             "created_at", "updated_at",
         ]

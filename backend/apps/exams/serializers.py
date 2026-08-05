@@ -7,7 +7,6 @@ from .models import (
     AdmitCard,
     AdmitCardSetting,
     Exam,
-    ExamAttendance,
     ExamAttendanceChild,
     ExamGradeScale,
     ExamMark,

@@ -3,14 +3,14 @@
 Full-stack school ERP — Django backend + Next.js 14 frontend, multi-tenant (schema-per-tenant scaffolding exists but runs in "monolithic" mode — see Tenancy policy below).
 
 ## Stack
-- **Backend:** Django 5.1.8, Python (venv at `backend/t/` or `backend/venv/`), PostgreSQL (Neon cloud — `DATABASE_URL` in `backend/.env`)
+- **Backend:** Django 5.1.8, Python (venv at `backend/venv/`), PostgreSQL (Neon cloud — `DATABASE_URL` in `backend/.env`)
 - **Frontend:** Next.js 14, React 18, TypeScript, Tailwind CSS 4
 - **Real-time:** Django Channels + Redis
 
 ## Run
 ```
 # Backend — always use the venv python, never system Python
-backend/t/Scripts/python.exe manage.py runserver 8000   # or backend/venv/Scripts/python.exe
+backend/venv/Scripts/python.exe manage.py runserver 8000
 
 # Frontend
 cd frontend && npm run dev      # http://localhost:3000

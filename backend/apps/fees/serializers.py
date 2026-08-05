@@ -2,7 +2,7 @@ import re
 from rest_framework import serializers
 from django.db import models
 from decimal import Decimal
-from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule, PaymentReconciliation, DueInteraction
+from .models import FeesGroup, FeesType, FeeAssignment, Payment, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule, PaymentReconciliation, DueInteraction
 from apps.core.models import Class, AcademicYear
 
 class FeesGroupSerializer(serializers.ModelSerializer):
@@ -507,6 +507,14 @@ class FeeScheduleSerializer(serializers.ModelSerializer):
 
 class DueInteractionSerializer(serializers.ModelSerializer):
     created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
+
+    def validate(self, attrs):
+        request = self.context.get('request')
+        school_id = getattr(getattr(request, 'user', None), 'school_id', None)
+        student = attrs.get('student') or getattr(self.instance, 'student', None)
+        if school_id and student and student.school_id != school_id:
+            raise serializers.ValidationError({'student': 'Student not found.'})
+        return attrs
 
     class Meta:
         model = DueInteraction

@@ -11,14 +11,10 @@ Tests:
 """
 import logging
 from django.core.management.base import BaseCommand
-from django.conf import settings
 from django.db import connection
 from django.contrib.auth import get_user_model
 
-from apps.tenancy.models import SchoolTenant
 from apps.tenancy.context import (
-    get_current_tenant,
-    get_current_schema,
     is_multi_tenancy_enabled,
 )
 from apps.tenancy.validation import get_all_active_tenants
@@ -197,7 +193,7 @@ class Command(BaseCommand):
         if len(unique_counts) > 1 or unique_counts == {0}:
             self.stdout.write(
                 self.style.SUCCESS(
-                    f"✓ RBAC isolation verified: different user counts per tenant"
+                    "✓ RBAC isolation verified: different user counts per tenant"
                 )
             )
             for name, count in user_counts.items():
@@ -239,7 +235,7 @@ class Command(BaseCommand):
                             self.stdout.write(
                                 f"✓ {tenant.name}: {table} = {count} rows"
                             )
-                        except Exception as tbl_exc:
+                        except Exception:
                             self.stdout.write(
                                 self.style.WARNING(
                                     f"⚠ {tenant.name}: {table} not found (expected for new schemas)"

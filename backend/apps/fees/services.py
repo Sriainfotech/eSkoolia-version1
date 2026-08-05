@@ -106,7 +106,7 @@ class FeeService:
                 entry_type='concession',
                 amount=-discount_amount,
                 created_by=created_by,
-                notes=f"Discount at time of assignment."
+                notes="Discount at time of assignment."
             )
 
         # 3. If there's a concession amount, create a negative 'concession' entry.
@@ -117,7 +117,7 @@ class FeeService:
                 entry_type='concession',
                 amount=-concession_amount,
                 created_by=created_by,
-                notes=f"Concession at time of assignment."
+                notes="Concession at time of assignment."
             )
         
         default_reason = f"Assigned {fees_type.name} to {student}."
@@ -234,7 +234,7 @@ class FeeService:
                 entry_type='payment',
                 amount=-payment.amount_paid,
                 created_by=user,
-                notes=f"Payment cleared/reconciled."
+                notes="Payment cleared/reconciled."
             )
         
         # If a previously settled payment is now reversing, create a positive 'reversal' entry.
@@ -309,7 +309,7 @@ class FeeService:
             # We only carry forward positive balances (money owed by the student)
             if balance > Decimal("0.00"):
                 # Create a single new assignment for the total outstanding balance
-                new_assignment = FeeService.assign_fees(
+                FeeService.assign_fees(
                     student=student,
                     fees_type=previous_dues_type,
                     due_date=due_date,

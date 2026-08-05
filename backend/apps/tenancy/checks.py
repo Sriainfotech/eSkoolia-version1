@@ -1,7 +1,5 @@
 import logging
 
-from django.apps import apps
-from django.conf import settings
 from django.core.checks import Error, Warning, register
 
 from .utils import validate_tenancy_configuration

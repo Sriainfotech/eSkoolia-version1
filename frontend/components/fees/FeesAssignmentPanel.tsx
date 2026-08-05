@@ -187,8 +187,6 @@ export default function FeesAssignmentPanel() {
 
       yearId = yearParam ? Number(yearParam) : undefined;
 
-      console.log("Fetching lists for academic_year:", yearId);
-
       const results = await Promise.allSettled([
         feesApi.listStudents({ academic_year: yearId }),
         feesApi.listClasses({ academic_year: yearId }),
@@ -198,7 +196,6 @@ export default function FeesAssignmentPanel() {
         feesApi.listTypes({ page_size: 500 }),
       ]);
       const [stRes, clRes, asgnRes, grpRes, schRes, typeRes] = results;
-      console.log("API raw results:", { stRes, clRes, asgnRes, grpRes, schRes, typeRes });
 
       if (stRes.status === "fulfilled") {
         let studentsData = listData(stRes.value);
@@ -207,13 +204,11 @@ export default function FeesAssignmentPanel() {
           try {
             const raw = await feesApi.listStudents();
             studentsData = listData(raw);
-            console.log("Students fallback (no year) loaded:", studentsData.length);
           } catch (e) {
             console.warn("Students fallback failed", e);
           }
         }
         setStudents(studentsData);
-        console.log("Students loaded:", studentsData.length, studentsData);
       } else {
         console.error("Failed to load students", stRes.reason);
         setStudents([]);
@@ -225,13 +220,11 @@ export default function FeesAssignmentPanel() {
           try {
             const raw = await feesApi.listClasses();
             classesData = listData(raw);
-            console.log("Classes fallback (no year) loaded:", classesData.length);
           } catch (e) {
             console.warn("Classes fallback failed", e);
           }
         }
         setClasses(classesData);
-        console.log("Classes loaded:", classesData.length, classesData);
       } else {
         console.error("Failed to load classes", clRes.reason);
         setClasses([]);
@@ -243,13 +236,11 @@ export default function FeesAssignmentPanel() {
           try {
             const raw = await feesApi.listAssignments();
             assignmentsData = listData(raw);
-            console.log("Assignments fallback (no year) loaded:", assignmentsData.length);
           } catch (e) {
             console.warn("Assignments fallback failed", e);
           }
         }
         setAssignments(assignmentsData);
-        console.log("Assignments loaded:", assignmentsData.length);
       } else {
         console.error("Failed to load fee assignments", asgnRes.reason);
         setAssignments([]);
@@ -258,7 +249,6 @@ export default function FeesAssignmentPanel() {
       if (grpRes.status === "fulfilled") {
         const groupsData = listData(grpRes.value);
         setGroups(groupsData);
-        console.log("Groups loaded:", groupsData.length);
       } else {
         console.error("Failed to load fee groups", grpRes.reason);
         setGroups([]);
@@ -270,13 +260,11 @@ export default function FeesAssignmentPanel() {
           try {
             const raw = await feesApi.listSchedules();
             schedulesData = listData(raw);
-            console.log("Schedules fallback (no year) loaded:", schedulesData.length);
           } catch (e) {
             console.warn("Schedules fallback failed", e);
           }
         }
         setSchedules(schedulesData);
-        console.log("Schedules loaded:", schedulesData.length);
       } else {
         console.error("Failed to load fee schedules", schRes.reason);
         setSchedules([]);
@@ -285,7 +273,6 @@ export default function FeesAssignmentPanel() {
       if (typeRes.status === "fulfilled") {
         const typesData = listData(typeRes.value);
         setFeeTypes(typesData);
-        console.log("Fee types loaded:", typesData.length);
       } else {
         console.error("Failed to load fee types", typeRes.reason);
         setFeeTypes([]);

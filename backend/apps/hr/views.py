@@ -837,14 +837,24 @@ class StaffViewSet(SchoolScopedModelViewSet):
         )
         staff = serializer.save(school=school, staff_no=staff_no)
         self._ensure_staff_user(staff)
-        self._copy_onboard_documents(staff, user)
+        # Uploads made while onboarding a brand-new hire have no staff to attach
+        # to yet, so they're tagged related_staff=None at upload time.
+        self._copy_onboard_documents(staff, user, related_staff_id=None)
 
-    def _copy_onboard_documents(self, staff, user):
+    def _copy_onboard_documents(self, staff, user, related_staff_id):
         """Copy this user's onboarding-wizard uploads into the permanent
         StaffDocument record now that the Staff row exists, then drop the
         temporary rows — the behavior promised by StaffOnboardDocument's
-        docstring but never previously implemented."""
-        onboard_docs = list(StaffOnboardDocument.objects.filter(uploaded_by=user))
+        docstring but never previously implemented.
+
+        Scoped by `related_staff_id` (None for a brand-new hire being created,
+        the staff's own id when editing an existing one) — NOT just by
+        `uploaded_by` — so a document mid-upload for one staff member can't be
+        misattached to a different one the same HR user happens to be editing
+        or onboarding concurrently."""
+        onboard_docs = list(
+            StaffOnboardDocument.objects.filter(uploaded_by=user, related_staff_id=related_staff_id)
+        )
         if not onboard_docs:
             return
         valid_types = dict(StaffDocument.DOCUMENT_TYPE_CHOICES)
@@ -863,7 +873,7 @@ class StaffViewSet(SchoolScopedModelViewSet):
                 )
             # Only the temporary rows are removed — the underlying stored file
             # (referenced by StaffDocument.file_path above) is left in place.
-            StaffOnboardDocument.objects.filter(uploaded_by=user).delete()
+            StaffOnboardDocument.objects.filter(uploaded_by=user, related_staff_id=related_staff_id).delete()
 
     def create(self, request, *args, **kwargs):
         try:
@@ -883,7 +893,8 @@ class StaffViewSet(SchoolScopedModelViewSet):
         except (ValidationError, NotFound, PermissionDenied, NotAuthenticated, AuthenticationFailed):
             raise
         except Exception as exc:
-            import logging, traceback
+            import logging
+            import traceback
             logging.getLogger(__name__).error(
                 "StaffViewSet.create unhandled error: %s\n%s", exc, traceback.format_exc()
             )
@@ -892,6 +903,7 @@ class StaffViewSet(SchoolScopedModelViewSet):
     def perform_update(self, serializer):
         staff = serializer.save()
         self._ensure_staff_user(staff)
+        self._copy_onboard_documents(staff, self.request.user, related_staff_id=staff.id)
 
     @action(detail=False, methods=["get"], url_path="next-staff-no")
     def next_staff_no(self, request):
@@ -1100,7 +1112,12 @@ class LeaveTypeViewSet(SchoolScopedModelViewSet):
         return self.update(request, *args, **kwargs)
 
     def perform_destroy(self, instance):
-        # Business rule: leave types in use cannot be deleted.
+        # Business rules: built-in (auto-seeded, see apps.settings.leave_seed)
+        # and in-use leave types cannot be deleted — same rule enforced in
+        # apps.settings.LeavePolicyViewSet, kept in sync here since this
+        # screen can also delete LeaveType rows.
+        if instance.is_builtin:
+            raise ValidationError({"leave_type": "Built-in leave types cannot be deleted — deactivate instead."})
         if instance.leave_defines.exists() or instance.leave_requests.exists():
             raise ValidationError({"leave_type": "Cannot delete leave type because it is assigned to employees."})
         instance.delete()
@@ -1365,7 +1382,38 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
         leave_request.approved_by = request.user
         leave_request.approved_at = timezone.now()
         leave_request.save(update_fields=["status", "approval_note", "approved_by", "approved_at", "updated_at"])
-        return Response({"id": leave_request.id, "status": leave_request.status})
+
+        # Deduct the actual day count from the staff's leave balance — holiday
+        # dates inside the range are excluded unless the leave type's
+        # count_holidays_as_leave says otherwise (see holiday_utils.compute_leave_days).
+        # Split at each calendar-year boundary since LeaveBalance is keyed
+        # per (staff, leave_type, year) — a request spanning New Year's Eve
+        # must deduct from two balance rows, not just from_date's year.
+        from apps.settings.models import LeaveBalance
+
+        from .holiday_utils import compute_leave_days_by_year
+        days_by_year = compute_leave_days_by_year(
+            leave_request.school_id, leave_request.leave_type, leave_request.from_date, leave_request.to_date
+        )
+        balances_by_year = {}
+        for year, days in days_by_year.items():
+            balance, _created = LeaveBalance.objects.get_or_create(
+                school_id=leave_request.school_id,
+                staff_id=leave_request.staff_id,
+                leave_type_id=leave_request.leave_type_id,
+                year=year,
+            )
+            balance.used_days = balance.used_days + days
+            balance.save(update_fields=["used_days", "updated_at"])
+            balances_by_year[year] = balance.used_days
+
+        return Response({
+            "id": leave_request.id,
+            "status": leave_request.status,
+            "days_deducted": sum(days_by_year.values()),
+            "days_deducted_by_year": days_by_year,
+            "leave_balance_used_days_by_year": balances_by_year,
+        })
 
     @action(detail=True, methods=["post"], url_path="reject")
     def reject(self, request, pk=None):
@@ -1854,18 +1902,32 @@ _MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
 
 
 class StaffOnboardDocumentListView(APIView):
-    """GET /api/v1/hr/onboard/documents/ — list all onboard docs for the current user."""
+    """GET /api/v1/hr/onboard/documents/ — list onboard docs for the current user,
+    scoped to the staff member being edited (?staff_id=) or to the brand-new-hire
+    pool (no staff_id) so documents pending for a different staff member being
+    concurrently onboarded/edited don't leak in."""
 
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        qs = StaffOnboardDocument.objects.filter(uploaded_by=request.user).order_by("doc_key")
+        staff_id = request.query_params.get("staff_id")
+        qs = StaffOnboardDocument.objects.filter(uploaded_by=request.user)
+        if staff_id:
+            qs = qs.filter(related_staff_id=staff_id)
+        else:
+            qs = qs.filter(related_staff__isnull=True)
+        qs = qs.order_by("doc_key")
         serializer = StaffOnboardDocumentSerializer(qs, many=True)
         return Response({"success": True, "data": serializer.data})
 
 
 class StaffOnboardDocumentUploadView(APIView):
-    """POST /api/v1/hr/onboard/documents/upload/ — upload (or replace) a document."""
+    """POST /api/v1/hr/onboard/documents/upload/ — upload (or replace) a document.
+
+    Optional `staff_id` in the form data tags the upload to the staff member
+    currently being edited; omitted entirely when onboarding a brand-new hire
+    (no Staff row exists yet). This keeps concurrent onboarding/edit sessions
+    by the same HR user from clobbering or misattaching each other's files."""
 
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
@@ -1874,6 +1936,7 @@ class StaffOnboardDocumentUploadView(APIView):
         file = request.FILES.get("file")
         doc_key = str(request.data.get("doc_key") or "").strip()
         doc_label = str(request.data.get("doc_label") or "").strip()
+        staff_id = str(request.data.get("staff_id") or "").strip()
 
         if not file:
             return Response({"success": False, "message": "No file provided."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1899,11 +1962,24 @@ class StaffOnboardDocumentUploadView(APIView):
 
         school = getattr(request.user, "school", None)
 
-        # Delete previous upload for the same (user, doc_key) if exists
-        StaffOnboardDocument.objects.filter(uploaded_by=request.user, doc_key=doc_key).delete()
+        related_staff = None
+        if staff_id:
+            staff_qs = Staff.objects.all()
+            if school is not None:
+                staff_qs = staff_qs.filter(school_id=school.id)
+            try:
+                related_staff = staff_qs.get(pk=staff_id)
+            except (Staff.DoesNotExist, ValueError):
+                return Response({"success": False, "message": "Staff not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Delete previous upload for the same (user, doc_key, related_staff) if exists
+        StaffOnboardDocument.objects.filter(
+            uploaded_by=request.user, doc_key=doc_key, related_staff=related_staff,
+        ).delete()
 
         doc = StaffOnboardDocument.objects.create(
             uploaded_by=request.user,
+            related_staff=related_staff,
             school=school,
             doc_key=doc_key,
             doc_label=doc_label,
@@ -2096,77 +2172,34 @@ class StaffOnboardDraftDeleteView(APIView):
 
 # ── Blank onboarding form PDF ─────────────────────────────────────────────────
 
-def _parse_school_header(raw) -> dict:
-    """Normalize the optional `school_header` request field (query-string JSON
-    string on the blank-form GET, or a dict in the filled-form POST body) into
-    a plain dict of string fields. Returns {} for anything missing/invalid —
-    callers treat an empty dict as "no header requested"."""
-    if raw is None:
-        return {}
-    if isinstance(raw, str):
-        import json as _json
-        try:
-            raw = _json.loads(raw)
-        except (ValueError, TypeError):
-            return {}
-    if not isinstance(raw, dict):
-        return {}
-    fields = ("schoolName", "schoolAddress", "schoolPhone", "schoolEmail", "logoDataUrl", "principalName")
-    return {k: str(raw.get(k) or "").strip() for k in fields if str(raw.get(k) or "").strip()}
-
-
-def _school_header_flowables(school_header: dict, inner_w):
-    """Builds the optional school-branding block (logo + name/address/contact)
-    shown above the form title. Returns [] when no header fields were supplied,
-    so PDFs render exactly as before when the caller omits `school_header`."""
-    if not school_header:
+def _school_header_flowables(school, inner_w):
+    """Builds the school-branding block shown above the form title, pulled
+    from Settings > Document Branding — the same central source every other
+    print/PDF feature in the app uses (see apps.settings.branding). Returns
+    [] if the header image can't be built for any reason, so PDF generation
+    never fails just because branding couldn't be rendered."""
+    if school is None:
         return []
 
+    from io import BytesIO
+
     from reportlab.lib import colors
-    from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import mm
-    from reportlab.platypus import HRFlowable, Image, Paragraph, Spacer, Table, TableStyle
+    from reportlab.platypus import HRFlowable, Image, Spacer
 
-    INK = colors.HexColor("#15172A")
-    MUTED = colors.HexColor("#94A3B8")
+    try:
+        from apps.settings.branding import get_header_image_bytes
+        img_bytes = get_header_image_bytes(school)
+        # Bounded to a header-height strip regardless of the source image's
+        # aspect ratio — a wide generated header fills the width; an
+        # uploaded full-page letterhead shrinks to fit instead of
+        # dominating the page.
+        header_img = Image(BytesIO(img_bytes), width=inner_w, height=25 * mm, kind="proportional")
+    except Exception:
+        return []
+
     BORDER = colors.HexColor("#E8E8F0")
-
-    name_style = ParagraphStyle("SchoolHdrName", fontName="Helvetica-Bold", fontSize=13, textColor=INK)
-    meta_style = ParagraphStyle("SchoolHdrMeta", fontName="Helvetica", fontSize=7.5, textColor=MUTED, leading=10)
-
-    name = school_header.get("schoolName") or ""
-    meta_lines = [
-        school_header.get("schoolAddress"),
-        " · ".join(filter(None, [school_header.get("schoolPhone"), school_header.get("schoolEmail")])),
-        (f"Principal: {school_header['principalName']}" if school_header.get("principalName") else ""),
-    ]
-    meta_html = "<br/>".join(line for line in meta_lines if line)
-
-    text_cell = Paragraph(
-        (f"<b>{name}</b>" if name else "") + (f"<br/>{meta_html}" if meta_html else ""),
-        name_style if name else meta_style,
-    )
-
-    logo_cell = ""
-    logo_data_url = school_header.get("logoDataUrl") or ""
-    if logo_data_url.startswith("data:"):
-        try:
-            import base64
-            from io import BytesIO
-            header, b64data = logo_data_url.split(",", 1)
-            img_bytes = base64.b64decode(b64data)
-            logo_cell = Image(BytesIO(img_bytes), width=16 * mm, height=16 * mm, kind="proportional")
-        except Exception:
-            logo_cell = ""  # malformed data URL — skip the logo, still show text
-
-    if logo_cell:
-        row = Table([[logo_cell, text_cell]], colWidths=[18 * mm, inner_w - 18 * mm])
-        row.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
-        block = row
-    else:
-        block = text_cell
-
-    return [block, Spacer(1, 6), HRFlowable(width=inner_w, thickness=0.75, color=BORDER), Spacer(1, 6)]
+    return [header_img, Spacer(1, 6), HRFlowable(width=inner_w, thickness=0.75, color=BORDER), Spacer(1, 6)]
 
 
 class StaffOnboardBlankFormView(APIView):
@@ -2204,18 +2237,17 @@ class StaffOnboardBlankFormView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        school_header = _parse_school_header(request.query_params.get("school_header"))
+        school = request.user.school
 
         # ── Build PDF ──────────────────────────────────────────────────────
         try:
             from reportlab.lib import colors
             from reportlab.lib.pagesizes import A4
-            from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+            from reportlab.lib.styles import ParagraphStyle
             from reportlab.lib.units import mm
             from reportlab.platypus import (
                 HRFlowable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
             )
-            from reportlab.platypus.flowables import Flowable
             from io import BytesIO
         except ImportError:
             return Response(
@@ -2228,13 +2260,10 @@ class StaffOnboardBlankFormView(APIView):
         BORDER   = colors.HexColor("#E8E8F0")
         MUTED    = colors.HexColor("#94A3B8")
         INK      = colors.HexColor("#15172A")
-        REQUIRED = colors.HexColor("#EF4444")
 
         PAGE_W, PAGE_H = A4
         L_MARGIN = R_MARGIN = 18 * mm
         INNER_W = PAGE_W - L_MARGIN - R_MARGIN
-
-        styles = getSampleStyleSheet()
 
         title_style  = ParagraphStyle("FormTitle",  fontName="Helvetica-Bold",   fontSize=16, textColor=INK,   spaceAfter=2)
         sub_style    = ParagraphStyle("FormSub",    fontName="Helvetica",         fontSize=8,  textColor=MUTED,  spaceAfter=6)
@@ -2291,7 +2320,6 @@ class StaffOnboardBlankFormView(APIView):
         def _three_col(*triples) -> list:
             col = INNER_W / 3 - 2 * mm
             result = []
-            it = iter(triples)
             for grp in zip(*[iter(triples)] * 3):
                 cells = []
                 for label, req in grp:
@@ -2357,14 +2385,14 @@ class StaffOnboardBlankFormView(APIView):
 
         # ── Build story ────────────────────────────────────────────────────
         def _build_story(copy_num: int, total: int) -> list:
-            story = list(_school_header_flowables(school_header, INNER_W))
+            story = list(_school_header_flowables(school, INNER_W))
 
             # ─── Header ───────────────────────────────────────────────────
             copy_label = f"Copy {copy_num} of {total}" if total > 1 else ""
             header_data = [[
                 Paragraph("<b>STAFF ONBOARDING FORM</b>", title_style),
                 Paragraph(
-                    f'<font color="#94A3B8">{school_header.get("schoolName") or "Eskoolia School Management"} · {copy_label}</font>',
+                    f'<font color="#94A3B8">{(school.name if school else "") or "Eskoolia School Management"} · {copy_label}</font>',
                     ParagraphStyle("HR", fontName="Helvetica", fontSize=7.5, textColor=MUTED, alignment=2)
                 ),
             ]]
@@ -2658,7 +2686,7 @@ class StaffOnboardFilledFormView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        school_header = _parse_school_header(body.get("school_header"))
+        school = request.user.school
 
         # Sanitise: all values to strings, strip control characters
         def _s(key: str, default: str = "") -> str:
@@ -2696,7 +2724,6 @@ class StaffOnboardFilledFormView(APIView):
         INNER_W = PAGE_W - L_MARGIN - R_MARGIN
 
         title_style   = ParagraphStyle("FT",  fontName="Helvetica-Bold",   fontSize=15, textColor=INK,   spaceAfter=2)
-        sub_style     = ParagraphStyle("FS",  fontName="Helvetica",         fontSize=8,  textColor=MUTED,  spaceAfter=6)
         section_style = ParagraphStyle("SEC", fontName="Helvetica-Bold",   fontSize=8.5,textColor=BRAND,  spaceBefore=8, spaceAfter=3)
         label_style   = ParagraphStyle("LBL", fontName="Helvetica-Bold",   fontSize=7,  textColor=MUTED)
         value_style   = ParagraphStyle("VAL", fontName="Helvetica",         fontSize=8,  textColor=INK)
@@ -2783,7 +2810,7 @@ class StaffOnboardFilledFormView(APIView):
             return t
 
         # ── Assemble story ─────────────────────────────────────────────────
-        story = list(_school_header_flowables(school_header, INNER_W))
+        story = list(_school_header_flowables(school, INNER_W))
 
         # ─── Header ───────────────────────────────────────────────────────
         staff_name = " ".join(filter(None, [_s("first_name"), _s("middle_name"), _s("last_name")]))

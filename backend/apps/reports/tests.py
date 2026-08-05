@@ -1,9 +1,8 @@
-from django.test import TestCase
-from rest_framework.test import APITestCase, APIClient
+from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 from decimal import Decimal
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from apps.core.models import (
     ItemCategory, ItemStore, Supplier, Item, ItemReceive, ItemReceiveChild,

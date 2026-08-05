@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useCallback, useMemo, type CSSProperties } from 'react';
 import { feesApi, listData, DueStudent, DuesClassGroup, FeesSummary, FeesGroup, YearEndFeeAmountRow, AcademicYear } from '@/lib/fees-api';
+import { fetchDocumentHeaderImageDataUrl, getImageNaturalSize } from '@/lib/document-branding';
 
 type EditModalState = { groupId: number; groupName: string } | null;
 
@@ -78,6 +79,7 @@ export default function YearEndPage() {
   const [selectedGroupIds, setSelectedGroupIds] = useState<Set<number>>(new Set());
   const [rollingOver, setRollingOver] = useState(false);
   const [schoolName, setSchoolName] = useState('School');
+  const [headerImageDataUrl, setHeaderImageDataUrl] = useState<string | null>(null);
 
   const currentYearLabel = currentYear?.name || '—';
 
@@ -111,6 +113,9 @@ export default function YearEndPage() {
         if (name) setSchoolName(name);
       })
       .catch(() => {});
+    // Header image for generated PDFs — Settings > Document Branding, the
+    // one central source every print/PDF feature in the app uses.
+    fetchDocumentHeaderImageDataUrl().then(setHeaderImageDataUrl);
   }, []);
 
   const toggleGroupSelected = (id: number) =>
@@ -311,7 +316,21 @@ export default function YearEndPage() {
       doc.text(reportName, 28, 42);
       doc.text(`Generated: ${new Date().toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })}`, W - 180, 42);
 
-      let y = 76;
+      let y = 60;
+
+      // ── School header (Settings > Document Branding) ─────────
+      if (headerImageDataUrl) {
+        try {
+          const { width: natW, height: natH } = await getImageNaturalSize(headerImageDataUrl);
+          const headerH = Math.min(26, (W - 56) * (natH / natW));
+          doc.addImage(headerImageDataUrl, 'PNG', 28, y, W - 56, headerH);
+          y += headerH + 10;
+        } catch {
+          y += 16;
+        }
+      } else {
+        y += 16;
+      }
 
       if (reportType === 'outstanding_dues' && allStudents.length > 0) {
         // Summary row

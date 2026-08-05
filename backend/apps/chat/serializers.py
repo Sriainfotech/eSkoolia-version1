@@ -1,6 +1,5 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from django.utils import timezone
 from django.db.utils import OperationalError, ProgrammingError
 import logging
 
@@ -12,7 +11,6 @@ from .models import (
     Invitation,
     BlockUser,
     UserStatus,
-    GroupMessageRemove,
 )
 
 User = get_user_model()

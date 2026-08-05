@@ -5,9 +5,7 @@ Organizes all app routes and provides API documentation.
 
 from django.contrib import admin
 from django.urls import path, include, re_path
-from rest_framework import permissions
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView, SpectacularRedocView
-from rest_framework.routers import DefaultRouter
 from apps.users.views import HealthView
 
 # API Documentation routes

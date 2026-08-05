@@ -3,7 +3,6 @@
 from django.core.management.base import BaseCommand
 from django.db import connection
 
-from apps.tenancy.models import SchoolTenant
 from apps.tenancy import migration_framework
 
 
@@ -22,7 +21,7 @@ class Command(BaseCommand):
         school1 = options.get("school1")
         school2 = options.get("school2")
 
-        self.stdout.write(f"Validating cross-tenant isolation:")
+        self.stdout.write("Validating cross-tenant isolation:")
         self.stdout.write(f"  Schema 1: {schema1} (school {school1})")
         self.stdout.write(f"  Schema 2: {schema2} (school {school2})")
         self.stdout.write("=" * 80)
@@ -61,7 +60,7 @@ class Command(BaseCommand):
                     pass
 
         if isolation_violations:
-            self.stdout.write(self.style.ERROR(f"\n✗ ISOLATION VIOLATIONS DETECTED:"))
+            self.stdout.write(self.style.ERROR("\n✗ ISOLATION VIOLATIONS DETECTED:"))
             for violation in isolation_violations:
                 self.stdout.write(self.style.ERROR(f"  - {violation}"))
         else:

@@ -11,7 +11,6 @@ When MULTI_TENANCY_ENABLED=False, acts as a no-op pass-through.
 import logging
 from typing import Optional
 
-from django.conf import settings
 from django.db import connection
 from django.http import Http404, HttpRequest, HttpResponse
 from django.utils.deprecation import MiddlewareMixin
@@ -20,10 +19,8 @@ from .context import (
     PUBLIC_PATH_PREFIXES,
     clear_tenant_context,
     is_multi_tenancy_enabled,
-    is_public_path,
     set_current_tenant,
 )
-from .models import SchoolTenant
 from .resolvers import get_tenant_from_request
 
 logger = logging.getLogger(__name__)

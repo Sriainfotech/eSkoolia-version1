@@ -16,7 +16,7 @@ const defaultProps = {
 describe('PageHeader', () => {
   it('renders the page title', () => {
     render(<PageHeader {...defaultProps} />);
-    expect(screen.getByText('Student List')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Student List' })).toBeInTheDocument();
   });
 
   it('renders the module name in breadcrumb', () => {
@@ -31,7 +31,7 @@ describe('PageHeader', () => {
 
   it('renders titleAccent alongside title', () => {
     render(<PageHeader {...defaultProps} titleAccent="(Active)" />);
-    expect(screen.getByText(/Active/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Active/ })).toBeInTheDocument();
   });
 
   it('renders action buttons when provided', () => {

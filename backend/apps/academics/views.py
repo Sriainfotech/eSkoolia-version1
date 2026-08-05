@@ -2,17 +2,17 @@ from datetime import datetime, timedelta
 import re
 
 from django.db import transaction
-from django.db.models import Q, Count
+from django.db.models import Q
 from django.utils import timezone
 from django.core.files.storage import default_storage
 from rest_framework import permissions, status, viewsets
 from config.pagination import ApiPageNumberPagination
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser, JSONParser
 from rest_framework.response import Response
 from apps.access_control.models import UserRole
-from apps.core.models import Class as SchoolClass
+from apps.core.models import Class as SchoolClass, Section
 from apps.hr.models import Staff
 from apps.users.models import User
 from .models import (
@@ -1214,7 +1214,6 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
         serializer.save(updated_by=self.request.user)
 
     def update(self, request, *args, **kwargs):
-        partial = kwargs.pop("partial", False)
         instance = self.get_object()
         serializer = LessonPlannerCreateSerializer(data=request.data, context=self.get_serializer_context())
         if not serializer.is_valid():
@@ -1507,8 +1506,13 @@ class StaffClassTeachersView(viewsets.ViewSet):
         if not all([section_id, teacher_id, class_id, academic_year_id]):
             return Response({"success": False, "message": "section_id, teacher_id, class_id, and academic_year_id are required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validate teacher is active staff
-        staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE).first()
+        if not SchoolClass.objects.filter(id=class_id, school_id=school_id).exists():
+            return Response({"success": False, "message": "Invalid class."}, status=status.HTTP_400_BAD_REQUEST)
+        if not Section.objects.filter(id=section_id, school_class_id=class_id).exists():
+            return Response({"success": False, "message": "Invalid section."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate teacher is active staff belonging to this school
+        staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE, school_id=school_id).first()
         if not staff:
             return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1562,10 +1566,10 @@ class StaffClassTeachersView(viewsets.ViewSet):
 
         teacher_id = request.data.get("teacher_id")
         if teacher_id:
-            staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE).first()
+            staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE, school_id=school_id).first()
             if not staff:
                 return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             # Validate teacher is not already assigned as CT for another section in the same academic year
             existing_ct = ClassTeacherAssignment.objects.filter(
                 school_id=school_id,
@@ -1611,10 +1615,10 @@ class StaffClassTeachersView(viewsets.ViewSet):
             return Response({"success": False, "message": "Please enter a reason to continue."}, status=status.HTTP_400_BAD_REQUEST)
 
         if new_teacher_id:
-            staff = Staff.objects.filter(user_id=new_teacher_id, status=Staff.STATUS_ACTIVE).first()
+            staff = Staff.objects.filter(user_id=new_teacher_id, status=Staff.STATUS_ACTIVE, school_id=school_id).first()
             if not staff:
                 return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             # Validate teacher is not already assigned as CT for another section in the same academic year
             existing_ct = ClassTeacherAssignment.objects.filter(
                 school_id=school_id,
@@ -1813,7 +1817,7 @@ class StaffSubjectAssignmentsView(viewsets.ViewSet):
         if not all([subject_id, teacher_id, class_id, academic_year_id]):
             return Response({"success": False, "message": "subject_id, teacher_id, class_id, and academic_year_id are required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE).first()
+        staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE, school_id=school_id).first()
         if not staff:
             return Response({"success": False, "message": "Selected user is not active teaching staff."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1877,8 +1881,8 @@ class StaffSubjectAssignmentsView(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Validate teacher is active staff
-        staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE).first()
+        # Validate teacher is active staff belonging to this school
+        staff = Staff.objects.filter(user_id=teacher_id, status=Staff.STATUS_ACTIVE, school_id=school_id).first()
         if not staff:
             return Response(
                 {"success": False, "message": "Selected user is not active teaching staff."},
@@ -1920,7 +1924,6 @@ class StaffWorkloadView(viewsets.ViewSet):
         if academic_year_id:
             qs = qs.filter(academic_year_id=academic_year_id)
 
-        from django.db.models import Count as DjCount
         teacher_periods = {}
         for slot in qs.select_related("teacher"):
             tid = slot.teacher_id
@@ -1985,6 +1988,10 @@ class StaffAuditLogView(viewsets.ViewSet):
         qs = ClassTeacherAudit.objects.select_related(
             "section", "school_class", "old_teacher", "new_teacher", "changed_by"
         ).order_by("-changed_at")
+        if school_id:
+            qs = qs.filter(school_class__school_id=school_id)
+        else:
+            qs = qs.none()
 
         section_id = request.query_params.get("section_id")
         if section_id:

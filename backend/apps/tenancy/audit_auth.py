@@ -12,13 +12,11 @@ from typing import Optional
 
 from django.contrib.auth import get_user_model
 from django.conf import settings
-from django.utils import timezone
 
 from .context import (
     get_current_tenant,
     get_current_schema,
     get_current_subdomain,
-    get_current_tenant_id,
 )
 from .models import TenantAuditLog
 

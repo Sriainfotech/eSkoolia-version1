@@ -1,6 +1,8 @@
 "use client";
 import React, { useRef, useState } from "react";
-import { SchoolHeaderPopover, loadSchoolHeader } from "./SchoolHeaderPopover";
+import { useDocumentBranding } from "@/hooks/useDocumentBranding";
+
+const DEFAULT_DECLARATION = "I, {staffName}, confirm that all information provided above is accurate and complete to the best of my knowledge, and consent to the school retaining it for employment and administrative purposes.";
 
 function val(v: string | undefined | null): string {
   return v && String(v).trim() ? String(v).trim() : "—";
@@ -51,8 +53,11 @@ interface StaffVerificationFormProps {
 
 export function StaffVerificationForm({ onClose, staff, onSavePdf, saving }: StaffVerificationFormProps) {
   const [showAI, setShowAI] = useState(false);
-  const [headerOpen, setHeaderOpen] = useState(false);
-  const [header, setHeader] = useState(() => loadSchoolHeader());
+  const [showHeaderInfo, setShowHeaderInfo] = useState(false);
+  // Header image + declaration text come from Settings > Document Branding —
+  // one central place, shared with the student verification form, fee
+  // receipts, and payslips — instead of a per-browser localStorage blob.
+  const { headerImageDataUrl, declarationText } = useDocumentBranding('staff_onboarding', DEFAULT_DECLARATION);
   const modalRef = useRef<HTMLDivElement>(null);
 
   const fullName = [staff.first_name, staff.middle_name, staff.last_name].filter(Boolean).join(" ") || "—";
@@ -90,7 +95,7 @@ export function StaffVerificationForm({ onClose, staff, onSavePdf, saving }: Sta
 
   interface Tip { tone: "warn" | "info" | "success"; icon: string; title: string; body: string; }
   const tips: Tip[] = [];
-  if (!header.schoolName) tips.push({ tone: "info", icon: "🏫", title: "Set the school header", body: "Add your school name/logo so it appears at the top of this form. Click Header above." });
+  if (!headerImageDataUrl) tips.push({ tone: "info", icon: "🏫", title: "School header not configured", body: "Set it up once in Settings → Document Branding — it applies to this form and every other printed document." });
   if (!staff.photo) tips.push({ tone: "warn", icon: "📷", title: "No staff photo", body: "A photo helps verify identity. Upload one in the Identity step." });
   if (!staff.mobile) tips.push({ tone: "warn", icon: "📱", title: "Mobile number missing", body: "Required for HR to reach this staff member." });
   if (!staff.bank_account_number) tips.push({ tone: "info", icon: "🏦", title: "Bank details incomplete", body: "Needed before payroll can be processed." });
@@ -110,7 +115,7 @@ export function StaffVerificationForm({ onClose, staff, onSavePdf, saving }: Sta
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l1.9 5.8L20 9.7l-5 3.6L16.5 19 12 15.7 7.5 19 9 13.3l-5-3.6 6.1-1.9L12 2z"/></svg>
               AI Assist
             </button>
-            <button type="button" className="sv-tb-btn sv-tb-settings" onClick={() => setHeaderOpen(true)}>
+            <button type="button" className="sv-tb-btn sv-tb-settings" onClick={() => setShowHeaderInfo((v) => !v)}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
               Header
             </button>
@@ -150,25 +155,28 @@ export function StaffVerificationForm({ onClose, staff, onSavePdf, saving }: Sta
           </div>
         )}
 
-        {headerOpen && (
-          <SchoolHeaderPopover onClose={() => { setHeaderOpen(false); setHeader(loadSchoolHeader()); }} />
+        {showHeaderInfo && (
+          <div className="sv-header-info-banner no-print">
+            <span>
+              The header and declaration text shown on this form are configured centrally in{" "}
+              <strong>Settings → Document Branding</strong> — changes there apply to every printed/PDF document.
+            </span>
+            <button type="button" onClick={() => window.open("/settings/document-branding", "_blank")}>
+              Open Document Branding
+            </button>
+            <button type="button" className="sv-header-info-close" onClick={() => setShowHeaderInfo(false)} aria-label="Dismiss">✕</button>
+          </div>
         )}
 
         <div className="sv-body">
-          <div className="sv-school-header">
-            {header.logoDataUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={header.logoDataUrl} alt="School logo" className="sv-school-logo-img" />
-            ) : (
-              <div className="sv-school-logo-placeholder">🏫</div>
-            )}
-            <div>
-              <h1 className="sv-school-name">{header.schoolName || "Your School"}</h1>
-              <p className="sv-school-address">
-                {[header.schoolAddress, header.schoolPhone, header.schoolEmail].filter(Boolean).join(" · ")}
-              </p>
+          {headerImageDataUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={headerImageDataUrl} alt="School header" className="sv-header-img" />
+          ) : (
+            <div className="sv-header-img-placeholder">
+              School header not configured yet — set it up in Settings → Document Branding.
             </div>
-          </div>
+          )}
           <hr className="sv-divider" />
 
           <h2 className="sv-form-title">Staff Verification Form</h2>
@@ -252,8 +260,7 @@ export function StaffVerificationForm({ onClose, staff, onSavePdf, saving }: Sta
           <div className="sv-section">
             <h3 className="sv-section-heading">Declaration</h3>
             <p style={{ fontSize: 12, lineHeight: 1.7, color: "#374151", background: "#fafafa", border: "1px solid #e5e7eb", borderRadius: 6, padding: "10px 12px" }}>
-              I, {fullName === "—" ? "the undersigned" : fullName}, confirm that all information provided above is accurate and
-              complete to the best of my knowledge, and consent to the school retaining it for employment and administrative purposes.
+              {declarationText.replace("{staffName}", fullName === "—" ? "the undersigned" : fullName)}
             </p>
             <div style={{ display: "flex", gap: 20, marginTop: 20, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
               <div style={{ flex: 1, textAlign: "center" }}>
@@ -326,11 +333,21 @@ export function StaffVerificationForm({ onClose, staff, onSavePdf, saving }: Sta
         .sv-tip-body { margin: 2px 0 0; font-size: 12px; color: #475569; line-height: 1.4; }
 
         .sv-body { padding: 36px 48px; }
-        .sv-school-header { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
-        .sv-school-logo-placeholder { font-size: 40px; line-height: 1; flex-shrink: 0; }
-        .sv-school-logo-img { width: 56px; height: 56px; object-fit: contain; flex-shrink: 0; }
-        .sv-school-name { margin: 0; font-size: 22px; font-weight: 700; color: #111827; }
-        .sv-school-address { margin: 4px 0 0; font-size: 12px; color: #6b7280; }
+        .sv-header-img { display: block; width: 100%; max-height: 140px; object-fit: contain; object-position: left center; margin-bottom: 16px; }
+        .sv-header-img-placeholder {
+          display: flex; align-items: center; justify-content: center; min-height: 80px; margin-bottom: 16px;
+          border: 1.5px dashed #d1d5db; border-radius: 8px; background: #f9fafb; color: #9ca3af;
+          font-size: 12.5px; text-align: center; padding: 12px;
+        }
+        .sv-header-info-banner {
+          display: flex; align-items: center; gap: 12px; margin: 0 18px; padding: 12px 16px;
+          background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 10px; font-size: 12.5px; color: #4c1d95; line-height: 1.5;
+        }
+        .sv-header-info-banner button {
+          flex-shrink: 0; background: #6c3ce1; color: #fff; border: none; border-radius: 6px;
+          padding: 7px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
+        }
+        .sv-header-info-close { background: transparent !important; color: #6c3ce1 !important; padding: 4px 8px !important; }
         .sv-divider { border: none; border-top: 2px solid #e5e7eb; margin: 16px 0; }
         .sv-form-title { margin: 0 0 6px; font-size: 18px; font-weight: 700; color: #111827; text-align: center; text-transform: uppercase; letter-spacing: 0.05em; }
         .sv-form-subtitle { text-align: center; font-size: 13px; color: #6b7280; margin: 0 0 24px; }

@@ -1,12 +1,11 @@
 import logging
-import time
 from typing import Dict, List
 
 from django.conf import settings
-from django.db import connection, transaction
+from django.db import connection
 from django.utils import timezone
 
-from .models import TenantAuditLog, School, SchoolTenant
+from .models import TenantAuditLog
 
 logger = logging.getLogger(__name__)
 

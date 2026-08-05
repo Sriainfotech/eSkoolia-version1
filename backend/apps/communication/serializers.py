@@ -4,12 +4,12 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from apps.access_control.models import Role
+from apps.core.models import Holiday
 from .models import (
     CommunicationNotification,
     CommunicationPreference,
     EmailMessageLog,
     EmailSmsLog,
-    HolidayCalendar,
     InAppMessage,
     NoticeBoard,
 )
@@ -262,11 +262,17 @@ class EmailSmsLogSerializer(serializers.ModelSerializer):
 
 
 class HolidayCalendarSerializer(serializers.ModelSerializer):
-    created_by = UserBasicSerializer(read_only=True)
-    updated_by = UserBasicSerializer(read_only=True)
+    """Backed by core.Holiday (the same table Academics > Foundation and
+    Settings > Holiday Calendar read/write) rather than a forked copy — field
+    names below are aliased to the legacy communication.HolidayCalendar wire
+    format so the existing frontend page needed no changes."""
+
+    holiday_title = serializers.CharField(source="name", max_length=120)
+    holiday_date = serializers.DateField(source="date")
+    is_active = serializers.BooleanField(source="active_status", default=True)
 
     class Meta:
-        model = HolidayCalendar
+        model = Holiday
         fields = [
             "id",
             "holiday_title",
@@ -274,15 +280,13 @@ class HolidayCalendarSerializer(serializers.ModelSerializer):
             "end_date",
             "description",
             "is_active",
-            "created_by",
-            "updated_by",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_by", "updated_by", "created_at", "updated_at"]
+        read_only_fields = ["id", "created_at", "updated_at"]
 
     def validate(self, attrs):
-        holiday_date = attrs.get("holiday_date")
+        holiday_date = attrs.get("date")
         end_date = attrs.get("end_date")
         if holiday_date and end_date and end_date < holiday_date:
             raise serializers.ValidationError("End date cannot be before holiday date.")

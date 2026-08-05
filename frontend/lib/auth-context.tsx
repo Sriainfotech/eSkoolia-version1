@@ -13,6 +13,7 @@ import { API_BASE_URL } from "@/lib/api";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens } from "@/lib/auth";
 import { clearPermissionsCache } from "@/hooks/usePermissions";
+import { clearRecentsLS } from "@/lib/recentsStore";
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -242,6 +243,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const result = await apiLogin(username, password);
       clearPermissionsCache(); // Ensure no stale identity from previous user
+      clearRecentsLS(); // Ensure no stale recently-visited pages from previous user
       setAuthTokens(result.access, result.refresh);
       // Persist tenant context so any component can read the active school.
       if (result.school_code) {
@@ -274,6 +276,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     clearAuthTokens();
     clearPermissionsCache();
+    clearRecentsLS();
     localStorage.removeItem('mock_user');
     sessionStorage.removeItem("school_code");
     sessionStorage.removeItem("tenant_id");

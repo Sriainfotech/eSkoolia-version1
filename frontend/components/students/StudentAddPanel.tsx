@@ -3,7 +3,7 @@
 import { Fragment, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { apiRequestWithRefresh, apiRequestWithRefreshResponse } from "@/lib/api-auth";
 import { StudentDocumentsUpload, type DocumentType as DocumentTypeKey, type CustomDocMeta, type MarksheetMeta } from "./StudentDocumentsUpload";
 import { ConsentForm } from "./ConsentForm";
 import { ScanFillModal, STUDENT_FIELD_GROUPS } from "./ScanFillModal";
@@ -14,7 +14,7 @@ import {
   type GuardianFieldErrors,
 } from "./StudentGuardiansStep";
 import StudentFeesStep, { EMPTY_FEE_PLAN, type FeePlanState, type FeePlanSummary, type StudentFeesStepHandle } from "./StudentFeesStep";
-import { feesApi } from "@/lib/fees-api";
+import { feesApi, type FeesAssignment } from "@/lib/fees-api";
 
 type ApiList<T> = T[] | { results?: T[]; count?: number };
 
@@ -28,6 +28,8 @@ type Guardian = {
   full_name: string;
   relation: string;
   phone: string;
+  email?: string;
+  occupation?: string;
 };
 
 type SchoolClass = {
@@ -68,12 +70,54 @@ type StudentCreatePayload = {
   photo?: string;
   status: "active" | "inactive" | "transferred" | "dropped";
   category?: number;
+  student_group?: number;
   guardian?: number;
+  guardians?: Array<{ id: number; is_primary: boolean }>;
   current_class: number;
   current_section: number;
   is_disabled: boolean;
   is_active: boolean;
   is_draft?: boolean;
+  landmark?: string;
+  transport_modes?: string[];
+  transport_custom?: string;
+  mother_tongue?: string;
+  other_mother_tongue?: string;
+  religion?: string;
+  nationality?: string;
+  other_nationality?: string;
+  admission_type?: string;
+  previous_school_name?: string;
+  rte_certificate_no?: string;
+  stream?: string;
+  apaar_id?: string;
+  aadhaar_no?: string;
+  pen?: string;
+  digilocker_mobile?: string;
+  abc_id?: string;
+  height_cm?: string;
+  weight_kg?: string;
+  vision?: string;
+  medical_conditions?: string[];
+  allergies?: string[];
+  current_medications?: string;
+  treating_doctor?: string;
+  vaccinations?: string[];
+  medical_notes?: string;
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
+  is_pwd?: boolean;
+  disability_types?: string[];
+  disability_percent?: number;
+  udid?: string;
+  disability_accommodations?: string[];
+  disability_notes?: string;
+  other_disability_text?: string;
+  identity_marks?: Array<{ location: string; description: string }>;
+  eye_colour?: string;
+  hair_colour?: string;
+  complexion?: string;
+  build?: string;
 };
 
 type StudentCreateResponse = {
@@ -109,10 +153,67 @@ type StudentDetail = {
   photo?: string;
   status?: "active" | "inactive" | "transferred" | "dropped";
   category?: number | null;
+  student_group?: number | null;
   guardian?: number | null;
+  guardians?: Array<{
+    id: number;
+    full_name?: string;
+    relation?: string;
+    phone?: string;
+    email?: string;
+    occupation?: string;
+    is_primary?: boolean;
+  }>;
   current_class?: number | null;
   current_section?: number | null;
   is_disabled?: boolean;
+  documents?: Array<{
+    id: number;
+    document_type: string;
+    file_url?: string | null;
+    original_name?: string;
+    uploaded_at?: string;
+  }>;
+  landmark?: string;
+  transport_modes?: string[];
+  transport_custom?: string;
+  mother_tongue?: string;
+  other_mother_tongue?: string;
+  religion?: string;
+  nationality?: string;
+  other_nationality?: string;
+  admission_type?: string;
+  previous_school_name?: string;
+  rte_certificate_no?: string;
+  stream?: string;
+  apaar_id?: string;
+  aadhaar_no?: string;
+  pen?: string;
+  digilocker_mobile?: string;
+  abc_id?: string;
+  height_cm?: string | number | null;
+  weight_kg?: string | number | null;
+  vision?: string;
+  medical_conditions?: string[];
+  allergies?: string[];
+  current_medications?: string;
+  treating_doctor?: string;
+  vaccinations?: string[];
+  medical_notes?: string;
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
+  is_pwd?: boolean;
+  disability_types?: string[];
+  disability_percent?: number | null;
+  udid?: string;
+  disability_accommodations?: string[];
+  disability_notes?: string;
+  other_disability_text?: string;
+  identity_marks?: Array<{ location: string; description: string }>;
+  eye_colour?: string;
+  hair_colour?: string;
+  complexion?: string;
+  build?: string;
 };
 
 type ApiError = Error & {
@@ -734,6 +835,13 @@ export function StudentAddPanel() {
   const [statusValue, setStatusValue] = useState<"active" | "inactive" | "transferred" | "dropped">("active");
   const [categoryId, setCategoryId] = useState("");
   const [guardianId, setGuardianId] = useState("");
+  // Set once when an existing student/draft is loaded, holding the guardian id that still
+  // needs to be hydrated into guardianDrafts[0] once the guardian pool has arrived. Kept
+  // separate from `guardianId` because that field is also driven downward from
+  // guardianDrafts[0].linkedExistingId (see the sync effect below) — reusing it here raced
+  // the two effects against each other and the load's value always lost, leaving the
+  // guardian card permanently blank on edit even though the student really had one saved.
+  const [pendingGuardianHydrationId, setPendingGuardianHydrationId] = useState("");
   const [classId, setClassId] = useState("");
   const [sectionId, setSectionId] = useState("");
   const [isDisabled, setIsDisabled] = useState(false);
@@ -888,6 +996,10 @@ export function StudentAddPanel() {
   const [feePlan, setFeePlan] = useState<FeePlanState>(EMPTY_FEE_PLAN);
   const [feeSummary, setFeeSummary] = useState<FeePlanSummary>({ groupName: "", concessionName: "", lineCount: 0, annualTotal: 0 });
   const feesStepRef = useRef<StudentFeesStepHandle>(null);
+  // undefined = not yet known (edit mode still fetching); [] = confirmed none to restore.
+  // Fee Plan previously always looked unassigned on edit even when a plan already
+  // existed — this is what StudentFeesStep uses to reconstruct it.
+  const [existingFeeAssignments, setExistingFeeAssignments] = useState<FeesAssignment[] | undefined>(undefined);
 
   // Consolidated document upload state with proper status management
   type DocumentStatus = "idle" | "validating" | "uploading" | "success" | "error";
@@ -1051,19 +1163,23 @@ export function StudentAddPanel() {
   }, [guardianDrafts, guardianId]);
 
   // Hydrate the primary guardian card when the form loads an existing student (edit
-  // mode) or a saved draft. Runs when guardianId is set AND the school's guardian
-  // pool has arrived AND the primary card is still untouched (to avoid stomping
-  // user edits after hydration).
+  // mode) or a saved draft. Keyed off `pendingGuardianHydrationId` rather than
+  // `guardianId` — the sync effect above resets `guardianId` to "" whenever
+  // guardianDrafts[0] is still unlinked, which raced ahead of this effect on load
+  // (guardianId got loaded first, then wiped back to "" before the guardian pool
+  // fetch — page_size=500 across the whole school — had a chance to resolve),
+  // leaving the guardian card permanently blank even though the student had a
+  // guardian saved. `pendingGuardianHydrationId` isn't touched by that effect, so
+  // it survives until this one consumes it.
   useEffect(() => {
-    if (!guardianId) return;
-    const numeric = Number(guardianId);
-    if (!Number.isFinite(numeric)) return;
-    const primary = guardianDrafts[0];
-    if (!primary) return;
-    if (primary.linkedExistingId === numeric) return;
-    if (primary.fullName.trim() || primary.phone.trim()) return;
+    if (!pendingGuardianHydrationId) return;
+    const numeric = Number(pendingGuardianHydrationId);
+    if (!Number.isFinite(numeric)) {
+      setPendingGuardianHydrationId("");
+      return;
+    }
     const match = guardians.find((g) => g.id === numeric);
-    if (!match) return;
+    if (!match) return; // guardian pool hasn't arrived yet — try again once `guardians` updates
     setGuardianDrafts((prev) => {
       if (prev.length === 0) return prev;
       const next = [...prev];
@@ -1074,10 +1190,14 @@ export function StudentAddPanel() {
         fullName: match.full_name || "",
         relation: match.relation || "Father",
         phone: match.phone || "",
+        email: match.email || "",
+        occupation: match.occupation || "",
       };
       return next;
     });
-  }, [guardianId, guardians, guardianDrafts]);
+    setGuardianId(String(match.id));
+    setPendingGuardianHydrationId("");
+  }, [pendingGuardianHydrationId, guardians]);
 
   // FIX 9: B-40 — pre-fill emergency contact from primary guardian when fields are empty
   useEffect(() => {
@@ -1311,6 +1431,7 @@ export function StudentAddPanel() {
       setStatusValue((String(draft.statusValue || "active") as "active" | "inactive" | "transferred" | "dropped"));
       setCategoryId(String(draft.categoryId || ""));
       setGuardianId(String(draft.guardianId || ""));
+      setPendingGuardianHydrationId(String(draft.guardianId || ""));
       const restoredClassId = String(draft.classId || "");
       const restoredSectionId = String(draft.sectionId || "");
       setClassId(restoredClassId);
@@ -1374,6 +1495,7 @@ export function StudentAddPanel() {
     setStatusValue((String(draft.statusValue || "active") as "active" | "inactive" | "transferred" | "dropped"));
     setCategoryId(String(draft.categoryId || ""));
     setGuardianId(String(draft.guardianId || ""));
+    setPendingGuardianHydrationId(String(draft.guardianId || ""));
     const restoredClassId = String(draft.classId || "");
     const restoredSectionId = String(draft.sectionId || "");
     setClassId(restoredClassId);
@@ -1478,7 +1600,29 @@ export function StudentAddPanel() {
     setPhotoCleared(false);
     setStatusValue(data.status || "active");
     setCategoryId(data.category ? String(data.category) : "");
+    setHouseId(data.student_group ? String(data.student_group) : "");
     setGuardianId(data.guardian ? String(data.guardian) : "");
+    if (Array.isArray(data.guardians) && data.guardians.length > 0) {
+      // Full multi-guardian list from the server — hydrate every card directly
+      // instead of relying on the single-card pool-matching effect below.
+      setGuardianDrafts(
+        data.guardians.map((g, idx) => ({
+          clientId:
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+              ? crypto.randomUUID()
+              : `existing_${g.id}_${idx}`,
+          isPrimary: g.is_primary ?? idx === 0,
+          linkedExistingId: g.id,
+          fullName: g.full_name || "",
+          relation: g.relation || "Father",
+          phone: g.phone || "",
+          email: g.email || "",
+          occupation: g.occupation || "",
+        })),
+      );
+    } else {
+      setPendingGuardianHydrationId(data.guardian ? String(data.guardian) : "");
+    }
     const nextClassId = data.current_class ? String(data.current_class) : "";
     const nextSectionId = data.current_section ? String(data.current_section) : "";
     setClassId(nextClassId);
@@ -1486,6 +1630,87 @@ export function StudentAddPanel() {
     setIsDisabled(Boolean(data.is_disabled));
     setAdmissionChecked(true);
     setPinLookupMessage("");
+
+    // Fields below previously had no backing column on Student at all, so they
+    // always reset to blank/default on edit even though the wizard captured
+    // and displayed them at enrollment time. Restoring them here is the other
+    // half of the schema-gap fix (payload wiring is in the submit handler).
+    setLandmark(String(data.landmark || ""));
+    setTransportModes(Array.isArray(data.transport_modes) ? data.transport_modes : []);
+    setTransportCustom(String(data.transport_custom || ""));
+    setMotherTongue(String(data.mother_tongue || ""));
+    setOtherMotherTongue(String(data.other_mother_tongue || ""));
+    setReligion(String(data.religion || "Prefer not to say"));
+    setNationality(String(data.nationality || ""));
+    setOtherNationality(String(data.other_nationality || ""));
+    setAdmissionType(String(data.admission_type || ""));
+    setPreviousSchoolName(String(data.previous_school_name || ""));
+    setRteCertificateNo(String(data.rte_certificate_no || ""));
+    setStreamId(String(data.stream || ""));
+    setApaarRaw(String(data.apaar_id || ""));
+    setAadhaarNo(String(data.aadhaar_no || ""));
+    setPen(String(data.pen || ""));
+    setDigiMobile(String(data.digilocker_mobile || ""));
+    setAbcId(String(data.abc_id || ""));
+    setHeightCm(data.height_cm != null ? String(data.height_cm) : "");
+    setWeightKg(data.weight_kg != null ? String(data.weight_kg) : "");
+    setVision(String(data.vision || ""));
+    setMedicalConditions(Array.isArray(data.medical_conditions) ? data.medical_conditions : []);
+    setAllergies(Array.isArray(data.allergies) ? data.allergies : []);
+    setCurrentMedications(String(data.current_medications || ""));
+    setTreatingDoctor(String(data.treating_doctor || ""));
+    setCheckedVaccinations(Array.isArray(data.vaccinations) ? data.vaccinations : []);
+    setMedicalNotes(String(data.medical_notes || ""));
+    setEmergencyName(String(data.emergency_contact_name || ""));
+    setEmergencyPhone(String(data.emergency_contact_phone || ""));
+    setIsPwD(Boolean(data.is_pwd));
+    setDisabilityTypes(Array.isArray(data.disability_types) ? data.disability_types : []);
+    setDisabilityPercent(data.disability_percent ?? 0);
+    setUdid(String(data.udid || ""));
+    setAccommodations(Array.isArray(data.disability_accommodations) ? data.disability_accommodations : []);
+    setAdditionalNotes(String(data.disability_notes || ""));
+    setOtherDisabilityText(String(data.other_disability_text || ""));
+    setIdentityMarks(Array.isArray(data.identity_marks) ? data.identity_marks : []);
+    setEyeColour(String(data.eye_colour || ""));
+    setHairColour(String(data.hair_colour || ""));
+    setComplexion(String(data.complexion || ""));
+    setBuild(String(data.build || ""));
+
+    // Documents step never re-fetched existing uploads — it only ever showed
+    // "not uploaded" on edit even when the file is already on record. The
+    // files themselves were always saved server-side (StudentDocument); only
+    // the Documents step's local status/preview state was never hydrated.
+    if (Array.isArray(data.documents) && data.documents.length > 0) {
+      const byType = new Map(data.documents.map((d) => [d.document_type, d]));
+      setDocuments((prev) => {
+        const next = { ...prev };
+        (["birth_certificate", "aadhaar_card", "medical_information", "caste_certificate"] as const).forEach((key) => {
+          const doc = byType.get(key);
+          if (doc) {
+            next[key] = {
+              status: "success",
+              fileName: doc.original_name || "Uploaded document",
+              url: doc.file_url || null,
+              error: null,
+              uploadedAt: doc.uploaded_at || null,
+            };
+          }
+        });
+        return next;
+      });
+    }
+
+    // Fee plan previously always looked unassigned on edit even when the
+    // student already had one — StudentFeesStep reconstructs it from these.
+    try {
+      const assignmentsData = await feesApi.listAssignments({
+        student: targetStudentId,
+        academic_year: data.academic_year ?? undefined,
+      });
+      setExistingFeeAssignments(listData<FeesAssignment>(assignmentsData));
+    } catch {
+      setExistingFeeAssignments([]);
+    }
   };
 
   const updateStateCityMap = (nextState: string, nextCities: string[]) => {
@@ -1667,6 +1892,8 @@ export function StudentAddPanel() {
           // the user actually types a first name (see effect below) so the form
           // doesn't show a wasted/random ADM number on a blank screen.
           restoreDraftSnapshot();
+          // Nothing can be assigned yet for a student that doesn't exist server-side.
+          setExistingFeeAssignments([]);
         }
       } catch (loadError) {
         setError(parseError(loadError));
@@ -2750,13 +2977,17 @@ export function StudentAddPanel() {
    *   - Otherwise validate and POST to create the Guardian record.
    *
    * Returns:
-   *   { primaryId }     — the ID that should be linked to the student's guardian FK, or
+   *   { primaryId, allLinks } — primaryId is the ID linked to the student's legacy
+   *     guardian FK; allLinks is every resolved (id, isPrimary) pair so the caller can
+   *     send the *complete* guardian list to the student payload — not just the
+   *     primary — so cards 2+ actually get attached to the student instead of being
+   *     created as orphaned Guardian rows.
    *   { cardErrors }    — per-card field-level errors when validation fails.
    *
    * Mutates state: updates draft cards with resolved `linkedExistingId` after a successful POST.
    */
   const persistGuardianDrafts = async (): Promise<
-    { ok: true; primaryId: number | null; updatedDrafts: GuardianDraft[] }
+    { ok: true; primaryId: number | null; allLinks: Array<{ id: number; isPrimary: boolean }>; updatedDrafts: GuardianDraft[] }
     | { ok: false; cardErrors: GuardianFieldErrors[] }
   > => {
     const cardErrors: GuardianFieldErrors[] = guardianDrafts.map(() => ({}));
@@ -2868,7 +3099,11 @@ export function StudentAddPanel() {
     setGuardianDrafts(updatedDrafts);
 
     const primaryId = resolvedIds[0];
-    return { ok: true, primaryId: primaryId ?? null, updatedDrafts };
+    const allLinks: Array<{ id: number; isPrimary: boolean }> = [];
+    resolvedIds.forEach((id, idx) => {
+      if (id != null) allLinks.push({ id, isPrimary: updatedDrafts[idx].isPrimary });
+    });
+    return { ok: true, primaryId: primaryId ?? null, allLinks, updatedDrafts };
   };
 
 
@@ -3080,7 +3315,6 @@ export function StudentAddPanel() {
       if (Number.isFinite(createdStudentId) && createdStudentId > 0) {
         setNewlyCreatedStudentId(createdStudentId);
         invalidateGeneratedAdmissionNoCache();
-        console.log("✅ Student auto-saved with ID:", createdStudentId);
         showToast("✅ Student draft saved. Ready for document uploads.", "success");
         return createdStudentId;
       } else {
@@ -3132,21 +3366,6 @@ export function StudentAddPanel() {
       academicIncomplete = true;
     }
 
-    console.log("🔍 Identity field validation:", {
-      valid: missingFields.length === 0,
-      missingFields,
-      formState: snapshot,
-      filledFields: {
-        firstName: !!snapshot.first_name,
-        lastName: !!snapshot.last_name,
-        dob: !!snapshot.date_of_birth,
-        gender: !!snapshot.gender,
-        academicYear: !!snapshot.academic_year_id,
-        classId: !!snapshot.class_id,
-        sectionId: !!snapshot.section_id,
-      },
-    });
-
     return { valid: missingFields.length === 0, missingFields, academicIncomplete };
   };
 
@@ -3155,8 +3374,6 @@ export function StudentAddPanel() {
     file: File,
     documentType: string
   ) => {
-    console.log("📂 Upload initiated:", { documentType, fileName: file.name, fileSize: file.size });
-
     // ============================================================
     // STEP 1: FILE VALIDATION
     // ============================================================
@@ -3182,8 +3399,6 @@ export function StudentAddPanel() {
       return;
     }
 
-    console.log("✅ File validation passed");
-
     // ============================================================
     // STEP 2: UPDATE STATE - SET UPLOADING
     // ============================================================
@@ -3196,19 +3411,11 @@ export function StudentAddPanel() {
       },
     }));
 
-    console.log("🔄 Set status to uploading for:", documentType);
-
     try {
       // ============================================================
       // STEP 3: CHECK STUDENT ID & VALIDATE IDENTITY FIELDS
       // ============================================================
       let effectiveStudentId = studentId || newlyCreatedStudentId;
-      
-      console.log("📋 Student ID check:", {
-        currentStudentId: studentId,
-        newlyCreatedId: newlyCreatedStudentId,
-        effective: effectiveStudentId,
-      });
 
       if (!effectiveStudentId) {
         // No student ID - must validate identity fields first
@@ -3235,7 +3442,6 @@ export function StudentAddPanel() {
         }
 
         // Identity fields are complete - attempt auto-save
-        console.log("✅ Identity fields complete, attempting auto-save...");
         try {
           effectiveStudentId = await autoSaveStudentDraft();
 
@@ -3255,7 +3461,6 @@ export function StudentAddPanel() {
             return;
           }
 
-          console.log("✅ Auto-save successful, student ID:", effectiveStudentId);
           setNewlyCreatedStudentId(effectiveStudentId);
         } catch (saveErr) {
           const fieldErrors = parseFieldErrors(saveErr);
@@ -3287,19 +3492,10 @@ export function StudentAddPanel() {
       formData.append("document_type", documentType);
       formData.append("file", file);
 
-      console.log("🚀 Uploading document:", {
-        studentId: effectiveStudentId,
-        documentType,
-        fileName: file.name,
-        endpoint: "/api/v1/students/documents/upload_document/",
-      });
-
       const response = await apiRequestWithRefresh("/api/v1/students/documents/upload_document/", {
         method: "POST",
         body: formData,
       }) as { id?: unknown; file?: string; file_url?: string; original_name?: string; uploaded_at?: string } | null;
-
-      console.log("📥 Upload response received:", response);
 
       // ============================================================
       // STEP 5: VALIDATE RESPONSE
@@ -3331,12 +3527,6 @@ export function StudentAddPanel() {
           uploadedAt: response.uploaded_at || new Date().toISOString(),
         },
       }));
-
-      console.log("✅ Document state updated to SUCCESS:", {
-        documentType,
-        fileName: displayFileName,
-        uploadedAt: response.uploaded_at,
-      });
 
       // Clear any previous error toast
       setLastErrorToastId(null);
@@ -3381,12 +3571,6 @@ export function StudentAddPanel() {
   };
 
   const handleDocumentPick = async (documentType: DocumentTypeKey, file: File) => {
-    console.log("File selected for upload:", {
-      documentType,
-      fileName: file.name,
-      fileSize: file.size,
-      fileType: file.type,
-    });
     try {
       await uploadDocumentFile(file, documentType);
     } catch (err) {
@@ -3623,11 +3807,53 @@ export function StudentAddPanel() {
         photo: photo ? photo : (isEditMode && photoCleared ? "" : undefined),
         status: statusValue,
         category: categoryId ? Number(categoryId) : undefined,
+        student_group: houseId ? Number(houseId) : undefined,
         guardian: resolvedPrimaryGuardianId,
+        guardians: persistResult.allLinks.map((g) => ({ id: g.id, is_primary: g.isPrimary })),
         current_class: Number(classId),
         current_section: Number(sectionId),
         is_disabled: isDisabled,
         is_active: isStudentActive,
+        landmark: sanitizeText(landmark) || undefined,
+        transport_modes: transportModes.length > 0 ? transportModes : undefined,
+        transport_custom: sanitizeText(transportCustom) || undefined,
+        mother_tongue: (motherTongue === "Other" ? sanitizeText(otherMotherTongue) : motherTongue) || undefined,
+        other_mother_tongue: motherTongue === "Other" ? sanitizeText(otherMotherTongue) || undefined : undefined,
+        religion: religion || undefined,
+        nationality: nationality || undefined,
+        other_nationality: nationality === "Other" ? sanitizeText(otherNationality) || undefined : undefined,
+        admission_type: admissionType || undefined,
+        previous_school_name: sanitizeText(previousSchoolName) || undefined,
+        rte_certificate_no: sanitizeText(rteCertificateNo) || undefined,
+        stream: streamId || undefined,
+        apaar_id: sanitizeText(apaarRaw) || undefined,
+        aadhaar_no: sanitizeText(aadhaarNo) || undefined,
+        pen: sanitizeText(pen) || undefined,
+        digilocker_mobile: sanitizeText(digiMobile) || undefined,
+        abc_id: sanitizeText(abcId) || undefined,
+        height_cm: heightCm.trim() || undefined,
+        weight_kg: weightKg.trim() || undefined,
+        vision: vision || undefined,
+        medical_conditions: medicalConditions.length > 0 ? medicalConditions : undefined,
+        allergies: allergies.length > 0 ? allergies : undefined,
+        current_medications: sanitizeText(currentMedications) || undefined,
+        treating_doctor: sanitizeText(treatingDoctor) || undefined,
+        vaccinations: checkedVaccinations.length > 0 ? checkedVaccinations : undefined,
+        medical_notes: sanitizeText(medicalNotes) || undefined,
+        emergency_contact_name: sanitizeText(emergencyName) || undefined,
+        emergency_contact_phone: emergencyPhone.trim() || undefined,
+        is_pwd: isPwD,
+        disability_types: disabilityTypes.length > 0 ? disabilityTypes : undefined,
+        disability_percent: isPwD ? disabilityPercent : undefined,
+        udid: sanitizeText(udid) || undefined,
+        disability_accommodations: accommodations.length > 0 ? accommodations : undefined,
+        disability_notes: sanitizeText(additionalNotes) || undefined,
+        other_disability_text: sanitizeText(otherDisabilityText) || undefined,
+        identity_marks: identityMarks.length > 0 ? identityMarks : undefined,
+        eye_colour: eyeColour || undefined,
+        hair_colour: hairColour || undefined,
+        complexion: complexion || undefined,
+        build: build || undefined,
       };
 
       // Success handler — stay on /students/add, reset the form, fetch a
@@ -3695,7 +3921,6 @@ export function StudentAddPanel() {
         const response = await apiPostJson<StudentCreateResponse>("/api/v1/students/students/", payload);
         const createdStudentId = Number(response?.id ?? response?.data?.id);
         if (Number.isFinite(createdStudentId) && createdStudentId > 0) {
-          console.log("✅ New student created with ID:", createdStudentId);
           await persistFeePlan(createdStudentId);
         }
         const toastMsg = response?.warning
@@ -4688,6 +4913,7 @@ export function StudentAddPanel() {
                 showToast={showToast}
                 sectionCounter={getSectionCounter("fees")}
                 navButtonsSlot={renderSectionNavButtons("fees")}
+                existingAssignments={existingFeeAssignments}
               />
             </div>
 
@@ -5107,21 +5333,28 @@ export function StudentAddPanel() {
             </div>
             <div style={{ padding: '14px 26px', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end', gap: 10, background: '#f9fafb', borderRadius: '0 0 14px 14px' }}>
               <button type="button" onClick={() => {
-                // Read school details from header settings (same key as ConsentForm)
-                let schoolName = 'School'; let schoolAddress = ''; let schoolPhone = ''; let affiliationNo = '';
+                void (async () => {
+                // Header image comes from Settings > Document Branding — the same
+                // central source every other print/PDF feature in the app uses.
+                let headerImgTag = '';
+                let schoolName = 'School';
                 try {
-                  const raw = typeof window !== 'undefined' ? window.localStorage.getItem('eskoolia:school:header:v2') : null;
-                  if (raw) { const h = JSON.parse(raw) as { schoolName?: string; schoolAddress?: string; schoolPhone?: string; affiliationNo?: string }; schoolName = h.schoolName || schoolName; schoolAddress = h.schoolAddress || ''; schoolPhone = h.schoolPhone || ''; affiliationNo = h.affiliationNo || ''; }
-                } catch { /* use defaults */ }
-                // Load school details from the same localStorage key used by ConsentForm
-                const _hRaw = typeof window !== 'undefined' ? window.localStorage.getItem('eskoolia:school:header:v2') : null;
-                const _h = _hRaw ? (() => { try { return JSON.parse(_hRaw) as Record<string,string>; } catch { return {}; } })() : {};
-                const _schoolName = _h.schoolName || 'School';
-                const _schoolAddress = _h.schoolAddress || '';
-                const _schoolPhone = _h.schoolPhone || '';
-                const _schoolEmail = _h.schoolEmail || '';
-                const _schoolWebsite = _h.schoolWebsite || '';
-                const _logoDataUrl = _h.logoDataUrl || '';
+                  const [imgRes, info] = await Promise.all([
+                    apiRequestWithRefreshResponse('/api/v1/settings/document-branding/header-image/'),
+                    apiRequestWithRefresh<{ name?: string }>('/api/tenancy/my-school-info/').catch(() => null),
+                  ]);
+                  if (info?.name) schoolName = info.name;
+                  if (imgRes.ok) {
+                    const blob = await imgRes.blob();
+                    const dataUrl = await new Promise<string>((resolve, reject) => {
+                      const reader = new FileReader();
+                      reader.onload = () => resolve(reader.result as string);
+                      reader.onerror = reject;
+                      reader.readAsDataURL(blob);
+                    });
+                    headerImgTag = `<img src="${dataUrl}" alt="School header" style="display:block;width:100%;max-height:90px;object-fit:contain;object-position:left center;margin-bottom:10px" />`;
+                  }
+                } catch { /* header image is optional — checklist still prints without it */ }
                 const modules = [
                   { n: 1, title: 'Student identity', items: [{ t: 'Full legal name (first, last)', req: true },{ t: 'Date of birth (must match age band of class)', req: true },{ t: 'Gender', req: true },{ t: 'Recent photo (square JPG/PNG, ≥400×400)', req: false },{ t: 'Blood group', req: false },{ t: 'Mother tongue, religion, nationality', req: false }]},
                   { n: 2, title: 'Academic placement', items: [{ t: 'Academic year', req: true },{ t: 'Class & section', req: true },{ t: 'House (auto-suggested by AI)', req: false },{ t: 'Roll number (auto if blank)', req: false },{ t: 'Admission type, previous school name', req: false }]},
@@ -5161,8 +5394,8 @@ export function StudentAddPanel() {
                   .footer{margin-top:18px;font-size:10px;color:#9ca3af;text-align:center;border-top:1px solid #e5e7eb;padding-top:10px}
                   @media print{body{padding:10px}.grid{grid-template-columns:1fr 1fr}}
                 </style></head><body>
+                ${headerImgTag}
                 <h1>📋 What you'll need to enroll a student</h1>
-                <div class="school-bar"><strong>${schoolName}</strong>${schoolAddress ? ` &nbsp;·&nbsp; ${schoolAddress}` : ''}${schoolPhone ? ` &nbsp;·&nbsp; ${schoolPhone}` : ''}${affiliationNo ? ` &nbsp;·&nbsp; Affiliation: ${affiliationNo}` : ''}</div>
                 <p class="sub">Share with parents before the admission appointment. ★ = required to enroll</p>
                 <div class="legend"><span class="req">★ Required</span> &nbsp;·&nbsp; <span class="opt">○ Optional / bring if available</span></div>
                 <div class="grid">${rows}</div>
@@ -5171,6 +5404,7 @@ export function StudentAddPanel() {
                 </body></html>`;
                 const w = window.open('', '_blank', 'width=800,height=700');
                 if (w) { w.document.write(html); w.document.close(); }
+                })();
               }} style={{ padding: '8px 16px', background: '#fff', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer', color: '#374151' }}>🖨 Print checklist</button>
               <button type="button" onClick={() => setInfoChecklistOpen(false)} style={{ padding: '8px 18px', background: '#6c3ce1', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Got it, let&apos;s start</button>
             </div>

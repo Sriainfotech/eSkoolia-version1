@@ -14,10 +14,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from config.pagination import ApiPageNumberPagination
 
-from apps.core.models import AcademicYear, Class, ClassRoom, Section, Subject
+from apps.core.models import AcademicYear, Class, ClassRoom, Holiday, Section, Subject
 from apps.hr.models import Staff
 from apps.students.models import Student
-from apps.communication.models import HolidayCalendar
 
 from .forms import ExamTypeModelForm
 from .models import (
@@ -778,7 +777,7 @@ class ExamHolidayListAPIView(ExamTenantMixin, APIView):
         month = request.query_params.get("month")
         year = request.query_params.get("year")
 
-        holidays = HolidayCalendar.objects.filter(is_active=True).filter(
+        holidays = Holiday.objects.filter(active_status=True).filter(
             Q(school_id=request.user.school_id) | Q(school_id__isnull=True)
         )
 
@@ -788,8 +787,8 @@ class ExamHolidayListAPIView(ExamTenantMixin, APIView):
                 year_int = int(year)
                 first_day = dt_date(year_int, month_int, 1)
                 last_day = dt_date(year_int, month_int, monthrange(year_int, month_int)[1])
-                holidays = holidays.filter(holiday_date__lte=last_day).filter(
-                    Q(end_date__isnull=True, holiday_date__gte=first_day) | Q(end_date__gte=first_day)
+                holidays = holidays.filter(date__lte=last_day).filter(
+                    Q(end_date__isnull=True, date__gte=first_day) | Q(end_date__gte=first_day)
                 )
             except (TypeError, ValueError):
                 return Response({"detail": "Invalid month/year."}, status=status.HTTP_400_BAD_REQUEST)
@@ -798,13 +797,13 @@ class ExamHolidayListAPIView(ExamTenantMixin, APIView):
             [
                 {
                     "id": row.id,
-                    "title": row.holiday_title,
-                    "start_date": row.holiday_date.isoformat(),
-                    "end_date": row.end_date.isoformat() if row.end_date else row.holiday_date.isoformat(),
-                    "is_active": row.is_active,
+                    "title": row.name,
+                    "start_date": row.date.isoformat(),
+                    "end_date": row.end_date.isoformat() if row.end_date else row.date.isoformat(),
+                    "is_active": row.active_status,
                     "description": row.description,
                 }
-                for row in holidays.order_by("holiday_date", "id")
+                for row in holidays.order_by("date", "id")
             ]
         )
 

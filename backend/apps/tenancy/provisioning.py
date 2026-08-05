@@ -15,8 +15,7 @@ import time
 import re
 from datetime import datetime
 from django.conf import settings
-from django.db import connection, connections
-from django.apps import apps as django_apps
+from django.db import connection
 from django.utils import timezone
 from apps.tenancy.models import SchoolTenant, Domain
 from apps.tenancy.audit import log_audit
@@ -203,7 +202,7 @@ def run_tenant_migrations(schema_name):
         logger.info(f"Migrations completed for schema {schema_name}\n{migration_output}")
         return True
 
-    except Exception as exc:
+    except Exception:
         logger.exception(f"Failed to run migrations for schema {schema_name}\n{output.getvalue()}")
         raise
 
@@ -302,9 +301,7 @@ def provision_tenant(
     actor_user=None,
     actor_ip=None,
 ):
-    import time
-    from datetime import datetime   
-    start = time.time()
+    from datetime import datetime
     start_time = datetime.now()
 
     """Main provisioning function.
@@ -444,7 +441,7 @@ def provision_tenant(
         )
         
         # Step 6: Create Domain record
-        domain = create_tenant_domain(tenant, subdomain_url)
+        create_tenant_domain(tenant, subdomain_url)
         
         # Step 7: Mark tenant as provisioned
         tenant.status = "active"

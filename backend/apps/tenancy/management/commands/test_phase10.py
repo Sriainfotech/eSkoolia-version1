@@ -9,8 +9,7 @@ Usage:
     python manage.py test_phase10 --all                 # Run all tests
 """
 
-from django.core.management.base import BaseCommand, CommandError
-from django.utils import timezone
+from django.core.management.base import BaseCommand
 from apps.tenancy.models import (
     SchoolTenant,
     TenantPlan,
@@ -19,16 +18,9 @@ from apps.tenancy.models import (
     TenantFeatureAudit,
 )
 from apps.tenancy.feature_flags import (
-    is_feature_enabled,
     get_tenant_features,
     get_tenant_plan,
 )
-from apps.tenancy.helpers import (
-    tenant_is_active,
-    tenant_is_suspended,
-    tenant_api_allowed,
-)
-from apps.tenancy.rate_limiting import TenantAwareThrottle
 
 
 class Command(BaseCommand):
@@ -174,13 +166,6 @@ class Command(BaseCommand):
         self.stdout.write(self.style.HTTP_INFO("\n--- Permission Tests ---\n"))
         
         try:
-            from apps.tenancy.permissions import (
-                TenantActive,
-                TenantFeatureEnabled,
-                TenantAPIAccessEnabled,
-                TenantNotSuspended,
-                IsSuperAdminOnly,
-            )
             
             perms = [
                 "TenantActive",
@@ -209,7 +194,6 @@ class Command(BaseCommand):
         
         try:
             from apps.tenancy.rate_limiting import (
-                TenantAwareThrottle,
                 TenantPlanBasedThrottle,
             )
             
@@ -223,8 +207,7 @@ class Command(BaseCommand):
             
             self.stdout.write("\nPlan-based limits:")
             for plan in plans:
-                from apps.tenancy.feature_flags import get_plan_features
-                from unittest.mock import Mock, patch
+                from unittest.mock import patch
                 
                 with patch(
                     "apps.tenancy.rate_limiting.get_tenant_plan",
@@ -312,12 +295,6 @@ class Command(BaseCommand):
         self.stdout.write(self.style.HTTP_INFO("\n--- Audit Logging Tests ---\n"))
         
         try:
-            from apps.tenancy.audit_features import (
-                log_feature_changed,
-                log_plan_changed,
-                log_tenant_suspended,
-                get_tenant_feature_audit_log,
-            )
             
             # Check audit logs exist
             total_logs = TenantFeatureAudit.objects.count()
@@ -375,10 +352,6 @@ class Command(BaseCommand):
         
         # Plan breakdown
         self.stdout.write("\nPlan Distribution:")
-        plan_counts = SchoolTenant.objects.values_list(
-            "plan"
-        ).annotate(count=__import__("django.db.models", fromlist=["Count"]).Count("id"))
-        # Fallback to simpler query
         for plan_name in ["trial", "premium", "enterprise"]:
             count = SchoolTenant.objects.filter(plan=plan_name).count()
             if count > 0:

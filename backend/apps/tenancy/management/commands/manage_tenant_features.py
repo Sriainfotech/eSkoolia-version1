@@ -135,7 +135,7 @@ class Command(BaseCommand):
                 f"\n{plan.name} ({plan.plan_type})"
             )
             self.stdout.write(f"  ID: {plan.plan_id}")
-            self.stdout.write(f"  Rate Limits:")
+            self.stdout.write("  Rate Limits:")
             self.stdout.write(
                 f"    - Per Minute: {plan.api_rate_limit_per_minute}"
             )

@@ -52,6 +52,6 @@ m0005 = recorder.migration_qs.filter(app='tenancy', name='0005_super_admin_model
 if m0005:
     print(f"  ✓ Migration 0005 applied at: {m0005.applied.isoformat()}")
 else:
-    print(f"  ✗ Migration 0005 NOT found in django_migrations")
+    print("  ✗ Migration 0005 NOT found in django_migrations")
 
 print("\n" + "=" * 70)

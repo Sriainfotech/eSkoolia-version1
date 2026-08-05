@@ -229,7 +229,7 @@ export function QuickBroadcast() {
                   {channels.includes('sms') && (
                     <div style={{ display: 'flex', gap: 5, alignItems: 'flex-start', marginTop: 6, fontSize: 10.5, color: 'var(--ink-3)' }}>
                       <AlertCircle size={11} strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }} />
-                      SMS is logged for the school's records but not yet dispatched through an SMS provider — recipients will only be notified via the other selected channels.
+                      SMS is logged for the school&apos;s records but not yet dispatched through an SMS provider — recipients will only be notified via the other selected channels.
                     </div>
                   )}
                 </div>
@@ -260,7 +260,7 @@ export function QuickBroadcast() {
                   <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>Loading…</div>
                 ) : options.is_teacher ? (
                   <div style={{ fontSize: 11.5, color: 'var(--ink-2)', marginBottom: 10, lineHeight: 1.5 }}>
-                    As a class teacher, you can broadcast to parents of the class(es) you're assigned to.
+                    As a class teacher, you can broadcast to parents of the class(es) you&apos;re assigned to.
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 12 }}>

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useMemo, useEffect } from "react";
 import { feesApi, listData } from "@/lib/fees-api";
+import { fetchDocumentHeaderImageDataUrl, getImageNaturalSize } from "@/lib/document-branding";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface Due { id:string; label:string; amount:number; due:string; }
@@ -98,8 +99,11 @@ export default function FeesCollectionPanel() {
   const [reconForm, setReconForm] = useState({ reference:"", amount:"", method:"bank", date:"", status:"review", match_note:"", notes:"" });
   const [reconSaving, setReconSaving] = useState(false);
   const [schoolHeader, setSchoolHeader] = useState({ name:"", address:"", email:"", logo_url:"" });
-  const [showHeaderModal, setShowHeaderModal] = useState(false);
-  const [headerDraft, setHeaderDraft] = useState<typeof schoolHeader>(schoolHeader);
+  // The header IMAGE shown on every generated PDF comes from Settings >
+  // Document Branding (the one central place every print/PDF feature in the
+  // app uses) — schoolHeader above still supplies the plain-text school name
+  // used elsewhere on this page.
+  const [headerImageDataUrl, setHeaderImageDataUrl] = useState<string | null>(null);
   // Store only the selected student ID; derive the full record reactively from STUDENTS.
   // This ensures the ledger view auto-updates after refreshPaymentData() without any manual setSelected() call.
   const [selectedId, setSelectedId] = useState<string|null>(null);
@@ -132,6 +136,10 @@ export default function FeesCollectionPanel() {
     if (asgnRes.status === "rejected") console.error("Assignments failed:", asgnRes.reason);
     if (payRes.status  === "rejected") console.error("Payments failed:",    payRes.reason);
     setLoading(false);
+    // Header image for generated PDFs — fetched separately since it's not
+    // part of feesApi.getMySchoolInfo() and shouldn't block the rest of the
+    // page's data from loading if it's briefly unavailable.
+    fetchDocumentHeaderImageDataUrl().then(setHeaderImageDataUrl);
   };
 
   const refreshPaymentData = async () => {
@@ -422,9 +430,9 @@ export default function FeesCollectionPanel() {
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#181B2A}
 .page{width:620px;margin:0 auto;padding:48px 40px}
-.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;padding-bottom:24px;border-bottom:2px solid #E8E8EE}
-.header-left{display:flex;align-items:center;gap:16px}
-.logo{width:60px;height:60px;border-radius:12px;background:#F3F4F6;display:flex;align-items:center;justify-content:center;font-size:34px;border:1px solid #E8E8EE;flex-shrink:0}
+.header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;padding-bottom:24px;border-bottom:2px solid #E8E8EE}
+.header-left{flex:1;min-width:0}
+.header-img{display:block;max-width:100%;max-height:80px;object-fit:contain;object-position:left center}
 .school-name{font-size:22px;font-weight:700;color:#181B2A;margin-bottom:4px}
 .school-addr{font-size:12px;color:#6B7280;line-height:1.5}
 .rcpt-badge{background:#6D4AFF;color:#fff;font-size:11px;font-weight:700;padding:6px 16px;border-radius:20px;letter-spacing:0.08em;white-space:nowrap}
@@ -449,11 +457,9 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#181B2A}
 <div class="page">
   <div class="header">
     <div class="header-left">
-      <div class="logo">&#127979;</div>
-      <div>
-        <div class="school-name">${schoolHeader.name}</div>
-        <div class="school-addr">${schoolHeader.address}${schoolHeader.email ? ` &middot; ${schoolHeader.email}` : ""}</div>
-      </div>
+      ${headerImageDataUrl
+        ? `<img src="${headerImageDataUrl}" alt="School header" class="header-img" />`
+        : `<div class="school-name">${schoolHeader.name}</div><div class="school-addr">${schoolHeader.address}${schoolHeader.email ? ` &middot; ${schoolHeader.email}` : ""}</div>`}
     </div>
     <div class="rcpt-badge">RECEIPT</div>
   </div>
@@ -506,58 +512,36 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#181B2A}
       if (y + need > 282) { doc.addPage(); y = M; }
     };
 
-    // ── LOGO IMAGE (school logo or 🏫 emoji via canvas) ──────────
-    const getLogoDataUrl = (): string => {
-      if (schoolHeader.logo_url) return schoolHeader.logo_url;
-      // Render the school building emoji onto a canvas and export as PNG data URL
-      const c = document.createElement("canvas");
-      c.width = 64; c.height = 64;
-      const ctx = c.getContext("2d");
-      if (ctx) {
-        ctx.clearRect(0, 0, 64, 64);
-        ctx.font = "44px serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("🏫", 32, 34);
+    // ── HEADER (from Settings > Document Branding — the one central
+    // source every print/PDF feature in the app uses) ────────────────
+    let headerHeight = 0;
+    if (headerImageDataUrl) {
+      try {
+        const { width: natW, height: natH } = await getImageNaturalSize(headerImageDataUrl);
+        headerHeight = Math.min(24, CW * (natH / natW));
+        doc.addImage(headerImageDataUrl, "PNG", M, y, CW, headerHeight);
+      } catch {
+        headerHeight = 0;
       }
-      return c.toDataURL("image/png");
-    };
-    const logoDataUrl = getLogoDataUrl();
-
-    // ── HEADER ──────────────────────────────────────────────────
-    doc.setFillColor(248, 248, 251);
-    doc.roundedRect(M, y, CW, 24, 2, 2, "F");
-
-    // Logo box background
-    doc.setFillColor(243, 244, 246);
-    doc.setDrawColor(232, 232, 238);
-    doc.setLineWidth(0.3);
-    doc.roundedRect(M + 3, y + 4, 16, 16, 2, 2, "FD");
-    // Embed logo image
-    doc.addImage(logoDataUrl, "PNG", M + 3, y + 4, 16, 16);
-
-    // School name
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(13);
-    doc.setTextColor(24, 27, 42);
-    doc.text(schoolHeader.name || "School", M + 23, y + 10);
-
-    // School address/email
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(7.5);
-    doc.setTextColor(107, 114, 128);
-    const addrLine = [schoolHeader.address, schoolHeader.email].filter(Boolean).join("  ·  ");
-    doc.text(addrLine, M + 23, y + 17);
+    }
+    if (headerHeight === 0) {
+      // Header image not configured/available yet — fall back to plain text.
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.setTextColor(24, 27, 42);
+      doc.text(schoolHeader.name || "School", M, y + 6);
+      headerHeight = 10;
+    }
 
     // LEDGER badge
     doc.setFillColor(109, 74, 255);
-    doc.roundedRect(W - M - 22, y + 8, 18, 8, 2, 2, "F");
+    doc.roundedRect(W - M - 22, y + 2, 18, 8, 2, 2, "F");
     doc.setFont("helvetica", "bold");
     doc.setFontSize(6.5);
     doc.setTextColor(255, 255, 255);
-    doc.text("LEDGER", W - M - 13, y + 13.2, { align: "center" });
+    doc.text("LEDGER", W - M - 13, y + 7.2, { align: "center" });
 
-    y += 30;
+    y += headerHeight + 8;
 
     // Divider
     doc.setDrawColor(232, 232, 238);
@@ -897,9 +881,16 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#181B2A}
             {selected&&selDues.length>0 ? (
               <div style={{border:"1px solid #E8E8EE",borderRadius:10,padding:"18px 20px"}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}>
-                  <div>
-                    <div style={{fontSize:20,fontWeight:700,color:"#181B2A",lineHeight:1.2}}>{schoolHeader.name || "School"}</div>
-                    <div style={{fontSize:12,color:"#A0A3B8",marginTop:2}}>{schoolHeader.address || ""}</div>
+                  <div style={{minWidth:0,flex:1}}>
+                    {headerImageDataUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={headerImageDataUrl} alt="School header" style={{display:"block",maxWidth:"100%",maxHeight:60,objectFit:"contain",objectPosition:"left center"}} />
+                    ) : (
+                      <>
+                        <div style={{fontSize:20,fontWeight:700,color:"#181B2A",lineHeight:1.2}}>{schoolHeader.name || "School"}</div>
+                        <div style={{fontSize:12,color:"#A0A3B8",marginTop:2}}>{schoolHeader.address || ""}</div>
+                      </>
+                    )}
                   </div>
                   <div style={{textAlign:"right"}}>
                     <div style={{fontSize:12.5,fontWeight:600,color:"#181B2A"}}>{nextR}</div>
@@ -1141,7 +1132,7 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#181B2A}
               </div>
             </div>
             <div style={{display:"flex",gap:8}}>
-              <button style={oBtn(true)} onClick={()=>{setHeaderDraft(schoolHeader);setShowHeaderModal(true);}}>Edit Header</button>
+              <button style={oBtn(true)} onClick={()=>window.open("/settings/document-branding","_blank")} title="The receipt header is configured centrally in Settings">Edit Header</button>
               <button style={oBtn(true)} onClick={refreshPaymentData}>Refresh</button>
             </div>
           </div>
@@ -1368,49 +1359,6 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#fff;color:#181B2A}
             <div style={{display:"flex",justifyContent:"flex-end",gap:10,padding:"14px 24px",borderTop:"1px solid #E8E8EE",flexShrink:0}}>
               <button style={{height:36,padding:"0 18px",border:"1px solid #E8E8EE",borderRadius:8,background:"#fff",color:"#181B2A",fontSize:13,fontWeight:500,cursor:"pointer"}} onClick={()=>setShowLedger(false)}>Close</button>
               <button style={{height:36,padding:"0 18px",border:"none",borderRadius:8,background:"#6D4AFF",color:"#fff",fontSize:13,fontWeight:600,cursor:"pointer",boxShadow:"0 2px 8px rgba(109,74,255,0.20)"}} onClick={()=>generateLedgerPDF()}>Generate Ledger PDF</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Edit Header Modal */}
-      {showHeaderModal&&(
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowHeaderModal(false)}>
-          <div style={{background:"#fff",borderRadius:14,padding:"28px 32px",width:460,maxWidth:"95vw",boxShadow:"0 12px 40px rgba(0,0,0,0.18)"}} onClick={e=>e.stopPropagation()}>
-            <div style={{fontSize:17,fontWeight:700,color:"#181B2A",marginBottom:4}}>Edit Receipt Header</div>
-            <div style={{fontSize:13,color:"#A0A3B8",marginBottom:22}}>This header appears at the top of every downloaded receipt.</div>
-
-            {/* Preview */}
-            <div style={{display:"flex",alignItems:"center",gap:14,padding:"16px",border:"1px solid #E8E8EE",borderRadius:10,background:"#F8F8FB",marginBottom:22}}>
-              <div style={{width:52,height:52,borderRadius:10,background:"#F3F4F6",border:"1px solid #E8E8EE",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0}}>🏫</div>
-              <div>
-                <div style={{fontSize:16,fontWeight:700,color:"#181B2A",marginBottom:3}}>{headerDraft.name||"School Name"}</div>
-                <div style={{fontSize:12,color:"#6B7280"}}>
-                  {headerDraft.address||"School Address"}
-                  {headerDraft.email ? ` · ${headerDraft.email}` : ""}
-                </div>
-              </div>
-            </div>
-
-            {[
-              {label:"School Name",    key:"name",    placeholder:"e.g. Greenwood High School"},
-              {label:"Address",        key:"address", placeholder:"e.g. MG Road, Bengaluru"},
-              {label:"Email / Contact",key:"email",   placeholder:"e.g. finance@school.edu"},
-            ].map(f=>(
-              <div key={f.key} style={{marginBottom:14}}>
-                <div style={{fontSize:12,fontWeight:600,color:"#5B5E72",marginBottom:6}}>{f.label}</div>
-                <input
-                  value={(headerDraft as any)[f.key]}
-                  onChange={e=>setHeaderDraft(d=>({...d,[f.key]:e.target.value}))}
-                  placeholder={f.placeholder}
-                  style={{width:"100%",height:36,border:"1px solid #E8E8EE",borderRadius:8,padding:"0 12px",fontSize:13,outline:"none",boxSizing:"border-box"}}
-                />
-              </div>
-            ))}
-
-            <div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:24}}>
-              <button style={oBtn(true)} onClick={()=>setShowHeaderModal(false)}>Cancel</button>
-              <button style={pBtn(true)} onClick={()=>{setSchoolHeader(headerDraft);setShowHeaderModal(false);}}>Save Header</button>
             </div>
           </div>
         </div>

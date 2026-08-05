@@ -1,5 +1,4 @@
 ﻿from django.contrib import admin
-from django.conf import settings
 from django.urls import include, path, re_path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from apps.core.media_views import serve_media
@@ -38,6 +37,7 @@ urlpatterns = [
     path("api/notes/", include("apps.notes.urls")),
     path("api/user/todos/", include("apps.todos.urls")),
     path("api/ai/calls-queue/", include("apps.calls_queue.urls")),
+    path("api/v1/settings/", include("apps.settings.urls")),
     path("api/ai/brief/", AIBriefView.as_view(), name="ai-brief"),
     path("api/dashboard/attention-count/", AttentionCountView.as_view(), name="dashboard-attention-count"),
     path("api/v1/utilities/communication/", include("apps.communication.urls")),

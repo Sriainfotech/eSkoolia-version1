@@ -4,7 +4,7 @@ Includes filtering, pagination, validation, and date/time utilities.
 """
 
 from datetime import datetime, timedelta, date
-from django.db.models import Q, QuerySet, Count
+from django.db.models import Q, Count
 from rest_framework import status
 from rest_framework.response import Response
 from .exceptions import InvalidQueryParams

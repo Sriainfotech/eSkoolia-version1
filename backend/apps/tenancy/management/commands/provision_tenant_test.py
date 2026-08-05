@@ -12,7 +12,6 @@ This command:
 """
 import logging
 from django.core.management.base import BaseCommand
-from django.conf import settings
 from django.db import connection
 
 from apps.tenancy.provisioning import provision_tenant, is_provisioning_enabled

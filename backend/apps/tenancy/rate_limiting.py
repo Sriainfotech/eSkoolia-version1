@@ -5,11 +5,8 @@ Compatible with future Redis backend for distributed rate limiting.
 """
 
 from rest_framework.throttling import SimpleRateThrottle, BaseThrottle
-from rest_framework.exceptions import Throttled
 from django.core.cache import cache
 from django.conf import settings
-from django.utils.decorators import method_decorator
-from django.views.decorators.cache import never_cache
 from apps.tenancy.context import (
     get_current_tenant,
     get_current_tenant_id,

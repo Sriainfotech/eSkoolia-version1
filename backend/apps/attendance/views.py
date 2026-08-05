@@ -18,7 +18,8 @@ from config.pagination import ApiPageNumberPagination
 from apps.core.models import AcademicYear, Class, Section
 from apps.students.models import Student
 
-from .models import ATTENDANCE_TYPE_CHOICES, StudentAttendance, StudentAttendanceBulk
+from .holiday_utils import get_calendar_holiday
+from .models import ATTENDANCE_TYPE_CHOICES, StudentAttendance
 from .serializers import (
     StudentAttendanceSerializer,
     StudentAttendanceStoreRequestSerializer,
@@ -71,7 +72,10 @@ class AttendanceTenantMixin:
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
         user = request.user
-        if user.is_superuser or getattr(user, "is_staff", False):
+        # NOTE: intentionally NOT `user.is_staff` — that's Django's generic staff
+        # flag, not a school-specific permission grant, and let any is_staff=True
+        # account skip the RBAC check regardless of assigned attendance permissions.
+        if user.is_superuser or getattr(user, "is_school_admin", False):
             return
         code = self._required_permission_code()
         if code is None:
@@ -245,6 +249,12 @@ class StudentAttendanceChatbotMarkAPIView(AttendanceTenantMixin, APIView):
                 or AcademicYear.objects.filter(school_id=school_id).order_by("-start_date").first()
             )
 
+        # A school-calendar holiday always wins over whatever type was requested.
+        calendar_holiday = get_calendar_holiday(school_id, attendance_date)
+        if calendar_holiday is not None:
+            attendance_type = "H"
+            notes = notes or "Holiday"
+
         obj, created = StudentAttendance.objects.update_or_create(
             school=school,
             student=student,
@@ -272,6 +282,7 @@ class StudentAttendanceChatbotMarkAPIView(AttendanceTenantMixin, APIView):
                 "class_name": student.current_class.name if student.current_class else "",
                 "section_name": student.current_section.name if student.current_section else "",
                 "created": created,
+                "holiday_name": calendar_holiday.name if calendar_holiday else None,
             },
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
@@ -370,12 +381,15 @@ class StudentSearchAPIView(AttendanceTenantMixin, APIView):
                 }
             )
 
+        calendar_holiday = get_calendar_holiday(request.user.school_id, attendance_date)
         response_data = {
             "date": attendance_date,
             "class_id": class_id,
             "section_id": section_id,
             "attendance_type": attendance_type,
             "students": table_students,
+            "is_holiday": calendar_holiday is not None,
+            "holiday_name": calendar_holiday.name if calendar_holiday else None,
         }
 
         # Optional backward-compatible payload for legacy clients.
@@ -477,6 +491,12 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                     {"success": False, "message": "Please mark lunch status for all students"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+
+            # Auto-detect a school-calendar holiday for this date so a teacher
+            # doesn't have to remember to pass mark_holiday=True — an explicit
+            # mark_holiday flag (e.g. a single-class school event) still wins.
+            calendar_holiday = get_calendar_holiday(request.user.school_id, data.get("date"))
+            is_calendar_holiday = calendar_holiday is not None
 
             school_scope = self.school_filter(request)
             student_scope = Student.objects.filter(id__in=attendance_ids, **school_scope)
@@ -581,7 +601,7 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
 
                     attendance = StudentAttendance()
                     attendance.student_id = student_id
-                    if data.get("mark_holiday"):
+                    if data.get("mark_holiday") or is_calendar_holiday:
                         attendance.attendance_type = "H"
                         attendance.notes = "Holiday"
                     else:
@@ -655,10 +675,11 @@ class StudentAttendanceStoreAPIView(AttendanceTenantMixin, APIView):
                         if student:
                             send_present_attendance_notifications(student, attendance.attendance_date)
 
-            return Response(
-                {"success": True, "message": "Attendance saved successfully"},
-                status=status.HTTP_200_OK,
-            )
+            response_payload = {"success": True, "message": "Attendance saved successfully"}
+            if calendar_holiday is not None:
+                response_payload["holiday"] = {"name": calendar_holiday.name, "date": str(data["date"])}
+                response_payload["message"] = f"{data['date']} is a holiday ({calendar_holiday.name}) — marked as Holiday."
+            return Response(response_payload, status=status.HTTP_200_OK)
         except Exception as e:
             detail = getattr(e, "detail", None)
             if detail is not None:
@@ -724,9 +745,13 @@ class StudentAttendanceHolidayAPIView(AttendanceTenantMixin, APIView):
 
         elif purpose == "unmark":
             for student in students:
+                # Only remove the holiday placeholder — a plain student_id+date
+                # filter here would also delete a real P/A/L mark already
+                # recorded for that day if one exists.
                 existing = StudentAttendance.objects.filter(
                     student_id=student.id,
                     attendance_date=attendance_date,
+                    attendance_type="H",
                     **self.school_filter(request),
                 ).first()
                 if existing:
@@ -998,6 +1023,11 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
         processed_count = 0
         failed_count = 0
 
+        # A school-calendar holiday always wins, same as the other attendance
+        # write paths — every row in this file gets forced to "H" regardless
+        # of what the uploaded attendance_type column says.
+        calendar_holiday = get_calendar_holiday(request.user.school_id, request_date)
+
         # Validate and process rows
         valid_attendance_types = ["P", "A", "L", "F", "H"]
 
@@ -1052,11 +1082,16 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
                 if value == "invalid":
                     row_errors.append({"field": field_name, "message": "Invalid time format. Use HH:MM"})
 
+            # A calendar holiday overrides whatever the file's attendance_type
+            # column says, so run the cross-field check against the type that
+            # will actually be saved.
+            effective_type = "H" if calendar_holiday else attendance_type
+
             # Cross-field validation: time / pickup / lunch fields are not allowed
             # when the student is marked Absent (A) or Holiday (H).
-            absent_like = attendance_type in {"A", "H"}
+            absent_like = effective_type in {"A", "H"}
             if absent_like:
-                type_label = "Absent" if attendance_type == "A" else "Holiday"
+                type_label = "Absent" if effective_type == "A" else "Holiday"
                 disallowed_fields = [
                     ("sign_in_time", sign_in_time, sign_in_time not in (None, "invalid")),
                     ("sign_out_time", sign_out_time, sign_out_time not in (None, "invalid")),
@@ -1127,8 +1162,8 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
                 attendance = StudentAttendance()
                 attendance.student_id = student.id
                 attendance.attendance_date = request_date
-                attendance.attendance_type = attendance_type or "P"
-                attendance.notes = note
+                attendance.attendance_type = effective_type or "P"
+                attendance.notes = note or ("Holiday" if calendar_holiday else "")
                 attendance.arrival_time = None if arrival_time == "invalid" else arrival_time
                 attendance.sign_in_time = None if sign_in_time == "invalid" else sign_in_time
                 attendance.sign_out_time = None if sign_out_time == "invalid" else sign_out_time
@@ -1167,28 +1202,36 @@ class StudentAttendanceBulkStoreAPIView(AttendanceTenantMixin, APIView):
             )
         elif failed_count > 0:
             # Partial success
+            message = f"{processed_count} records imported, {failed_count} failed"
+            if calendar_holiday:
+                message += f" — {request_date} is a holiday ({calendar_holiday.name}), all imported rows were marked Holiday"
             return Response(
                 {
                     "success": True,
-                    "message": f"{processed_count} records imported, {failed_count} failed",
+                    "message": message,
                     "data": {
                         "imported": processed_count,
                         "failed": failed_count,
-                        "errors": errors[:50]  # Limit to first 50 errors
+                        "errors": errors[:50],  # Limit to first 50 errors
+                        "holiday": {"name": calendar_holiday.name, "date": str(request_date)} if calendar_holiday else None,
                     }
                 },
                 status=status.HTTP_200_OK,
             )
         else:
             # Full success
+            message = f"Successfully imported {processed_count} attendance records"
+            if calendar_holiday:
+                message += f" — {request_date} is a holiday ({calendar_holiday.name}), all rows were marked Holiday"
             return Response(
                 {
                     "success": True,
-                    "message": f"Successfully imported {processed_count} attendance records",
+                    "message": message,
                     "data": {
                         "imported": processed_count,
                         "failed": 0,
-                        "errors": []
+                        "errors": [],
+                        "holiday": {"name": calendar_holiday.name, "date": str(request_date)} if calendar_holiday else None,
                     }
                 },
                 status=status.HTTP_200_OK,
@@ -1247,6 +1290,7 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
                 )),
                 absent=Count(Case(When(attendance_type="A", then=1), output_field=IntegerField())),
                 late=Count(Case(When(attendance_type="L", then=1), output_field=IntegerField())),
+                holiday=Count(Case(When(attendance_type="H", then=1), output_field=IntegerField())),
             )
         )
 
@@ -1259,6 +1303,7 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
                     "signed_in": row["signed_in"] or 0,
                     "absent": row["absent"] or 0,
                     "late": row["late"] or 0,
+                    "holiday": row["holiday"] or 0,
                 }
 
         # Build result using union of both sets so all classes are represented
@@ -1266,13 +1311,15 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
         result = []
         for cls_id in all_class_ids:
             total = total_by_class.get(cls_id, 0)
-            c = counts_by_class.get(cls_id, {"present": 0, "signed_in": 0, "absent": 0, "late": 0})
+            c = counts_by_class.get(cls_id, {"present": 0, "signed_in": 0, "absent": 0, "late": 0, "holiday": 0})
             # Clamp to total to be defensive against stray duplicates.
             present = min(c["present"], total) if total else c["present"]
             signed_in = min(c["signed_in"], total) if total else c["signed_in"]
             absent = min(c["absent"], total) if total else c["absent"]
             late = min(c["late"], total) if total else c["late"]
-            marked = present + absent + late
+            holiday = min(c["holiday"], total) if total else c["holiday"]
+            # holiday days aren't "unmarked" — they were auto-marked by the school calendar.
+            marked = present + absent + late + holiday
             attended = signed_in + late
             result.append({
                 "class_id": cls_id,
@@ -1281,6 +1328,7 @@ class ClassAttendanceSummaryAPIView(AttendanceTenantMixin, APIView):
                 "signed_in": signed_in,
                 "absent": absent,
                 "late": late,
+                "holiday": holiday,
                 "unmarked": max(0, total - marked),
                 # pct now reflects students who actually arrived (signed in or late),
                 # so a class marked Present in advance without sign-ins shows 0%.
@@ -1319,13 +1367,16 @@ class StudentAttendanceDailySummaryAPIView(AttendanceTenantMixin, APIView):
             present=Count(Case(When(attendance_type="P", then=1), output_field=IntegerField())),
             absent=Count(Case(When(attendance_type="A", then=1), output_field=IntegerField())),
             late=Count(Case(When(attendance_type="L", then=1), output_field=IntegerField())),
+            holiday=Count(Case(When(attendance_type="H", then=1), output_field=IntegerField())),
         )
         absent_with_reason = latest_rows.filter(attendance_type="A").exclude(notes__isnull=True).exclude(notes="").count()
 
         present = counts.get("present") or 0
         absent = counts.get("absent") or 0
         late = counts.get("late") or 0
-        marked = present + absent + late
+        holiday = counts.get("holiday") or 0
+        # holiday days aren't "unmarked" — they were auto-marked by the school calendar.
+        marked = present + absent + late + holiday
         unmarked = max(0, total - marked)
 
         return Response({
@@ -1333,6 +1384,7 @@ class StudentAttendanceDailySummaryAPIView(AttendanceTenantMixin, APIView):
             "total_students": total,
             "present": present,
             "absent": absent,
+            "holiday": holiday,
             "absent_with_reason": absent_with_reason,
             "late": late,
             "unmarked": unmarked,
@@ -1386,8 +1438,7 @@ class StudentAttendanceDashboardAPIView(AttendanceTenantMixin, APIView):
         absent = counts.get("absent") or 0
         late = counts.get("late") or 0
         leave = counts.get("leave") or 0
-        marked = present + absent + late + leave
-        
+
         # Calculate percentage
         attendance_pct = round((present / total * 100), 1) if total > 0 else 0
 
@@ -1806,7 +1857,6 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
 
         current_row = header_row_idx + 1
         sno = 0
-        last_group = None
         # Group buckets for separator headers
         from itertools import groupby
         def group_keyer(att):
@@ -1962,7 +2012,10 @@ class StudentAttendanceExportAPIView(AttendanceTenantMixin, APIView):
                 else:
                     cell.alignment = left
             tot_students += total
-            tot_p += b["P"]; tot_a += b["A"]; tot_l += b["L"]; tot_eso += b["ESO"]
+            tot_p += b["P"]
+            tot_a += b["A"]
+            tot_l += b["L"]
+            tot_eso += b["ESO"]
             sum_row += 1
 
         # Totals row

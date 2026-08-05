@@ -93,15 +93,28 @@ class SchoolTenant(TenantMixin, models.Model):
     principal_name = models.CharField(max_length=128, null=True, blank=True)
     principal_email = models.EmailField(max_length=128, null=True, blank=True)
     principal_phone = models.CharField(max_length=20, null=True, blank=True)
+    school_phone = models.CharField(max_length=20, blank=True, help_text="General/front-office phone, distinct from the principal's direct line.")
+    school_email = models.EmailField(max_length=128, blank=True, help_text="General/front-office email, distinct from the principal's inbox.")
+    website = models.URLField(max_length=255, blank=True)
     campus_address = models.TextField(null=True, blank=True)
     city = models.CharField(max_length=64, null=True, blank=True)
     pin_code = models.CharField(max_length=6, null=True, blank=True)
+    country = models.CharField(max_length=64, blank=True, default="India")
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    geofence_radius_meters = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Radius (metres) around latitude/longitude for future staff clock-in/out geofencing.",
+    )
 
     # Board affiliation
     affiliation_number = models.CharField(max_length=64, null=True, blank=True)
 
     # School identity metadata
     school_type = models.CharField(max_length=64, blank=True)
+    year_established = models.PositiveSmallIntegerField(null=True, blank=True)
+    medium_of_instruction = models.CharField(max_length=64, blank=True)
+    motto = models.CharField(max_length=255, blank=True, help_text="School motto/tagline, shown on receipts and the parent portal.")
 
     # Plan & capacity overrides (null = inherit subscription plan default)
     student_seat_limit = models.PositiveIntegerField(null=True, blank=True)

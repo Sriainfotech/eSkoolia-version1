@@ -49,6 +49,24 @@ class SchoolTenantSerializer(serializers.ModelSerializer):
             "lastActivity",
             "brand_color",
             "logo_url",
+            # School identity metadata
+            "school_type",
+            "medium_of_instruction",
+            "year_established",
+            "motto",
+            # Contact & address
+            "principal_name",
+            "principal_email",
+            "principal_phone",
+            "school_phone",
+            "school_email",
+            "website",
+            "campus_address",
+            "city",
+            "pin_code",
+            "country",
+            # Board affiliation
+            "affiliation_number",
             # Plan & capacity overrides
             "student_seat_limit",
             "staff_seat_limit",
@@ -135,6 +153,24 @@ class SchoolTenantUpdateSerializer(serializers.Serializer):
     staff_count = serializers.IntegerField(required=False, min_value=0)
     brand_color = serializers.CharField(max_length=32, required=False, allow_blank=True)
     logo_url = serializers.CharField(max_length=512, required=False, allow_blank=True)
+    # School identity metadata
+    school_type = serializers.CharField(max_length=64, required=False, allow_blank=True)
+    medium_of_instruction = serializers.CharField(max_length=64, required=False, allow_blank=True)
+    year_established = serializers.IntegerField(required=False, min_value=1800, max_value=2100, allow_null=True)
+    motto = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    # Contact & address
+    principal_name = serializers.CharField(max_length=128, required=False, allow_blank=True, allow_null=True)
+    principal_email = serializers.EmailField(max_length=128, required=False, allow_blank=True, allow_null=True)
+    principal_phone = serializers.CharField(max_length=20, required=False, allow_blank=True, allow_null=True)
+    school_phone = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    school_email = serializers.EmailField(max_length=128, required=False, allow_blank=True)
+    website = serializers.URLField(max_length=255, required=False, allow_blank=True)
+    campus_address = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    city = serializers.CharField(max_length=64, required=False, allow_blank=True, allow_null=True)
+    pin_code = serializers.CharField(max_length=6, required=False, allow_blank=True, allow_null=True)
+    country = serializers.CharField(max_length=64, required=False, allow_blank=True)
+    # Board affiliation
+    affiliation_number = serializers.CharField(max_length=64, required=False, allow_blank=True, allow_null=True)
     # Plan & capacity overrides
     student_seat_limit = serializers.IntegerField(required=False, min_value=0, allow_null=True)
     staff_seat_limit = serializers.IntegerField(required=False, min_value=0, allow_null=True)

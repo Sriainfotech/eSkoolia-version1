@@ -11,17 +11,16 @@ Tests cover:
 """
 
 import pytest
-from django.test import TestCase, TransactionTestCase
+from django.test import TransactionTestCase
 from django.db import connection
 
-from .models import SchoolTenant, School
+from .models import SchoolTenant
 from .migration_framework import (
     migrate_school_to_tenant,
     validate_migration,
     rollback_migration,
 )
 from .test_fixtures import create_test_school, create_test_dataset, cleanup_test_data
-from .validation_automation import validate_migration_completeness
 from .observability import get_observer, reset_observer
 
 
@@ -71,7 +70,7 @@ class DryRunMigrationTest(MigrationIntegrationTestBase):
     def test_dry_run_collects_row_counts(self):
         """Dry-run should count rows but not copy them."""
         # Create test data
-        dataset = create_test_dataset(self.test_school_id, small=True)
+        create_test_dataset(self.test_school_id, small=True)
         self._ensure_tenant_schema(self.test_schema)
         
         # Run dry-run migration
@@ -97,7 +96,7 @@ class RealMigrationTest(MigrationIntegrationTestBase):
     def test_real_migration_copies_data(self):
         """Real migration should copy rows and set status to 'completed'."""
         # Create test data
-        dataset = create_test_dataset(self.test_school_id, small=True)
+        create_test_dataset(self.test_school_id, small=True)
         self._ensure_tenant_schema(self.test_schema)
         
         # Run real migration
@@ -121,7 +120,7 @@ class ValidationTest(MigrationIntegrationTestBase):
     
     def test_validation_detects_matches(self):
         """Validation should detect matching row counts after migration."""
-        dataset = create_test_dataset(self.test_school_id, small=True)
+        create_test_dataset(self.test_school_id, small=True)
         self._ensure_tenant_schema(self.test_schema)
         
         # Migrate
@@ -147,7 +146,7 @@ class RollbackTest(MigrationIntegrationTestBase):
     
     def test_rollback_removes_tenant_data(self):
         """Rollback should remove tenant-side rows."""
-        dataset = create_test_dataset(self.test_school_id, small=True)
+        create_test_dataset(self.test_school_id, small=True)
         self._ensure_tenant_schema(self.test_schema)
         
         # Migrate
@@ -239,7 +238,7 @@ class RemigrationTest(MigrationIntegrationTestBase):
     
     def test_can_remigrate_after_rollback(self):
         """After rollback, should be able to re-migrate safely."""
-        dataset = create_test_dataset(self.test_school_id, small=True)
+        create_test_dataset(self.test_school_id, small=True)
         self._ensure_tenant_schema(self.test_schema)
         
         # Initial migration

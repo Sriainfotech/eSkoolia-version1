@@ -783,7 +783,17 @@ class Holiday(models.Model):
         ("other",     "Other"),
     ]
 
-    school        = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="holidays")
+    AUDIENCE_ALL = "all"
+    AUDIENCE_STAFF_ONLY = "staff_only"
+    AUDIENCE_CHOICES = [
+        (AUDIENCE_ALL, "All (students & staff)"),
+        (AUDIENCE_STAFF_ONLY, "Staff only"),
+    ]
+
+    school        = models.ForeignKey(
+        "tenancy.School", on_delete=models.CASCADE, related_name="holidays", null=True, blank=True,
+        help_text="Null = applies to every school (e.g. a national holiday declared platform-wide).",
+    )
     academic_year = models.ForeignKey(
         "core.AcademicYear",
         on_delete=models.SET_NULL,
@@ -797,6 +807,12 @@ class Holiday(models.Model):
     holiday_type  = models.CharField(max_length=20, choices=TYPE_CHOICES, default="public")
     description   = models.CharField(max_length=255, blank=True, default="")
     active_status = models.BooleanField(default=True)
+    # Default "all" preserves existing Foundation behavior exactly; only
+    # apps.settings' staff-only holiday creation ever sets "staff_only".
+    audience      = models.CharField(max_length=16, choices=AUDIENCE_CHOICES, default=AUDIENCE_ALL)
+    # "Restricted" holiday — staff may individually opt in rather than it
+    # being mandatory for everyone. Default False preserves existing behavior.
+    is_optional   = models.BooleanField(default=False)
     created_at    = models.DateTimeField(auto_now_add=True)
     updated_at    = models.DateTimeField(auto_now=True)
 

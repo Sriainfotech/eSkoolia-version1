@@ -89,6 +89,21 @@ def _school_owns_path(user, rel_path: str) -> bool:
         from apps.admissions.models import CertificateTemplate
         return CertificateTemplate.objects.filter(background_image=rel_path, school_id=school_id).exists()
 
+    if rel_path.startswith("settings/policy_docs/"):
+        from apps.settings.models import SchoolPolicyDocument
+        return SchoolPolicyDocument.objects.filter(file=rel_path, school_id=school_id).exists()
+
+    if rel_path.startswith("school_logos/"):
+        from apps.tenancy.models import SchoolTenant
+        return SchoolTenant.objects.filter(logo_url__endswith=f"/{rel_path}", school_id=school_id).exists()
+
+    if rel_path.startswith("settings/branding/"):
+        from apps.settings.models import DocumentBrandingSettings
+        return DocumentBrandingSettings.objects.filter(
+            Q(letterhead_source_file=rel_path) | Q(letterhead_rendered_image=rel_path),
+            school_id=school_id,
+        ).exists()
+
     # Unrecognized location — require authentication only (handled by the
     # caller already having a `user`), don't guess at ownership.
     return True

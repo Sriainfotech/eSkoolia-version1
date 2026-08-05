@@ -6,7 +6,6 @@ Uses pytest-django against the dedicated test settings module.
 """
 
 import os
-import sys
 from uuid import uuid4
 
 import pytest

@@ -88,9 +88,13 @@ def my_school_info_view(request):
         return Response({"error": "No school associated with this account"}, status=404)
     try:
         school = School.objects.get(id=school_id)
-        # Address/contact fields live on SchoolTenant, not School
-        tenant = None
-        if school.subdomain:
+        # Address/contact fields live on SchoolTenant, not School. Prefer the
+        # explicit FK (school.tenant_record) added in migration
+        # 0019_schooltenant_school; fall back to the legacy subdomain match
+        # only for tenants provisioned before that migration and never
+        # backfilled (see backfill_schooltenant_school_links command).
+        tenant = getattr(school, "tenant_record", None)
+        if tenant is None and school.subdomain:
             try:
                 from apps.tenancy.models import SchoolTenant
                 tenant = SchoolTenant.objects.filter(subdomain_url__iexact=school.subdomain).first()

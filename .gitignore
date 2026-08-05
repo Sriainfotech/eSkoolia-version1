@@ -18,9 +18,22 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Virtual environments
+backend/venv/
+backend/t/
+.venv/
+
 # Django
 db.sqlite3
 *.log
+backend/logs/
+
+# User-uploaded media (photos, documents) — runtime content, not source
+backend/media/
+# Saved Django debug-error pages (DEBUG=True technical_500 dumps can contain
+# request locals — DB URLs, tokens — that Django's settings redaction doesn't cover)
+error.html
+backend/error.html
 
 # Env
 .env

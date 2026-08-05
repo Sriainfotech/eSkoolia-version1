@@ -481,7 +481,7 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
         inquiry.save(update_fields=["last_contacted_at"])
         AuditLog.objects.create(
             school=inquiry.school,
-            user=self.request.user,
+            actor=self.request.user,
             action=f"contact.{channel}",
             object_type="AdmissionInquiry",
             object_id=str(inquiry.pk),
@@ -586,7 +586,7 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
             # Audit log
             AuditLog.objects.create(
                 school=target.school,
-                user=request.user,
+                actor=request.user,
                 action="inquiry.merge",
                 object_type="AdmissionInquiry",
                 object_id=str(target.pk),
@@ -606,7 +606,7 @@ class AdmissionInquiryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vi
         follow_up = ser.save(author=request.user)
         AuditLog.objects.create(
             school=inquiry.school,
-            user=request.user,
+            actor=request.user,
             action="followup.create",
             object_type="AdmissionInquiry",
             object_id=str(inquiry.pk),
@@ -1211,7 +1211,6 @@ class AdminSetupEntryViewSet(AdminSectionRBACMixin, DuplicateSafeWriteMixin, vie
         return school
 
     def get_queryset(self):
-        user = self.request.user
         qs = AdminSetupEntry.objects.select_related("school", "created_by")
         school = self._resolve_school()
         if not school:
@@ -1670,7 +1669,7 @@ class BulkJobViewSet(viewsets.GenericViewSet,
         job = serializer.save(school=school, created_by=user, status="pending")
         AuditLog.objects.create(
             school=school,
-            user=user,
+            actor=user,
             action="bulk_job.create",
             object_type="BulkJob",
             object_id=str(job.pk),
@@ -1723,7 +1722,7 @@ class AIGenerateView(APIView):
 
         AuditLog.objects.create(
             school=inquiry.school,
-            user=user,
+            actor=user,
             action="ai.generate",
             object_type="AdmissionInquiry",
             object_id=str(inquiry.pk),
@@ -1762,7 +1761,7 @@ class ConsentLogView(APIView):
         log = serializer.save(inquiry=inquiry, recorded_by=user)
         AuditLog.objects.create(
             school=inquiry.school,
-            user=user,
+            actor=user,
             action="consent.log",
             object_type="AdmissionInquiry",
             object_id=str(inquiry.pk),
@@ -1786,9 +1785,10 @@ class AnalyticsOverviewView(APIView):
         from datetime import timedelta
 
         user = request.user
-        base_qs = AdmissionInquiry.objects.all()
-        if getattr(user, "school_id", None):
-            base_qs = base_qs.filter(school_id=user.school_id)
+        school_id = getattr(user, "school_id", None)
+        if not school_id:
+            return Response({"success": False, "message": "School context is required."}, status=status.HTTP_403_FORBIDDEN)
+        base_qs = AdmissionInquiry.objects.filter(school_id=school_id)
 
         # Period filter
         period = request.query_params.get("period", "all")

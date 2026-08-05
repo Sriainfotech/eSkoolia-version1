@@ -9,12 +9,12 @@ from apps.academics.models import ClassSubjectAssignment
 from apps.core.models import Class, Section, Subject
 from apps.students.models import Student
 
+from .holiday_utils import get_calendar_holiday
 from .models import SubjectAttendance
 from .serializers import (
     SubjectAttendanceHolidayRequestSerializer,
     SubjectAttendanceReportSearchRequestSerializer,
     SubjectAttendanceSearchRequestSerializer,
-    SubjectAttendanceSerializer,
     SubjectAttendanceStoreRequestSerializer,
 )
 
@@ -180,6 +180,7 @@ class SubjectAttendanceSearchAPIView(SubjectAttendanceTenantMixin, APIView):
                 }
             )
 
+        calendar_holiday = get_calendar_holiday(request.user.school_id, attendance_date)
         return Response(
             {
                 "classes": [{"id": c.id, "class_name": c.name} for c in classes],
@@ -199,6 +200,8 @@ class SubjectAttendanceSearchAPIView(SubjectAttendanceTenantMixin, APIView):
                     "subject_name": subject_info.name if subject_info else "",
                     "date": attendance_date,
                 },
+                "is_holiday": calendar_holiday is not None,
+                "holiday_name": calendar_holiday.name if calendar_holiday else None,
             }
         )
 
@@ -219,12 +222,29 @@ class SubjectAttendanceStoreAPIView(SubjectAttendanceTenantMixin, APIView):
 
         self._validate_selection_access(request, class_id=class_id, section_id=section_id, subject_id=subject_id)
 
+        # Every student id in the payload must belong to this school — the class/section/
+        # subject checks above don't cover the per-row student ids, which are otherwise
+        # taken straight from the request body with no ownership check.
+        submitted_student_ids = {
+            student_data.get("student")
+            for student_data in attendance_payload.values()
+            if student_data.get("student") is not None
+        }
+        valid_student_ids = set(
+            Student.objects.filter(id__in=submitted_student_ids, **self.school_filter(request)).values_list("id", flat=True)
+        )
+        if submitted_student_ids - valid_student_ids:
+            raise ValidationError({"attendance": "One or more students were not found."})
+
+        # A school-calendar holiday always wins, same as every other attendance write path.
+        calendar_holiday = get_calendar_holiday(request.user.school_id, attendance_date)
+
         for record_id, student_data in attendance_payload.items():
             student_id = student_data.get("student")
             s_class = student_data.get("class") or class_id
             s_section = student_data.get("section") or section_id
-            attendance_type = student_data.get("attendance_type") or "A"
-            note = student_data.get("note") or ""
+            attendance_type = "H" if calendar_holiday else (student_data.get("attendance_type") or "A")
+            note = student_data.get("note") or ("Holiday" if calendar_holiday else "")
 
             existing = SubjectAttendance.objects.filter(
                 student_id=student_id,
@@ -252,7 +272,10 @@ class SubjectAttendanceStoreAPIView(SubjectAttendanceTenantMixin, APIView):
             row.attendance_date = attendance_date
             row.save()
 
-        return Response({"message": "Operation successful"}, status=status.HTTP_200_OK)
+        message = "Operation successful"
+        if calendar_holiday:
+            message += f" — {attendance_date} is a holiday ({calendar_holiday.name}), all rows were marked Holiday"
+        return Response({"message": message}, status=status.HTTP_200_OK)
 
 
 class SubjectAttendanceHolidayStoreAPIView(SubjectAttendanceTenantMixin, APIView):
@@ -304,6 +327,9 @@ class SubjectAttendanceHolidayStoreAPIView(SubjectAttendanceTenantMixin, APIView
 
         else:
             for student in students:
+                # Only remove the holiday placeholder — a plain student/subject/date
+                # filter here would also delete a real P/A/L mark already recorded
+                # for that day if one exists.
                 existing = SubjectAttendance.objects.filter(
                     student_id=student.id,
                     subject_id=v["subject_id"],
@@ -311,6 +337,7 @@ class SubjectAttendanceHolidayStoreAPIView(SubjectAttendanceTenantMixin, APIView
                     class_id=v["class_id"],
                     section_id=v["section_id"],
                     student_record_id=student.id,
+                    attendance_type="H",
                     **self.school_filter(request),
                 ).first()
                 if existing:

@@ -90,6 +90,15 @@ export interface SchoolTenant {
   pin_code?: string;
   // Board affiliation
   affiliation_number?: string;
+  // School identity metadata (extended)
+  medium_of_instruction?: string;
+  year_established?: number | null;
+  motto?: string;
+  // Contact & address (extended)
+  school_phone?: string;
+  school_email?: string;
+  website?: string;
+  country?: string;
   // Plan & capacity overrides (null/undefined = inherit plan defaults)
   student_seat_limit?: number | null;
   staff_seat_limit?: number | null;

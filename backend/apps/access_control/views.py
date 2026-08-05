@@ -1,24 +1,48 @@
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.http import Http404
 from django.db import IntegrityError
 from django.db.models import Q, Sum
-from django.utils import timezone
+from django.http import Http404
 from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import AuthenticationFailed, NotAuthenticated, NotFound, PermissionDenied as DRFPermissionDenied, ValidationError
+from rest_framework.exceptions import (
+    AuthenticationFailed,
+    NotAuthenticated,
+    NotFound,
+    ValidationError,
+)
+from rest_framework.exceptions import (
+    PermissionDenied as DRFPermissionDenied,
+)
 from rest_framework.response import Response
 
 from apps.core.models import Class, Section
 from apps.fees.models import FeeAssignment
 from apps.hr.models import Staff
 from apps.students.models import Student, StudentMultiClassRecord
-
-from .models import AccessTier, ModuleAccessTier, Permission, Role, RoleModuleAccess, RoleTemplate, UserRole
-from .permission_classes import CanManageRoles, CanManageUserRoles, CanViewPermissions
-from .serializers import PermissionSerializer, RoleMinimalSerializer, RoleSerializer, UserRoleSerializer
-from .services import apply_template_to_role, infer_tier_for_role_module, sync_role_module_permissions
 from config.pagination import ApiPageNumberPagination
+
+from .models import (
+    AccessTier,
+    ModuleAccessTier,
+    Permission,
+    Role,
+    RoleModuleAccess,
+    RoleTemplate,
+    UserRole,
+)
+from .permission_classes import CanManageRoles, CanManageUserRoles, CanViewPermissions
+from .serializers import (
+    PermissionSerializer,
+    RoleMinimalSerializer,
+    RoleSerializer,
+    UserRoleSerializer,
+)
+from .services import (
+    apply_template_to_role,
+    infer_tier_for_role_module,
+    sync_role_module_permissions,
+)
 
 User = get_user_model()
 
@@ -117,7 +141,7 @@ def _is_parent_role(role: Role) -> bool:
 class PermissionViewSet(StandardizedAccessControlResponseMixin, viewsets.ReadOnlyModelViewSet):
     queryset = Permission.objects.all()
     serializer_class = PermissionSerializer
-    permission_classes = [permissions.IsAuthenticated, CanViewPermissions]
+    permission_classes = (permissions.IsAuthenticated, CanViewPermissions)
 
     def get_object(self):
         try:
@@ -138,7 +162,7 @@ class PermissionViewSet(StandardizedAccessControlResponseMixin, viewsets.ReadOnl
 
 class RoleViewSet(StandardizedAccessControlResponseMixin, viewsets.ModelViewSet):
     serializer_class = RoleSerializer
-    permission_classes = [permissions.IsAuthenticated, CanManageRoles]
+    permission_classes = (permissions.IsAuthenticated, CanManageRoles)
     pagination_class = ApiPageNumberPagination
 
     def get_serializer_class(self):
@@ -423,7 +447,7 @@ class RoleViewSet(StandardizedAccessControlResponseMixin, viewsets.ModelViewSet)
 
 class RoleTemplateViewSet(StandardizedAccessControlResponseMixin, viewsets.ReadOnlyModelViewSet):
     """Read-only list of available role templates for the Apply Template dropdown."""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = (permissions.IsAuthenticated, CanManageRoles)
 
     def get_queryset(self):
         return RoleTemplate.objects.all()
@@ -443,7 +467,7 @@ class RoleTemplateViewSet(StandardizedAccessControlResponseMixin, viewsets.ReadO
 
 class UserRoleViewSet(viewsets.ModelViewSet):
     serializer_class = UserRoleSerializer
-    permission_classes = [permissions.IsAuthenticated, CanManageUserRoles]
+    permission_classes = (permissions.IsAuthenticated, CanManageUserRoles)
 
     def get_queryset(self):
         user = self.request.user
@@ -459,7 +483,7 @@ class UserRoleViewSet(viewsets.ModelViewSet):
 
 
 class LoginAccessControlViewSet(viewsets.ViewSet):
-    permission_classes = [permissions.IsAuthenticated, CanManageUserRoles]
+    permission_classes = (permissions.IsAuthenticated, CanManageUserRoles)
 
     def _roles_queryset(self, request):
         qs = Role.objects.order_by("name")
@@ -704,7 +728,7 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
         if not user:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if request.user.school_id and user.school_id != request.user.school_id:
+        if not request.user.school_id or user.school_id != request.user.school_id:
             return Response({"detail": "User does not belong to your school."}, status=status.HTTP_403_FORBIDDEN)
 
         user.access_status = enabled
@@ -723,7 +747,7 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
         if not user:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if request.user.school_id and user.school_id != request.user.school_id:
+        if not request.user.school_id or user.school_id != request.user.school_id:
             return Response({"detail": "User does not belong to your school."}, status=status.HTTP_403_FORBIDDEN)
 
         user.set_password(str(new_password))
@@ -739,7 +763,7 @@ class LoginAccessControlViewSet(viewsets.ViewSet):
 
 
 class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
-    permission_classes = [permissions.IsAuthenticated, CanManageUserRoles]
+    permission_classes = (permissions.IsAuthenticated, CanManageUserRoles)
 
     def _role_queryset(self, request):
         qs = Role.objects.order_by("name")
@@ -802,9 +826,9 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
                 name_filter |= Q(first_name__icontains=first_name, last_name__icontains=last_name)
             students_qs = students_qs.filter(name_filter)
 
-        outstanding_qs = FeesAssignment.objects.filter(
+        outstanding_qs = FeeAssignment.objects.filter(
             student_id__in=students_qs.values_list("id", flat=True),
-        ).exclude(status=FeesAssignment.STATUS_PAID)
+        ).exclude(status=FeeAssignment.STATUS_PAID)
         due_rows = outstanding_qs.values("student_id").annotate(total_due=Sum("amount") - Sum("discount_amount"))
         due_map = {row["student_id"]: row["total_due"] for row in due_rows}
 
@@ -898,7 +922,7 @@ class DueFeesLoginPermissionViewSet(viewsets.ViewSet):
         if not user:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        if request.user.school_id and user.school_id != request.user.school_id:
+        if not request.user.school_id or user.school_id != request.user.school_id:
             return Response({"detail": "User does not belong to your school."}, status=status.HTTP_403_FORBIDDEN)
 
         user.due_fees_login_blocked = blocked
@@ -915,7 +939,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
     Uses camelCase JSON keys to match the frontend TypeScript interfaces directly.
     """
 
-    permission_classes = [permissions.IsAuthenticated, CanManageUserRoles]
+    permission_classes = (permissions.IsAuthenticated, CanManageUserRoles)
 
     def _roles_qs(self, request):
         qs = Role.objects.order_by("name")
@@ -1144,7 +1168,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
         user_obj = User.objects.filter(id=user_id).first()
         if not user_obj:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        if request.user.school_id and user_obj.school_id != request.user.school_id:
+        if not request.user.school_id or user_obj.school_id != request.user.school_id:
             return Response({"detail": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
 
         user_obj.access_status = login_access
@@ -1163,7 +1187,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
         user_obj = User.objects.filter(id=user_id).first()
         if not user_obj:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        if request.user.school_id and user_obj.school_id != request.user.school_id:
+        if not request.user.school_id or user_obj.school_id != request.user.school_id:
             return Response({"detail": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
 
         alphabet = _string.ascii_letters + _string.digits
@@ -1183,6 +1207,9 @@ class LoginPermissionViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["post"], url_path="bulk-access")
     def bulk_access(self, request):
+        if not request.user.school_id:
+            return Response({"detail": "School context is required."}, status=status.HTTP_403_FORBIDDEN)
+
         ids = request.data.get("ids") or []
         all_matching = _coerce_bool(request.data.get("allMatching", False))
         login_access = _coerce_bool(request.data.get("login_access", request.data.get("loginAccess", False)))
@@ -1193,9 +1220,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
             role = self._get_role_by_slug(request, role_slug)
             if role:
                 user_ids_qs = UserRole.objects.filter(role_id=role.id).values_list("user_id", flat=True).distinct()
-                target_qs = User.objects.filter(id__in=user_ids_qs)
-                if request.user.school_id:
-                    target_qs = target_qs.filter(school_id=request.user.school_id)
+                target_qs = User.objects.filter(id__in=user_ids_qs, school_id=request.user.school_id)
                 if search:
                     target_qs = target_qs.filter(
                         Q(first_name__icontains=search)
@@ -1206,9 +1231,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
                 return Response({"affected": affected}, status=status.HTTP_200_OK)
         elif ids:
             safe_ids = [int(i) for i in ids if str(i).lstrip("-").isdigit()]
-            qs = User.objects.filter(id__in=safe_ids)
-            if request.user.school_id:
-                qs = qs.filter(school_id=request.user.school_id)
+            qs = User.objects.filter(id__in=safe_ids, school_id=request.user.school_id)
             affected = qs.update(access_status=login_access)
             return Response({"affected": affected}, status=status.HTTP_200_OK)
 
@@ -1218,6 +1241,9 @@ class LoginPermissionViewSet(viewsets.ViewSet):
     def bulk_reset(self, request):
         import secrets
         import string as _string
+
+        if not request.user.school_id:
+            return Response({"detail": "School context is required."}, status=status.HTTP_403_FORBIDDEN)
 
         ids = request.data.get("ids") or []
         all_matching = _coerce_bool(request.data.get("allMatching", False))
@@ -1235,9 +1261,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
                 user_ids = list(
                     UserRole.objects.filter(role_id=role.id).values_list("user_id", flat=True).distinct()
                 )
-                target_qs = User.objects.filter(id__in=user_ids)
-                if request.user.school_id:
-                    target_qs = target_qs.filter(school_id=request.user.school_id)
+                target_qs = User.objects.filter(id__in=user_ids, school_id=request.user.school_id)
                 if search:
                     target_qs = target_qs.filter(
                         Q(first_name__icontains=search)
@@ -1252,9 +1276,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
                 return Response({"affected": count}, status=status.HTTP_200_OK)
         elif ids:
             safe_ids = [int(i) for i in ids if str(i).lstrip("-").isdigit()]
-            qs = User.objects.filter(id__in=safe_ids)
-            if request.user.school_id:
-                qs = qs.filter(school_id=request.user.school_id)
+            qs = User.objects.filter(id__in=safe_ids, school_id=request.user.school_id)
             count = 0
             for u in qs:
                 u.set_password(gen_pwd())
@@ -1276,7 +1298,7 @@ class LoginPermissionViewSet(viewsets.ViewSet):
         user_obj = User.objects.filter(id=user_id).first()
         if not user_obj:
             return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
-        if request.user.school_id and user_obj.school_id != request.user.school_id:
+        if not request.user.school_id or user_obj.school_id != request.user.school_id:
             return Response({"detail": "Unauthorized."}, status=status.HTTP_403_FORBIDDEN)
         if user_obj.last_login:
             return Response(

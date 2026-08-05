@@ -1,8 +1,8 @@
 
+from django.db.models import Sum
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.utils import timezone
 
 from apps.core.models import SmOnlineExam, SmStudent, SmStudentTakeOnlineExam
 from apps.reports.serializers import ExamReportSerializer

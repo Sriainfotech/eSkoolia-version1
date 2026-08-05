@@ -1,0 +1,10 @@
+# Ruff configuration for the Eskoolia backend.
+# https://docs.astral.sh/ruff/
+
+[lint.per-file-ignores]
+# ASGI entrypoint intentionally normalizes sys.path before importing Channels/Django
+# (avoids a duplicate-package ImproperlyConfigured error under daphne/-m invocation).
+"config/asgi.py" = ["E402"]
+# Standalone maintenance script: needs django.setup() to run before importing
+# django.db.migrations.recorder, which isn't available until apps are loaded.
+"scripts/verify_tables.py" = ["E402"]

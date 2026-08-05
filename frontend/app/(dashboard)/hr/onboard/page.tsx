@@ -35,7 +35,6 @@ import type { Staff, StaffDocument } from "@/types/hr";
 import { isValidEmail, isValidPhoneDigits, isValidPin, hasAlphanumeric, isGibberishAddress, isGibberishPlaceName, isValidIndianMobile, isValidPersonName, PERSON_NAME_ERR, isValidBankAccountName, BANK_ACCOUNT_NAME_ERR } from "@/lib/hrValidation";
 import { ScanFillModal } from "@/components/students/ScanFillModal";
 import { STAFF_FIELD_GROUPS } from "@/components/hr/staffScanFields";
-import { loadSchoolHeader } from "@/components/hr/SchoolHeaderPopover";
 import { StaffVerificationForm } from "@/components/hr/StaffVerificationForm";
 
 // --- Constants ---
@@ -3059,9 +3058,11 @@ type OnboardDocRecord = { id: number; doc_key: string; file_name: string; status
 function StepDocuments({
   validatorRef,
   externalDocs,
+  editingStaffId,
 }: {
   validatorRef: React.MutableRefObject<() => string | null>;
   externalDocs?: StaffDocument[];
+  editingStaffId?: number | null;
 }) {
   const [uploads, setUploads] = useState<Record<string, OnboardDocRecord>>({});
   const [uploading, setUploading] = useState<Record<string, boolean>>({});
@@ -3074,11 +3075,14 @@ function StepDocuments({
   // newer action and overwriting the shared previewUrl/previewMime with stale content.
   const activePreviewKeyRef = useRef<string | null>(null);
 
-  // Load existing uploads on mount
+  // Load existing uploads on mount — scoped to the staff being edited (or the
+  // brand-new-hire pool when not editing) so a concurrently in-progress
+  // onboarding/edit of a DIFFERENT staff member by the same HR user doesn't leak in.
   useEffect(() => {
     void (async () => {
       try {
-        const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/", { method: "GET", silent401: true });
+        const qs = editingStaffId ? `?staff_id=${editingStaffId}` : "";
+        const res = await apiRequestWithRefreshResponse(`/api/v1/hr/onboard/documents/${qs}`, { method: "GET", silent401: true });
         if (res.ok) {
           const json = (await res.json()) as { data: OnboardDocRecord[] };
           const map: Record<string, OnboardDocRecord> = {};
@@ -3089,7 +3093,7 @@ function StepDocuments({
         // silently ignore — user will see pending state and can re-upload
       }
     })();
-  }, []);
+  }, [editingStaffId]);
 
   // Merge external staff documents (read-only) into uploads mapping
   useEffect(() => {
@@ -3150,6 +3154,7 @@ function StepDocuments({
       fd.append("file", file);
       fd.append("doc_key", doc.key);
       fd.append("doc_label", doc.label);
+      if (editingStaffId) fd.append("staff_id", String(editingStaffId));
       const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/upload/", {
         method: "POST",
         body: fd,
@@ -3566,6 +3571,13 @@ export default function HrOnboardPage(props: any) {
         const id = Number(staffId);
         if (!Number.isNaN(id)) {
           setEditingStaffId(id);
+          // Block the wizard from rendering until the fetch below resolves —
+          // several step components (StepFamily's emergency contacts/nominees,
+          // qualifications, previous employment, custom payroll rows) seed
+          // their local state from `form` via a one-time useState initializer.
+          // If a step mounted before `setForm(mapped)` ran, that state would
+          // permanently default to blank even after the real data arrived.
+          setIsLoadingStaff(true);
           (async () => {
             try {
               const resp = await apiRequestWithRefreshResponse(`/api/v1/hr/staff/${id}/`, { silent401: true });
@@ -3688,6 +3700,10 @@ export default function HrOnboardPage(props: any) {
                 delete mapped.other_document;
 
                 setForm(mapped);
+                // The photo preview is separate local state (not part of `form`),
+                // so it has to be hydrated explicitly — otherwise the uploader
+                // looks empty on edit even though a photo is saved.
+                if (json?.staff_photo) setPhotoPreview(String(json.staff_photo));
                 setHighestStep(1);
               } else {
                 console.error("❌ Failed to fetch staff:", resp.status, resp.statusText);
@@ -4128,7 +4144,7 @@ export default function HrOnboardPage(props: any) {
   const handleBlankForm = async () => {
     setBlankFormDownloading(true);
     try {
-      await downloadBlankForm(1, loadSchoolHeader());
+      await downloadBlankForm(1);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to download blank form.";
       toast(msg, "error");
@@ -4160,7 +4176,7 @@ export default function HrOnboardPage(props: any) {
       if (roleMatch) cleanForm.role = roleMatch;
       if (managerMatch) cleanForm.reporting_manager = `${managerMatch.first_name} ${managerMatch.last_name}`.trim();
       cleanForm.contract_type = empLabel.includes("contract") ? "contract" : (empLabel ? "permanent" : "");
-      await downloadFilledForm(cleanForm, loadSchoolHeader());
+      await downloadFilledForm(cleanForm);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to generate PDF.";
       toast(msg, "error");
@@ -4185,6 +4201,7 @@ export default function HrOnboardPage(props: any) {
       fd.append("file", file);
       fd.append("doc_key", "signed_onboarding_form");
       fd.append("doc_label", "Signed Onboarding Acknowledgment");
+      if (editingStaffId) fd.append("staff_id", String(editingStaffId));
       const res = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/upload/", {
         method: "POST",
         body: fd,
@@ -4289,9 +4306,13 @@ export default function HrOnboardPage(props: any) {
       };
 
       // Pull uploaded onboarding docs and surface signature filename via other_document,
-      // which the backend requires as the "Signature upload".
+      // which the backend requires as the "Signature upload". Scoped to this staff
+      // (or the brand-new-hire pool when not editing) — without staff_id here, editing
+      // one staff member could pick up a signature left over from a different,
+      // unfinished onboarding/edit by the same HR user.
       try {
-        const docsRes = await apiRequestWithRefreshResponse("/api/v1/hr/onboard/documents/", { silent401: true });
+        const docsQs = editingStaffId ? `?staff_id=${editingStaffId}` : "";
+        const docsRes = await apiRequestWithRefreshResponse(`/api/v1/hr/onboard/documents/${docsQs}`, { silent401: true });
         if (docsRes.ok) {
           const docsJson = (await docsRes.json()) as { data?: { doc_key: string; file_name: string }[] };
           const sig = (docsJson.data ?? []).find((d) => d.doc_key === "signature");
@@ -4753,7 +4774,7 @@ export default function HrOnboardPage(props: any) {
             {step === 6 && <StepQualifications f={form} set={setField} validatorRef={prevDateValidatorRef} />}
             {step === 7 && <StepMedical f={form} set={setField} validatorRef={medValidatorRef} />}
             {step === 8 && <StepPayroll f={form} set={setField} validatorRef={payrollValidatorRef} />}
-            {step === 9 && <StepDocuments validatorRef={docValidatorRef} externalDocs={staffDocumentsData?.results} />}
+            {step === 9 && <StepDocuments validatorRef={docValidatorRef} externalDocs={staffDocumentsData?.results} editingStaffId={editingStaffId} />}
             {step === 10 && <StepReview f={form} set={setField} departments={departments} designations={designations} />}
 
           </div>

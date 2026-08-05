@@ -72,8 +72,8 @@ def _parse_database_url(database_url: str) -> dict:
     query_params = parse_qs(parsed_db_url.query or "")
     resolved_sslmode = (query_params.get("sslmode", [""])[0] or os.getenv("DB_SSLMODE", "")).strip()
 
-    if dj_database_url is not None:
-        default_db = dj_database_url.parse(database_url, conn_max_age=0)
+    if dj_database_url is not None:  # noqa: F405
+        default_db = dj_database_url.parse(database_url, conn_max_age=0)  # noqa: F405
         default_db.setdefault("OPTIONS", {})
         default_db["OPTIONS"].setdefault("connect_timeout", 10)
         if resolved_sslmode:
@@ -87,11 +87,11 @@ def _parse_database_url(database_url: str) -> dict:
         "postgresql": "django.db.backends.postgresql",
         "sqlite": "django.db.backends.sqlite3",
     }
-    resolved_engine = engine_map.get(db_scheme, DB_ENGINE)
+    resolved_engine = engine_map.get(db_scheme, DB_ENGINE)  # noqa: F405
     resolved_name = (
         unquote(parsed_db_url.path.lstrip("/"))
         if resolved_engine != "django.db.backends.sqlite3"
-        else (unquote(parsed_db_url.path) or str(BASE_DIR / "db.sqlite3"))
+        else (unquote(parsed_db_url.path) or str(BASE_DIR / "db.sqlite3"))  # noqa: F405
     )
     resolved_options = {"connect_timeout": 10}
     if resolved_sslmode:
@@ -120,8 +120,8 @@ if DATABASE_URL_TEST:
 elif os.getenv("CI") or os.getenv("GITHUB_ACTIONS"):
     # CI injects a clean PostgreSQL service database via DATABASE_URL.
     DATABASES = DATABASES
-elif DATABASE_URL:
-    parsed_main_db_url = urlparse(DATABASE_URL)
+elif DATABASE_URL:  # noqa: F405
+    parsed_main_db_url = urlparse(DATABASE_URL)  # noqa: F405
     derived_test_db_name = os.getenv("DATABASE_NAME_TEST", "neondb_test_local")
     DATABASES = {"default": _parse_database_url(urlunparse(parsed_main_db_url._replace(path=f"/{derived_test_db_name}")))}
 else:
@@ -129,7 +129,7 @@ else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
-            "NAME": str(Path(BASE_DIR) / "test.sqlite3"),
+            "NAME": str(Path(BASE_DIR) / "test.sqlite3"),  # noqa: F405
             "CONN_MAX_AGE": 0,
             "CONN_HEALTH_CHECKS": True,
         }

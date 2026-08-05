@@ -8,7 +8,6 @@ from typing import Optional, Tuple, Dict, Any
 from django.utils import timezone
 from apps.tenancy.context import (
     get_current_tenant,
-    get_current_tenant_id,
     get_current_schema,
     is_tenant_mode,
 )

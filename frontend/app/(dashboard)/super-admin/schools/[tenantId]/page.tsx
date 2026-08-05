@@ -296,6 +296,27 @@ export default function SchoolViewPage({ params }: { params: { tenantId: string 
       <SectionCard title="GST &amp; Legal">
         <InfoRow label="GSTIN" value={school.gstin} />
         <InfoRow label="PAN"   value={school.pan} />
+        <InfoRow label="Board affiliation number" value={school.affiliation_number} />
+      </SectionCard>
+
+      <SectionCard title="Contact &amp; Address">
+        <InfoRow label="Principal name"    value={school.principal_name} />
+        <InfoRow label="Principal email"   value={school.principal_email} />
+        <InfoRow label="Principal phone"   value={school.principal_phone} />
+        <InfoRow label="Front-office phone" value={school.school_phone} />
+        <InfoRow label="Front-office email" value={school.school_email} />
+        <InfoRow label="Website"           value={school.website} />
+        <InfoRow label="Campus address"    value={school.campus_address} />
+        <InfoRow label="City"              value={school.city} />
+        <InfoRow label="PIN code"          value={school.pin_code} />
+        <InfoRow label="Country"           value={school.country} />
+      </SectionCard>
+
+      <SectionCard title="Identity Extras">
+        <InfoRow label="School type"           value={school.school_type} />
+        <InfoRow label="Medium of instruction" value={school.medium_of_instruction} />
+        <InfoRow label="Year established"      value={school.year_established} />
+        <InfoRow label="Motto / tagline"       value={school.motto} />
       </SectionCard>
 
       <SectionCard title="Infrastructure">

@@ -11,6 +11,7 @@ from .models import (
     StudentCategory,
     StudentDocument,
     StudentGroup,
+    StudentGuardian,
     StudentMultiClassRecord,
     StudentRecordAudit,
     StudentSubjectAssignment,
@@ -263,6 +264,14 @@ class StudentTransferHistorySerializer(serializers.ModelSerializer):
         model = StudentTransferHistory
         fields = ["id", "student", "from_school", "to_school", "note", "created_at"]
         read_only_fields = ["id", "created_at"]
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        student = attrs.get("student") or getattr(self.instance, "student", None)
+        if school_id and student and student.school_id != school_id:
+            raise serializers.ValidationError({"student": "Student not found."})
+        return attrs
 
 
 class StudentRecordAuditSerializer(serializers.ModelSerializer):
@@ -554,6 +563,17 @@ class StudentMultiClassRecordSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         school_class = attrs.get("school_class") or getattr(self.instance, "school_class", None)
         section = attrs.get("section") if "section" in attrs else getattr(self.instance, "section", None)
+        student = attrs.get("student") or getattr(self.instance, "student", None)
+
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+        if school_id:
+            if student and student.school_id != school_id:
+                raise serializers.ValidationError({"student": "Student not found."})
+            if school_class and school_class.school_id != school_id:
+                raise serializers.ValidationError({"school_class": "Class not found."})
+            if section and section.school_class.school_id != school_id:
+                raise serializers.ValidationError({"section": "Section not found."})
 
         if section and school_class and section.school_class_id != school_class.id:
             raise serializers.ValidationError({"section": "Section must belong to selected class."})
@@ -660,6 +680,42 @@ class StudentSerializer(serializers.ModelSerializer):
     documents = StudentDocumentSerializer(many=True, read_only=True)
     transport_route_title = serializers.CharField(source="transport_route.title", read_only=True, allow_null=True)
     vehicle_no = serializers.CharField(source="vehicle.vehicle_no", read_only=True, allow_null=True)
+    # Read-only nested view of every guardian linked to this student (see
+    # StudentGuardian). Writes go through `_sync_guardian_links`, driven by the raw
+    # `guardians` list in the request body (popped in `to_internal_value` below so
+    # ModelSerializer doesn't try to validate it as a `Student` field) rather than a
+    # normal writable serializer field, to keep read/write shapes independent.
+    guardians = serializers.SerializerMethodField()
+
+    def get_guardians(self, obj):
+        links = list(obj.guardian_links.select_related("guardian").order_by("-is_primary", "id"))
+        if not links and obj.guardian_id:
+            # Backward-compat: students created before multi-guardian support have
+            # no StudentGuardian row yet — fall back to the legacy single FK so
+            # they still show their guardian instead of an empty list. The next
+            # edit-save backfills the through-row via `_sync_guardian_links`.
+            g = obj.guardian
+            return [{
+                "id": g.id,
+                "full_name": g.full_name,
+                "relation": g.relation,
+                "phone": g.phone,
+                "email": g.email,
+                "occupation": g.occupation,
+                "is_primary": True,
+            }]
+        return [
+            {
+                "id": link.guardian_id,
+                "full_name": link.guardian.full_name,
+                "relation": link.guardian.relation,
+                "phone": link.guardian.phone,
+                "email": link.guardian.email,
+                "occupation": link.guardian.occupation,
+                "is_primary": link.is_primary,
+            }
+            for link in links
+        ]
 
     REQUIRED_CREATE_FIELDS = {
         "admission_no": "Admission number is required",
@@ -861,6 +917,7 @@ class StudentSerializer(serializers.ModelSerializer):
     def to_internal_value(self, data):
         mutable = dict(data)
         mutable.pop("is_draft", None)
+        mutable.pop("guardians", None)  # synced separately in create()/update(), not a Student model field
         if "class" in mutable and "current_class" not in mutable:
             mutable["current_class"] = mutable.get("class")
         if "section" in mutable and "current_section" not in mutable:
@@ -881,6 +938,56 @@ class StudentSerializer(serializers.ModelSerializer):
             max_roll = max(max_roll, int(roll))
         return str(max_roll + 1)
 
+    def _sync_guardian_links(self, instance, guardians_payload):
+        """
+        guardians_payload: list of {"id": <guardian pk>, "is_primary": bool}, sent by
+        the frontend once it has resolved/created every guardian card. Replaces the
+        full set of links for this student — safe because the frontend always sends
+        the complete, current list of cards, not a partial patch.
+        """
+        if guardians_payload is None:
+            return
+        request = self.context.get("request")
+        school_id = getattr(getattr(request, "user", None), "school_id", None)
+
+        valid_ids = []
+        primary_id = None
+        for item in guardians_payload:
+            if not isinstance(item, dict):
+                continue
+            gid = item.get("id")
+            try:
+                gid = int(gid)
+            except (TypeError, ValueError):
+                continue
+            # Scope check — never link a guardian belonging to another school.
+            guardian_qs = Guardian.objects.filter(id=gid)
+            if school_id:
+                guardian_qs = guardian_qs.filter(school_id=school_id)
+            if not guardian_qs.exists():
+                continue
+            valid_ids.append(gid)
+            if item.get("is_primary") and primary_id is None:
+                primary_id = gid
+
+        if not valid_ids:
+            return
+        if primary_id is None:
+            primary_id = valid_ids[0]
+
+        StudentGuardian.objects.filter(student=instance).exclude(guardian_id__in=valid_ids).delete()
+        for gid in valid_ids:
+            StudentGuardian.objects.update_or_create(
+                student=instance, guardian_id=gid,
+                defaults={"is_primary": gid == primary_id},
+            )
+        # Keep the legacy single FK in sync — the many existing call sites (parent
+        # portal auth, attendance/fee notifications, reports, broadcasts) read it
+        # directly and don't know about StudentGuardian.
+        if instance.guardian_id != primary_id:
+            instance.guardian_id = primary_id
+            instance.save(update_fields=["guardian"])
+
     def create(self, validated_data):
         request = self.context.get("request")
         school_id = getattr(getattr(request, "user", None), "school_id", None)
@@ -894,14 +1001,18 @@ class StudentSerializer(serializers.ModelSerializer):
         validated_data["is_disabled"] = status_value in {"transferred", "dropped", "deleted"}
         validated_data["is_deleted"] = status_value == "deleted"
 
-        return super().create(validated_data)
+        instance = super().create(validated_data)
+        self._sync_guardian_links(instance, self.initial_data.get("guardians"))
+        return instance
 
     def update(self, instance, validated_data):
         status_value = (validated_data.get("status") or instance.status or "active").lower()
         validated_data["is_active"] = status_value == "active"
         validated_data["is_disabled"] = status_value in {"transferred", "dropped", "deleted"}
         validated_data["is_deleted"] = status_value == "deleted"
-        return super().update(instance, validated_data)
+        instance = super().update(instance, validated_data)
+        self._sync_guardian_links(instance, self.initial_data.get("guardians"))
+        return instance
 
     class Meta:
         model = Student
@@ -926,7 +1037,47 @@ class StudentSerializer(serializers.ModelSerializer):
             "district",
             "state",
             "pincode",
+            "landmark",
+            "transport_modes",
+            "transport_custom",
             "photo",
+            "mother_tongue",
+            "other_mother_tongue",
+            "religion",
+            "nationality",
+            "other_nationality",
+            "admission_type",
+            "previous_school_name",
+            "rte_certificate_no",
+            "stream",
+            "apaar_id",
+            "aadhaar_no",
+            "pen",
+            "digilocker_mobile",
+            "abc_id",
+            "height_cm",
+            "weight_kg",
+            "vision",
+            "medical_conditions",
+            "allergies",
+            "current_medications",
+            "treating_doctor",
+            "vaccinations",
+            "medical_notes",
+            "emergency_contact_name",
+            "emergency_contact_phone",
+            "is_pwd",
+            "disability_types",
+            "disability_percent",
+            "udid",
+            "disability_accommodations",
+            "disability_notes",
+            "other_disability_text",
+            "identity_marks",
+            "eye_colour",
+            "hair_colour",
+            "complexion",
+            "build",
             "status",
             "is_deleted",
             "deleted_at",
@@ -934,6 +1085,7 @@ class StudentSerializer(serializers.ModelSerializer):
             "category",
             "student_group",
             "guardian",
+            "guardians",
             "current_class",
             "current_section",
             "admission_inquiry",

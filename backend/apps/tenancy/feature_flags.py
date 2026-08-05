@@ -6,12 +6,9 @@ All operations are tenant-safe and async-compatible.
 
 from typing import Dict, Optional, Any, List
 from django.core.cache import cache
-from django.conf import settings
 from apps.tenancy.context import (
     get_current_tenant,
-    get_current_tenant_id,
     is_tenant_mode,
-    is_monolithic_mode,
 )
 from apps.tenancy.models import TenantPlan, TenantFeature, TenantFeatureFlag
 
@@ -254,9 +251,8 @@ def clear_tenant_feature_cache(tenant_id: str) -> None:
     
     # Clear per-feature caches (approximate)
     # In production, use cache versioning for granular control
-    cache_key_prefix = f"tenant:{tenant_id}:feature:"
     # Django's cache doesn't have direct prefix deletion;
-    # for Redis, you'd use: cache.delete_pattern(f"{cache_key_prefix}*")
+    # for Redis, you'd use: cache.delete_pattern(f"tenant:{tenant_id}:feature:*")
     # For now, we rely on TTL
 
 

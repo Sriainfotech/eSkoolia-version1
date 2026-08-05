@@ -688,10 +688,13 @@ class StudentGroupViewSet(TenantScopedModelViewSet):
         deleted, _ = StudentClubMembership.objects.filter(
             student_id=student_id,
             club_id=club_id,
+            student__school_id=school_id,
         ).delete()
 
         club_ids = list(
-            StudentClubMembership.objects.filter(student_id=student_id).values_list("club_id", flat=True)
+            StudentClubMembership.objects.filter(
+                student_id=student_id, student__school_id=school_id
+            ).values_list("club_id", flat=True)
         )
         return Response({"studentId": student_id, "clubId": club_id, "removed": deleted > 0, "clubIds": club_ids})
 
@@ -1042,7 +1045,6 @@ class StudentViewSet(TenantScopedModelViewSet):
 
             # Re-use the account if the phone is already registered.
             user = User.objects.filter(username=phone).first()
-            already_existed = user is not None
             if user is None:
                 user = User(
                     username=phone,
@@ -1855,7 +1857,6 @@ class StudentViewSet(TenantScopedModelViewSet):
     @action(detail=False, methods=["get"], url_path="next-roll-no")
     def next_roll_no(self, request):
         """Return the next available roll number for a class+section+academic_year combo."""
-        from apps.core.models import Section
         import re as _re
 
         class_id = str(request.query_params.get("class_id") or "").strip()
@@ -3042,7 +3043,7 @@ class PromotionBatchViewSet(TenantScopedModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="update-record")
     def update_record(self, request, pk=None):
-        from apps.core.models import Section, Subject
+        from apps.core.models import Class, Section, Subject
 
         batch = self.get_object()
         serializer = PromotionRecordUpdateSerializer(data=request.data)
@@ -3055,11 +3056,16 @@ class PromotionBatchViewSet(TenantScopedModelViewSet):
             return Response({"error": "Record not found"}, status=status.HTTP_404_NOT_FOUND)
 
         if "to_class" in data:
-            record.to_class_id = data.get("to_class")
+            class_id = data.get("to_class")
+            if class_id:
+                target_class = Class.objects.filter(id=class_id, school_id=batch.school_id).first()
+                if not target_class:
+                    raise ValidationError({"to_class": "Invalid class."})
+            record.to_class_id = class_id
         if "to_section" in data:
             section_id = data.get("to_section")
             if section_id:
-                section = Section.objects.filter(id=section_id).first()
+                section = Section.objects.filter(id=section_id, school_class__school_id=batch.school_id).first()
                 if not section:
                     raise ValidationError({"to_section": "Invalid section."})
                 if record.to_class_id and section.school_class_id != record.to_class_id:
@@ -3193,43 +3199,43 @@ class PromotionBatchViewSet(TenantScopedModelViewSet):
             "academic": [
                 f"Enrol {first_name} in targeted remedial sessions for {top_subjects} for the first 6 weeks.",
                 f"Pair {first_name} with a peer-mentor and assign weekly graded practice in the weakest subject.",
-                f"Schedule fortnightly progress reviews with subject teachers and share results with parents.",
-                f"Use diagnostic assessments at week 4 and week 12 to confirm conceptual recovery.",
+                "Schedule fortnightly progress reviews with subject teachers and share results with parents.",
+                "Use diagnostic assessments at week 4 and week 12 to confirm conceptual recovery.",
                 f"Provide {first_name} with a personalised study plan and quiet supervised study slots after class.",
             ],
             "attendance": [
                 f"Implement an attendance improvement plan with daily tracking for {first_name}.",
-                f"Hold a parent–counsellor meeting to identify and resolve the root cause of absences.",
-                f"Set a written attendance contract with weekly targets shared with the family.",
-                f"Provide catch-up notes and lesson recordings for any future absence.",
-                f"Review attendance every fortnight and recognise consecutive on-time weeks.",
+                "Hold a parent–counsellor meeting to identify and resolve the root cause of absences.",
+                "Set a written attendance contract with weekly targets shared with the family.",
+                "Provide catch-up notes and lesson recordings for any future absence.",
+                "Review attendance every fortnight and recognise consecutive on-time weeks.",
             ],
             "medical": [
                 f"Design a flexible learning schedule that accommodates {first_name}'s ongoing care needs.",
-                f"Co-ordinate with the school nurse to maintain a wellness log throughout the year.",
-                f"Provide bridging worksheets covering missed curriculum topics in priority order.",
-                f"Offer assistive learning resources (recorded lessons, extended deadlines) where required.",
-                f"Schedule monthly check-ins with class teacher and parent to reassess workload.",
+                "Co-ordinate with the school nurse to maintain a wellness log throughout the year.",
+                "Provide bridging worksheets covering missed curriculum topics in priority order.",
+                "Offer assistive learning resources (recorded lessons, extended deadlines) where required.",
+                "Schedule monthly check-ins with class teacher and parent to reassess workload.",
             ],
             "behavioral": [
                 f"Assign a school counsellor to {first_name} with weekly one-to-one sessions for the first term.",
                 f"Introduce a behaviour contract co-signed by {first_name}, parents and the class teacher.",
-                f"Use positive-reinforcement tracking with measurable weekly goals.",
-                f"Provide structured peer-group activities to develop social and emotional skills.",
-                f"Review behaviour log monthly and adjust the support plan as needed.",
+                "Use positive-reinforcement tracking with measurable weekly goals.",
+                "Provide structured peer-group activities to develop social and emotional skills.",
+                "Review behaviour log monthly and adjust the support plan as needed.",
             ],
             "parent_request": [
                 f"Develop an enrichment plan that strengthens {first_name}'s foundational skills during the repeat year.",
                 f"Hold a goal-setting meeting with {first_name} and parents to define success criteria for the year.",
-                f"Encourage participation in co-curricular activities to build confidence and leadership.",
+                "Encourage participation in co-curricular activities to build confidence and leadership.",
                 f"Offer optional advanced practice in subjects of strength to keep {first_name} challenged.",
-                f"Schedule quarterly reviews with parents to track holistic progress.",
+                "Schedule quarterly reviews with parents to track holistic progress.",
             ],
             "other": [
                 f"Create an individualised learning plan tailored to {first_name}'s specific needs.",
-                f"Hold a meeting with parents and key teachers to align on the support strategy.",
-                f"Set measurable progress goals and review them monthly.",
-                f"Offer additional academic and pastoral support resources as required.",
+                "Hold a meeting with parents and key teachers to align on the support strategy.",
+                "Set measurable progress goals and review them monthly.",
+                "Offer additional academic and pastoral support resources as required.",
                 f"Document all interventions in {first_name}'s student file for continuity.",
             ],
         }

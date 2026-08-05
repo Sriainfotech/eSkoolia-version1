@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { feesApi, DuesClassGroup, DueStudent, DueInteraction } from "@/lib/fees-api";
+import { fetchDocumentHeaderImageDataUrl, getImageNaturalSize } from "@/lib/document-branding";
 
 type TierNum = 1 | 2 | 3;
 
@@ -106,6 +107,7 @@ export default function FeesDuesRemindersPanel() {
   const [agreedDate,   setAgreedDate]   = useState("");
   const [saving,       setSaving]       = useState(false);
   const [schoolName, setSchoolName] = useState("School");
+  const [headerImageDataUrl, setHeaderImageDataUrl] = useState<string | null>(null);
 
   const toast_ = (m: string) => { setToast(m); setTimeout(() => setToast(""), 3200); };
 
@@ -135,6 +137,9 @@ export default function FeesDuesRemindersPanel() {
         if (name) setSchoolName(name);
       })
       .catch(() => {});
+    // Header image for the generated PDF report — from Settings > Document
+    // Branding, the one central source every print/PDF feature uses.
+    fetchDocumentHeaderImageDataUrl().then(setHeaderImageDataUrl);
   }, []);
 
   // Apply resolved filter per group
@@ -259,7 +264,21 @@ export default function FeesDuesRemindersPanel() {
       doc.text("DUES & REMINDERS REPORT", M, 11);
       doc.setFontSize(8); doc.setFont("helvetica", "normal");
       doc.text(`${tierLabel}  ·  Generated: ${today}`, PW - M, 11, { align: "right" });
-      y = 24;
+      y = 20;
+
+      // ── School header (Settings > Document Branding) ─────────
+      if (headerImageDataUrl) {
+        try {
+          const { width: natW, height: natH } = await getImageNaturalSize(headerImageDataUrl);
+          const headerH = Math.min(14, (PW - 2 * M) * (natH / natW));
+          doc.addImage(headerImageDataUrl, "PNG", M, y, PW - 2 * M, headerH);
+          y += headerH + 6;
+        } catch {
+          y += 4;
+        }
+      } else {
+        y += 4;
+      }
 
       // ── Summary boxes ────────────────────────────────────────
       if (summary) {

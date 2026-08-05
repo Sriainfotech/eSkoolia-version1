@@ -23,6 +23,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
+from apps.attendance.holiday_utils import get_calendar_holiday
+
 from .permissions import IsTeacherPortalUser
 from .utils import (
     build_my_classes,
@@ -441,6 +443,7 @@ class TeacherAttendanceFetchView(APIView):
 
         any_marked = any(att for att in attendance_rows.values())
         any_locked = any(att.is_locked for att in attendance_rows.values())
+        calendar_holiday = get_calendar_holiday(school_id, attendance_date)
 
         return Response({
             "date": str(attendance_date),
@@ -450,6 +453,8 @@ class TeacherAttendanceFetchView(APIView):
             "is_marked": any_marked,
             "is_locked": any_locked,
             "can_edit": can_edit,
+            "is_holiday": calendar_holiday is not None,
+            "holiday_name": calendar_holiday.name if calendar_holiday else None,
         })
 
 
@@ -569,6 +574,10 @@ class TeacherAttendanceStoreView(APIView):
         )
         academic_year_id = ay.id if ay else None
 
+        # A school-calendar holiday always wins over whatever type was submitted —
+        # matches every other attendance write path (admin store, bulk import, chatbot mark).
+        calendar_holiday = get_calendar_holiday(school_id, attendance_date)
+
         existing_map: dict = {}
         for row in StudentAttendance.objects.filter(
             student_id__in=student_ids,
@@ -608,7 +617,7 @@ class TeacherAttendanceStoreView(APIView):
 
                 sid_str = str(student_id)
                 raw_type = attendance_map.get(sid_str) or attendance_map.get(student_id)
-                new_type = raw_type if raw_type else ex_type
+                new_type = "H" if calendar_holiday else (raw_type if raw_type else ex_type)
                 if not new_type:
                     continue
 
@@ -616,6 +625,8 @@ class TeacherAttendanceStoreView(APIView):
                 if raw_note is None:
                     raw_note = note_map.get(student_id)
                 note_text = ex_note if raw_note is None else (raw_note or "")
+                if calendar_holiday and not note_text:
+                    note_text = "Holiday"
 
                 raw_lunch = lunch_map.get(sid_str)
                 if raw_lunch is None:
@@ -652,4 +663,8 @@ class TeacherAttendanceStoreView(APIView):
                     is_locked=lock_attendance,
                 )
 
-        return Response({"success": True, "message": "Attendance saved successfully"}, status=http_status.HTTP_200_OK)
+        response_payload = {"success": True, "message": "Attendance saved successfully"}
+        if calendar_holiday is not None:
+            response_payload["message"] = f"{attendance_date} is a holiday ({calendar_holiday.name}) — marked as Holiday."
+            response_payload["holiday_name"] = calendar_holiday.name
+        return Response(response_payload, status=http_status.HTTP_200_OK)

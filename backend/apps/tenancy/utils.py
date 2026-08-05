@@ -1,8 +1,9 @@
-import logging
-from django.conf import settings
 import importlib
+import logging
+
 from django.apps import apps as django_apps
-from django.db import connection
+from django.conf import settings
+from django.db import DatabaseError, connection
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +110,10 @@ def create_public_schema(output=None):
         return
 
     try:
-        from django_tenants.utils import get_public_schema_name
         from django.db import connection
-    except Exception as exc:
-        raise RuntimeError("django-tenants not available or misconfigured: %s" % exc)
+        from django_tenants.utils import get_public_schema_name
+    except ImportError as exc:
+        raise RuntimeError(f"django-tenants not available or misconfigured: {exc}")
 
     public_schema = get_public_schema_name()
     if output:
@@ -124,7 +125,7 @@ def create_public_schema(output=None):
             cursor.execute("SELECT 1;")
             if output:
                 output.write("Database reachable and public schema present.\n")
-        except Exception as exc:
+        except DatabaseError as exc:
             raise RuntimeError(f"Failed to validate database/public schema: {exc}")
 
 def _resolve_router_paths():
@@ -137,7 +138,7 @@ def _resolve_router_paths():
             module = importlib.import_module(module_path)
             router_class = getattr(module, class_name)
             resolved.append({"path": router_path, "class": router_class})
-        except Exception as exc:
+        except (ImportError, AttributeError) as exc:
             router_errors.append(f"Failed to import router {router_path}: {exc}")
     return resolved, router_errors
 
@@ -151,8 +152,6 @@ def validate_tenancy_configuration(output=None):
     """
     enabled = getattr(settings, "MULTI_TENANCY_ENABLED", False)
     middleware = list(getattr(settings, "MIDDLEWARE", []))
-    shared = list(getattr(settings, "SHARED_APPS", []) or [])
-    tenant_apps = list(getattr(settings, "TENANT_APPS", []) or [])
     routers = list(getattr(settings, "DATABASE_ROUTERS", []) or [])
     warnings = []
     errors = []
@@ -199,16 +198,14 @@ def validate_tenancy_configuration(output=None):
 
     auth_mw = "django.contrib.auth.middleware.AuthenticationMiddleware"
     session_mw = "django.contrib.sessions.middleware.SessionMiddleware"
-    if auth_mw in middleware and TENANT_MAIN_MIDDLEWARE in middleware:
-        if middleware.index(auth_mw) < middleware.index(TENANT_MAIN_MIDDLEWARE):
-            message = "AuthenticationMiddleware must appear after TenantMainMiddleware."
-            result["middleware"]["errors"].append(message)
-            errors.append(message)
-    if session_mw in middleware and TENANT_MAIN_MIDDLEWARE in middleware:
-        if middleware.index(session_mw) < middleware.index(TENANT_MAIN_MIDDLEWARE):
-            message = "SessionMiddleware should remain ahead of TenantMainMiddleware for compatibility."
-            result["middleware"]["warnings"].append(message)
-            warnings.append(message)
+    if auth_mw in middleware and TENANT_MAIN_MIDDLEWARE in middleware and middleware.index(auth_mw) < middleware.index(TENANT_MAIN_MIDDLEWARE):
+        message = "AuthenticationMiddleware must appear after TenantMainMiddleware."
+        result["middleware"]["errors"].append(message)
+        errors.append(message)
+    if session_mw in middleware and TENANT_MAIN_MIDDLEWARE in middleware and middleware.index(session_mw) < middleware.index(TENANT_MAIN_MIDDLEWARE):
+        message = "SessionMiddleware should remain ahead of TenantMainMiddleware for compatibility."
+        result["middleware"]["warnings"].append(message)
+        warnings.append(message)
     _auth_classes = set(getattr(settings, "REST_FRAMEWORK", {}).get("DEFAULT_AUTHENTICATION_CLASSES", []))
     if not _auth_classes.intersection({JWT_AUTH_CLASS, JWT_AUTH_CLASS_TENANT}):
         message = "JWTAuthentication is not present in REST_FRAMEWORK; verify auth compatibility."
@@ -223,7 +220,7 @@ def validate_tenancy_configuration(output=None):
             message = "django_tenants.routers.TenantSyncRouter is missing from the installed package."
             result["routers"]["warnings"].append(message)
             warnings.append(message)
-    except Exception as exc:
+    except ImportError as exc:
         message = f"Failed to import django_tenants.routers: {exc}"
         result["routers"]["errors"].append(message)
         errors.append(message)
@@ -274,8 +271,6 @@ def validate_tenancy_configuration(output=None):
 
     # tenant model readiness
     try:
-        from .models import SchoolTenant, Domain
-
         tenant_model = django_apps.get_model("tenancy", "SchoolTenant")
         domain_model = django_apps.get_model("tenancy", "Domain")
         result["models"]["school_tenant"] = {
@@ -304,7 +299,7 @@ def validate_tenancy_configuration(output=None):
             message = "Domain does not inherit from DomainMixin."
             result["models"]["warnings"].append(message)
             warnings.append(message)
-    except Exception as exc:
+    except (LookupError, AttributeError) as exc:
         message = f"Tenant model import/ready validation failed: {exc}"
         result["models"]["errors"].append(message)
         errors.append(message)
@@ -553,57 +548,6 @@ def _validate_staging_activation_readiness():
 
     return result
 
-
-    # tenant model readiness
-    try:
-        from .models import SchoolTenant, Domain
-
-        tenant_model = django_apps.get_model("tenancy", "SchoolTenant")
-        domain_model = django_apps.get_model("tenancy", "Domain")
-        result["models"]["school_tenant"] = {
-            "imported": True,
-            "tenant_mixin": any(base.__name__ == "TenantMixin" for base in tenant_model.__mro__),
-            "auto_create_schema": bool(getattr(tenant_model, "auto_create_schema", False)),
-            "schema_name_ready": bool(getattr(tenant_model, "_meta", None) and tenant_model._meta.get_field("schema_name") is not None),
-        }
-        result["models"]["domain"] = {
-            "imported": True,
-            "domain_mixin": any(base.__name__ == "DomainMixin" for base in domain_model.__mro__),
-        }
-        if not result["models"]["school_tenant"]["tenant_mixin"]:
-            message = "SchoolTenant does not inherit from TenantMixin."
-            result["models"]["warnings"].append(message)
-            warnings.append(message)
-        if not result["models"]["school_tenant"]["auto_create_schema"]:
-            message = "SchoolTenant.auto_create_schema is not enabled."
-            result["models"]["warnings"].append(message)
-            warnings.append(message)
-        if not result["models"]["school_tenant"]["schema_name_ready"]:
-            message = "SchoolTenant.schema_name field is missing or not ready."
-            result["models"]["warnings"].append(message)
-            warnings.append(message)
-        if not result["models"]["domain"]["domain_mixin"]:
-            message = "Domain does not inherit from DomainMixin."
-            result["models"]["warnings"].append(message)
-            warnings.append(message)
-    except Exception as exc:
-        message = f"Tenant model import/ready validation failed: {exc}"
-        result["models"]["errors"].append(message)
-        errors.append(message)
-
-    # summary state
-    result["ok"] = not errors
-    result["blockers"] = list(errors)
-
-    logger.info(
-        "Tenancy validation result: enabled=%s ok=%s warnings=%d errors=%d",
-        enabled,
-        result["ok"],
-        len(warnings),
-        len(errors),
-    )
-    return result
-
 def provision_test_tenant(output=None):
     """Provision a minimal test tenant using the SchoolTenant model.
 
@@ -618,11 +562,12 @@ def provision_test_tenant(output=None):
         return
 
     try:
-        from .models import SchoolTenant
-        from django_tenants.utils import schema_context
         from django.db import connection
-    except Exception as exc:
-        raise RuntimeError("django-tenants not available or misconfigured: %s" % exc)
+        from django_tenants.utils import schema_context
+
+        from .models import SchoolTenant
+    except ImportError as exc:
+        raise RuntimeError(f"django-tenants not available or misconfigured: {exc}")
 
     # Create a test tenant record (non-destructive if duplicates exist)
     tenant_id = "TNT_TEST_0001"
@@ -648,13 +593,12 @@ def provision_test_tenant(output=None):
             output.write(f"Tenant saved (schema creation attempted) for {tenant.schema_name}\n")
 
         # Verify schema switch
-        with schema_context(tenant.schema_name):
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT current_schema();")
-                current = cursor.fetchone()
-                if output:
-                    output.write(f"Current schema inside context: {current}\n")
-    except Exception as exc:
+        with schema_context(tenant.schema_name), connection.cursor() as cursor:
+            cursor.execute("SELECT current_schema();")
+            current = cursor.fetchone()
+            if output:
+                output.write(f"Current schema inside context: {current}\n")
+    except (DatabaseError, RuntimeError, ValueError) as exc:
         # Non-fatal: surface error clearly
         raise RuntimeError(f"Provisioning attempt failed: {exc}")
 

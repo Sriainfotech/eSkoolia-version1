@@ -133,6 +133,9 @@ export function useStudents() {
   const [students, setStudents] = useState<Record<string, Student[]>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<Record<string, string>>({});
+  // Holiday is a property of the date, not the class/section, but every
+  // section's fetch reports it — keep the latest one seen per date.
+  const [holidayByDate, setHolidayByDate] = useState<Record<string, string | null>>({});
 
   const loadSection = useCallback(async (
     classId: number,
@@ -158,8 +161,9 @@ export function useStudents() {
         return fetchWithToken(newToken);
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: { students?: DjangoStudent[] } = await res.json();
+      const data: { students?: DjangoStudent[]; is_holiday?: boolean; holiday_name?: string | null } = await res.json();
       const list: DjangoStudent[] = data.students ?? [];
+      setHolidayByDate((p) => ({ ...p, [date]: data.is_holiday ? (data.holiday_name ?? 'Holiday') : null }));
       const metaMap = readRuntimeMeta(date);
       const mapped = list.map((raw) => {
         const student = mapDjangoStudentToStudent(raw);
@@ -217,5 +221,5 @@ export function useStudents() {
     clearRuntimeMeta(date, studentIds);
   }, []);
 
-  return { students, loading, error, loadSection, updateStudent, clearStudents, clearStudentMeta };
+  return { students, loading, error, holidayByDate, loadSection, updateStudent, clearStudents, clearStudentMeta };
 }

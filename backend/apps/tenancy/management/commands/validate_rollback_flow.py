@@ -3,7 +3,6 @@
 from django.core.management.base import BaseCommand
 
 from apps.tenancy import migration_framework
-from apps.tenancy.models import TenantMigrationAudit
 from apps.tenancy.observability import get_observer
 
 
@@ -81,6 +80,6 @@ class Command(BaseCommand):
 
         # Print observability summary
         summary = observer.get_summary()
-        self.stdout.write(f"\nObservability Summary:")
+        self.stdout.write("\nObservability Summary:")
         self.stdout.write(f"  Total events: {summary['total_events']}")
         self.stdout.write(f"  Error count: {summary['error_count']}")

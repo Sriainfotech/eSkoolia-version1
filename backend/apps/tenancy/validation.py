@@ -11,7 +11,6 @@ This module provides:
 import logging
 from typing import Dict, List, Optional
 
-from django.apps import apps
 from django.conf import settings
 from django.core.checks import Error, Warning, register
 from django.db import connection

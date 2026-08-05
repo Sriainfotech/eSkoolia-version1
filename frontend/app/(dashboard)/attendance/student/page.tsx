@@ -88,7 +88,8 @@ export default function StudentAttendancePage() {
 
   // -- Data hooks -----------------------------------------------
   const { classes, loading: classesLoading, refreshClassSummary } = useClasses(selectedDate);
-  const { students, loading: studentsLoading, loadSection, updateStudent, clearStudents, clearStudentMeta } = useStudents();
+  const { students, loading: studentsLoading, holidayByDate, loadSection, updateStudent, clearStudents, clearStudentMeta } = useStudents();
+  const holidayName = holidayByDate[selectedDate] ?? null;
   const { kpis: backendKpis, exportAttendance, patchMark, saveBulk, downloadSampleTemplate } = useAttendance(selectedDate);
   const selectedDateRef = useRef(selectedDate);
   const studentsRef = useRef(students);
@@ -976,6 +977,16 @@ export default function StudentAttendancePage() {
           );
         }}
       />
+
+      {holidayName && (
+        <div className="flex items-center gap-2.5 px-4 py-3 mb-4 rounded-xl bg-[#FFF7ED] border border-[#FDBA74] text-[13px] text-[#9A3412]">
+          <span>🎉</span>
+          <span>
+            <strong>{selectedDate}</strong> is a school holiday (<strong>{holidayName}</strong>) — students marked on
+            this date will be saved as Holiday regardless of the status selected.
+          </span>
+        </div>
+      )}
 
       {kpis && kpis.rte_at_risk > 0 && (
         <AttendanceAlert count={kpis.rte_at_risk} />

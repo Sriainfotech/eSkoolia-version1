@@ -1,5 +1,225 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Claude (05/08/2026)
+
+**Area:** Pre-production QA pass (12 of 14 phases complete) — 8 bugs found and fixed live against the shared Neon DB
+
+### 1. Critical fixes
+- **Fee payments were completely unrecordable, app-wide** — not specific to any one school. The `fees_payment` table carries two orphaned columns (`collected_by_note`, `counter`) that are `NOT NULL` with no default and don't exist in the Django model or any prior migration — pure schema drift. Every payment insert failed the DB's own constraint before reaching application code. Fixed with an additive migration (`backend/apps/fees/migrations/0015_fix_orphaned_payment_columns.py`) that only adds a missing default — no data or model changes. Applied directly to the shared DB since the feature was already 100% broken. Verified by posting a real ₹10,000 payment and confirming it appears correctly in the fee ledger, parent dashboard, teacher dashboard, and the admin home widget.
+- **Every new student's tuition fee was silently assigned ₹0 and marked paid** — a case-sensitivity bug in the fee-schedule lookup (`frontend/components/students/StudentFeesStep.tsx`) compared status against lowercase `"active"` while the stored value is `"Active"`, so the match always failed and fell back to an unset ₹0. No error surfaced anywhere. Fixed by matching the case-insensitive pattern already used one line below in the same file; re-verified end to end (enrollment → stored assignment → parent's fee summary).
+- **Cross-school fee data leakage** — `FeesTypeListCreateAPIView`/`FeesGroupListCreateAPIView` (`backend/apps/fees/views.py`) never passed request context to their serializers, so school-scoping checks silently no-op'd. Result: GL-code uniqueness was checked globally instead of per-school (a legit new fee got falsely rejected as "already exists" due to an unrelated school's code), and `FeesGroup.academic_year`/`applicable_classes` accepted any school's IDs unchecked (a real IDOR). Fixed by passing `context={'request': request}`, matching the already-correct pattern elsewhere in the same file.
+
+### 2. High-severity fixes
+- **Teachers saw Dashboard, the super-admin console, and Reports (fees/staff/payroll data) in their nav with zero permission granted** — `getModulesForUser()` in `frontend/lib/portal-modules.ts` treated "no permission field defined on a module" as "show it to everyone" when deciding which admin-level pages to surface to a teacher role. Fixed by requiring an explicit granted permission and excluding `superuserOnly` modules from this path entirely. Direct navigation to the super-admin console was already blocked server-side, so this was a misleading nav rather than a working backdoor — but see next item.
+- **All ~25 report API endpoints (staff, payroll, accounts, fees) had no role check at all**, only `IsAuthenticated` — discovered while chasing the item above. Added `IsSchoolAdminOrSuperuser` to `backend/apps/access_control/permission_classes.py` and applied it once on `BaseReportAPIView` (`backend/apps/reports/views.py`), covering every subclass. Also fixed an unrelated bug found in the same pass: every report request 500'd for everyone (admins included) because the results cache called Redis with no fallback, and Redis isn't running in this dev environment — now degrades gracefully.
+
+### 3. Medium fixes
+- **Cross-user localStorage leak** — the "Recently Visited" home-screen widget (`frontend/lib/recentsStore.ts`) stores its list under one global, unscoped key, never cleared on login/logout. On a shared browser, the next user to log in sees the previous user's page-visit history (confirmed: a teacher saw the admin's visits to the super-admin console). Fixed by clearing it in both `login()` and `logout()` in `frontend/lib/auth-context.tsx`, mirroring the existing permissions-cache clear.
+- **School-provisioning's "Generate password" button was mislabeled "Provision school"** (copy-paste from the real submit button) and silently regenerated the admin password on click with no feedback — `frontend/app/(dashboard)/super-admin/schools/page.tsx`. Relabeled to say what it does.
+
+### 4. Regression check against the prior tenancy bug-fix record
+Re-verified all 23 previously-documented tenancy/auth bugs (`eskoolia_bug_fixes.html`, June 2026, B1–B13 backend + F1–F10 frontend) against current code. **21/23 confirmed still correctly fixed.** 2 diverge from the original spec but are deliberate-looking design decisions with zero live impact, not regressions — flagged for product sign-off rather than reverted:
+- Tenant-suspension login block now runs regardless of the multi-tenancy flag (arguably more correct than the original spec — suspension is a billing concept, not a DB-architecture one). No suspended tenant currently exists, so no live effect.
+- `is_school_admin` still bypasses module-permission checks by design (explicit comment: "school admins see all modules"). This is the exact behavior the entire QA pass relied on throughout — reverting it would need a parallel effort to seed `permission_codes` for the School Admin role first, or every admin loses access to their own console.
+
+### 5. Known gaps confirmed this session (pre-existing, not touched)
+- The fee module's Audit Trail / Task Queue widgets have never worked for any school — both depend on `GET /api/v1/fees/home/`, which 404s (never implemented). The `LedgerEntry` model this is meant to surface has zero API exposure at all. Scoped implementation plan prepared as a follow-up, not attempted here.
+- Examination module is entirely unbuilt ("Coming Soon" placeholder); teacher Homework/Lessons/Messages and parent Results pages all 404; no teacher/parent self-service view of leave policy, holiday calendar, or attendance rules; uploaded documents aren't surfaced in parent/teacher portal UI. All pre-existing, confirmed still true, none new.
+
+### Files changed
+- `backend/apps/fees/migrations/0015_fix_orphaned_payment_columns.py` (new)
+- `backend/apps/fees/views.py`
+- `backend/apps/access_control/permission_classes.py`
+- `backend/apps/reports/views.py`
+- `frontend/lib/portal-modules.ts`
+- `frontend/lib/recentsStore.ts`
+- `frontend/lib/auth-context.tsx`
+- `frontend/components/students/StudentFeesStep.tsx`
+- `frontend/app/(dashboard)/super-admin/schools/page.tsx`
+
+### Status
+✅ All 8 fixes verified live against the shared Neon DB, including the schema migration. **None yet deployed to the production VPS** — code-only until pushed. A dedicated `QA Test School DELETEME` tenant was used throughout (3 teachers, 3 students, 1 posted payment) — clearly named, safe to delete once no longer needed. Full phase-by-phase detail and QA login credentials are in this session's working notes, not duplicated here.
+
+---
+
+## Update — GitHub Copilot (03/08/2026 — Backend lint slice)
+
+**Area:** Production-relevant Ruff cleanup in backend app modules
+
+### 1. Backend fixes applied
+- Fixed the undefined-name and import-safety issues in the production backend modules that were blocking the lint pass:
+  - `backend/apps/access_control/views.py`
+  - `backend/apps/reports/exam_report.py`
+  - `backend/apps/reports/fees_report.py`
+  - `backend/apps/tenancy/utils.py`
+- Corrected the fees assignment model reference in access control, added the missing Django ORM imports in the reports views, and removed dead unreachable code from the tenancy utility helper.
+- Tightened the tenancy utility exception handling and cleaned up its import ordering so Ruff no longer reports local issues in that file.
+
+### 2. Verification
+- Re-ran Ruff on the touched backend files and confirmed they now pass cleanly.
+
+### 3. Current status
+- This slice of backend lint issues is resolved.
+- The broader backend Ruff backlog outside these files is still open.
+
+## Update — GitHub Copilot (03/08/2026)
+
+**Area:** Lint verification and targeted JSX cleanup
+
+### 1. Frontend lint fix
+- Escaped the blocking JSX text in the settings and broadcast components that were tripping `react/no-unescaped-entities`.
+- Verified the frontend lint script now exits cleanly with `npm --prefix frontend run lint` returning exit code 0.
+- Files updated: `frontend/components/settings/AttendanceRulesPanel.tsx`, `frontend/components/settings/HolidaysPanel.tsx`, `frontend/components/settings/LeavePolicyPanel.tsx`, `frontend/components/settings/SchoolInfoPanel.tsx`, `frontend/components/widgets/cockpit/QuickBroadcast.tsx`.
+
+### 2. Backend lint status
+- Ran Ruff against the backend tree with `python -m ruff check .`.
+- Result: Ruff still reports 3,047 issues in total, including 899 fixable findings, so the backend is not yet lint-clean.
+- The largest buckets remain import ordering, unused imports, f-strings without placeholders, mutable defaults, and older diagnostic/script files in the backend workspace.
+
+### 3. Current status
+- Frontend blocking lint errors are resolved.
+- Backend Ruff cleanup is still pending and remains the main lint backlog.
+
+---
+
+## Update — GitHub Copilot (31/07/2026 — Session 2)
+
+**Area:** Document Branding settings — full feature build, advanced UI, and live preview
+
+### 1. Document Branding backend — new fields, styles, and preview API
+
+**Model & migration additions** (`backend/apps/settings/`)
+- Added 10 new fields to `DocumentBrandingSettings`: `accent_color`, `header_size` (compact/standard/tall), `logo_position`, `show_divider`, `divider_style` (none/solid/double/dashed/thick_rule), `show_watermark`, `watermark_text`, `show_logo`, `declaration_fee_receipt`, `declaration_transfer_certificate`, `declaration_admission`.
+- Three new header styles added: `executive`, `letterpress`, `banner` — each designed for crisp B&W print.
+- Migrations: `0005_documentbrandingsettings_advanced`, `0006_documentbrandingsettings_show_logo`. Both applied.
+
+**Branding renderer** (`backend/apps/settings/branding.py`)
+- Refactored `render_generated_header_png` to accept `branding_override=None` for preview-without-save.
+- Added six separate style renderer functions: `_render_classic`, `_render_modern`, `_render_minimal`, `_render_executive`, `_render_letterpress`, `_render_banner`.
+- Added `_draw_divider` (5 styles), `_add_watermark` (faint diagonal at 22 % opacity), `_hex_to_rgb`, dynamic height from `header_size`.
+- Logo skipped entirely when `show_logo=False`.
+
+**Preview endpoint** (`backend/apps/settings/views.py` + `urls.py`)
+- New `POST /api/v1/settings/document-branding/preview/` — renders PNG from posted layout params without touching the DB; used by the frontend debounce loop.
+- All 10 layout fields accepted; boolean fields coerced safely.
+
+**Serializer** (`backend/apps/settings/serializers.py`)
+- All new fields exposed; `accent_color` and `header_text_color` both validated as `#RRGGBB`.
+
+### 2. Document Branding frontend — advanced studio UI
+
+**Component** (`frontend/components/settings/DocumentBrandingPanel.tsx`)
+- **Dark-sidebar studio layout**: the settings panel is a self-contained two-pane card (`dark #0e0e1c` left sidebar + lavender-gradient right preview panel) giving a design-app feel rather than a settings form.
+- **Live preview**: 420 ms debounced `useEffect` watches all 10 layout fields; POSTs to the preview endpoint and swaps the PNG without saving — dot turns amber while rendering.
+- **A4 paper mock**: preview image uses `width:100%; height:auto` (natural aspect ratio = A4-proportional header height); framed in a white sheet card with multi-layer shadow + simulated page-content lines below.
+- **Style options**: 6 horizontal sidebar list rows each with a handcrafted 38×26 px whiteboard-style mini diagram (not abstract swatches); selected row gets purple left border + tinted background.
+- **Logo toggle**: fetches `logo_url` from `/api/v1/settings/school-info/` on load; shows school logo thumbnail as a 28 px icon button in the preview controls bar; toggling triggers live preview immediately.
+- **B&W preview toggle**: applies `grayscale(1) contrast(1.05)` CSS filter to the rendered PNG in one click.
+- **Declarations accordion**: 6 document types (student verification, staff onboarding, payslip, fee receipt, transfer certificate, admission) as a collapsible list — one expands at a time; filled items show a 4 px purple dot on the row label.
+- **Save button** moved to the page-level header, always visible.
+- All new fields (`show_logo`, `show_divider`, `divider_style`, `show_watermark`, `watermark_text`, `accent_color`, `header_size`, `logo_position`, three new declarations) saved via PATCH and included in the live-preview payload.
+
+### Key files changed (31/07 Session 2)
+- `backend/apps/settings/models.py`
+- `backend/apps/settings/migrations/0005_documentbrandingsettings_advanced.py`
+- `backend/apps/settings/migrations/0006_documentbrandingsettings_show_logo.py`
+- `backend/apps/settings/serializers.py`
+- `backend/apps/settings/branding.py`
+- `backend/apps/settings/views.py`
+- `backend/apps/settings/urls.py`
+- `frontend/components/settings/DocumentBrandingPanel.tsx`
+
+### Status
+✅ **COMPLETE** — Document Branding settings fully rebuilt end-to-end. Backend syntax clean; frontend TypeScript zero errors; migrations applied.
+
+⚠️ **Next steps**: run a PDF download in each module (fees receipt, staff onboarding form, student verification) to confirm the rendered header picks up the new settings in production.
+
+## Update — GitHub Copilot (31/07/2026)
+
+**Area:** Fees tenancy safety, HR onboarding consistency, and permission-driven portal rendering
+
+### 1. Fees module tenancy hardening
+- Fees serializers now scope related foreign-key querysets by the current school context, preventing cross-tenant leakage in academic year, fee-group, fee-type, student, class, and assignment lookups.
+- GL code uniqueness checks and fee-schedule validation now enforce school ownership plus academic-year consistency.
+- Frontend fee dashboards now rely on tenancy school metadata and the live current academic year instead of hardcoded school/year labels.
+
+### 2. HR onboarding and role-scope alignment
+- HR onboarding role options now come from the shared form-options endpoint and include both school roles and global/system roles so valid roles such as Receptionist remain available.
+- Staff number generation now follows the agreed format of `<academic year start><4-digit sequence>`, scoped per school and academic-year bucket.
+
+### 3. Portal permissions and module rendering
+- Teacher and parent portal visibility now resolves from effective permissions and active roles rather than brittle hardcoded assumptions.
+- Portal type resolution is now deterministic and based on active roles only, while module tiles and route visibility use the permission-aware rendering flow.
+
+### Status
+✅ **CURRENT FOCUS** — The team is consolidating tenancy-safe fees behavior, HR onboarding consistency, and permission-driven portal access for the next validation round.
+
+⚠️ **Validation still pending** — no fresh end-to-end regression run is recorded in this handoff update.
+
+## Update — GitHub Copilot (29/07/2026)
+
+**Area:** School profile management expansion, HR leave-policy groundwork, and holiday-model consolidation
+
+### 1. Super Admin School Management Expanded
+
+**Backend school tenant serializers now expose richer school profile data**
+- Added editable school identity, contact, and affiliation fields to super-admin tenant serializers:
+  - `backend/apps/tenancy/super_admin/serializers.py`
+- `my_school_info_view` now prefers the explicit `School.tenant_record` link and only falls back to legacy subdomain matching when needed:
+  - `backend/apps/tenancy/views.py`
+
+**Frontend school detail/edit surfaces now support full profile maintenance**
+- Expanded the super-admin school edit page with principal/contact/address, identity extras, branding, and board affiliation fields:
+  - `frontend/app/(dashboard)/super-admin/schools/[tenantId]/edit/page.tsx`
+- Expanded the school detail page to display the same richer profile fields:
+  - `frontend/app/(dashboard)/super-admin/schools/[tenantId]/page.tsx`
+
+### 2. HR Leave Policy Foundation Hardened
+
+**LeaveType now carries policy-level configuration fields**
+- Added built-in leave-type protection plus policy metadata for carry-forward, eligibility, duration, notice, attachment, optionality, and combination rules:
+  - `backend/apps/hr/models.py`
+
+**Leave usage now enforces policy eligibility at request time**
+- `LeaveTypeSerializer` exposes policy fields as read-only in HR, signaling Settings as the editing surface:
+  - `backend/apps/hr/serializers.py`
+- `LeaveRequestSerializer` now enforces gender, department, designation, employment-type, minimum-service, and minimum-notice constraints, and treats `max_days_per_year=0` as "no annual cap":
+  - `backend/apps/hr/serializers.py`
+- Built-in leave types can no longer be deleted from the HR leave-type screen:
+  - `backend/apps/hr/views.py`
+
+### 3. Holiday Data Model Consolidated Across Modules
+
+**Communication/exams now converge on `core.Holiday`**
+- Communication holiday calendar APIs now read/write `apps.core.models.Holiday` instead of a separate holiday table, while preserving the existing frontend wire format:
+  - `backend/apps/communication/serializers.py`
+  - `backend/apps/communication/views.py`
+- Core holiday model now supports platform-wide holidays (`school=None`), audience targeting, and optional holidays:
+  - `backend/apps/core/models.py`
+- Core holiday querysets now include both school-scoped and global holidays for the current school:
+  - `backend/apps/core/views.py`
+- Exam scheduling and exam holiday listing now also read from `core.Holiday`:
+  - `backend/apps/exams/models.py`
+  - `backend/apps/exams/views.py`
+
+**Attendance summaries now understand holidays explicitly**
+- Student attendance store auto-detects matching school/global calendar holidays and marks holiday attendance accordingly.
+- Class and daily attendance summary APIs now count holiday rows separately and exclude them from the "unmarked" bucket:
+  - `backend/apps/attendance/views.py`
+
+### 4. Settings / Navigation Cleanup
+
+- Removed the old dashboard school-setup page wrapper:
+  - `frontend/app/(dashboard)/setup/schools/page.tsx` (deleted)
+- Reintroduced the Settings module in route config with school info, leave policy, holiday calendar, SMTP, audit log, attendance rules, and documents entries:
+  - `frontend/lib/routes.ts`
+
+### Status
+
+✅ **WORKTREE UPDATE CAPTURED** — Current uncommitted source changes are centered on school profile management, HR leave-policy behavior, holiday unification, and settings navigation.
+
+⚠️ **Validation still pending:** no integrated backend/frontend regression run is recorded in this context update, and the repo also contains additional non-source worktree churn outside this summary.
+
 ## Update — GitHub Copilot (28/07/2026)
 
 **Area:** Backend quality pass, student portal hardening, and lint/format cleanup

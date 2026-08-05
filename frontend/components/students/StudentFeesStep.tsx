@@ -7,6 +7,7 @@ import {
   listData,
   type ConcessionRule,
   type FeeSchedule,
+  type FeesAssignment,
   type FeesGroup,
   type FeesType,
 } from "@/lib/fees-api";
@@ -60,6 +61,12 @@ interface Props {
   showToast: (message: string, type?: "success" | "error", durationMs?: number) => void;
   sectionCounter?: string;
   navButtonsSlot?: ReactNode;
+  /** Already-saved assignments for this student (edit mode only) — used once to
+   * reconstruct the fee group + per-line override amounts so the plan doesn't
+   * look unassigned when it already exists. The assignment endpoint upserts by
+   * (academic_year, student, fees_type), so re-submitting is safe either way —
+   * this is purely so the admin sees the truth instead of a blank plan. */
+  existingAssignments?: FeesAssignment[];
 }
 
 function initials(name: string): string {
@@ -108,6 +115,7 @@ const StudentFeesStep = forwardRef<StudentFeesStepHandle, Props>(function Studen
     showToast,
     sectionCounter = "10 / 10",
     navButtonsSlot,
+    existingAssignments,
   },
   ref
 ) {
@@ -121,6 +129,7 @@ const StudentFeesStep = forwardRef<StudentFeesStepHandle, Props>(function Studen
   const [loading, setLoading] = useState(false);
   const [openOfferFor, setOpenOfferFor] = useState<number | null>(null);
   const autoSelectedRef = useRef(false);
+  const restoredFromExistingRef = useRef(false);
 
   useEffect(() => {
     if (!academicYearId) return;
@@ -162,9 +171,33 @@ const StudentFeesStep = forwardRef<StudentFeesStepHandle, Props>(function Studen
     });
   }, [groups, classId]);
 
+  // Reconstruct the saved plan from existing FeeAssignment rows (edit mode) once
+  // both the assignments and the fee-type pool have arrived, so a student who
+  // already has a fee plan doesn't look unassigned — and so the auto-select
+  // effect below doesn't grab an unrelated group first. `existingAssignments`
+  // is `undefined` while the parent is still fetching it and `[]` once
+  // resolved-empty, so the auto-select effect can tell "not known yet" apart
+  // from "confirmed nothing to restore."
+  useEffect(() => {
+    if (restoredFromExistingRef.current) return;
+    if (!existingAssignments || existingAssignments.length === 0) return;
+    if (types.length === 0) return;
+    const groupId = types.find((t) => t.id === existingAssignments[0].fees_type)?.fees_group;
+    if (!groupId) return;
+    restoredFromExistingRef.current = true;
+    autoSelectedRef.current = true;
+    const overrides: FeePlanState["overrides"] = {};
+    existingAssignments.forEach((a) => {
+      overrides[a.fees_type] = { overrideAmount: a.amount };
+    });
+    onChange({ ...value, feeGroupId: String(groupId), overrides });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [existingAssignments, types]);
+
   // Auto-select the first applicable group once data loads, so the table isn't empty by default.
   useEffect(() => {
     if (autoSelectedRef.current) return;
+    if (existingAssignments === undefined) return; // still waiting to know whether to restore instead
     if (value.feeGroupId) {
       autoSelectedRef.current = true;
       return;
@@ -174,7 +207,7 @@ const StudentFeesStep = forwardRef<StudentFeesStepHandle, Props>(function Studen
       onChange({ ...value, feeGroupId: String(filteredGroups[0].id) });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filteredGroups]);
+  }, [filteredGroups, existingAssignments]);
 
   const activeConcessions = useMemo(
     () =>
@@ -206,7 +239,7 @@ const StudentFeesStep = forwardRef<StudentFeesStepHandle, Props>(function Studen
           (s) =>
             String(s.fee_type) === String(feesType.id) &&
             (!s.fee_group || String(s.fee_group) === value.feeGroupId) &&
-            (s.status ?? "active") === "active"
+            (s.status ?? "active").toLowerCase() === "active"
         ) || null;
 
       const standardAmount = schedule ? parseFloat(schedule.amount || "0") : parseFloat(feesType.amount || "0");

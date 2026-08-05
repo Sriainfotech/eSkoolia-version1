@@ -81,7 +81,12 @@ type StatusFilter = "all" | "active" | "inactive" | "archived" | "new" | "docs";
 const UNASSIGNED_SECTION_ID = -1;
 
 async function apiGet<T>(path: string): Promise<T> {
-  return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" } });
+  // silent401: this page fires several concurrent read calls on mount (classes,
+  // sections, summary stats, the list itself). A stray/transient 401 on any one
+  // of them shouldn't force-logout the whole session — only a genuinely expired
+  // session (surfaced via the inline "Session expired" error below, or hit on an
+  // actual submit action elsewhere on this page) should send the user to /login.
+  return apiRequestWithRefresh<T>(path, { headers: { "Content-Type": "application/json" }, silent401: true });
 }
 
 async function apiPatch<T>(path: string, payload: unknown): Promise<T> {

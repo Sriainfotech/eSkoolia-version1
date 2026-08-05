@@ -493,7 +493,11 @@ class StaffAttendanceExportAPIView(StaffAttendancePermissionMixin, APIView):
                 else:
                     cell.alignment = left
             tot_staff += total
-            tot_p += b["P"]; tot_a += b["A"]; tot_l += b["L"]; tot_f += b["F"]; tot_h += b["H"]
+            tot_p += b["P"]
+            tot_a += b["A"]
+            tot_l += b["L"]
+            tot_f += b["F"]
+            tot_h += b["H"]
             sum_row += 1
 
         tot_worked = tot_p + tot_a + tot_f
@@ -611,6 +615,9 @@ class StaffAttendanceImportBulkAPIView(StaffAttendancePermissionMixin, APIView):
         failed = 0
         errors = []
 
+        from apps.attendance.holiday_utils import get_calendar_holiday
+        calendar_holiday = get_calendar_holiday(school.id if school else None, request_date)
+
         for row_num, row in enumerate(imported_rows, start=2):
             staff_no = str(row.get("staff_no") or "").strip()
             if not staff_no:
@@ -632,15 +639,25 @@ class StaffAttendanceImportBulkAPIView(StaffAttendancePermissionMixin, APIView):
             
             note = str(row.get("note") or "").strip()
             lunch = str(row.get("lunch") or "").strip().lower() in ["1", "true", "yes", "y", "t"]
-            
+
+            # A school-calendar holiday always wins — unless the staff member
+            # is on approved leave whose leave type counts holidays as leave,
+            # in which case it's marked Leave (consumes balance) instead.
+            from .holiday_utils import resolve_staff_holiday_attendance
+            resolved = resolve_staff_holiday_attendance(school.id if school else None, staff.id, request_date)
+            final_type = resolved[0] if resolved else (att_type or "P")
+            final_note = note or (
+                (f"Leave ({resolved[1]})" if resolved[0] == "L" else "Holiday") if resolved else ""
+            )
+
             try:
                 StaffAttendance.objects.update_or_create(
                     school=school,
                     staff=staff,
                     attendance_date=request_date,
                     defaults={
-                        "attendance_type": att_type or "P",
-                        "note": note,
+                        "attendance_type": final_type,
+                        "note": final_note,
                         "lunch": lunch
                     }
                 )
@@ -649,8 +666,14 @@ class StaffAttendanceImportBulkAPIView(StaffAttendancePermissionMixin, APIView):
                 errors.append({"row": row_num, "message": str(e)})
                 failed += 1
 
+        message = f"Imported {processed}, failed {failed}"
+        if calendar_holiday:
+            message += f" — {request_date} is a holiday ({calendar_holiday.name}); rows were marked Holiday or Leave per each staff member's leave status"
         return Response({
             "success": failed == 0,
-            "message": f"Imported {processed}, failed {failed}",
-            "data": {"imported": processed, "failed": failed, "errors": errors[:50]}
+            "message": message,
+            "data": {
+                "imported": processed, "failed": failed, "errors": errors[:50],
+                "holiday": {"name": calendar_holiday.name, "date": str(request_date)} if calendar_holiday else None,
+            }
         })

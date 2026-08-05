@@ -88,6 +88,30 @@ class Guardian(models.Model):
         return f"{self.full_name} ({self.relation})"
 
 
+class StudentGuardian(models.Model):
+    """
+    Links a Student to more than one Guardian. Added alongside the legacy
+    `Student.guardian` FK (kept as-is for the many existing call sites that read
+    it directly — parent portal auth, attendance/fee notifications, reports,
+    broadcasts) rather than replacing it, so this is purely additive: the FK
+    always mirrors whichever linked guardian is flagged `is_primary`.
+    """
+    student = models.ForeignKey("Student", on_delete=models.CASCADE, related_name="guardian_links")
+    guardian = models.ForeignKey(Guardian, on_delete=models.CASCADE, related_name="student_links")
+    is_primary = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "student_guardians"
+        ordering = ["-is_primary", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["student", "guardian"], name="uq_student_guardian_link"),
+        ]
+
+    def __str__(self):
+        return f"{self.student_id} -> {self.guardian_id} ({'primary' if self.is_primary else 'secondary'})"
+
+
 class Student(models.Model):
     GENDER_CHOICES = [
         ("male", "Male"),
@@ -197,6 +221,60 @@ class Student(models.Model):
         on_delete=models.SET_NULL,
         related_name="student_profile",
     )
+    # Identity extras (captured on the enrollment wizard's Identity/Academic steps)
+    mother_tongue = models.CharField(max_length=40, blank=True)
+    other_mother_tongue = models.CharField(max_length=60, blank=True)
+    religion = models.CharField(max_length=30, blank=True, default="Prefer not to say")
+    nationality = models.CharField(max_length=30, blank=True)
+    other_nationality = models.CharField(max_length=60, blank=True)
+    admission_type = models.CharField(max_length=20, blank=True)
+    previous_school_name = models.CharField(max_length=150, blank=True)
+    rte_certificate_no = models.CharField(max_length=40, blank=True)
+    stream = models.CharField(max_length=20, blank=True)
+
+    # Contact extras
+    landmark = models.CharField(max_length=150, blank=True)
+    transport_modes = models.JSONField(default=list, blank=True)
+    transport_custom = models.CharField(max_length=60, blank=True)
+
+    # Government identity (India's "One Nation, One Student ID" + related IDs)
+    apaar_id = models.CharField(max_length=20, blank=True)
+    aadhaar_no = models.CharField(max_length=20, blank=True)
+    pen = models.CharField(max_length=20, blank=True, verbose_name="PEN / UDISE+")
+    digilocker_mobile = models.CharField(max_length=20, blank=True)
+    abc_id = models.CharField(max_length=30, blank=True, verbose_name="ABC Portal ID")
+
+    # Medical & emergency
+    height_cm = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
+    weight_kg = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
+    vision = models.CharField(max_length=30, blank=True)
+    medical_conditions = models.JSONField(default=list, blank=True)
+    allergies = models.JSONField(default=list, blank=True)
+    current_medications = models.CharField(max_length=255, blank=True)
+    treating_doctor = models.CharField(max_length=120, blank=True)
+    vaccinations = models.JSONField(default=list, blank=True)
+    medical_notes = models.TextField(blank=True)
+    emergency_contact_name = models.CharField(max_length=120, blank=True)
+    emergency_contact_phone = models.CharField(max_length=20, blank=True)
+
+    # Specially abled (Rights of Persons with Disabilities Act, 2016) — disclosure
+    # is voluntary; `is_pwd` records whether it was disclosed, distinct from
+    # `is_disabled` above which is an enrollment/account-status flag.
+    is_pwd = models.BooleanField(default=False)
+    disability_types = models.JSONField(default=list, blank=True)
+    disability_percent = models.PositiveSmallIntegerField(null=True, blank=True)
+    udid = models.CharField(max_length=30, blank=True, verbose_name="UDID")
+    disability_accommodations = models.JSONField(default=list, blank=True)
+    disability_notes = models.TextField(blank=True)
+    other_disability_text = models.CharField(max_length=120, blank=True)
+
+    # Identity marks — physical descriptors, administrative identity verification only
+    identity_marks = models.JSONField(default=list, blank=True)
+    eye_colour = models.CharField(max_length=20, blank=True)
+    hair_colour = models.CharField(max_length=20, blank=True)
+    complexion = models.CharField(max_length=20, blank=True)
+    build = models.CharField(max_length=20, blank=True)
+
     is_disabled = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     is_deleted = models.BooleanField(default=False, db_index=True)

@@ -1,6 +1,5 @@
 import json
-import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
@@ -79,7 +78,7 @@ class BusLocationConsumer(AsyncWebsocketConsumer):
         accuracy = int(data.get("accuracy", 0))
         
         # Update/Create location in database
-        location = await self.update_bus_location(vehicle_id, latitude, longitude, speed, heading, accuracy)
+        await self.update_bus_location(vehicle_id, latitude, longitude, speed, heading, accuracy)
         
         # Check for alerts (stopped, near school, late)
         await self.check_and_create_alerts(vehicle_id, latitude, longitude, speed)
@@ -177,8 +176,7 @@ class BusLocationConsumer(AsyncWebsocketConsumer):
         # School coordinates (should be fetched from settings)
         SCHOOL_LAT = Decimal("27.1088")
         SCHOOL_LON = Decimal("85.3194")
-        NEAR_SCHOOL_RADIUS_KM = 1
-        
+
         # Calculate distance (simplified - use Haversine for production)
         distance = abs(float(latitude) - float(SCHOOL_LAT)) + abs(float(longitude) - float(SCHOOL_LON))
         

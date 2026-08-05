@@ -1,6 +1,5 @@
 """Tenant audit logging for provisioning and operational events."""
 import logging
-from django.conf import settings
 from apps.tenancy.models import TenantAuditLog
 
 logger = logging.getLogger(__name__)

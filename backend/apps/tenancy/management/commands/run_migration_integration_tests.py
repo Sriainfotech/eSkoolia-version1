@@ -1,8 +1,6 @@
 """Management command to run migration integration test suite."""
 
 from django.core.management.base import BaseCommand
-from django.test.utils import setup_test_environment, teardown_test_environment
-from django.db import connection
 import subprocess
 import sys
 

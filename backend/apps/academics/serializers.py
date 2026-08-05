@@ -99,20 +99,30 @@ class ClassSubjectAssignmentSerializer(LegacyAliasMixin):
         if section and school_class and section.school_class_id != school_class.id:
             raise serializers.ValidationError({"message": "Invalid class and section combination"})
 
-        # Validate teacher exists and is active
-        teacher_obj = User.objects.filter(id=teacher.id).first()
-        if not teacher_obj or not teacher_obj.is_active or not getattr(teacher_obj, "access_status", True):
-            raise serializers.ValidationError({"teacher": ["Selected teacher is inactive"]})
-
-        # Validate teacher has Teacher role
-        if not _is_teacher_user(teacher.id):
-            raise serializers.ValidationError({"message": "Selected user is not a teacher"})
-
         # Validate no duplicate assignment (unique constraint scope)
         school = attrs.get("school") or getattr(self.instance, "school", None)
         request = self.context.get("request")
         if not school and request and getattr(request.user, "school", None):
             school = request.user.school
+
+        if school:
+            if school_class and school_class.school_id != school.id:
+                raise serializers.ValidationError({"class_id": ["Invalid class."]})
+            if subject and subject.school_id != school.id:
+                raise serializers.ValidationError({"subject_id": ["Invalid subject."]})
+            if academic_year and academic_year.school_id != school.id:
+                raise serializers.ValidationError({"academic_year_id": ["Invalid academic year."]})
+
+        # Validate teacher exists and is active
+        teacher_obj = User.objects.filter(id=teacher.id).first()
+        if not teacher_obj or not teacher_obj.is_active or not getattr(teacher_obj, "access_status", True):
+            raise serializers.ValidationError({"teacher": ["Selected teacher is inactive"]})
+        if school and getattr(teacher_obj, "school_id", None) != school.id:
+            raise serializers.ValidationError({"teacher_id": ["Invalid teacher."]})
+
+        # Validate teacher has Teacher role
+        if not _is_teacher_user(teacher.id):
+            raise serializers.ValidationError({"message": "Selected user is not a teacher"})
 
         duplicate_qs = ClassSubjectAssignment.objects.filter(
             school=school,
@@ -192,18 +202,26 @@ class ClassTeacherAssignmentSerializer(LegacyAliasMixin):
         if section and school_class and section.school_class_id != school_class.id:
             raise serializers.ValidationError({"message": "Invalid class and section combination"})
 
-        teacher_obj = User.objects.filter(id=teacher.id).first()
-        if not teacher_obj or not teacher_obj.is_active or not getattr(teacher_obj, "access_status", True):
-            raise serializers.ValidationError({"teacher": ["Selected teacher is inactive"]})
-
-        if not _is_teacher_user(teacher.id):
-            raise serializers.ValidationError({"message": "Selected user is not a teacher"})
-
         # Validate class-section is set up for the academic year (check if any subject is assigned)
         school = attrs.get("school") or getattr(self.instance, "school", None)
         request = self.context.get("request")
         if not school and request and getattr(request.user, "school", None):
             school = request.user.school
+
+        if school:
+            if school_class and school_class.school_id != school.id:
+                raise serializers.ValidationError({"class_id": ["Invalid class."]})
+            if academic_year and academic_year.school_id != school.id:
+                raise serializers.ValidationError({"academic_year_id": ["Invalid academic year."]})
+
+        teacher_obj = User.objects.filter(id=teacher.id).first()
+        if not teacher_obj or not teacher_obj.is_active or not getattr(teacher_obj, "access_status", True):
+            raise serializers.ValidationError({"teacher": ["Selected teacher is inactive"]})
+        if school and getattr(teacher_obj, "school_id", None) != school.id:
+            raise serializers.ValidationError({"teacher_id": ["Invalid teacher."]})
+
+        if not _is_teacher_user(teacher.id):
+            raise serializers.ValidationError({"message": "Selected user is not a teacher"})
 
         has_subject_assignment = ClassSubjectAssignment.objects.filter(
             school=school,
@@ -359,6 +377,14 @@ class ClassRoutineSlotSerializer(LegacyAliasMixin):
         if section and school_class and section.school_class_id != school_class.id:
             raise serializers.ValidationError({"message": "Invalid class and section combination"})
 
+        if school:
+            if school_class and school_class.school_id != school.id:
+                raise serializers.ValidationError({"class_id": ["Invalid class."]})
+            if subject and subject.school_id != school.id:
+                raise serializers.ValidationError({"subject_id": ["Invalid subject."]})
+            if academic_year and academic_year.school_id != school.id:
+                raise serializers.ValidationError({"academic_year_id": ["Invalid academic year."]})
+
         if start_time == time_obj(0, 0) or end_time == time_obj(0, 0):
             raise serializers.ValidationError({"message": "Invalid time value"})
 
@@ -380,6 +406,8 @@ class ClassRoutineSlotSerializer(LegacyAliasMixin):
             teacher_obj = User.objects.filter(id=teacher.id).first()
             if not teacher_obj or not teacher_obj.is_active or not getattr(teacher_obj, "access_status", True):
                 raise serializers.ValidationError({"teacher": ["Selected teacher is inactive"]})
+            if school and getattr(teacher_obj, "school_id", None) != school.id:
+                raise serializers.ValidationError({"teacher_id": ["Invalid teacher."]})
             has_teacher_role = UserRole.objects.filter(user_id=teacher.id, role__name__icontains="teacher").exists()
             if not has_teacher_role:
                 raise serializers.ValidationError({"message": "Selected user is not a teacher"})
@@ -637,6 +665,18 @@ class HomeworkSerializer(LegacyAliasMixin):
         if section and school_class and section.school_class_id != school_class.id:
             raise serializers.ValidationError({"message": "Invalid class and section combination"})
 
+        request = self.context.get("request")
+        school = getattr(getattr(request, "user", None), "school", None)
+        if school:
+            subject = attrs.get("subject_id_ref") or getattr(self.instance, "subject_id_ref", None)
+            academic_year = attrs.get("academic_year") or getattr(self.instance, "academic_year", None)
+            if school_class and school_class.school_id != school.id:
+                errors.setdefault("class_id", []).append("Invalid class")
+            if subject and subject.school_id != school.id:
+                errors.setdefault("subject_id", []).append("Invalid subject")
+            if academic_year and academic_year.school_id != school.id:
+                errors.setdefault("academic_year_id", []).append("Invalid academic year")
+
         if errors:
             raise serializers.ValidationError(errors)
 
@@ -731,6 +771,15 @@ class UploadedContentSerializer(LegacyAliasMixin):
 
         if section and school_class and section.school_class_id != school_class.id:
             raise serializers.ValidationError({"message": "Invalid class and section combination"})
+
+        request = self.context.get("request")
+        school = getattr(getattr(request, "user", None), "school", None)
+        academic_year = attrs.get("academic_year") or getattr(self.instance, "academic_year", None)
+        if school:
+            if school_class and school_class.school_id != school.id:
+                errors.setdefault("class_id", []).append("Invalid class")
+            if academic_year and academic_year.school_id != school.id:
+                errors.setdefault("academic_year_id", []).append("Invalid academic year")
 
         file_upload = attrs.pop("file_upload", None)
         remove_upload_file = bool(attrs.pop("remove_upload_file", False))
@@ -950,6 +999,15 @@ class LessonTopicGroupCreateSerializer(serializers.Serializer):
 
         if section and school_class and section.school_class_id != school_class.id:
             raise serializers.ValidationError({"section_id": ["Invalid class and section combination."]})
+
+        if school_class and school_class.school_id != school.id:
+            raise serializers.ValidationError({"class_id": ["Invalid class."]})
+        if subject and subject.school_id != school.id:
+            raise serializers.ValidationError({"subject_id": ["Invalid subject."]})
+        if lesson and lesson.school_id != school.id:
+            raise serializers.ValidationError({"lesson_id": ["Invalid lesson."]})
+        if academic_year and academic_year.school_id != school.id:
+            raise serializers.ValidationError({"academic_year_id": ["Invalid academic year."]})
 
         if lesson and (
             lesson.school_class_id != school_class.id

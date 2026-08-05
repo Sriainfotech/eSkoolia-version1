@@ -32,3 +32,9 @@ export function loadRecentsLS(limit = 8): RecentEntry[] {
     return [];
   }
 }
+
+export function clearRecentsLS() {
+  try {
+    localStorage.removeItem(LS_KEY);
+  } catch {}
+}

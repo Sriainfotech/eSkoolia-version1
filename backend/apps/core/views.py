@@ -1705,7 +1705,12 @@ class HolidayViewSet(TenantQueryMixin, viewsets.ModelViewSet):
     pagination_class = _Pagination
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        user = self.request.user
+        if not user.school_id:
+            return Holiday.objects.none()
+        # Include school-wide holidays (school=None) alongside this school's own —
+        # global rows represent a platform-wide declaration (e.g. a national holiday).
+        queryset = Holiday.objects.filter(Q(school_id=user.school_id) | Q(school__isnull=True))
         academic_year = self.request.query_params.get("academic_year")
         year = self.request.query_params.get("year")
         htype = self.request.query_params.get("type")

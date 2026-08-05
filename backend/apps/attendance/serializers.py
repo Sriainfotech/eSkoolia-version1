@@ -1,6 +1,6 @@
 from rest_framework import serializers
-from django.utils.timezone import now
 from datetime import date
+from .holiday_utils import get_calendar_holiday
 from .models import StudentAttendance, SubjectAttendance, ATTENDANCE_TYPE_CHOICES
 
 
@@ -29,6 +29,18 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
         academic_year = attrs.get("academic_year")
         if academic_year is None and self.instance is not None:
             academic_year = getattr(self.instance, "academic_year", None)
+
+        # A school-calendar holiday always wins over whatever status was submitted —
+        # matches the same auto-mark behavior as every other attendance write path.
+        if school and attendance_date:
+            calendar_holiday = get_calendar_holiday(school.id if hasattr(school, "id") else school, attendance_date)
+            if calendar_holiday is not None:
+                attrs["attendance_type"] = "H"
+                if not attrs.get("notes") and not (self.instance and self.instance.notes):
+                    attrs["notes"] = "Holiday"
+
+        if school and student and getattr(student, "school_id", None) != (school.id if hasattr(school, "id") else school):
+            raise serializers.ValidationError({"student": "Student not found."})
 
         if school and student and attendance_date:
             queryset = StudentAttendance.objects.filter(

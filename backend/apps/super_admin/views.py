@@ -12,7 +12,6 @@ import json
 import os
 import secrets
 import string
-from collections import OrderedDict
 from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
@@ -63,7 +62,6 @@ from .serializers import (
     POLICY_GROUP_METADATA,
     PolicyGroupSerializer,
     PolicySettingsSerializer,
-    PolicySerializer,
     ProvisionSchoolRequestSerializer,
     ProvisionSchoolResponseSerializer,
     SchoolTenantDetailSerializer,
@@ -865,6 +863,25 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                         name=role_name,
                         defaults={"is_system": True, "is_active": True, "portal_type": portal},
                     )
+
+                # 6. Seed a current academic year (Apr–Mar cycle). Without this, every
+                #    academic-year-scoped feature (attendance, fees, homework, timetable,
+                #    lesson planning, etc.) has nothing to attach to until a school admin
+                #    manually creates one in Settings — which is easy to miss right after signup.
+                from apps.core.models import AcademicYear
+                today = timezone.localdate()
+                year_start = today.year if today.month >= 4 else today.year - 1
+                AcademicYear.objects.get_or_create(
+                    school=erp_school,
+                    name=f"{year_start}-{year_start + 1}",
+                    defaults={
+                        "board": data["board"] if data.get("board") in dict(AcademicYear.BOARD_CHOICES) else None,
+                        "start_date": f"{year_start}-04-01",
+                        "end_date": f"{year_start + 1}-03-31",
+                        "is_current": True,
+                        "is_active": True,
+                    },
+                )
 
         except Exception as exc:
             return Response(

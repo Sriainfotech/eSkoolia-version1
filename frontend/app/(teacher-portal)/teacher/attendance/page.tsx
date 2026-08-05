@@ -16,7 +16,7 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users } from 'lucide-react';
+import { Users, CalendarOff } from 'lucide-react';
 import { fetchTeacherMe, type TeacherMe } from '@/lib/api/teacher';
 import { getAccessToken } from '@/lib/auth';
 import { API_BASE_URL } from '@/lib/api';
@@ -177,6 +177,7 @@ export default function TeacherAttendancePage() {
   const [canEdit, setCanEdit] = useState(false); // true only when teacher is CT of this class
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [holidayName, setHolidayName] = useState<string | null>(null);
 
   // Selection
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -215,8 +216,10 @@ export default function TeacherAttendancePage() {
   const today = fmt(new Date());
   const isPastDate = selectedDate < today;
   const isFutureDate = selectedDate > today;
-  // effectiveReadOnly: past dates OR backend says this teacher cannot edit this class
-  const effectiveReadOnly = isLocked || isPastDate || !canEdit;
+  // effectiveReadOnly: past dates, a calendar holiday (server auto-marks everyone "H"
+  // regardless of what's clicked, so manual marking would be pointless), or backend
+  // says this teacher cannot edit this class.
+  const effectiveReadOnly = isLocked || isPastDate || !canEdit || Boolean(holidayName);
 
   // Load students for the currently selected class + date
   const loadStudents = useCallback(async (date: string, vc: ViewClass) => {
@@ -224,6 +227,7 @@ export default function TeacherAttendancePage() {
       setStudents([]);
       setIsLocked(false);
       setCanEdit(false);
+      setHolidayName(null);
       setSelectedIds(new Set());
       return;
     }
@@ -241,6 +245,7 @@ export default function TeacherAttendancePage() {
       setStudents((data.students ?? []).map((r: RawStudent) => mapRaw(r, date)));
       setIsLocked(data.is_locked ?? false);
       setCanEdit(data.can_edit ?? false);
+      setHolidayName(data.is_holiday ? (data.holiday_name ?? 'Holiday') : null);
       setSelectedIds(new Set());
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Failed to load students');
@@ -603,6 +608,21 @@ export default function TeacherAttendancePage() {
         )}
       </div>
 
+      {/* ── Holiday banner ───────────────────────────────────────────────────── */}
+      {holidayName && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          background: '#FFF7ED', border: '1px solid #FDBA74', borderRadius: 10,
+          padding: '10px 16px', marginBottom: 16, fontSize: 13, color: '#9A3412',
+        }}>
+          <CalendarOff size={16} style={{ flexShrink: 0 }} />
+          <span>
+            <strong>{selectedDate}</strong> is a school holiday (<strong>{holidayName}</strong>) — every student in
+            this class will be automatically marked Holiday. Manual marking is disabled for this date.
+          </span>
+        </div>
+      )}
+
       {/* ── KPI Cards ────────────────────────────────────────────────────────── */}
       <AttendanceKPIs data={kpiData} selectedDate={selectedDate} today={today} />
 
@@ -665,8 +685,14 @@ export default function TeacherAttendancePage() {
             Section {viewClass.section_name}
           </span>
 
+          {holidayName && (
+            <span style={{ padding: '2px 8px', borderRadius: 20, fontSize: 10, fontWeight: 700, background: '#FFF7ED', color: '#9A3412' }}>
+              🎉 Holiday — {holidayName}
+            </span>
+          )}
+
           {/* Attendance status */}
-          {!isFutureDate && !isLocked && !isPastDate && (
+          {!isFutureDate && !isLocked && !isPastDate && !holidayName && (
             <span style={{
               padding: '2px 8px', borderRadius: 20, fontSize: 10, fontWeight: 700,
               background: allMarked ? '#ECFDF5' : '#FFF7ED',

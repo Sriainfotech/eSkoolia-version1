@@ -35,7 +35,6 @@ are both FK to users.User, not hr.Staff.
 
 from __future__ import annotations
 
-from functools import lru_cache
 
 from rest_framework.exceptions import PermissionDenied
 

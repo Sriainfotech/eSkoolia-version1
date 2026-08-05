@@ -2085,10 +2085,8 @@ export default function SuperAdminSchoolsPage() {
                     }}
                     className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border border-[var(--bd-2)] bg-[var(--bg-2)] px-3 text-[12px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-1)] flex-shrink-0"
                   >
-                    <Check className="h-3.5 w-3.5" />
-                    {provisioning
-                      ? (editSchool ? 'Saving\u2026' : 'Provisioning\u2026')
-                      : (editSchool ? 'Save changes' : 'Provision school')}
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Generate
                   </button>
                 </div>
               </Fld>

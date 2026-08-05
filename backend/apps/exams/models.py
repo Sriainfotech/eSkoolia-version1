@@ -263,20 +263,20 @@ class ExamRoutine(models.Model):
         if self.end_time <= self.start_time:
             raise ValidationError({"detail": "End time must be later than start time.", "conflict_type": "invalid_time"})
 
-        from apps.communication.models import HolidayCalendar
+        from apps.core.models import Holiday
 
         holiday = (
-            HolidayCalendar.objects.filter(is_active=True)
+            Holiday.objects.filter(active_status=True)
             .filter(Q(school_id=self.school_id) | Q(school_id__isnull=True))
-            .filter(holiday_date__lte=self.exam_date)
-            .filter(Q(end_date__isnull=True, holiday_date__gte=self.exam_date) | Q(end_date__gte=self.exam_date))
-            .order_by("holiday_date")
+            .filter(date__lte=self.exam_date)
+            .filter(Q(end_date__isnull=True, date__gte=self.exam_date) | Q(end_date__gte=self.exam_date))
+            .order_by("date")
             .first()
         )
         if holiday:
             raise ValidationError(
                 {
-                    "detail": f"Cannot schedule on holiday: {holiday.holiday_title} ({self.exam_date}).",
+                    "detail": f"Cannot schedule on holiday: {holiday.name} ({self.exam_date}).",
                     "conflict_type": "holiday_lockout",
                 }
             )

@@ -12,7 +12,7 @@ from rest_framework.response import Response
 from django.conf import settings
 from django.views.decorators.http import require_http_methods
 
-from apps.tenancy.models import SchoolTenant, Domain
+from apps.tenancy.models import SchoolTenant
 from apps.tenancy.provisioning import provision_tenant, is_provisioning_enabled
 from apps.tenancy.permissions import IsSuperAdmin
 

@@ -9,7 +9,6 @@ Optional: filter by school id
     python manage.py check_grade1_section_a --school_id=1
 """
 from django.core.management.base import BaseCommand
-from django.db.models import Q
 
 
 class Command(BaseCommand):

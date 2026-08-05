@@ -80,5 +80,7 @@ class User(AbstractUser):
         return {code for code in codes if code}
 
     def has_permission_code(self, code: str) -> bool:
+        if self.is_superuser or self.is_school_admin:
+            return True
         permission_codes = self.get_permission_codes()
         return "*" in permission_codes or code in permission_codes

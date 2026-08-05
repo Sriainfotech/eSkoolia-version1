@@ -44,6 +44,26 @@ class IsSuperAdmin(BasePermission):
         return True
 
 
+class IsSchoolAdminOrSuperuser(BasePermission):
+    """
+    Restricts access to school admins and superusers.
+
+    For whole-school aggregate views (e.g. Reports) that have no individually
+    grantable permission code yet — until such codes exist, only admin-level
+    users may call these endpoints. Ordinary school-user roles (teacher,
+    parent, custom) are rejected even though they pass IsAuthenticated,
+    matching the frontend's isAdminLike gate in lib/portal-modules.ts.
+    """
+
+    message = "School admin access required."
+
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        return bool(user.is_superuser or user.is_school_admin)
+
+
 class HasPermissionCode(BasePermission):
     required_code = ""
 

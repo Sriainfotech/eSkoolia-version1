@@ -1,7 +1,7 @@
 import re
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from django.db.models import Sum, Q, F, Value, ExpressionWrapper, DecimalField, Subquery, OuterRef
+from django.db.models import Sum, Q, F, ExpressionWrapper, DecimalField, Subquery, OuterRef, Count
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from rest_framework.views import APIView
@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import csv
 from django.utils import timezone
 
-from .models import FeesGroup, FeesType, FeeAssignment, Payment, LedgerEntry, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule, PaymentReconciliation, DueInteraction
+from .models import FeesGroup, FeesType, FeeAssignment, Payment, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule, PaymentReconciliation, DueInteraction
 from .serializers import FeesGroupSerializer, FeesTypeSerializer, FeeAssignmentSerializer, PaymentSerializer, TermSettingsSerializer, FeeScheduleSerializer, ConcessionRuleSerializer, LateFeeRuleSerializer, PaymentReconciliationSerializer, DueInteractionSerializer
 from .services import FeeService, FeeServiceError
 from config.pagination import ApiPageNumberPagination
@@ -48,10 +48,8 @@ class FeesGroupListCreateAPIView(BaseFeeAPIView):
         return self.get_paginated_response(groups, FeesGroupSerializer, request)
 
     def post(self, request):
-        serializer = FeesGroupSerializer(data=request.data)
+        serializer = FeesGroupSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
-            # Ensure academic_year belongs to the user's school
-            # This check should be more robust in a real app
             serializer.save(created_by=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -67,7 +65,7 @@ class FeesGroupDetailAPIView(BaseFeeAPIView):
 
     def patch(self, request, pk):
         group = self.get_object(pk, request.user)
-        serializer = FeesGroupSerializer(group, data=request.data, partial=True)
+        serializer = FeesGroupSerializer(group, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -75,8 +73,7 @@ class FeesGroupDetailAPIView(BaseFeeAPIView):
 
     def delete(self, request, pk):
         group = self.get_object(pk, request.user)
-        from django.db import transaction, IntegrityError
-        from django.db.models import ProtectedError
+        from django.db import transaction
         try:
             with transaction.atomic():
                 group.schedules.all().delete()
@@ -119,7 +116,7 @@ class FeesTypeListCreateAPIView(BaseFeeAPIView):
         return self.get_paginated_response(queryset, FeesTypeSerializer, request)
 
     def post(self, request):
-        serializer = FeesTypeSerializer(data=request.data)
+        serializer = FeesTypeSerializer(data=request.data, context={'request': request})
         if serializer.is_valid():
             serializer.save(created_by=request.user)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -136,7 +133,7 @@ class FeesTypeDetailAPIView(BaseFeeAPIView):
 
     def patch(self, request, pk):
         fee_type = self.get_object(pk, request.user)
-        serializer = FeesTypeSerializer(fee_type, data=request.data, partial=True)
+        serializer = FeesTypeSerializer(fee_type, data=request.data, partial=True, context={'request': request})
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
@@ -625,7 +622,6 @@ class TermSettingsListCreateAPIView(BaseFeeAPIView):
         return self.get_paginated_response(queryset, TermSettingsSerializer, request)
 
     def post(self, request):
-        print("[DEBUG] request.data TYPE:", type(request.data), "data:", request.data)
         if isinstance(request.data, list):
             if not request.data:
                 return Response([], status=status.HTTP_200_OK)
@@ -697,7 +693,6 @@ class TermSettingsListCreateAPIView(BaseFeeAPIView):
                             )
 
                             if is_changed:
-                                print(f"[TermSettings] [backend/debug] Term {term_num}: UPDATE detected (name: {existing_obj.term_name} -> {income_name})")
                                 serializer = TermSettingsSerializer(
                                     existing_obj,
                                     data=term_data,
@@ -717,12 +712,10 @@ class TermSettingsListCreateAPIView(BaseFeeAPIView):
                                 saved_data.append(serializer.data)
                                 update_count += 1
                             else:
-                                print(f"[TermSettings] [backend/debug] Term {term_num}: NO_CHANGE detected")
                                 serializer = TermSettingsSerializer(existing_obj)
                                 saved_data.append(serializer.data)
                                 no_change_count += 1
                         else:
-                            print(f"[TermSettings] [backend/debug] Term {term_num}: CREATE detected")
                             serializer = TermSettingsSerializer(
                                 data=term_data,
                                 context={"request": request}
@@ -744,17 +737,7 @@ class TermSettingsListCreateAPIView(BaseFeeAPIView):
                     to_delete = existing_terms.exclude(term_number__in=incoming_term_numbers)
                     delete_count = to_delete.count()
                     if delete_count > 0:
-                        print(f"[TermSettings] [backend/debug] Deleting {delete_count} extra terms not included in the payload.")
                         to_delete.delete()
-
-                    if create_count > 0:
-                        overall_action = "CREATE"
-                    elif update_count > 0 or delete_count > 0:
-                        overall_action = "UPDATE"
-                    else:
-                        overall_action = "NO_CHANGE"
-
-                    print(f"[TermSettings] [backend/debug] Overall Action: {overall_action} (Created: {create_count}, Updated: {update_count}, Unchanged: {no_change_count}, Deleted: {delete_count})")
 
                 return Response(saved_data, status=status.HTTP_201_CREATED)
             except Exception as e:

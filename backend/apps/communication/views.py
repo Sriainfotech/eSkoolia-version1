@@ -11,7 +11,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.core.models import AcademicYear
+from apps.core.models import AcademicYear, Holiday
 
 from .models import (
     BroadcastMessage,
@@ -19,7 +19,6 @@ from .models import (
     CommunicationPreference,
     EmailMessageLog,
     EmailSmsLog,
-    HolidayCalendar,
     InAppMessage,
     NoticeBoard,
 )
@@ -281,17 +280,20 @@ class NoticeBoardViewSet(BaseCommunicationViewSet):
 
 
 class HolidayCalendarViewSet(BaseCommunicationViewSet):
+    """Reads/writes core.Holiday — the same table Academics > Foundation and
+    Settings > Holiday Calendar use — so a holiday created from any of the
+    three surfaces shows up in the other two, plus exam scheduling and the
+    parent portal, which also read core.Holiday."""
+
     serializer_class = HolidayCalendarSerializer
 
     def get_queryset(self):
-        queryset = HolidayCalendar.objects.select_related("created_by", "updated_by", "school", "academic_year")
+        queryset = Holiday.objects.select_related("school", "academic_year")
         return queryset.filter(Q(school=self.request.user.school) | Q(school__isnull=True))
 
     def perform_create(self, serializer):
         academic_year = AcademicYear.objects.filter(school=self.request.user.school, is_current=True).first()
         serializer.save(
-            created_by=self.request.user,
-            updated_by=self.request.user,
             school=self.request.user.school,
             academic_year=academic_year,
         )
@@ -299,7 +301,6 @@ class HolidayCalendarViewSet(BaseCommunicationViewSet):
     def perform_update(self, serializer):
         academic_year = AcademicYear.objects.filter(school=self.request.user.school, is_current=True).first()
         serializer.save(
-            updated_by=self.request.user,
             school=self.request.user.school,
             academic_year=academic_year,
         )

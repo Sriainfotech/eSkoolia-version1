@@ -5,7 +5,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from django.shortcuts import get_object_or_404
-from django.db.models import Q, Count, Prefetch
+from django.db.models import Q
 from django.db.utils import OperationalError, ProgrammingError
 from django.contrib.auth import get_user_model
 from django.utils import timezone
@@ -25,10 +25,8 @@ from .models import (
 )
 from .serializers import (
     ConversationSerializer,
-    ConversationListSerializer,
     GroupDetailSerializer,
     GroupListSerializer,
-    GroupUserSerializer,
     GroupMessageRecipientSerializer,
     InvitationSerializer,
     BlockUserSerializer,

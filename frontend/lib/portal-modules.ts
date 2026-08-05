@@ -102,13 +102,18 @@ export function getModulesForUser(
   // Roles & Permissions.  Only the teacher portal surfaces these extras because:
   //   • Teachers are school staff who may legitimately need admin pages.
   //   • Parent / student portals are consumer-facing — they never get admin pages.
-  // Extra modules still require a permission check (cross-portal grant).
+  // Extra modules require an explicit, granted permission — a module with no
+  // `permission` field (e.g. Dashboard, Reports) has nothing to grant and must
+  // never surface here, and superuserOnly modules (School Tenancy) are never
+  // grantable via ordinary role permissions.
   if (portalType === 'teacher') {
     const baseIds   = new Set(baseList.map((m) => m.id));
     const basePaths = new Set(baseList.map((m) => m.path));
     const extra = MODULES.filter(
       (m) =>
-        hasModuleAccess(m, me) &&
+        !m.superuserOnly &&
+        Boolean(m.permission) &&
+        hasPermission(m.permission, me) &&
         !baseIds.has(m.id) &&    // deduplicate by id
         !basePaths.has(m.path),  // deduplicate by path (e.g. prevents two Attendance tiles)
     );

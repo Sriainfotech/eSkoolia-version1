@@ -9,6 +9,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.access_control.permission_classes import IsSchoolAdminOrSuperuser
+
 from .export_utils import build_export_response
 from .serializers import (
     AcademicClassPerformanceFilterSerializer,
@@ -52,7 +54,7 @@ def _full_name(first_name: str | None, last_name: str | None) -> str:
 
 
 class BaseReportAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsSchoolAdminOrSuperuser]
     filter_serializer_class = None
     row_serializer_class = None
     service_method = ""
@@ -102,7 +104,13 @@ class BaseReportAPIView(APIView):
         cache_key = None
         if not export_format:
             cache_key = self._build_cache_key(request, school_id, filters)
-            cached_payload = cache.get(cache_key)
+            try:
+                cached_payload = cache.get(cache_key)
+            except Exception:
+                # Cache is a performance optimization, not a correctness
+                # requirement — an unreachable cache backend must not break
+                # report responses.
+                cached_payload = None
             if cached_payload is not None:
                 return Response(cached_payload, status=status.HTTP_200_OK)
 
@@ -139,7 +147,10 @@ class BaseReportAPIView(APIView):
         }
 
         if cache_key:
-            cache.set(cache_key, payload, self.cache_timeout_seconds)
+            try:
+                cache.set(cache_key, payload, self.cache_timeout_seconds)
+            except Exception:
+                pass
 
         return Response(
             payload,
