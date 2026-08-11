@@ -1116,6 +1116,8 @@ class StudentSerializer(serializers.ModelSerializer):
 class StudentListSerializer(serializers.ModelSerializer):
     current_class_name = serializers.CharField(source="current_class.name", read_only=True, default=None)
     current_section_name = serializers.CharField(source="current_section.name", read_only=True, default=None)
+    guardian_name = serializers.CharField(source="guardian.full_name", read_only=True, default=None)
+    guardian_phone = serializers.CharField(source="guardian.phone", read_only=True, default=None)
 
     class Meta:
         model = Student
@@ -1132,6 +1134,8 @@ class StudentListSerializer(serializers.ModelSerializer):
             "category",
             "student_group",
             "guardian",
+            "guardian_name",
+            "guardian_phone",
             "current_class",
             "current_class_name",
             "current_section",

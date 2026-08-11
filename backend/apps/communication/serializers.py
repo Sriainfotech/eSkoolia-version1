@@ -6,6 +6,7 @@ from rest_framework import serializers
 from apps.access_control.models import Role
 from apps.core.models import Holiday
 from .models import (
+    BroadcastMessage,
     CommunicationNotification,
     CommunicationPreference,
     EmailMessageLog,
@@ -21,6 +22,29 @@ class UserBasicSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["id", "username", "first_name", "last_name", "email"]
+
+
+class BroadcastMessageSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.SerializerMethodField()
+    audience_label = serializers.SerializerMethodField()
+
+    class Meta:
+        model = BroadcastMessage
+        fields = [
+            "id", "template", "message", "audience_type", "audience_label", "audience_class_ids",
+            "channels", "status", "scheduled_at", "sent_at", "recipient_count", "error",
+            "created_by_name", "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_created_by_name(self, obj):
+        if not obj.created_by:
+            return "—"
+        name = f"{obj.created_by.first_name} {obj.created_by.last_name}".strip()
+        return name or obj.created_by.username
+
+    def get_audience_label(self, obj):
+        return dict(BroadcastMessage.AUDIENCE_CHOICES).get(obj.audience_type, obj.audience_type)
 
 
 class CommunicationPreferenceSerializer(serializers.ModelSerializer):

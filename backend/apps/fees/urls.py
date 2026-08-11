@@ -34,6 +34,7 @@ from .views import (
     YearEndGroupAmountsAPIView,
     YearEndRolloverAPIView,
     TodayFeesSummaryAPIView,
+    FeesHomeAPIView,
 )
 
 app_name = 'fees'
@@ -98,4 +99,5 @@ urlpatterns = [
     path('year-end/group-amounts/', YearEndGroupAmountsAPIView.as_view(), name='year-end-group-amounts'),
     path('year-end/rollover/', YearEndRolloverAPIView.as_view(), name='year-end-rollover'),
     path('today-summary/', TodayFeesSummaryAPIView.as_view(), name='today-fees-summary'),
+    path('home/', FeesHomeAPIView.as_view(), name='fees-home'),
 ]

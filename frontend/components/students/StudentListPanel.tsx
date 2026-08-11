@@ -41,6 +41,7 @@ type StudentRow = {
     full_name?: string;
     phone?: string;
   } | null;
+  guardians?: Array<{ id: number; full_name: string; relation: string; phone: string; is_primary?: boolean }>;
   status?: string;
   is_deleted?: boolean;
   is_active: boolean;
@@ -175,12 +176,17 @@ function formatAgeFromDob(value?: string | null) {
   return `${Math.max(0, age)} yrs`;
 }
 
+function resolvePrimaryGuardian(row: StudentRow) {
+  if (!row.guardians?.length) return undefined;
+  return row.guardians.find((g) => g.is_primary) || row.guardians[0];
+}
+
 function resolveGuardianName(row: StudentRow) {
-  return row.guardian_name || row.guardian_details?.full_name || "Not linked";
+  return row.guardian_name || row.guardian_details?.full_name || resolvePrimaryGuardian(row)?.full_name || "Not linked";
 }
 
 function resolveGuardianPhone(row: StudentRow) {
-  return row.guardian_phone || row.guardian_details?.phone || "-";
+  return row.guardian_phone || row.guardian_details?.phone || resolvePrimaryGuardian(row)?.phone || "-";
 }
 
 export function StudentListPanel() {

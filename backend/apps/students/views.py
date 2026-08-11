@@ -1123,6 +1123,8 @@ class StudentViewSet(TenantScopedModelViewSet):
                 "category_id",
                 "student_group_id",
                 "guardian_id",
+                "guardian__full_name",
+                "guardian__phone",
                 "current_class_id",
                 "current_section_id",
                 "status",

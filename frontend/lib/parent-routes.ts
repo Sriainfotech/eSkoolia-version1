@@ -1,7 +1,7 @@
 import {
   LayoutGrid, Users, CalendarDays, CreditCard, Bell, GraduationCap,
   BookOpen, FileText, Star, Leaf, Shield, MessageCircle, Trophy,
-  Bus, Activity,
+  Bus, Activity, User,
 } from "lucide-react";
 import type { ModuleRoute } from "@/lib/routes";
 
@@ -114,6 +114,17 @@ export const PARENT_MODULES: ModuleRoute[] = [
       { label: "Health Log",     path: "/parent/children", icon: Activity },
       { label: "Sports & Clubs", path: "/parent/children", icon: Trophy   },
     ],
+  },
+  {
+    id: "parent-profile",
+    name: "My Profile",
+    path: "/parent/profile",
+    icon: User,
+    bg: "var(--pu-soft)",
+    ic: "var(--pu-deep)",
+    // Always visible — every parent can see their own children's onboarding
+    // data, self-scoped server-side via Guardian.user.
+    sub: [],
   },
   {
     id: "parent-transport",

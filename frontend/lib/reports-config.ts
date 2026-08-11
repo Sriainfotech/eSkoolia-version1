@@ -380,3 +380,21 @@ const REPORTS: Record<string, ReportDefinition> = {
 export function getReportDefinition(key: string): ReportDefinition | null {
   return REPORTS[key] || null;
 }
+
+/**
+ * All "module/report"-keyed definitions (excludes the handful of legacy
+ * single-segment aliases like "fees"/"staff" that duplicate a properly-keyed
+ * entry and don't fit the /reports/[module]/[report] route shape).
+ * Used by the Reports hub page to render a real index instead of a
+ * hardcoded/stale list.
+ */
+export function getGroupedReportDefinitions(): Record<string, ReportDefinition[]> {
+  const groups: Record<string, ReportDefinition[]> = {};
+  for (const definition of Object.values(REPORTS)) {
+    if (!definition.key.includes("/")) continue;
+    const [module] = definition.key.split("/");
+    if (!module) continue;
+    (groups[module] ||= []).push(definition);
+  }
+  return groups;
+}

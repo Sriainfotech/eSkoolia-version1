@@ -112,6 +112,17 @@ export const TEACHER_MODULES: ModuleRoute[] = [
       { label: 'Parent Messages', path: '/teacher/messages', icon: MessageSquare },
     ],
   },
+  {
+    id: 'teacher-profile',
+    name: 'My Profile',
+    path: '/teacher/profile',
+    icon: User,
+    bg: '#F5F3FF',
+    ic: '#6D28D9',
+    // No permission guard — every teacher can always see their own profile,
+    // self-scoped server-side via /api/v1/hr/staff/me/.
+    sub: [],
+  },
 ];
 
 /**

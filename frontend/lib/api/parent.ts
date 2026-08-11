@@ -59,9 +59,37 @@ export interface ExamMarkRow {
   exam_date: string | null;
 }
 
-export interface ChildDetail extends ChildSummary {
+export interface ChildGuardian {
+  id: number;
+  full_name: string;
+  relation: string;
+  phone: string;
+  email: string;
+  occupation: string;
+  is_primary: boolean;
+}
+
+/** All fields captured during the admission wizard, as recorded at onboarding. */
+export interface ChildOnboardingProfile {
+  contact: { phone: string; email: string; emergency_contact_name: string; emergency_contact_phone: string };
+  address: { address_line: string; landmark: string; city: string; district: string; state: string; pincode: string };
+  background: { mother_tongue: string; other_mother_tongue: string; religion: string; nationality: string; other_nationality: string };
+  admission: { admission_type: string; previous_school_name: string; rte_certificate_no: string; stream: string; transport_modes: string[]; transport_custom: string };
+  identity_documents: { apaar_id: string; aadhaar_no: string; pen: string; digilocker_mobile: string; abc_id: string };
+  physical: { height_cm: number | null; weight_kg: number | null; eye_colour: string; hair_colour: string; complexion: string; build: string; identity_marks: string[] };
+  medical: {
+    vision: string; medical_conditions: string[]; allergies: string[]; current_medications: string;
+    treating_doctor: string; vaccinations: string[]; medical_notes: string; is_pwd: boolean;
+    disability_types: string[]; disability_percent: number | null; disability_accommodations: string[]; disability_notes: string;
+  };
+  guardians: ChildGuardian[];
+}
+
+export interface ChildDetail extends ChildSummary, ChildOnboardingProfile {
   first_name: string;
+  middle_name: string;
   last_name: string;
+  custom_gender: string;
   date_of_birth: string | null;
   blood_group: string;
   attendance: AttendanceSummary;

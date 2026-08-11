@@ -149,6 +149,15 @@ export interface ProvisionSchoolRequest {
   billing_cycle?: TenantBillingCycle | null;
   admin_username?: string;
   admin_password?: string;
+  // Optional SMTP configuration — seeded at provisioning time so schools don't
+  // have to figure out SMTP setup themselves later in Settings.
+  smtp_host?: string;
+  smtp_port?: number;
+  smtp_username?: string;
+  smtp_password?: string;
+  smtp_from_email?: string;
+  smtp_use_tls?: boolean;
+  smtp_sender_name?: string;
 }
 
 export interface ProvisionSchoolResponse {

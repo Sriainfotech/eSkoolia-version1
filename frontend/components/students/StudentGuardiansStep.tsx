@@ -13,6 +13,12 @@ export type GuardianDraft = {
   phone: string;
   email: string;
   occupation: string;
+  // Snapshot of the last-known-saved values for a linked guardian (set when
+  // the card is hydrated from the backend or right after a create/update
+  // call resolves). Used to detect whether the user actually edited a linked
+  // guardian's fields before deciding to PUT an update — without this, edits
+  // to an already-linked guardian were silently discarded on submit.
+  original?: { fullName: string; relation: string; phone: string; email: string; occupation: string } | null;
 };
 
 export type GuardianLite = {
@@ -35,6 +41,21 @@ export interface StudentGuardiansStepProps {
 }
 
 const RELATION_OPTIONS = ["Father", "Mother", "Guardian", "Grandfather", "Grandmother", "Uncle", "Aunt", "Other"];
+
+/**
+ * The <select> below matches on exact option value, but relation values saved
+ * to the backend aren't guaranteed to be Title Case (older/API-created records
+ * can have e.g. "father") — an exact-match select would then silently show
+ * blank for a guardian who does have a relation on file. Case-insensitively
+ * resolve to the canonical option so the dropdown reflects existing data;
+ * falls back to the raw value for anything genuinely outside the known list.
+ */
+export function normalizeRelation(raw: string | null | undefined): string {
+  const value = (raw || "").trim();
+  if (!value) return "Father";
+  const match = RELATION_OPTIONS.find((opt) => opt.toLowerCase() === value.toLowerCase());
+  return match || value;
+}
 
 export function makeEmptyGuardianDraft(isPrimary: boolean): GuardianDraft {
   return {
@@ -157,20 +178,25 @@ export function StudentGuardiansStep({
   const linkExistingToPrimary = (guardian: GuardianLite) => {
     // Link the selected guardian to the first (primary) card.
     onDraftsChange(
-      drafts.map((d, idx) =>
-        idx === 0
-          ? {
-              ...d,
-              isPrimary: true,
-              linkedExistingId: guardian.id,
-              fullName: guardian.full_name,
-              relation: guardian.relation || "Father",
-              phone: guardian.phone || "",
-              email: d.email,
-              occupation: d.occupation,
-            }
-          : d,
-      ),
+      drafts.map((d, idx) => {
+        if (idx !== 0) return d;
+        const fullName = guardian.full_name;
+        const relation = normalizeRelation(guardian.relation);
+        const phone = guardian.phone || "";
+        const email = d.email;
+        const occupation = d.occupation;
+        return {
+          ...d,
+          isPrimary: true,
+          linkedExistingId: guardian.id,
+          fullName,
+          relation,
+          phone,
+          email,
+          occupation,
+          original: { fullName, relation, phone, email, occupation },
+        };
+      }),
     );
     setPickerOpen(false);
     setPickerQuery("");
@@ -214,20 +240,25 @@ export function StudentGuardiansStep({
   const linkSiblingGuardian = (sibling: typeof siblingSearchResults[0]) => {
     if (sibling.guardian) {
       onDraftsChange(
-        drafts.map((d, idx) =>
-          idx === 0
-            ? {
-                ...d,
-                isPrimary: true,
-                linkedExistingId: sibling.guardian!.id,
-                fullName: sibling.guardian!.full_name,
-                relation: sibling.guardian!.relation || "Father",
-                phone: sibling.guardian!.phone || "",
-                email: sibling.guardian!.email || d.email,
-                occupation: sibling.guardian!.occupation || d.occupation,
-              }
-            : d,
-        ),
+        drafts.map((d, idx) => {
+          if (idx !== 0) return d;
+          const fullName = sibling.guardian!.full_name;
+          const relation = normalizeRelation(sibling.guardian!.relation);
+          const phone = sibling.guardian!.phone || "";
+          const email = sibling.guardian!.email || d.email;
+          const occupation = sibling.guardian!.occupation || d.occupation;
+          return {
+            ...d,
+            isPrimary: true,
+            linkedExistingId: sibling.guardian!.id,
+            fullName,
+            relation,
+            phone,
+            email,
+            occupation,
+            original: { fullName, relation, phone, email, occupation },
+          };
+        }),
       );
       setSiblingSearchName("");
       setSiblingSearchClass("");

@@ -269,6 +269,16 @@ class ProvisionSchoolRequestSerializer(serializers.Serializer):
     # Optional admin credentials — auto-generated if omitted
     admin_username = serializers.CharField(max_length=150, required=False, allow_blank=True, default="")
     admin_password = serializers.CharField(max_length=128, required=False, allow_blank=True, default="")
+    # Optional SMTP configuration — schools often don't know how to set this up
+    # later, so super-admin can seed it directly at provisioning time. Entirely
+    # optional; a school can still configure/change this later in Settings.
+    smtp_host = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    smtp_port = serializers.IntegerField(required=False, default=587, min_value=1)
+    smtp_username = serializers.CharField(max_length=255, required=False, allow_blank=True, default="")
+    smtp_password = serializers.CharField(max_length=512, required=False, allow_blank=True, default="")
+    smtp_from_email = serializers.EmailField(max_length=254, required=False, allow_blank=True, default="")
+    smtp_use_tls = serializers.BooleanField(required=False, default=True)
+    smtp_sender_name = serializers.CharField(max_length=120, required=False, allow_blank=True, default="")
 
 
 class ProvisionSchoolResponseSerializer(serializers.Serializer):

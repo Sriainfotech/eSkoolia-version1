@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { X, Users, Send, Clock, Mail, MessageSquare, Smartphone, AlertCircle } from 'lucide-react';
+import { X, Users, Send, Clock, Mail, MessageSquare, Smartphone, AlertCircle, History, CheckCircle2, XCircle, CalendarClock } from 'lucide-react';
 import { getAccessToken } from '@/lib/auth';
 import { API_BASE_URL } from '@/lib/api';
 
@@ -37,6 +37,36 @@ interface SendResult {
   message: string;
 }
 
+interface BroadcastHistoryItem {
+  id: number;
+  template: string;
+  message: string;
+  audience_label: string;
+  channels: string[];
+  status: 'scheduled' | 'sent' | 'failed';
+  scheduled_at: string | null;
+  sent_at: string | null;
+  recipient_count: number;
+  error: string;
+  created_by_name: string;
+  created_at: string;
+}
+
+const STATUS_META: Record<BroadcastHistoryItem['status'], { icon: typeof CheckCircle2; color: string; label: string }> = {
+  sent:       { icon: CheckCircle2,  color: '#059669', label: 'Sent' },
+  failed:     { icon: XCircle,       color: '#DC2626', label: 'Failed' },
+  scheduled:  { icon: CalendarClock, color: '#D97706', label: 'Scheduled' },
+};
+
+function formatWhen(iso: string): string {
+  return new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+}
+
+// A slow/cold DB connection can make the synchronous send path take a long
+// time; bound the wait so the user gets real feedback instead of an
+// indefinite spinner that looks identical to "broken".
+const SEND_TIMEOUT_MS = 25000;
+
 function toDateInputValue(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
@@ -67,7 +97,25 @@ export function QuickBroadcast() {
   const [scheduleMode, setScheduleMode] = useState(false);
   const [scheduleDate, setScheduleDate] = useState('');
   const [scheduleTime, setScheduleTime] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<BroadcastHistoryItem[] | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const { min: scheduleMinDate, max: scheduleMaxDate } = scheduleDateBounds();
+
+  const loadHistory = () => {
+    setHistoryLoading(true);
+    fetch(`${API_BASE_URL}/api/v1/utilities/communication/broadcast/`, { headers: authHeaders() })
+      .then(r => (r.ok ? r.json() : []))
+      .then((d: BroadcastHistoryItem[]) => setHistory(Array.isArray(d) ? d : []))
+      .catch(() => setHistory([]))
+      .finally(() => setHistoryLoading(false));
+  };
+
+  const toggleHistory = () => {
+    const next = !historyOpen;
+    setHistoryOpen(next);
+    if (next && history === null) loadHistory();
+  };
 
   useEffect(() => {
     fetch(`${API_BASE_URL}/api/v1/utilities/communication/broadcast/audience-options/`, { headers: authHeaders() })
@@ -126,10 +174,13 @@ export function QuickBroadcast() {
 
     setSending(true);
     setResult(null);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), SEND_TIMEOUT_MS);
     try {
       const res = await fetch(`${API_BASE_URL}/api/v1/utilities/communication/broadcast/`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        signal: controller.signal,
         body: JSON.stringify({
           template: modal?.id,
           message: msg,
@@ -144,13 +195,23 @@ export function QuickBroadcast() {
         setResult({ ok: false, message: data?.error || 'Failed to send broadcast.' });
       } else {
         setResult({ ok: true, message: data.message });
+        setHistory(null); // stale — refetch next time the history panel opens
+        if (historyOpen) loadHistory();
         if (data.status === 'sent') {
           setTimeout(() => { setModal(null); setResult(null); }, 1800);
         }
       }
-    } catch {
-      setResult({ ok: false, message: 'Network error — could not reach the server.' });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setResult({
+          ok: false,
+          message: "This is taking much longer than usual — the server may still be processing it. Check History in a moment before sending again, so you don't send it twice.",
+        });
+      } else {
+        setResult({ ok: false, message: 'Network error — could not reach the server.' });
+      }
     } finally {
+      clearTimeout(timeoutId);
       setSending(false);
     }
   };
@@ -158,9 +219,17 @@ export function QuickBroadcast() {
   return (
     <>
       <div style={{ background: '#fff', border: '1px solid var(--bd)', borderRadius: 16, padding: 14, boxShadow: 'var(--sh-1)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
-          <Send size={13} color="#22C55E" strokeWidth={2} />
-          <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-1)' }}>Quick Broadcast</span>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Send size={13} color="#22C55E" strokeWidth={2} />
+            <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--ink-1)' }}>Quick Broadcast</span>
+          </div>
+          <button onClick={toggleHistory} style={{
+            display: 'flex', alignItems: 'center', gap: 4, border: 'none', background: 'none',
+            cursor: 'pointer', fontSize: 11, fontWeight: 600, color: historyOpen ? 'var(--pu)' : 'var(--ink-3)', padding: 2,
+          }}>
+            <History size={12} strokeWidth={2} /> History
+          </button>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
@@ -181,6 +250,41 @@ export function QuickBroadcast() {
             </button>
           ))}
         </div>
+
+        {historyOpen && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--bd)', maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {historyLoading && <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', padding: 8 }}>Loading…</div>}
+            {!historyLoading && history?.length === 0 && (
+              <div style={{ fontSize: 11.5, color: 'var(--ink-3)', textAlign: 'center', padding: 8 }}>Nothing sent yet.</div>
+            )}
+            {!historyLoading && history?.map(item => {
+              const meta = STATUS_META[item.status];
+              const StatusIcon = meta.icon;
+              return (
+                <div key={item.id} style={{ border: '1px solid var(--bd)', borderRadius: 9, padding: '8px 10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                      <StatusIcon size={12} color={meta.color} strokeWidth={2} style={{ flexShrink: 0 }} />
+                      <span style={{ fontSize: 11.5, fontWeight: 600, color: meta.color }}>{meta.label}</span>
+                      <span style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>· {item.audience_label}</span>
+                    </div>
+                    <span style={{ fontSize: 10, color: 'var(--ink-3)', flexShrink: 0 }}>
+                      {formatWhen(item.sent_at || item.scheduled_at || item.created_at)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--ink-2)', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.message}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: 'var(--ink-3)', marginTop: 2 }}>
+                    {item.status === 'sent' ? `${item.recipient_count} recipient${item.recipient_count === 1 ? '' : 's'}` : ''}
+                    {item.status === 'failed' && item.error ? item.error : ''}
+                    {item.created_by_name ? ` · by ${item.created_by_name}` : ''}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {modal && (

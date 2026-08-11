@@ -429,6 +429,11 @@ class StaffViewSet(SchoolScopedModelViewSet):
         "*": "human_resource.staff.view",
         "next_staff_no": "human_resource.staff.view",
         "form_options": "human_resource.staff.view",
+        # Self-service — any authenticated staff member can view their own
+        # profile without the admin-level "view any staff" permission. The
+        # action itself only ever returns the caller's own record, so no
+        # permission code is needed beyond being authenticated.
+        "me": None,
     }
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
@@ -904,6 +909,33 @@ class StaffViewSet(SchoolScopedModelViewSet):
         staff = serializer.save()
         self._ensure_staff_user(staff)
         self._copy_onboard_documents(staff, self.request.user, related_staff_id=staff.id)
+
+    @action(detail=False, methods=["get"], url_path="me")
+    def me(self, request):
+        """The caller's own staff profile — full detail, payroll included.
+
+        Self-scoped by construction (always the logged-in user's own record),
+        so no admin permission code is required beyond being authenticated.
+        This is what powers the self-service Settings > Staff Profile tab for
+        staff who don't have human_resource.staff.view (i.e. aren't admins).
+        """
+        queryset = Staff.objects.select_related("school", "user", "role", "department", "designation")
+        if request.user.school_id:
+            queryset = queryset.filter(school_id=request.user.school_id)
+
+        staff = queryset.filter(user_id=request.user.id).first()
+        if not staff and request.user.email:
+            # Legacy staff rows imported without a user_id — resolve by email
+            # and backfill the link, same fallback LeaveRequestViewSet uses.
+            staff = queryset.filter(user__isnull=True, email__iexact=request.user.email).first()
+            if staff:
+                staff.user = request.user
+                staff.save(update_fields=["user", "updated_at"])
+
+        if not staff:
+            return Response({"detail": "No staff profile linked to this account."}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(self.get_serializer(staff).data)
 
     @action(detail=False, methods=["get"], url_path="next-staff-no")
     def next_staff_no(self, request):

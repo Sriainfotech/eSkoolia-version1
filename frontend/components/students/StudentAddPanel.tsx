@@ -10,6 +10,7 @@ import { ScanFillModal, STUDENT_FIELD_GROUPS } from "./ScanFillModal";
 import {
   StudentGuardiansStep,
   makeEmptyGuardianDraft,
+  normalizeRelation,
   type GuardianDraft,
   type GuardianFieldErrors,
 } from "./StudentGuardiansStep";
@@ -1183,15 +1184,21 @@ export function StudentAddPanel() {
     setGuardianDrafts((prev) => {
       if (prev.length === 0) return prev;
       const next = [...prev];
+      const fullName = match.full_name || "";
+      const relation = normalizeRelation(match.relation);
+      const phone = match.phone || "";
+      const email = match.email || "";
+      const occupation = match.occupation || "";
       next[0] = {
         ...next[0],
         isPrimary: true,
         linkedExistingId: match.id,
-        fullName: match.full_name || "",
-        relation: match.relation || "Father",
-        phone: match.phone || "",
-        email: match.email || "",
-        occupation: match.occupation || "",
+        fullName,
+        relation,
+        phone,
+        email,
+        occupation,
+        original: { fullName, relation, phone, email, occupation },
       };
       return next;
     });
@@ -1606,19 +1613,27 @@ export function StudentAddPanel() {
       // Full multi-guardian list from the server — hydrate every card directly
       // instead of relying on the single-card pool-matching effect below.
       setGuardianDrafts(
-        data.guardians.map((g, idx) => ({
-          clientId:
-            typeof crypto !== "undefined" && "randomUUID" in crypto
-              ? crypto.randomUUID()
-              : `existing_${g.id}_${idx}`,
-          isPrimary: g.is_primary ?? idx === 0,
-          linkedExistingId: g.id,
-          fullName: g.full_name || "",
-          relation: g.relation || "Father",
-          phone: g.phone || "",
-          email: g.email || "",
-          occupation: g.occupation || "",
-        })),
+        data.guardians.map((g, idx) => {
+          const fullName = g.full_name || "";
+          const relation = normalizeRelation(g.relation);
+          const phone = g.phone || "";
+          const email = g.email || "";
+          const occupation = g.occupation || "";
+          return {
+            clientId:
+              typeof crypto !== "undefined" && "randomUUID" in crypto
+                ? crypto.randomUUID()
+                : `existing_${g.id}_${idx}`,
+            isPrimary: g.is_primary ?? idx === 0,
+            linkedExistingId: g.id,
+            fullName,
+            relation,
+            phone,
+            email,
+            occupation,
+            original: { fullName, relation, phone, email, occupation },
+          };
+        }),
       );
     } else {
       setPendingGuardianHydrationId(data.guardian ? String(data.guardian) : "");
@@ -3000,16 +3015,19 @@ export function StudentAddPanel() {
       const email = (draft.email || "").trim();
       const isEmpty = !fullName && !phone && !email && !(draft.occupation || "").trim();
 
+      if (draft.linkedExistingId != null) {
+        resolvedIds[idx] = draft.linkedExistingId;
+      }
+
       if (!draft.isPrimary && isEmpty && draft.linkedExistingId == null) {
         // Empty non-primary cards are silently skipped.
         return;
       }
 
-      if (draft.linkedExistingId != null) {
-        resolvedIds[idx] = draft.linkedExistingId;
-        return;
-      }
-
+      // Linked drafts fall through to the same validation as new ones below —
+      // previously they returned here unchecked, which meant editing an
+      // already-linked guardian's fields skipped validation *and* (see the
+      // save loop further down) never actually persisted the edit.
       const err: GuardianFieldErrors = {};
       if (!fullName) {
         err.fullName = "Full name is required";
@@ -3056,27 +3074,63 @@ export function StudentAddPanel() {
       return { ok: false, cardErrors };
     }
 
-    // POST any draft that still needs creating
+    // POST any draft that still needs creating, or PUT an update for a linked
+    // draft whose fields were actually edited since the last save. Previously
+    // a linked draft was `continue`d past unconditionally here — any edit to
+    // an existing guardian's name/phone/relation/email/occupation was silently
+    // discarded on submit even though the form showed it as saved.
     const updatedDrafts: GuardianDraft[] = [...guardianDrafts];
     for (let idx = 0; idx < guardianDrafts.length; idx++) {
       const draft = guardianDrafts[idx];
-      if (resolvedIds[idx] != null) continue; // already resolved (linked or skipped)
-
       const fullName = sanitizeText(draft.fullName);
       const phone = (draft.phone || "").replace(/\D/g, "").slice(0, 10);
+      const email = sanitizeText(draft.email);
+      const relation = sanitizeText(draft.relation) || "Father";
+      const occupation = sanitizeText(draft.occupation);
+
+      if (draft.linkedExistingId != null) {
+        const original = draft.original;
+        const changed =
+          !original ||
+          original.fullName !== fullName ||
+          original.relation !== relation ||
+          original.phone !== phone ||
+          original.email !== email ||
+          original.occupation !== occupation;
+        if (!changed) continue;
+
+        try {
+          const updated = await apiPutJson<Guardian & { email?: string; occupation?: string }>(
+            `/api/v1/students/guardians/${draft.linkedExistingId}/`,
+            { full_name: fullName, relation, phone, email, occupation },
+          );
+          updatedDrafts[idx] = {
+            ...draft,
+            fullName,
+            phone,
+            email,
+            occupation,
+            relation,
+            original: { fullName, relation, phone, email, occupation },
+          };
+          setGuardians((prev) =>
+            prev.map((g) => (g.id === updated.id ? { ...g, full_name: fullName, relation, phone } : g)),
+          );
+        } catch (updateError) {
+          const msg = parseError(updateError) || "Failed to update this guardian";
+          cardErrors[idx] = { ...cardErrors[idx], fullName: msg };
+          return { ok: false, cardErrors };
+        }
+        continue;
+      }
+
       const isEmpty = !fullName && !phone;
       if (!draft.isPrimary && isEmpty) continue; // empty non-primary → skip
 
       try {
         const created = await apiPostJson<Guardian & { email?: string; occupation?: string }>(
           "/api/v1/students/guardians/",
-          {
-            full_name: fullName,
-            relation: sanitizeText(draft.relation) || "Father",
-            phone,
-            email: sanitizeText(draft.email) || "",
-            occupation: sanitizeText(draft.occupation) || "",
-          },
+          { full_name: fullName, relation, phone, email, occupation },
         );
         resolvedIds[idx] = created.id;
         updatedDrafts[idx] = {
@@ -3084,6 +3138,10 @@ export function StudentAddPanel() {
           linkedExistingId: created.id,
           fullName,
           phone,
+          email,
+          occupation,
+          relation,
+          original: { fullName, relation, phone, email, occupation },
         };
         // Add to the school's guardian pool so the picker can see it next time
         setGuardians((prev) =>

@@ -410,6 +410,7 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Attendance Rules',  path: '/settings/attendance-rules',  icon: UserCheck,     permission: 'settings.attendance_rules' },
       { label: 'Documents',         path: '/settings/documents',         icon: FileText,      permission: 'settings.documents' },
       { label: 'Document Branding', path: '/settings/document-branding', icon: Palette,       permission: 'settings.document_branding' },
+      { label: 'Staff Profile',     path: '/settings/staff-profile',     icon: UserSearch,    permission: 'settings.staff_profile' },
     ],
   },
 ];

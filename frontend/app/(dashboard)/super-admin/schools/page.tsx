@@ -785,7 +785,7 @@ export default function SuperAdminSchoolsPage() {
   const [provisionForm, setProvisionForm] = useState<ProvisionSchoolRequest>({
     name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial',
     shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native',
-    admin_username: '', admin_password: '',
+    admin_username: '', admin_password: '', smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '', smtp_from_email: '', smtp_use_tls: true, smtp_sender_name: '',
   });
 
 
@@ -985,7 +985,7 @@ export default function SuperAdminSchoolsPage() {
         toast.success(`${provisionForm.name} updated.`);
         setEditSchool(null);
         setAccAddOpen(false);
-        setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
+        setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '', smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '', smtp_from_email: '', smtp_use_tls: true, smtp_sender_name: '' });
         setEditFields({ ...EMPTY_EDIT_FIELDS });
         setLogoFile(null);
         setLogoPreview(null);
@@ -1054,7 +1054,7 @@ export default function SuperAdminSchoolsPage() {
         }
       }
       setAccAddOpen(false);
-      setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
+      setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '', smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '', smtp_from_email: '', smtp_use_tls: true, smtp_sender_name: '' });
       setEditFields({ ...EMPTY_EDIT_FIELDS });
       setLogoFile(null);
       setLogoPreview(null);
@@ -1193,7 +1193,7 @@ export default function SuperAdminSchoolsPage() {
       backup_retention: school.backup_retention ?? 30,
       sso_method: school.sso_method ?? 'native',
       admin_username: '',
-      admin_password: '',
+      admin_password: '', smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '', smtp_from_email: '', smtp_use_tls: true, smtp_sender_name: '',
     });
     setEditFields({
       ...EMPTY_EDIT_FIELDS,
@@ -1374,7 +1374,7 @@ export default function SuperAdminSchoolsPage() {
         <Accordion num="01" featured open={accAddOpen} onToggle={() => {
           if (accAddOpen && editSchool) {
             setEditSchool(null);
-            setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
+            setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '', smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '', smtp_from_email: '', smtp_use_tls: true, smtp_sender_name: '' });
             setEditFields({ ...EMPTY_EDIT_FIELDS, gst_registered: '' });
             setLogoFile(null);
             setLogoPreview(null);
@@ -2094,6 +2094,85 @@ export default function SuperAdminSchoolsPage() {
           </div>
           )}
 
+          {!editSchool && (
+          <div className="border-b border-dashed border-[var(--bd-2)] py-5">
+            <SectionHead num="10">
+              SMTP configuration
+              <span className="ml-auto text-[10.5px] font-[400] normal-case tracking-normal text-[var(--ink-4)]">
+                Optional — can also be set up later
+              </span>
+            </SectionHead>
+            <div className="mb-3 flex items-start gap-2.5 rounded-[10px] border border-[var(--bd-2)] bg-[var(--bg-2)] p-[10px_12px]">
+              <Info size={13} className="mt-px flex-shrink-0 text-[var(--ink-3)]" />
+              <p className="text-[11.5px] leading-[1.55] text-[var(--ink-2)]">
+                Many schools don&apos;t know how to configure this themselves. Fill it in now so email (fee reminders, notices,
+                credential resets) works immediately — or leave blank and set it up later in Settings &gt; SMTP Settings.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-3.5 max-md:grid-cols-1">
+              <Fld label="SMTP host" hint="e.g. smtp.gmail.com">
+                <input
+                  className={inputCls}
+                  placeholder="smtp.gmail.com"
+                  value={provisionForm.smtp_host ?? ''}
+                  onChange={e => setProvisionForm(f => ({ ...f, smtp_host: e.target.value }))}
+                />
+              </Fld>
+              <Fld label="Port">
+                <input
+                  className={inputCls}
+                  type="number"
+                  placeholder="587"
+                  value={provisionForm.smtp_port ?? 587}
+                  onChange={e => setProvisionForm(f => ({ ...f, smtp_port: Number(e.target.value) || 587 }))}
+                />
+              </Fld>
+              <Fld label="Username">
+                <input
+                  className={inputCls}
+                  placeholder="smtp username"
+                  value={provisionForm.smtp_username ?? ''}
+                  onChange={e => setProvisionForm(f => ({ ...f, smtp_username: e.target.value }))}
+                />
+              </Fld>
+              <Fld label="Password">
+                <input
+                  className={inputCls}
+                  type="password"
+                  placeholder="smtp password / app password"
+                  value={provisionForm.smtp_password ?? ''}
+                  onChange={e => setProvisionForm(f => ({ ...f, smtp_password: e.target.value }))}
+                />
+              </Fld>
+              <Fld label="From email" hint="Must be set if host is set">
+                <input
+                  className={inputCls}
+                  type="email"
+                  placeholder="noreply@school.edu.in"
+                  value={provisionForm.smtp_from_email ?? ''}
+                  onChange={e => setProvisionForm(f => ({ ...f, smtp_from_email: e.target.value }))}
+                />
+              </Fld>
+              <Fld label="Sender name">
+                <input
+                  className={inputCls}
+                  placeholder="Vasavi Vidyalaya Public School"
+                  value={provisionForm.smtp_sender_name ?? ''}
+                  onChange={e => setProvisionForm(f => ({ ...f, smtp_sender_name: e.target.value }))}
+                />
+              </Fld>
+              <label className="col-span-2 flex items-center gap-2 text-[12.5px] font-[550] text-[var(--ink-2)] max-md:col-span-1">
+                <input
+                  type="checkbox"
+                  checked={provisionForm.smtp_use_tls ?? true}
+                  onChange={e => setProvisionForm(f => ({ ...f, smtp_use_tls: e.target.checked }))}
+                />
+                Use TLS
+              </label>
+            </div>
+          </div>
+          )}
+
           {/* Footer */}
           <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-[var(--bd)] pt-[18px]">
             <span className="flex items-center gap-1.5 text-[11.5px] text-[var(--ink-2)]">
@@ -2105,7 +2184,7 @@ export default function SuperAdminSchoolsPage() {
             <div className="flex gap-2">
               {editSchool ? (
                 <button type="button"
-                  onClick={() => { setEditSchool(null); setAccAddOpen(false); setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' }); setEditFields({ ...EMPTY_EDIT_FIELDS }); setLogoFile(null); setLogoPreview(null); setSelectedColor(PALETTE_COLORS[0]!.hex); setProvisionError(null); }}
+                  onClick={() => { setEditSchool(null); setAccAddOpen(false); setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '', smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '', smtp_from_email: '', smtp_use_tls: true, smtp_sender_name: '' }); setEditFields({ ...EMPTY_EDIT_FIELDS }); setLogoFile(null); setLogoPreview(null); setSelectedColor(PALETTE_COLORS[0]!.hex); setProvisionError(null); }}
                   className="inline-flex h-9 items-center gap-1.5 rounded-[9px] border-0 bg-transparent px-3.5 text-[12.5px] font-[550] text-[var(--ink-1)] hover:bg-[var(--bg-2)]">
                   Cancel edit
                 </button>
@@ -2113,7 +2192,7 @@ export default function SuperAdminSchoolsPage() {
                 <>
                   <button type="button" onClick={() => {
                     setAccAddOpen(false);
-                    setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '' });
+                    setProvisionForm({ name: '', subdomain_url: '', state: '', board: 'OTHER', plan: 'trial', shard_region: '', storage_region: '', backup_retention: 30, sso_method: 'native', admin_username: '', admin_password: '', smtp_host: '', smtp_port: 587, smtp_username: '', smtp_password: '', smtp_from_email: '', smtp_use_tls: true, smtp_sender_name: '' });
                     setEditFields({ ...EMPTY_EDIT_FIELDS });
                     setLogoFile(null);
                     setLogoPreview(null);

@@ -218,11 +218,37 @@ class ChildDetailView(APIView):
         ).aggregate(total=Sum("point"))
         behaviour_points = beh["total"] or 0
 
+        # ── Guardians linked to this student — same shape/fallback logic as
+        #    apps.students.serializers.StudentSerializer.get_guardians() ──────
+        guardian_links = list(student.guardian_links.select_related("guardian").order_by("-is_primary", "id"))
+        if guardian_links:
+            guardians_data = [
+                {
+                    "id": link.guardian_id,
+                    "full_name": link.guardian.full_name,
+                    "relation": link.guardian.relation,
+                    "phone": link.guardian.phone,
+                    "email": link.guardian.email,
+                    "occupation": link.guardian.occupation,
+                    "is_primary": link.is_primary,
+                }
+                for link in guardian_links
+            ]
+        elif student.guardian_id:
+            g = student.guardian
+            guardians_data = [{
+                "id": g.id, "full_name": g.full_name, "relation": g.relation,
+                "phone": g.phone, "email": g.email, "occupation": g.occupation, "is_primary": True,
+            }]
+        else:
+            guardians_data = []
+
         return Response(
             {
                 "id": student.id,
                 "name": f"{student.first_name} {student.last_name}".strip(),
                 "first_name": student.first_name,
+                "middle_name": student.middle_name,
                 "last_name": student.last_name,
                 "admission_no": student.admission_no,
                 "roll_no": student.roll_no,
@@ -232,6 +258,7 @@ class ChildDetailView(APIView):
                 "section_id": student.current_section_id,
                 "photo_url": student.photo or None,
                 "gender": student.gender,
+                "custom_gender": student.custom_gender,
                 "date_of_birth": student.date_of_birth.isoformat() if student.date_of_birth else None,
                 "blood_group": student.blood_group,
                 "attendance": {
@@ -244,6 +271,67 @@ class ChildDetailView(APIView):
                 },
                 "recent_marks": marks_data,
                 "behaviour_points": behaviour_points,
+                # ── Onboarding-captured profile data (as recorded at admission) ──
+                "contact": {
+                    "phone": student.phone,
+                    "email": student.email,
+                    "emergency_contact_name": student.emergency_contact_name,
+                    "emergency_contact_phone": student.emergency_contact_phone,
+                },
+                "address": {
+                    "address_line": student.address_line,
+                    "landmark": student.landmark,
+                    "city": student.city,
+                    "district": student.district,
+                    "state": student.state,
+                    "pincode": student.pincode,
+                },
+                "background": {
+                    "mother_tongue": student.mother_tongue,
+                    "other_mother_tongue": student.other_mother_tongue,
+                    "religion": student.religion,
+                    "nationality": student.nationality,
+                    "other_nationality": student.other_nationality,
+                },
+                "admission": {
+                    "admission_type": student.admission_type,
+                    "previous_school_name": student.previous_school_name,
+                    "rte_certificate_no": student.rte_certificate_no,
+                    "stream": student.stream,
+                    "transport_modes": student.transport_modes,
+                    "transport_custom": student.transport_custom,
+                },
+                "identity_documents": {
+                    "apaar_id": student.apaar_id,
+                    "aadhaar_no": student.aadhaar_no,
+                    "pen": student.pen,
+                    "digilocker_mobile": student.digilocker_mobile,
+                    "abc_id": student.abc_id,
+                },
+                "physical": {
+                    "height_cm": student.height_cm,
+                    "weight_kg": student.weight_kg,
+                    "eye_colour": student.eye_colour,
+                    "hair_colour": student.hair_colour,
+                    "complexion": student.complexion,
+                    "build": student.build,
+                    "identity_marks": student.identity_marks,
+                },
+                "medical": {
+                    "vision": student.vision,
+                    "medical_conditions": student.medical_conditions,
+                    "allergies": student.allergies,
+                    "current_medications": student.current_medications,
+                    "treating_doctor": student.treating_doctor,
+                    "vaccinations": student.vaccinations,
+                    "medical_notes": student.medical_notes,
+                    "is_pwd": student.is_pwd,
+                    "disability_types": student.disability_types,
+                    "disability_percent": student.disability_percent,
+                    "disability_accommodations": student.disability_accommodations,
+                    "disability_notes": student.disability_notes,
+                },
+                "guardians": guardians_data,
             }
         )
 

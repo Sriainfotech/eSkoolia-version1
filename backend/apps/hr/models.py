@@ -109,16 +109,22 @@ class Staff(models.Model):
     GENDER_MALE = "male"
     GENDER_FEMALE = "female"
     GENDER_OTHER = "other"
+    GENDER_PREFER_NOT_TO_SAY = "prefer not to say"
     GENDER_CHOICES = [
         (GENDER_MALE, "Male"),
         (GENDER_FEMALE, "Female"),
         (GENDER_OTHER, "Other"),
+        (GENDER_PREFER_NOT_TO_SAY, "Prefer not to say"),
     ]
     MARITAL_SINGLE = "single"
     MARITAL_MARRIED = "married"
+    MARITAL_DIVORCED = "divorced"
+    MARITAL_WIDOWED = "widowed"
     MARITAL_CHOICES = [
         (MARITAL_SINGLE, "Single"),
         (MARITAL_MARRIED, "Married"),
+        (MARITAL_DIVORCED, "Divorced"),
+        (MARITAL_WIDOWED, "Widowed"),
     ]
     CONTRACT_PERMANENT = "permanent"
     CONTRACT_CONTRACT = "contract"
@@ -145,7 +151,7 @@ class Staff(models.Model):
     email = models.EmailField(blank=True)
     phone = models.CharField(max_length=32, blank=True)
     emergency_mobile = models.CharField(max_length=32, blank=True)
-    gender = models.CharField(max_length=10, choices=GENDER_CHOICES, blank=True)
+    gender = models.CharField(max_length=20, choices=GENDER_CHOICES, blank=True)
     marital_status = models.CharField(max_length=12, choices=MARITAL_CHOICES, blank=True)
     driving_license = models.CharField(max_length=80, blank=True)
     staff_photo = models.ImageField(upload_to="staff/photos/", blank=True)
@@ -185,9 +191,17 @@ class Staff(models.Model):
     )
     num_children = models.PositiveSmallIntegerField(default=0, blank=True, null=True)
     custom_field = models.JSONField(
-        default=dict, 
+        default=dict,
         blank=True,
-        help_text="JSON field for extensible data. Current supported fields: {'ifsc_code': 'string', 'allowance': 'decimal', 'deduction': 'decimal'}"
+        help_text=(
+            "JSON field for extensible data. Current supported fields: "
+            "{'ifsc_code': 'string', 'bank_city': 'string', 'bank_state': 'string', "
+            "'allowance': 'decimal', 'deduction': 'decimal', "
+            "'hra': 'decimal', 'da': 'decimal', 'travel_allowance': 'decimal', "
+            "'medical_allowance': 'decimal', 'special_allowance': 'decimal', "
+            "'custom_earnings': [{'label': 'string', 'amount': 'decimal'}], "
+            "'custom_deductions': [{'label': 'string', 'amount': 'decimal'}]}"
+        )
     )
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members")
     designation = models.ForeignKey(Designation, on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members")

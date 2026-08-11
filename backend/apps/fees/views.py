@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import csv
 from django.utils import timezone
 
-from .models import FeesGroup, FeesType, FeeAssignment, Payment, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule, PaymentReconciliation, DueInteraction
+from .models import FeesGroup, FeesType, FeeAssignment, Payment, TermSettings, FeeSchedule, ConcessionRule, LateFeeRule, PaymentReconciliation, DueInteraction, AuditEvent
 from .serializers import FeesGroupSerializer, FeesTypeSerializer, FeeAssignmentSerializer, PaymentSerializer, TermSettingsSerializer, FeeScheduleSerializer, ConcessionRuleSerializer, LateFeeRuleSerializer, PaymentReconciliationSerializer, DueInteractionSerializer
 from .services import FeeService, FeeServiceError
 from config.pagination import ApiPageNumberPagination
@@ -296,6 +296,88 @@ class FeeAssignmentSummaryAPIView(BaseFeeAPIView):
             "total_due": str(due_total),
         }
         return Response(data)
+
+class FeesHomeAPIView(BaseFeeAPIView):
+    """Fees Command Center home dashboard: Task Queue + Audit Trail.
+
+    Response shape must match the frontend's FeesHomeData type exactly
+    (frontend/lib/fees-api.ts) — {tasks: [...], audit_trail: [...]}.
+    The stat cards and Live Payment Feed on the same page are populated by
+    separate, already-existing endpoints (assignments/summary/, payments/).
+    """
+
+    def get(self, request):
+        school = request.user.school
+        return Response({
+            "tasks": self._build_tasks(school),
+            "audit_trail": self._build_audit_trail(school),
+        })
+
+    def _build_tasks(self, school):
+        today = timezone.localdate()
+        tasks = []
+
+        overdue_assignments = [
+            a for a in FeeAssignment.objects.filter(
+                academic_year__school=school, due_date__lt=today
+            ).prefetch_related("payments")
+            if a.status != "paid"
+        ]
+        if overdue_assignments:
+            count = len(overdue_assignments)
+            tasks.append({
+                "id": "overdue-dues",
+                "color": "red",
+                "title": f"{count} student{'s' if count != 1 else ''} with overdue fees",
+                "desc": "Fee assignments past their due date with an outstanding balance.",
+                "buttons": [
+                    {"label": "View Dues", "variant": "primary", "toast": "Opening dues & reminders…", "href": "/fees/dues-reminders"},
+                ],
+            })
+
+        pending_statuses = ["pending_verification", "pending_reconciliation", "pending_clearance"]
+        pending_count = Payment.objects.filter(
+            assignment__academic_year__school=school, status__in=pending_statuses
+        ).count()
+        if pending_count:
+            tasks.append({
+                "id": "pending-payments",
+                "color": "amber",
+                "title": f"{pending_count} payment{'s' if pending_count != 1 else ''} awaiting verification",
+                "desc": "Online, bank, and cheque payments not yet confirmed as posted.",
+                "buttons": [
+                    {"label": "Review Payments", "variant": "outline", "toast": "Opening recent payments…", "href": "/fees/collection"},
+                ],
+            })
+
+        return tasks
+
+    def _build_audit_trail(self, school):
+        events = (
+            AuditEvent.objects.filter(user__school=school)
+            .select_related("user")
+            .order_by("-timestamp")[:20]
+        )
+        event_colors = {"fee": "purple", "payment": "green"}
+        trail = []
+        for event in events:
+            first = (event.user.first_name or "").strip()
+            last = (event.user.last_name or "").strip()
+            initials = (first[:1] + last[:1]) or (event.user.username or "??")[:2]
+            prefix = event.event_type.split(".", 1)[0]
+            label = event.event_type.replace(".", " ").replace("_", " ").title()
+            content_object = event.content_object
+            desc = event.reason or (str(content_object) if content_object else "")
+            trail.append({
+                "id": str(event.id),
+                "initials": initials.upper(),
+                "event": label,
+                "desc": desc,
+                "date": event.timestamp.strftime("%d %b %Y, %I:%M %p"),
+                "bg": event_colors.get(prefix, "gray"),
+            })
+        return trail
+
 
 class PaymentReceiptAPIView(BaseFeeAPIView):
     def get(self, request, pk):

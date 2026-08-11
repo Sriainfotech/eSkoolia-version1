@@ -1,116 +1,146 @@
-// "use client";
-// 
-// import Link from "next/link";
-// 
-// const reportModules = [
-//   {
-//     group: "Student Reports",
-//     color: "#3b82f6",
-//     icon: "👤",
-//     items: [
-//       { name: "Student List Report", route: "/reports/student-list", desc: "Filter students by class, section, gender" },
-//       { name: "Student Attendance Report", route: "/reports/student-attendance", desc: "Attendance by date range, class, section" },
-//     ],
-//   },
-//   {
-//     group: "Examination Reports",
-//     color: "#8b5cf6",
-//     icon: "📝",
-//     items: [
-//       { name: "Exam Result Report", route: "/reports/exam-result", desc: "Marks per student per subject" },
-//       { name: "Merit List Report", route: "/reports/exam-merit", desc: "Students ranked by total marks" },
-//     ],
-//   },
-//   {
-//     group: "Fees Reports",
-//     color: "#10b981",
-//     icon: "💰",
-//     items: [
-//       { name: "Fees Collection Report", route: "/reports/fees-collection", desc: "Payment records by date range and class" },
-//       { name: "Fees Due Report", route: "/reports/fees-due", desc: "Unpaid and partial fee assignments" },
-//     ],
-//   },
-//   {
-//     group: "Accounts Reports",
-//     color: "#f59e0b",
-//     icon: "📊",
-//     items: [
-//       { name: "Ledger Report", route: "/reports/accounts-ledger", desc: "Income and expense entries by date range" },
-//     ],
-//   },
-//   {
-//     group: "HR Reports",
-//     color: "#ef4444",
-//     icon: "👥",
-//     items: [
-//       { name: "Staff List Report", route: "/reports/staff-list", desc: "Staff filtered by department, gender, status" },
-//       { name: "Staff Attendance Report", route: "/reports/staff-attendance", desc: "Staff attendance by date range" },
-//     ],
-//   },
-//   {
-//     group: "Library Reports",
-//     color: "#06b6d4",
-//     icon: "📚",
-//     items: [
-//       { name: "Book Issue Report", route: "/reports/library-issue", desc: "Book issues and returns by date and status" },
-//     ],
-//   },
-//   {
-//     group: "Transport Reports",
-//     color: "#6366f1",
-//     icon: "🚌",
-//     items: [
-//       { name: "Student Transport Report", route: "/reports/transport", desc: "Students assigned to routes and vehicles" },
-//     ],
-//   },
-//   {
-//     group: "Inventory Reports",
-//     color: "#84cc16",
-//     icon: "📦",
-//     items: [
-//       { name: "Stock Report", route: "/reports/inventory-stock", desc: "Item stock levels with low-stock alerts" },
-//     ],
-//   },
-// ];
-// 
-// export default function ReportsHubPage() {
-//   return (
-//     <div>
-//       {/* Breadcrumb */}
-//       <section style={{ background: "#fff", padding: "12px 20px", borderRadius: 8, marginBottom: 20, boxShadow: "0 1px 3px rgba(0,0,0,.08)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-//         <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Reports</h1>
-//         <div style={{ fontSize: 13, color: "#6b7280", display: "flex", gap: 6 }}>
-//           <Link href="/dashboard" style={{ color: "#6b7280", textDecoration: "none" }}>Dashboard</Link>
-//           <span>/</span>
-//           <span style={{ color: "var(--primary, #3b82f6)" }}>Reports</span>
-//         </div>
-//       </section>
-// 
-//       {/* Module Cards Grid */}
-//       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
-//         {reportModules.map((mod) => (
-//           <div key={mod.group} style={{ background: "#fff", borderRadius: 10, boxShadow: "0 1px 4px rgba(0,0,0,.08)", overflow: "hidden" }}>
-//             {/* Group Header */}
-//             <div style={{ background: mod.color, padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}>
-//               <span style={{ fontSize: 22 }}>{mod.icon}</span>
-//               <h3 style={{ margin: 0, color: "#fff", fontSize: 15, fontWeight: 600 }}>{mod.group}</h3>
-//             </div>
-//             {/* Links */}
-//             <div style={{ padding: "8px 0" }}>
-//               {mod.items.map((item) => (
-//                 <Link key={item.route} href={item.route} style={{ display: "block", padding: "10px 16px", textDecoration: "none", borderBottom: "1px solid #f3f4f6" }}>
-//                   <div style={{ fontSize: 14, fontWeight: 500, color: "#111827" }}>{item.name}</div>
-//                   <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 2 }}>{item.desc}</div>
-//                 </Link>
-//               ))}
-//             </div>
-//           </div>
-//         ))}
-//       </div>
-//     </div>
-//   );
-// }
+"use client";
 
-import ComingSoon from '@/components/shared/ComingSoon';
+import Link from "next/link";
+import {
+  Users,
+  GraduationCap,
+  HandCoins,
+  Landmark,
+  BookOpen,
+  Bus,
+  Package,
+  AlertTriangle,
+  Briefcase,
+  BarChart2,
+  Building2,
+  ClipboardList,
+  type LucideIcon,
+} from "lucide-react";
+import { getGroupedReportDefinitions } from "@/lib/reports-config";
 
-export default function Page() { return <ComingSoon />; }
+const MODULE_META: Record<string, { label: string; icon: LucideIcon; color: string }> = {
+  students: { label: "Student Reports", icon: Users, color: "#3B82F6" },
+  fees: { label: "Fees Reports", icon: HandCoins, color: "#10B981" },
+  accounts: { label: "Accounts Reports", icon: Landmark, color: "#F59E0B" },
+  academics: { label: "Academics Reports", icon: GraduationCap, color: "#8B5CF6" },
+  academic: { label: "Academic Reports", icon: GraduationCap, color: "#8B5CF6" },
+  examination: { label: "Examination Reports", icon: ClipboardList, color: "#EC4899" },
+  hr: { label: "HR Reports", icon: Briefcase, color: "#EF4444" },
+  library: { label: "Library Reports", icon: BookOpen, color: "#06B6D4" },
+  transport: { label: "Transport Reports", icon: Bus, color: "#6366F1" },
+  dormitory: { label: "Dormitory Reports", icon: Building2, color: "#0EA5E9" },
+  inventory: { label: "Inventory Reports", icon: Package, color: "#84CC16" },
+  behaviour: { label: "Behaviour Reports", icon: AlertTriangle, color: "#DC2626" },
+};
+
+function moduleMeta(module: string) {
+  return (
+    MODULE_META[module] ?? {
+      label: `${module.charAt(0).toUpperCase()}${module.slice(1)} Reports`,
+      icon: BarChart2,
+      color: "#6B7280",
+    }
+  );
+}
+
+export default function ReportsHubPage() {
+  const groups = getGroupedReportDefinitions();
+  const modules = Object.keys(groups).sort();
+
+  return (
+    <div>
+      <section
+        style={{
+          background: "var(--bg-1)",
+          border: "1px solid var(--bd)",
+          borderRadius: 14,
+          padding: "18px 22px",
+          marginBottom: 20,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <div>
+          <h1 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: "var(--ink-1)" }}>Reports</h1>
+          <p style={{ margin: "4px 0 0", fontSize: 13, color: "var(--ink-3)" }}>
+            {Object.values(groups).reduce((total, defs) => total + defs.length, 0)} reports across{" "}
+            {modules.length} modules
+          </p>
+        </div>
+      </section>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+          gap: 20,
+        }}
+      >
+        {modules.map((module) => {
+          const meta = moduleMeta(module);
+          const Icon = meta.icon;
+          return (
+            <div
+              key={module}
+              style={{
+                background: "var(--bg-1)",
+                border: "1px solid var(--bd)",
+                borderRadius: 14,
+                overflow: "hidden",
+                boxShadow: "var(--sh-1, none)",
+              }}
+            >
+              <div
+                style={{
+                  padding: "14px 16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  borderBottom: "1px solid var(--bd)",
+                }}
+              >
+                <span
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 32,
+                    height: 32,
+                    borderRadius: 9,
+                    background: `${meta.color}1A`,
+                    color: meta.color,
+                    flexShrink: 0,
+                  }}
+                >
+                  <Icon size={16} />
+                </span>
+                <h3 style={{ margin: 0, fontSize: 14.5, fontWeight: 650, color: "var(--ink-1)" }}>
+                  {meta.label}
+                </h3>
+              </div>
+              <div style={{ padding: "6px 0" }}>
+                {groups[module]!.map((definition) => (
+                  <Link
+                    key={definition.key}
+                    href={`/reports/${definition.key}`}
+                    style={{
+                      display: "block",
+                      padding: "9px 16px",
+                      textDecoration: "none",
+                      borderBottom: "1px solid var(--bd)",
+                    }}
+                  >
+                    <div style={{ fontSize: 13.5, fontWeight: 550, color: "var(--ink-1)" }}>
+                      {definition.title}
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

@@ -1342,11 +1342,11 @@ class StaffSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({field: f"Please enter a valid {label.lower()} name."})
 
         _validate_payroll_amount(
-            self.initial_data.get("hra", ""),
+            self.initial_data.get("hra", self.initial_data.get("hra_input", "")),
             "hra", "HRA",
         )
         _validate_payroll_amount(
-            self.initial_data.get("da", ""),
+            self.initial_data.get("da", self.initial_data.get("da_input", "")),
             "da", "DA",
         )
         _validate_payroll_amount(
@@ -1371,7 +1371,7 @@ class StaffSerializer(serializers.ModelSerializer):
 
         _basic_val = _to_decimal(basic_salary)
         if _basic_val > 0:
-            _hra_raw = self.initial_data.get("hra", "") or ""
+            _hra_raw = self.initial_data.get("hra", self.initial_data.get("hra_input", "")) or ""
             _hra_val = _to_decimal(_hra_raw) if str(_hra_raw).strip() else Decimal("0")
             _hra_limit = (_basic_val * Decimal("0.50")).quantize(Decimal("1"), rounding="ROUND_HALF_UP")
             if _hra_val > _hra_limit:
@@ -1379,7 +1379,7 @@ class StaffSerializer(serializers.ModelSerializer):
                     "hra": f"HRA cannot exceed 50% of Basic Salary (max ₹{_hra_limit:,})."
                 })
 
-            _da_raw = self.initial_data.get("da", "") or ""
+            _da_raw = self.initial_data.get("da", self.initial_data.get("da_input", "")) or ""
             _da_val = _to_decimal(_da_raw) if str(_da_raw).strip() else Decimal("0")
             _da_limit = (_basic_val * Decimal("0.50")).quantize(Decimal("1"), rounding="ROUND_HALF_UP")
             if _da_val > _da_limit:
@@ -1414,8 +1414,10 @@ class StaffSerializer(serializers.ModelSerializer):
                     "special_allowance": f"Special Allowance cannot exceed 100% of Basic Salary (max ₹{_sp_limit:,})."
                 })
 
-        # Custom allowance rows: expected as JSON array [{"label": "...", "amount": "..."}, ...]
-        _custom_allowances_raw = self.initial_data.get("custom_allowances", [])
+        # Custom allowance rows: expected as JSON array [{"label": "...", "amount": "..."}, ...].
+        # The onboarding wizard sends these as "custom_earnings" — "custom_allowances" is
+        # kept as the primary key for any other caller that already uses that name.
+        _custom_allowances_raw = self.initial_data.get("custom_allowances", self.initial_data.get("custom_earnings", []))
         if isinstance(_custom_allowances_raw, str):
             try:
                 import json as _json
@@ -1457,6 +1459,22 @@ class StaffSerializer(serializers.ModelSerializer):
                     f"custom_deductions[{_idx}].amount", "Deduction",
                     required=True,
                 )
+
+        # ── Persist payroll components into custom_field ────────────────────
+        # HRA/DA/Travel/Medical/Special allowances and the custom earning/deduction
+        # rows above were validated but never actually saved anywhere — every value
+        # entered during onboarding was silently discarded after submit, and the
+        # Payroll step showed blank when re-opened even though the wizard's own CTC
+        # preview clearly used them. Store them alongside the other extensible
+        # payroll data already kept in custom_field (ifsc_code, allowance, etc.).
+        _cf_mut["hra"] = str(_hra_val) if str(_hra_raw).strip() else ""
+        _cf_mut["da"] = str(_da_val) if str(_da_raw).strip() else ""
+        _cf_mut["travel_allowance"] = str(_ta_val) if str(_ta_raw).strip() else ""
+        _cf_mut["medical_allowance"] = str(_med_val) if str(_med_raw).strip() else ""
+        _cf_mut["special_allowance"] = str(_sp_val) if str(_sp_raw).strip() else ""
+        _cf_mut["custom_earnings"] = _custom_allowances_raw if isinstance(_custom_allowances_raw, list) else []
+        _cf_mut["custom_deductions"] = _custom_deductions_raw if isinstance(_custom_deductions_raw, list) else []
+        attrs["custom_field"] = _cf_mut
 
         if epf_no and not re.fullmatch(r"[A-Za-z0-9\-/]{4,30}", epf_no):
             raise serializers.ValidationError({"epf_no": "Enter a valid EPF number."})

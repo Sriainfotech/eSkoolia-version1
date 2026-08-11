@@ -82,6 +82,23 @@ type StepDef = { num: number; label: string; sub: string };
 const ALL_STEPS: StepDef[] = STEP_GROUPS.flatMap((g) => g.steps as StepDef[]);
 const TOTAL     = ALL_STEPS.length;
 
+// Maps backend field names (from a 400 response's `field_errors`, e.g. a
+// server-side uniqueness check like "bank account already registered") to the
+// wizard step that owns that field, so a submit-time API error can jump the
+// user straight to it instead of leaving them stuck on Review with no clue
+// which of the 10 steps needs fixing.
+const BACKEND_FIELD_STEP_MAP: Record<string, number> = {
+  first_name: 1, last_name: 1, middle_name: 1, gender: 1, date_of_birth: 1,
+  nationality: 1, staff_photo: 1, staff_no: 1, status: 1,
+  department: 2, designation: 2, role: 2, contract_type: 2, join_date: 2, employment_type: 2,
+  phone: 3, mobile: 3, email: 3, personal_email: 3, official_email: 3, whatsapp: 3,
+  current_address: 3, permanent_address: 3, city: 3, state: 3, current_pin: 3, preferred_communication: 3,
+  emergency_name: 4, emergency_relation: 4, emergency_phone: 4, emergency_mobile: 4, spouse_parent_name: 4,
+  nin: 5, aadhaar: 5, pan: 5, passport_no: 5, driving_licence: 5, uan: 5, esi_no: 5, pt_registration: 5,
+  bank_account_no: 5, bank_name: 5, bank_branch: 5, bank_account_name: 5, ifsc_code: 5,
+  basic_salary: 8, hra_input: 8, da_input: 8,
+};
+
 // --- Form data type ---
 type FormData = Partial<
   Staff & {
@@ -1568,7 +1585,7 @@ function StepFamily({ f, set, showErrors, validatorRef }: {
 type IfscLookupStatus = "idle" | "loading" | "found" | "error";
 type IfscApiResponse = { BANK?: string; BRANCH?: string; CENTRE?: string; DISTRICT?: string; STATE?: string };
 
-function StepGovId({ f, set, showErrors }: { f: FormData; set: (k: string, v: string) => void; showErrors: boolean }) {
+function StepGovId({ f, set, showErrors, apiFieldErrors }: { f: FormData; set: (k: string, v: string) => void; showErrors: boolean; apiFieldErrors?: Record<string, string> }) {
   const errTxt = (msg: string | null) =>
     msg ? <p className="mt-1 text-[11px] text-[var(--red)] font-[500]">{msg}</p> : null;
 
@@ -1633,7 +1650,11 @@ function StepGovId({ f, set, showErrors }: { f: FormData; set: (k: string, v: st
   const uanErr      = uanRaw      && !/^\d{12}$/.test(uanRaw)           ? "Please enter a valid 12-digit UAN number." : null;
   const esiErr      = esiRaw      && !/^\d{17}$/.test(esiRaw)           ? "Please enter a valid ESI number." : null;
   const ptErr       = ptRaw       && !/^[A-Z0-9]{8,20}$/i.test(ptRaw)  ? "Please enter a valid PT Registration number." : null;
-  const accNoErr    = accNoRaw    && !/^\d{9,18}$/.test(accNoRaw)       ? "Please enter a valid bank account number." : null;
+  const accNoErr    = apiFieldErrors?.bank_account_no
+    ? apiFieldErrors.bank_account_no
+    : !accNoRaw && showErrors
+      ? "Account Number is required."
+      : accNoRaw && !/^\d{9,18}$/.test(accNoRaw) ? "Please enter a valid bank account number." : null;
   const ifscFmtErr  = ifscRaw     && !IFSC_FMT_RE.test(ifscRaw)        ? "Please enter a valid IFSC code." : null;
 
   // ── Auto-populated read-only field ────────────────────────────────────────
@@ -1784,7 +1805,11 @@ function StepGovId({ f, set, showErrors }: { f: FormData; set: (k: string, v: st
                 Bank Name <span className="text-[var(--red)]">*</span>
               </label>
               <HrInput value={f.bank_name ?? ""} onChange={(e) => set("bank_name", e.target.value)} placeholder="Enter bank name" />
-              {ifscStatus === "error" && <p className="text-[11px] text-[var(--muted)]">IFSC lookup unavailable — enter bank details manually.</p>}
+              {apiFieldErrors?.bank_name
+                ? <p className="mt-1 text-[11px] text-[var(--red)] font-[500]">{apiFieldErrors.bank_name}</p>
+                : !((f.bank_name ?? "").trim()) && showErrors
+                  ? <p className="mt-1 text-[11px] text-[var(--red)] font-[500]">Bank Name is required.</p>
+                  : ifscStatus === "error" && <p className="text-[11px] text-[var(--muted)]">IFSC lookup unavailable — enter bank details manually.</p>}
             </div>
           )}
           {bankLocked ? (
@@ -1817,6 +1842,8 @@ function StepGovId({ f, set, showErrors }: { f: FormData; set: (k: string, v: st
             />
             {(() => {
               const v = (f.bank_account_name ?? "").trim();
+              if (apiFieldErrors?.bank_account_name) return <p className="mt-1 text-[11px] text-[var(--red)] font-[500]">{apiFieldErrors.bank_account_name}</p>;
+              if (!v && showErrors) return <p className="mt-1 text-[11px] text-[var(--red)] font-[500]">Account Holder Name is required.</p>;
               return v && !isValidBankAccountName(v)
                 ? <p className="mt-1 text-[11px] text-[var(--red)] font-[500]">{BANK_ACCOUNT_NAME_ERR}</p>
                 : null;
@@ -3499,6 +3526,11 @@ export default function HrOnboardPage(props: any) {
   const [cameraStream,         setCameraStream]         = useState<MediaStream | null>(null);
   const [cameraErr,            setCameraErr]            = useState<string | null>(null);
   const [showErrors,           setShowErrors]           = useState(false);
+  // Server-side-only errors (e.g. "this bank account number is already
+  // registered for another staff member") that have no client-side check to
+  // mirror, keyed by backend field name. Rendered inline on the owning field
+  // once the user is routed to that step; cleared as soon as they edit it.
+  const [apiFieldErrors,       setApiFieldErrors]       = useState<Record<string, string>>({});
   const [highestStep,          setHighestStep]          = useState(1);
   const [editingStaffId,       setEditingStaffId]       = useState<number | null>(null);
   const [isLoadingStaff,       setIsLoadingStaff]       = useState(false);
@@ -3639,6 +3671,33 @@ export default function HrOnboardPage(props: any) {
                 // Blood group: map from backend 'blood_group' to frontend 'blood_group_input'
                 if ((json as any).blood_group && !mapped.blood_group_input) mapped.blood_group_input = String((json as any).blood_group).trim();
 
+                // Payroll: map backend 'basic_salary' (a Decimal, e.g. 37000.00) to the
+                // frontend's '_input' string field the Payroll step actually reads —
+                // without this the field silently renders blank on edit even though the
+                // value is saved, and re-submitting without noticing wipes it to 0.
+                if ((json as any).basic_salary !== undefined && (json as any).basic_salary !== null && !mapped.basic_salary_input) {
+                  const salaryNum = Number((json as any).basic_salary);
+                  if (!Number.isNaN(salaryNum)) mapped.basic_salary_input = String(salaryNum);
+                }
+                // Payroll components (HRA/DA/allowances) and bank lookup extras
+                // (IFSC/city/state) all live in custom_field on the backend but the
+                // Payroll/Government-identity steps read flat '_input'-suffixed (or
+                // plain) form keys — same class of gap as basic_salary_input above.
+                if (!mapped.hra_input && json?.custom_field?.hra) mapped.hra_input = String(json.custom_field.hra);
+                if (!mapped.da_input && json?.custom_field?.da) mapped.da_input = String(json.custom_field.da);
+                if (!mapped.travel_allowance_input && json?.custom_field?.travel_allowance) mapped.travel_allowance_input = String(json.custom_field.travel_allowance);
+                if (!mapped.medical_allowance_input && json?.custom_field?.medical_allowance) mapped.medical_allowance_input = String(json.custom_field.medical_allowance);
+                if (!mapped.special_allowance_input && json?.custom_field?.special_allowance) mapped.special_allowance_input = String(json.custom_field.special_allowance);
+                if (!mapped.custom_earnings && Array.isArray(json?.custom_field?.custom_earnings) && json.custom_field.custom_earnings.length > 0) {
+                  mapped.custom_earnings = JSON.stringify(json.custom_field.custom_earnings);
+                }
+                if (!mapped.custom_deductions && Array.isArray(json?.custom_field?.custom_deductions) && json.custom_field.custom_deductions.length > 0) {
+                  mapped.custom_deductions = JSON.stringify(json.custom_field.custom_deductions);
+                }
+                if (!mapped.ifsc_code && json?.custom_field?.ifsc_code) mapped.ifsc_code = String(json.custom_field.ifsc_code);
+                if (!mapped.bank_city && json?.custom_field?.bank_city) mapped.bank_city = String(json.custom_field.bank_city);
+                if (!mapped.bank_state && json?.custom_field?.bank_state) mapped.bank_state = String(json.custom_field.bank_state);
+
                 // Mother tongue, religion: map directly
                 if ((json as any).mother_tongue && !mapped.mother_tongue) mapped.mother_tongue = String((json as any).mother_tongue).trim();
                 if ((json as any).religion && !mapped.religion) mapped.religion = String((json as any).religion).trim();
@@ -3736,7 +3795,15 @@ export default function HrOnboardPage(props: any) {
   const staffCount   = staffData?.count ?? 0;
   const draftList    = draftsData?.results ?? [];
 
-  const setField = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const setField = (k: string, v: string) => {
+    setForm((f) => ({ ...f, [k]: v }));
+    setApiFieldErrors((prev) => {
+      if (!(k in prev)) return prev;
+      const next = { ...prev };
+      delete next[k];
+      return next;
+    });
+  };
 
   const { data: staffDocumentsData } = useStaffDocuments(Number(editingStaffId ?? 0));
 
@@ -3865,139 +3932,186 @@ export default function HrOnboardPage(props: any) {
     setStep((s) => Math.min(s + 1, TOTAL));
   };
 
-  const goNext = () => {
-    if (step === 1) {
+  /**
+   * Validates step `n`'s required fields (same rules the "Next" button has always
+   * enforced), surfacing a toast + inline highlighting via `showErrors` on failure.
+   * Pulled out of `goNext` so both the Next button and jumping via the sidebar nav
+   * (`attemptNavigate`) — and the final Submit safety net — share one source of truth
+   * instead of the sidebar silently skipping validation the Next button enforces.
+   * Returns true when the step is NOT complete (guard fails, caller should stop).
+   */
+  const stepGuardFails = (n: number): boolean => {
+    if (n === 1) {
       const dob = form.date_of_birth ?? "";
       if (dob && dob >= todayDate) {
         setShowErrors(true);
         toast("Date of birth cannot be today or a future date.", "error");
-        return;
+        return true;
       }
       if (dob && dob > maxDobDate) {
         setShowErrors(true);
         toast("Staff age must be at least 18 years.", "error");
-        return;
+        return true;
       }
       if (dob && dob < minDobDate) {
         setShowErrors(true);
         toast("Please enter a valid date of birth. Age cannot exceed 70 years.", "error");
-        return;
+        return true;
       }
     }
-    if (step === 2) {
+    if (n === 2) {
       const joining = form.joining_date ?? "";
       const dob = form.date_of_birth ?? "";
       if (joining && joining > todayDate) {
         setShowErrors(true);
         toast("Joining date cannot be a future date.", "error");
-        return;
+        return true;
       }
       if (joining && dob && joining <= dob) {
         setShowErrors(true);
         toast("Joining date cannot be earlier than date of birth.", "error");
-        return;
+        return true;
       }
       if (joining && dob && joining < addYears(dob, 18)) {
         setShowErrors(true);
         toast("Staff must be at least 18 years old at the time of joining.", "error");
-        return;
+        return true;
       }
     }
-    if (step === 3) {
+    if (n === 3) {
       const mob = (form.mobile ?? "").trim();
-      if (mob && !/^\d+$/.test(mob)) { setShowErrors(true); toast("Enter a valid mobile number.", "error"); return; }
-      if (mob && mob.length < 10)    { setShowErrors(true); toast("Enter a valid mobile number.", "error"); return; }
+      if (mob && !/^\d+$/.test(mob)) { setShowErrors(true); toast("Enter a valid mobile number.", "error"); return true; }
+      if (mob && mob.length < 10)    { setShowErrors(true); toast("Enter a valid mobile number.", "error"); return true; }
       const wa  = (form.whatsapp ?? "").trim();
       if (wa && (!/^\d+$/.test(wa) || wa.replace(/\D/g,"").length < 10)) {
-        setShowErrors(true); toast("Enter a valid WhatsApp number.", "error"); return;
+        setShowErrors(true); toast("Enter a valid WhatsApp number.", "error"); return true;
       }
       const pe = (form.personal_email ?? "").trim();
-      if (pe && !isValidEmail(pe)) { setShowErrors(true); toast("Enter a valid email address.", "error"); return; }
+      if (pe && !isValidEmail(pe)) { setShowErrors(true); toast("Enter a valid email address.", "error"); return true; }
     }
-    if (step === 4) {
+    if (n === 4) {
       const ecName   = (form.emergency_name     ?? "").trim();
       const ecRel    = (form.emergency_relation  ?? "").trim();
       const ecMobile = (form.emergency_phone     ?? "").trim();
       if (!ecName || !ecRel || !ecMobile) {
         setShowErrors(true);
         toast("Please fill in required emergency contact fields (name, relationship, mobile).", "error");
-        return;
+        return true;
       }
       if (!isValidPersonName(ecName)) {
         setShowErrors(true);
         toast(PERSON_NAME_ERR, "error");
-        return;
+        return true;
       }
       if (!isValidIndianMobile(ecMobile.replace(/\D/g, ""))) {
         setShowErrors(true);
         toast("Enter a valid 10-digit mobile number starting with 6, 7, 8, or 9.", "error");
-        return;
+        return true;
       }
       if (form.marital_status === "Married") {
         const spouse = (form.spouse_parent_name ?? "").trim();
         if (!spouse) {
           setShowErrors(true);
           toast("Spouse name is required for married staff.", "error");
-          return;
+          return true;
         }
         if (!isValidPersonName(spouse)) {
           setShowErrors(true);
           toast(PERSON_NAME_ERR, "error");
-          return;
+          return true;
         }
       }
       const nomErr = nomValidatorRef.current();
       if (nomErr) {
         setShowErrors(true);
         toast(nomErr, "error");
-        return;
+        return true;
       }
     }
-    if (step === 6) {
+    if (n === 5) {
+      const missing: string[] = [];
+      if (!(form.bank_account_no ?? "").trim())   missing.push("Account Number");
+      if (!(form.bank_name ?? "").trim())         missing.push("Bank Name");
+      if (!(form.bank_account_name ?? "").trim()) missing.push("Account Holder Name");
+      if (missing.length > 0) {
+        setShowErrors(true);
+        toast(`Please fill in required bank details: ${missing.join(", ")}.`, "error");
+        return true;
+      }
+      const accNo = (form.bank_account_no ?? "").trim();
+      if (accNo && !/^\d{9,18}$/.test(accNo)) {
+        setShowErrors(true);
+        toast("Please enter a valid bank account number.", "error");
+        return true;
+      }
+      const holder = (form.bank_account_name ?? "").trim();
+      if (holder && !isValidBankAccountName(holder)) {
+        setShowErrors(true);
+        toast(BANK_ACCOUNT_NAME_ERR, "error");
+        return true;
+      }
+    }
+    if (n === 6) {
       const dateErr = prevDateValidatorRef.current();
       if (dateErr) {
         setShowErrors(true);
         toast(dateErr, "error");
-        return;
+        return true;
       }
     }
-    if (step === 7) {
+    if (n === 7) {
       const medErr = medValidatorRef.current();
       if (medErr) {
         setShowErrors(true);
         toast(medErr, "error");
-        return;
+        return true;
       }
     }
-    if (step === 8) {
+    if (n === 8) {
       const payErr = payrollValidatorRef.current();
       if (payErr) {
         setShowErrors(true);
         toast(payErr, "error");
-        return;
+        return true;
       }
     }
-    if (step === 9) {
+    if (n === 9) {
       const docErr = docValidatorRef.current();
       if (docErr) {
         setShowErrors(true);
         toast(docErr, "error");
-        return;
+        return true;
       }
     }
-    if (step <= 3 && !isStepComplete(step, form, todayDate, maxDobDate, minDobDate, highestStep)) {
+    if (n <= 3 && !isStepComplete(n, form, todayDate, maxDobDate, minDobDate, highestStep)) {
       setShowErrors(true);
       // Give a specific message when inactive status is the only blocker
-      if (step === 1 && form.status === "inactive" && step1Missing({ ...form, status: "active" }).size === 0) {
+      if (n === 1 && form.status === "inactive" && step1Missing({ ...form, status: "active" }).size === 0) {
         toast("Inactive staff cannot continue onboarding. Change status to Active.", "error");
       } else {
         toast("Please fill in all required fields before continuing.", "error");
       }
-      return;
+      return true;
     }
+    return false;
+  };
+
+  const goNext = () => {
+    if (stepGuardFails(step)) return;
     advanceStep();
   };
   const goPrev = () => { setShowErrors(false); setStep((s) => Math.max(s - 1, 1)); };
+
+  /**
+   * Jump directly to step `n` via the sidebar. Forward jumps must first clear the
+   * step being left — the same rule "Next" already enforces — so a required field
+   * can no longer be skipped by clicking ahead in the nav instead of clicking Next.
+   * Jumping backward (or re-clicking the current step) stays unrestricted.
+   */
+  const attemptNavigate = (n: number) => {
+    if (n > step && stepGuardFails(step)) return;
+    navigateTo(n);
+  };
 
   const currentStep = ALL_STEPS.find((s: StepDef) => s.num === step) ?? ALL_STEPS[0];
   const progress    = Math.round((step / TOTAL) * 100);
@@ -4223,22 +4337,27 @@ export default function HrOnboardPage(props: any) {
   const handleSubmit = async () => {
     // Primary check for the fields every wizard entry point reaches (name/department/etc).
     // These extra checks close the gap for later-step required fields (photo, bank, salary)
-    // that a resumed draft or out-of-order step navigation could otherwise skip past —
-    // previously such a submit fell straight through to the backend and surfaced only as
-    // an unlabeled raw error.
-    const missingLabels: string[] = [];
-    if (!form.first_name) missingLabels.push("First Name");
-    if (!form.last_name) missingLabels.push("Last Name");
-    if (!form.department) missingLabels.push("Department");
-    if (!form.designation) missingLabels.push("Designation");
-    if (!form.joining_date) missingLabels.push("Joining Date");
-    if (!editingStaffId && !photoFile) missingLabels.push("Staff Photo");
-    if (!form.bank_account_name?.trim()) missingLabels.push("Bank Account Holder Name");
-    if (!form.bank_account_no?.trim()) missingLabels.push("Bank Account Number");
-    if (!form.bank_name?.trim()) missingLabels.push("Bank Name");
-    if (!form.basic_salary_input?.trim()) missingLabels.push("Basic Salary");
-    if (missingLabels.length > 0) {
-      toast(`Fill in required fields: ${missingLabels.join(", ")}`, "error");
+    // that a resumed draft could otherwise skip past — previously a missing field here only
+    // surfaced as a toast, leaving the user to hunt across 10 steps for what to fix. Now it
+    // jumps straight to the earliest incomplete step and highlights it, same as `goNext`.
+    const missing: Array<{ label: string; step: number }> = [];
+    if (!form.first_name) missing.push({ label: "First Name", step: 1 });
+    if (!form.last_name) missing.push({ label: "Last Name", step: 1 });
+    if (!editingStaffId && !photoFile) missing.push({ label: "Staff Photo", step: 1 });
+    if (!form.department) missing.push({ label: "Department", step: 2 });
+    if (!form.designation) missing.push({ label: "Designation", step: 2 });
+    if (!form.joining_date) missing.push({ label: "Joining Date", step: 2 });
+    if (!form.bank_account_name?.trim()) missing.push({ label: "Bank Account Holder Name", step: 5 });
+    if (!form.bank_account_no?.trim()) missing.push({ label: "Bank Account Number", step: 5 });
+    if (!form.bank_name?.trim()) missing.push({ label: "Bank Name", step: 5 });
+    if (!form.basic_salary_input?.trim()) missing.push({ label: "Basic Salary", step: 8 });
+    if (missing.length > 0) {
+      const targetStep = missing.reduce((min, m) => Math.min(min, m.step), TOTAL);
+      const labelsForStep = missing.filter((m) => m.step === targetStep).map((m) => m.label);
+      setHighestStep((h) => Math.max(h, targetStep));
+      setStep(targetStep);
+      setShowErrors(true);
+      toast(`Fill in required fields: ${labelsForStep.join(", ")}`, "error");
       return;
     }
     setSaving(true);
@@ -4346,7 +4465,36 @@ export default function HrOnboardPage(props: any) {
       if (err instanceof HrApiError && err.errors) {
         const fieldNames = Object.keys(err.errors);
         if (fieldNames.length > 0) {
-          msg = `${msg} (${fieldNames.join(", ")})`;
+          // Surface the backend's actual field-level message (e.g. "This bank
+          // account number is already registered for another staff member.")
+          // instead of a generic string with just the raw field name tacked
+          // on — that told the user *something* was wrong but never *what*,
+          // which is exactly what read as "only SBI is accepted" confusion
+          // when the real cause was an unrelated duplicate account number.
+          const detailFor = (field: string): string => {
+            const raw = err.errors![field];
+            const first = Array.isArray(raw) ? raw[0] : raw;
+            return typeof first === "string" && first.trim() ? first : "";
+          };
+          const messages = fieldNames.map((f) => detailFor(f)).filter(Boolean);
+          msg = messages.length > 0 ? messages.join(" ") : `${msg} (${fieldNames.join(", ")})`;
+
+          const nextApiErrors: Record<string, string> = {};
+          for (const f of fieldNames) {
+            const d = detailFor(f);
+            if (d) nextApiErrors[f] = d;
+          }
+          setApiFieldErrors(nextApiErrors);
+
+          // Jump to + highlight the earliest step that owns one of the failing
+          // fields, same as the client-side pre-submit check above.
+          const steps = fieldNames.map((f) => BACKEND_FIELD_STEP_MAP[f]).filter((n): n is number => !!n);
+          if (steps.length > 0) {
+            const targetStep = Math.min(...steps);
+            setHighestStep((h) => Math.max(h, targetStep));
+            setStep(targetStep);
+            setShowErrors(true);
+          }
         }
       }
       toast(msg, "error");
@@ -4715,7 +4863,7 @@ export default function HrOnboardPage(props: any) {
 
       {/* Sidebar + Step content */}
       <div className="flex gap-6 items-start">
-        <WizardNav step={step} completedSteps={completedSteps} onGo={navigateTo} />
+        <WizardNav step={step} completedSteps={completedSteps} onGo={attemptNavigate} />
 
         <div className="flex-1 min-w-0">
           <div
@@ -4770,7 +4918,7 @@ export default function HrOnboardPage(props: any) {
             {step === 2 && <StepRole f={form} set={setField} departments={departments} designations={designations} roles={roles} staffList={staffList} empTypes={empTypeData ?? []} empLoading={empTypeLoading} empError={empTypeError} showErrors={showErrors} todayDate={todayDate} />}
             {step === 3 && <StepContact f={form} set={setField} showErrors={showErrors} />}
             {step === 4 && <StepFamily  f={form} set={setField} showErrors={showErrors} validatorRef={nomValidatorRef} />}
-            {step === 5 && <StepGovId   f={form} set={setField} showErrors={showErrors} />}
+            {step === 5 && <StepGovId   f={form} set={setField} showErrors={showErrors} apiFieldErrors={apiFieldErrors} />}
             {step === 6 && <StepQualifications f={form} set={setField} validatorRef={prevDateValidatorRef} />}
             {step === 7 && <StepMedical f={form} set={setField} validatorRef={medValidatorRef} />}
             {step === 8 && <StepPayroll f={form} set={setField} validatorRef={payrollValidatorRef} />}

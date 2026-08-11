@@ -162,6 +162,7 @@ PERMISSIONS = [
     ("settings.attendance_rules.view", "Attendance Rules", "settings"),
     ("settings.documents.view", "Documents", "settings"),
     ("settings.document_branding.view", "Document Branding", "settings"),
+    ("settings.staff_profile.view", "Staff Profile", "settings"),
 ]
 
 

@@ -883,6 +883,27 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                     },
                 )
 
+                # 7. Optional SMTP configuration. Many schools don't know how to set
+                #    this up themselves later, so super-admin can seed it directly
+                #    here. Entirely optional — a school works fine without it and can
+                #    still add/change it later in Settings > SMTP Settings.
+                smtp_host = (data.get("smtp_host") or "").strip()
+                smtp_from_email = (data.get("smtp_from_email") or "").strip()
+                if smtp_host and smtp_from_email:
+                    from apps.settings.models import SchoolSMTPSettings
+                    smtp_settings = SchoolSMTPSettings.objects.create(
+                        school=erp_school,
+                        name="Primary",
+                        host=smtp_host,
+                        port=data.get("smtp_port") or 587,
+                        username=data.get("smtp_username") or "",
+                        password=data.get("smtp_password") or "",
+                        use_tls=data.get("smtp_use_tls", True),
+                        from_email=smtp_from_email,
+                        sender_name=data.get("smtp_sender_name") or "",
+                    )
+                    smtp_settings.activate()
+
         except Exception as exc:
             return Response(
                 {"detail": f"Provisioning failed: {exc}"},

@@ -35,6 +35,11 @@ from .serializers import (
 
 class CommunicationPermissionMixin:
     required_permission_code = "utilities.communication.view"
+    # Map action name -> permission code. A value of None means "no permission
+    # code required" — use this only for actions that are inherently
+    # self-scoped (e.g. get_queryset() already filters to request.user), where
+    # gating behind an admin-grantable permission would just be an extra
+    # barrier to a user seeing their own data, never a real access control.
     action_permission_codes = {}
 
     def check_permissions(self, request):
@@ -47,7 +52,12 @@ class CommunicationPermissionMixin:
             return
 
         action = getattr(self, "action", None)
-        permission_code = self.action_permission_codes.get(action, self.required_permission_code)
+        if action in self.action_permission_codes:
+            permission_code = self.action_permission_codes[action]
+            if permission_code is None:
+                return
+        else:
+            permission_code = self.required_permission_code
 
         if not hasattr(request.user, "has_permission_code") or not request.user.has_permission_code(permission_code):
             raise ValidationError("You do not have permission to access communication features.")
@@ -60,6 +70,13 @@ class BaseCommunicationViewSet(CommunicationPermissionMixin, viewsets.ModelViewS
 class CommunicationPreferenceViewSet(BaseCommunicationViewSet):
     serializer_class = CommunicationPreferenceSerializer
     http_method_names = ["get", "post", "patch", "put", "head", "options"]
+    action_permission_codes = {
+        # list/create below are hardcoded to request.user's own row
+        # (get_or_create(user=request.user)) — can never touch another
+        # user's preferences, so no permission code is needed.
+        "list": None,
+        "create": None,
+    }
 
     def get_queryset(self):
         return CommunicationPreference.objects.filter(user=self.request.user)
@@ -86,8 +103,15 @@ class CommunicationPreferenceViewSet(BaseCommunicationViewSet):
 class CommunicationNotificationViewSet(BaseCommunicationViewSet):
     serializer_class = CommunicationNotificationSerializer
     action_permission_codes = {
-        "mark_read": "utilities.communication.view",
-        "mark_all_read": "utilities.communication.view",
+        # Reading and managing YOUR OWN notification inbox is basic account
+        # functionality, not an admin-configurable "communication module"
+        # feature — get_queryset() below always scopes to recipient=user, so
+        # these can never expose anyone else's data. Only `create` (pushing a
+        # notification TO another user) stays behind the real permission.
+        "list": None,
+        "retrieve": None,
+        "mark_read": None,
+        "mark_all_read": None,
     }
     filterset_fields = ["notification_type", "is_read"]
     search_fields = ["title", "body"]
@@ -350,10 +374,30 @@ class BroadcastAudienceOptionsView(APIView):
 
 
 class BroadcastMessageView(APIView):
-    """POST: resolve the audience, create the BroadcastMessage, and either
+    """GET: history of broadcasts — whoever composed one can always see their
+    own; a school admin/superuser sees every broadcast for the school (same
+    "no is_superuser bypass on ordinary scoping" policy as elsewhere, but
+    admin oversight of what's been sent to the whole school is the actual
+    intended capability here, not a bypass of it).
+
+    POST: resolve the audience, create the BroadcastMessage, and either
     dispatch immediately or schedule it via Celery for `scheduled_at`."""
 
     permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from .serializers import BroadcastMessageSerializer
+
+        user = request.user
+        if not user.school:
+            return Response({"error": "No school on this account."}, status=status.HTTP_400_BAD_REQUEST)
+
+        queryset = BroadcastMessage.objects.filter(school=user.school).select_related("created_by")
+        if not (user.is_superuser or user.is_school_admin):
+            queryset = queryset.filter(created_by=user)
+
+        queryset = queryset.order_by("-created_at")[:50]
+        return Response(BroadcastMessageSerializer(queryset, many=True).data)
 
     def post(self, request):
         from apps.communication.broadcast import dispatch_broadcast, resolve_recipient_user_ids, teacher_assigned_class_ids
