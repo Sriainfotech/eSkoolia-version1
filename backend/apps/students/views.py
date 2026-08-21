@@ -1116,6 +1116,7 @@ class StudentViewSet(TenantScopedModelViewSet):
                 "admission_no",
                 "roll_no",
                 "first_name",
+                "middle_name",
                 "last_name",
                 "date_of_birth",
                 "gender",
