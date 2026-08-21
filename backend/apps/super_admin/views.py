@@ -2214,3 +2214,54 @@ class SchoolFormChoicesView(SuperAdminBaseAPIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class BotTelemetryListView(SuperAdminBaseAPIView):
+    """Cross-tenant "Ask eSkoolia" query log — recognition-rate comparison
+    across resolver types (manifest-fuzzy today, LLM once switched on)."""
+
+    def get_queryset(self):
+        from apps.assistant.models import BotQueryLog
+
+        queryset = self._public_queryset(BotQueryLog).select_related("school", "user").order_by("-created_at")
+
+        resolver_type = self.request.query_params.get("resolver_type")
+        if resolver_type:
+            queryset = queryset.filter(resolver_type=resolver_type)
+
+        school_id = self.request.query_params.get("school_id")
+        if school_id:
+            queryset = queryset.filter(school_id=school_id)
+
+        return queryset
+
+    def get(self, request):
+        from apps.assistant.serializers import BotQueryLogReadSerializer
+
+        return self._paginate(request, self.get_queryset(), BotQueryLogReadSerializer)
+
+
+class BotTelemetrySummaryView(SuperAdminBaseAPIView):
+    """Recognition rate per resolver_type: resolved vs. 'unrecognized'."""
+
+    def get(self, request):
+        from apps.assistant.models import BotQueryLog
+
+        rows = self._public_queryset(BotQueryLog).values("resolver_type", "resolved_intent_id")
+        summary: dict[str, dict[str, int]] = {}
+        for row in rows:
+            bucket = summary.setdefault(row["resolver_type"], {"total": 0, "resolved": 0})
+            bucket["total"] += 1
+            if row["resolved_intent_id"] and row["resolved_intent_id"] != "unrecognized":
+                bucket["resolved"] += 1
+
+        result = [
+            {
+                "resolver_type": resolver_type,
+                "total": stats["total"],
+                "resolved": stats["resolved"],
+                "recognition_rate": round(stats["resolved"] / stats["total"], 4) if stats["total"] else 0.0,
+            }
+            for resolver_type, stats in summary.items()
+        ]
+        return Response(result, status=status.HTTP_200_OK)

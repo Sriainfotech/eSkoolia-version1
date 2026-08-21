@@ -10,6 +10,8 @@ from .views import (
     AuditLogExportView,
     AuditLogListView,
     BillingGSTR1ExportView,
+    BotTelemetryListView,
+    BotTelemetrySummaryView,
     BillingInvoiceDetailView,
     BillingInvoiceListCreateView,
     BillingInvoiceMarkPaidView,
@@ -68,4 +70,7 @@ urlpatterns = [
     # LLM access management (Tasks 4 & 5)
     path("llm/schools/", SchoolLLMListView.as_view(), name="llm-schools-list"),
     path("llm/schools/<int:school_id>/", ToggleSchoolLLMView.as_view(), name="llm-schools-toggle"),
+    # "Ask eSkoolia" bot telemetry
+    path("bot-telemetry/", BotTelemetryListView.as_view(), name="bot-telemetry"),
+    path("bot-telemetry/summary/", BotTelemetrySummaryView.as_view(), name="bot-telemetry-summary"),
 ]
