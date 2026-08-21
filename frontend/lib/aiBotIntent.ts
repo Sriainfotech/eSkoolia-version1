@@ -1,13 +1,5 @@
 import { FLAT_INDEX } from '@/lib/routes';
 
-/** Keywords that indicate a module/page intent rather than a student name */
-const MODULE_KEYWORDS = [
-  'attendance','fees','exam','result','homework','transport','bus','library',
-  'certificate','admission','report','marks','student list','staff','leave',
-  'inventory','finance','hr','behaviour','lesson','setup','roles','open','go to',
-  'show me','navigate','take me','admin','utilities','communication',
-];
-
 export type Intent =
   | { kind: 'navigate'; path: string; label: string }
   | { kind: 'phone-lookup'; phone: string }
@@ -15,9 +7,7 @@ export type Intent =
   | { kind: 'report-bus'; query: string }
   | { kind: 'report-lunch'; query: string }
   | { kind: 'report-emergency'; query: string }
-  | { kind: 'student-lookup'; query: string }
   | { kind: 'enquiry-lookup'; query: string }
-  | { kind: 'parent-qa'; topic: string; raw: string }
   | { kind: 'planner-task'; day: string; time: string; title: string; raw: string }
   | { kind: 'compose-message'; topic: string; raw: string }
   | { kind: 'fuzzy-pages'; query: string };
@@ -33,26 +23,17 @@ function exactPageMatch(norm: string) {
   }) ?? null;
 }
 
-const QA_TOPICS: Array<{ key: string; patterns: RegExp[] }> = [
-  { key: 'fees-class',      patterns: [/fee[s]?.*class/i, /how much.*class/i, /fee structure/i, /class.*fee/i] },
-  { key: 'holidays',        patterns: [/holida/i, /school.*closed/i, /off day/i, /vacation/i] },
-  { key: 'school-timing',   patterns: [/school time/i, /timing/i, /what time.*school/i, /open.*time/i, /close.*time/i] },
-  { key: 'transport-route', patterns: [/bus route/i, /which bus/i, /route.*\d/i, /transport for/i] },
-  { key: 'admission-process', patterns: [/how to.*admit/i, /admission process/i, /enroll/i, /new student.*admit/i] },
-  { key: 'exam-schedule',   patterns: [/exam.*schedule/i, /when.*exam/i, /exam.*date/i, /exam.*when/i, /next exam/i] },
-  { key: 'syllabus',        patterns: [/syllabus/i, /curriculum/i, /what.*taught/i, /chapter/i] },
-];
-
-function matchParentQATopic(norm: string): string | null {
-  for (const t of QA_TOPICS) {
-    if (t.patterns.some(p => p.test(norm))) return t.key;
-  }
-  return null;
-}
-
 /**
  * Parse a free-text bot query into a typed intent.
- * Priority: exact page match → planner task → compose message → student lookup → parent Q&A → fuzzy fallback
+ *
+ * Student/attendance/fees lookups and parent FAQ answers are NOT handled
+ * here anymore — 'fuzzy-pages' is the catch-all signal for "none of the
+ * intents below matched"; components/AIBot.tsx tries the manifest-driven
+ * IntentResolver and then the FAQProvider before falling back to actual
+ * page search. See lib/bot/ for that generic, module-agnostic layer.
+ *
+ * Priority: phone → call-log reporting → exact page match → planner task
+ * → compose message → enquiry lookup → fuzzy fallback (resolver/FAQ/pages)
  */
 export function parseIntent(q: string): Intent {
   const norm = q.toLowerCase().trim();
@@ -64,10 +45,12 @@ export function parseIntent(q: string): Intent {
     return { kind: 'phone-lookup', phone: phoneMatch[1] };
   }
 
-  // 0.5. Call-log reporting intents — explicit "report/mark" verbs or clear triggers
-  //      Must come before module-keyword/student-lookup checks
+  // 0.5. Call-log reporting intents — explicit "report/mark" verbs or clear triggers.
+  //      Absence is also handled by the attendance manifest's mark-absent
+  //      action (lib/bot/manifests/attendance.ts) when the query already
+  //      names a student; this trigger is the fallback that launches the
+  //      richer multi-step AbsenceFlow UI when it doesn't.
   if (/\b(report\s+abs[e]?nce|mark\s+abs[e]?nt|child\s+is\s+(sick|ill|unwell)|child\s+(won'?t|cannot|can'?t)\s+(come|attend)|not\s+coming\s+today|sick\s+today|home\s+sick|calling\s+.*abs[e]?nt|abs[e]?nt\s+today)\b/i.test(norm)) {
-    // Try to extract a student name from the query
     const nameMatch = norm.match(/\b(?:mark|report)\s+(?:abs[e]?nt\s+)?(.+?)\s+(?:abs[e]?nt|sick|today)\b/i)
       || norm.match(/\b(.+?)\s+(?:is|won'?t|cannot|can'?t)\s+/i);
     const rawName = nameMatch ? nameMatch[1].trim() : '';
@@ -106,7 +89,8 @@ export function parseIntent(q: string): Intent {
   }
 
   // 4. Enquiry lookup: "find enquiry Mehta", "enquiry for Priya", "admission enquiry Arjun"
-  //    Must come before student-lookup since "admission" is in MODULE_KEYWORDS
+  //    Admissions is not one of the pilot manifests yet — stays a direct
+  //    intent for now (see lib/bot/manifestLoader.ts's TODO list).
   const hasEnquiryKw = /enquir|inquir/i.test(norm);
   if (hasEnquiryKw) {
     const enquiryQuery = norm
@@ -118,29 +102,7 @@ export function parseIntent(q: string): Intent {
     if (enquiryQuery.length >= 2) return { kind: 'enquiry-lookup', query: enquiryQuery };
   }
 
-  // 5. Student lookup: starts with a lookup verb OR looks like a proper name
-  //    and doesn't contain module keywords
-  const hasModuleKw = MODULE_KEYWORDS.some(k => norm.includes(k));
-  const lookupVerb = /^(find|search|lookup|show|who is|get)\s+/i.test(norm);
-  const looksLikeName = /^[a-z][\w\s\-']+$/i.test(norm)
-    && norm.split(/\s+/).length <= 4
-    && !hasModuleKw;
-
-  if (lookupVerb || looksLikeName) {
-    const query = norm
-      .replace(/^(find|search|lookup|show|who is|get|look up)\s+/i, '')
-      .replace(/^student[s]?\s+/i, '')   // remove leading "student(s)"
-      .replace(/\s+student[s]?\s*$/i, '') // remove trailing "student(s)"
-      .replace(/\s+class\s*\d+\w*/i, '')
-      .trim();
-    if (query.length >= 2 && !/^student[s]?$/i.test(query)) return { kind: 'student-lookup', query };
-    // "find student" with no name → fuzzy fallback so user can type a name
-  }
-
-  // 5. Parent Q&A topics
-  const qaTopic = matchParentQATopic(norm);
-  if (qaTopic) return { kind: 'parent-qa', topic: qaTopic, raw: norm };
-
-  // 6. Fuzzy page search fallback
+  // 5. Fall through — components/AIBot.tsx tries the manifest resolver,
+  //    then the FAQ provider, before treating this as a page search.
   return { kind: 'fuzzy-pages', query: norm };
 }

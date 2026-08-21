@@ -8,12 +8,22 @@ import { FLAT_INDEX } from '@/lib/routes';
 import { getAccessToken } from '@/lib/auth';
 import { API_BASE_URL } from '@/lib/api';
 import { parseIntent } from '@/lib/aiBotIntent';
+import type { BotAction, DisambiguationResult, LastViewedEntity, ResolvedIntent } from '@/types/bot';
+import { createFAQProvider, createIntentResolver, createMessageDraftProvider } from '@/lib/bot/botFactory';
+import { useBotContextValue } from '@/lib/bot/useBotContextValue';
+import { logBotQuery } from '@/lib/bot/telemetry';
+import { describeBotFetchError } from '@/lib/bot/errorHandling';
+import { listTodos, createTodo, toggleTodo, deleteTodo, type RemoteTodo } from '@/lib/bot/todosApi';
+import { createCalendarEvent } from '@/lib/bot/calendarEventsApi';
 import { StudentLookupResults, type StudentResult } from './aibot/StudentLookupResults';
 import { StudentProfilePopup } from './aibot/StudentProfilePopup';
 import { EnquiryLookupResults, type EnquiryResult } from './aibot/EnquiryLookupResults';
 import { EnquiryProfilePopup } from './aibot/EnquiryProfilePopup';
 import { AbsenceFlow, type AbsenceResult } from './aibot/AbsenceFlow';
 import { IssueFlow, type IssueType } from './aibot/IssueFlow';
+import { DisambiguationCard } from './aibot/DisambiguationCard';
+import { ConfirmationCard } from './aibot/ConfirmationCard';
+import { GenericEntityResults } from './aibot/GenericEntityResults';
 
 /** Shape returned by /api/v1/students/students/ list endpoint */
 interface RawStudentAPI {
@@ -30,8 +40,7 @@ interface RawStudentAPI {
   photo?: string;
 }
 
-function normalizeStudent(s: RawStudentAPI): import('./aibot/StudentLookupResults').StudentResult {
-  // Prefer explicit name fields; fall back to nested object; fall back to ''
+function normalizeStudent(s: RawStudentAPI): StudentResult {
   const className = s.current_class_name
     ?? (typeof s.current_class === 'object' && s.current_class ? s.current_class.name : '')
     ?? '';
@@ -50,43 +59,6 @@ function normalizeStudent(s: RawStudentAPI): import('./aibot/StudentLookupResult
   };
 }
 
-const PARENT_FAQ: Record<string, string> = {
-  'fees due': 'You can check outstanding fees by going to **Fees → Fees Due**. You can also generate a statement from the Fees Collection page. For urgent queries, please contact the accounts office.',
-  'fee': 'Fees can be paid online or at the school office. Visit **Fees → Fees Collection** to check payment status. For fee structure details, see **Fees → Fees Master**.',
-  'attendance': "Your child's attendance can be viewed under **Reports → Student Attendance**. For today's attendance, check with the class teacher or visit the attendance section.",
-  'exam': 'Upcoming exam schedules are listed under **Examination → Exam Schedule**. Results are published under **Examination → Result Publish** once available.',
-  'result': 'Exam results are published under **Examination → Result Publish**. You can also view historical results in **Reports → Exam Result**.',
-  'homework': 'Assigned homework is listed under **Academics → Homework List**. Completed homework evaluations are in **Academics → Homework Evaluation**.',
-  'school timing': 'Please visit **Settings → General Settings** for official school timings. You can also contact the school office for the latest schedule.',
-  'holiday': 'Holiday lists are published under **Academics → Class Routine**. Please check the school notice board or contact administration for updates.',
-  'transport': 'Bus routes and vehicle assignments are in **Transport → Routes** and **Transport → Assign Vehicles**. For live bus tracking, visit **Transport → Live Tracking**.',
-  'library': 'Library books and issue status can be checked under **Library → Book Issues**. Contact the librarian for book reservations.',
-  'certificate': 'Certificates (bonafide, character, etc.) can be generated from **Administration → Generate Certificate**. Submit a request to the school office.',
-  'id card': 'Student ID cards can be generated from **Administration → Generate ID Card**. Contact administration if your child has lost their ID card.',
-  'complaint': 'Complaints can be registered at **Administration → Complaint**. You can also contact the school principal directly.',
-  'admission': 'Admission queries can be submitted at **Admissions → Admission Query**. Our team typically responds within 2 business days.',
-};
-
-function findFAQAnswer(q: string): string | null {
-  const lower = q.toLowerCase();
-  for (const [key, answer] of Object.entries(PARENT_FAQ)) {
-    if (lower.includes(key)) return answer;
-  }
-  return null;
-}
-
-async function searchStudents(q: string): Promise<Array<{ id: number; name: string; class_name?: string; roll_no?: string }>> {
-  try {
-    const token = getAccessToken();
-    const res = await fetch(`${API_BASE_URL}/api/v1/students/students/?search=${encodeURIComponent(q)}&limit=5`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-    if (!res.ok) return [];
-    const data = await res.json();
-    return Array.isArray(data) ? data : (data.results ?? []);
-  } catch { return []; }
-}
-
 type FlatEntry = (typeof FLAT_INDEX)[0];
 
 interface Msg {
@@ -96,6 +68,7 @@ interface Msg {
   results?: FlatEntry[];
   studentResults?: StudentResult[];
   studentQuery?: string;
+  genericResults?: { manifestLabel: string; manifest: import('@/types/bot').BotModuleManifest; results: import('@/types/bot').BotEntityResult[]; query?: string };
   enquiryResults?: EnquiryResult[];
   enquiryQuery?: string;
   redirect?: FlatEntry;
@@ -106,12 +79,9 @@ interface Msg {
   quickActions?: boolean;
   absenceFlow?: { prefillName?: string };
   issueFlow?: { type: IssueType };
-}
-
-interface TodoItem {
-  id: string;
-  text: string;
-  done: boolean;
+  disambiguation?: DisambiguationResult;
+  disambiguationQuery?: string;
+  confirmation?: { action: BotAction; params: Record<string, unknown> };
 }
 
 const ENDPOINT = process.env.NEXT_PUBLIC_ASSISTANT_ENDPOINT;
@@ -136,6 +106,15 @@ async function remoteSearch(q: string): Promise<{ pages?: FlatEntry[]; reply?: s
 let _id = 0;
 const uid = () => String(++_id);
 
+function currentWeekStart(): string {
+  const now = new Date();
+  const day = now.getDay();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+  monday.setHours(0, 0, 0, 0);
+  return monday.toISOString().slice(0, 10);
+}
+
 export function AIBot() {
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -143,12 +122,7 @@ export function AIBot() {
   const [loading, setLoading] = useState(false);
   const [profileStudent, setProfileStudent] = useState<StudentResult | null>(null);
   const [profileEnquiry, setProfileEnquiry] = useState<EnquiryResult | null>(null);
-  const [todos, setTodos] = useState<TodoItem[]>(() => {
-    try {
-      const saved = localStorage.getItem('eskoolia_todos');
-      return saved ? JSON.parse(saved) : [];
-    } catch { return []; }
-  });
+  const [todos, setTodos] = useState<RemoteTodo[]>([]);
   const [showTodos, setShowTodos] = useState(false);
   const [showActions, setShowActions] = useState(false);
   const [showChips, setShowChips] = useState(false);
@@ -157,9 +131,10 @@ export function AIBot() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    try { localStorage.setItem('eskoolia_todos', JSON.stringify(todos)); } catch { /* ignore */ }
-  }, [todos]);
+  const botContext = useBotContextValue();
+  const resolverRef = useRef(createIntentResolver());
+  const faqProviderRef = useRef(createFAQProvider());
+  const draftProviderRef = useRef(createMessageDraftProvider());
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -171,6 +146,10 @@ export function AIBot() {
 
   const handleOpen = useCallback(() => {
     setOpen(true);
+    // Warm the FAQ cache and load remote to-dos in the background — first
+    // query/open doesn't have to wait on either.
+    void faqProviderRef.current.preload?.();
+    listTodos().then(setTodos).catch(() => {});
     if (msgs.length === 0) {
       addMsg({ role: 'bot', text: "Hi — I'm your eskoolia assistant. I can log parent calls (absence, bus issues, etc.), find students, check enquiries by phone number, navigate pages, and add tasks to your planner. Try a quick action below, or type a student name, phone number, or page." });
     } else {
@@ -187,6 +166,34 @@ export function AIBot() {
   }, [msgs.length, addMsg]);
 
   const handleClose = useCallback(() => setOpen(false), []);
+
+  /** Renders whatever a ResolvedIntent turned out to hold — a manifest
+   *  action pending confirmation, or a set of entity results. Called both
+   *  from ask() and from a DisambiguationCard's onResolved. */
+  const renderResolvedIntent = useCallback((intent: ResolvedIntent, fallbackQuery: string) => {
+    if (intent.action) {
+      addMsg({ role: 'bot', text: `Let's ${intent.action.label.toLowerCase()}:`, confirmation: { action: intent.action, params: intent.params ?? {} } });
+      return;
+    }
+    const results = intent.entityResults ?? [];
+    if (results.length === 1) {
+      // All pilot manifests (students/attendance/fees) target a Student
+      // entity — revisit this if a non-student-backed manifest is added.
+      botContext.setLastViewedEntity({ type: 'student', id: results[0].id, label: results[0].displayLabel });
+    }
+    if (intent.manifest.id === 'students' || intent.manifest.id === 'attendance') {
+      const students = results.map(r => normalizeStudent(r.raw as unknown as RawStudentAPI));
+      addMsg({ role: 'bot', text: '', studentResults: students, studentQuery: fallbackQuery });
+    } else {
+      addMsg({ role: 'bot', text: '', genericResults: { manifestLabel: intent.manifest.label, manifest: intent.manifest, results, query: fallbackQuery } });
+    }
+  }, [addMsg, botContext]);
+
+  const handleDisambiguation = useCallback(async (msgId: string, intent: ResolvedIntent | null, fallbackQuery: string) => {
+    setMsgs(prev => prev.filter(x => x.id !== msgId));
+    if (intent) renderResolvedIntent(intent, fallbackQuery);
+    else addMsg({ role: 'bot', text: "I couldn't complete that — please try again." });
+  }, [addMsg, renderResolvedIntent]);
 
   const ask = useCallback(async (q: string) => {
     if (!q.trim()) return;
@@ -266,56 +273,30 @@ export function AIBot() {
       return;
     }
 
-    // Report Absence
+    // Report Absence (fallback path — the attendance manifest's
+    // mark-absent action handles the case where a student name is already
+    // in the query; this launches the richer multi-step flow when it isn't)
     if (intent.kind === 'report-absence') {
       addMsg({ role: 'bot', text: 'Let me help you log this absence.', absenceFlow: { prefillName: intent.query || undefined } });
       return;
     }
 
-    // Report Bus Issue
     if (intent.kind === 'report-bus') {
       addMsg({ role: 'bot', text: "I'll log this bus issue.", issueFlow: { type: 'bus' } });
       return;
     }
 
-    // Report Lunch Concern
     if (intent.kind === 'report-lunch') {
       addMsg({ role: 'bot', text: "I'll log this lunch concern.", issueFlow: { type: 'lunch' } });
       return;
     }
 
-    // Emergency Pickup
     if (intent.kind === 'report-emergency') {
       addMsg({ role: 'bot', text: "I'll log this emergency pickup request.", issueFlow: { type: 'emergency' } });
       return;
     }
 
-    // Student lookup
-    if (intent.kind === 'student-lookup') {
-      setLoading(true);
-      addMsg({ role: 'bot', isTyping: true, text: '' });
-      const token = getAccessToken();
-      let students: StudentResult[] = [];
-      try {
-        // Correct URL: /api/v1/students/students/ (DRF router doubles the prefix)
-        const res = await fetch(`${API_BASE_URL}/api/v1/students/students/?search=${encodeURIComponent(intent.query)}&limit=8`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        });
-        if (res.ok) {
-          const d = await res.json();
-          const raw: RawStudentAPI[] = Array.isArray(d) ? d : (d.results ?? []);
-          students = raw.map(normalizeStudent);
-        }
-      } catch { /* silently fail */ }
-      setLoading(false);
-      setMsgs(prev => {
-        const withoutTyping = prev.filter(m => !m.isTyping);
-        return [...withoutTyping, { id: uid(), role: 'bot' as const, text: '', studentResults: students, studentQuery: intent.query }];
-      });
-      return;
-    }
-
-    // Enquiry lookup (live API)
+    // Enquiry lookup (admissions — not a converted manifest yet)
     if (intent.kind === 'enquiry-lookup') {
       setLoading(true);
       try {
@@ -362,12 +343,6 @@ export function AIBot() {
       return;
     }
 
-    // Parent Q&A
-    if (intent.kind === 'parent-qa') {
-      const faqAnswer = findFAQAnswer(q);
-      if (faqAnswer) { addMsg({ role: 'bot', text: faqAnswer }); return; }
-    }
-
     // Planner task
     if (intent.kind === 'planner-task') {
       const DAY_MAP: Record<string, number> = {
@@ -375,7 +350,6 @@ export function AIBot() {
         thu: 3, thursday: 3, fri: 4, friday: 4, sat: 5, saturday: 5, sun: 6, sunday: 6,
       };
       const dayIndex = DAY_MAP[intent.day.toLowerCase()] ?? 0;
-      // Parse time: "12pm" → "12:00", "9:30am" → "09:30", "14:00" → "14:00"
       const timeRaw = intent.time.toLowerCase().trim();
       let timeFormatted = '09:00';
       const tMatch = timeRaw.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/);
@@ -387,62 +361,64 @@ export function AIBot() {
         if (mer === 'am' && h === 12) h = 0;
         timeFormatted = `${String(h).padStart(2, '0')}:${String(m2).padStart(2, '0')}`;
       }
-      // Determine current week key (Monday date)
-      const now = new Date();
-      const day = now.getDay();
-      const monday = new Date(now);
-      monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
-      monday.setHours(0, 0, 0, 0);
-      const wk = monday.toISOString().slice(0, 10);
-      const LS_KEY = 'eskoolia_week_events_v2';
-      const lsKey = `${LS_KEY}_${wk}`;
-      let existing: unknown[] = [];
-      try { existing = JSON.parse(localStorage.getItem(lsKey) || '[]'); } catch { existing = []; }
-      const newEvent = {
-        id: `bot-${Date.now()}`,
-        dayIndex,
-        time: timeFormatted,
-        title: intent.title,
-        category: 'meeting',
-        aiGenerated: true,
-      };
-      existing.push(newEvent);
-      try { localStorage.setItem(lsKey, JSON.stringify(existing)); } catch { /* ignore */ }
-      // Notify WeekAhead widget to reload
-      window.dispatchEvent(new CustomEvent('eskoolia-planner-updated', { detail: { weekKey: wk } }));
+      const wk = currentWeekStart();
+      const created = await createCalendarEvent(wk, {
+        dayIndex, time: timeFormatted, title: intent.title, category: 'meeting', aiGenerated: true,
+      });
       const DAY_LABELS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-      addMsg({ role: 'bot', text: `✅ Added to your planner: **${intent.title}** on **${DAY_LABELS[dayIndex]}** at **${timeFormatted}**. Check the Week Ahead widget on your home screen.` });
+      if (created) {
+        window.dispatchEvent(new CustomEvent('eskoolia-planner-updated', { detail: { weekKey: wk } }));
+        addMsg({ role: 'bot', text: `✅ Added to your planner: **${intent.title}** on **${DAY_LABELS[dayIndex]}** at **${timeFormatted}**. Check the Week Ahead widget on your home screen.` });
+      } else {
+        addMsg({ role: 'bot', text: await describeBotFetchError(null, 'your planner') });
+      }
       return;
     }
 
-    // Compose message
+    // Compose message — TemplateDraftProvider today, LLMDraftProvider stub later
     if (intent.kind === 'compose-message') {
-      const topic = intent.topic.toLowerCase();
-      let template = '';
-      if (topic.includes('fee') || topic.includes('payment')) {
-        template = `Dear Parent,\n\nThis is a gentle reminder that your child's school fees for the current term are due. Kindly clear the outstanding amount at your earliest convenience to avoid any inconvenience.\n\nFor any queries regarding the fee structure or payment, please contact our accounts office.\n\nThank you for your cooperation.\n\nWarm regards,\n[School Name] Administration`;
-      } else if (topic.includes('attendance') || topic.includes('absent')) {
-        template = `Dear Parent,\n\nWe wish to inform you that your child's attendance has been below the required 75% threshold. Regular attendance is essential for academic progress.\n\nKindly ensure your child attends school regularly. If there are any concerns, please meet with the class teacher at your earliest convenience.\n\nRegards,\n[School Name] Administration`;
-      } else if (topic.includes('exam') || topic.includes('result') || topic.includes('mark')) {
-        template = `Dear Parent,\n\nWe are pleased to inform you that the exam results have been published. You can view your child's results by visiting our school portal or contacting the class teacher.\n\nFor result-related queries, please visit the school office during working hours.\n\nBest regards,\n[School Name] Academic Team`;
-      } else if (topic.includes('meeting') || topic.includes('parent teacher')) {
-        template = `Dear Parent,\n\nYou are cordially invited to attend the Parent-Teacher Meeting scheduled on [DATE] at [TIME] in [VENUE].\n\nYour presence is important as we will discuss your child's academic progress, attendance, and overall development.\n\nKindly confirm your attendance by [RSVP DATE].\n\nLooking forward to meeting you.\n\nRegards,\n[School Name] Administration`;
-      } else {
-        template = `Dear Parent,\n\nWe would like to bring to your attention an important matter regarding ${intent.topic}.\n\n[Please add your specific message here]\n\nFor any queries, please contact the school office.\n\nThank you.\n\nRegards,\n[School Name] Administration`;
-      }
+      const template = await draftProviderRef.current.draft(intent.topic);
       addMsg({ role: 'bot', text: `📝 Here's a draft message about **${intent.topic}**:\n\n---\n\n${template}\n\n---\n\n_Copy and customize as needed._` });
       return;
     }
 
-    // FAQ fallback check
-    const faqAnswer = findFAQAnswer(q);
-    if (faqAnswer) {
-      addMsg({ role: 'bot', text: faqAnswer });
+    // Everything else: try the manifest-driven resolver first (students,
+    // attendance, fees today), then the FAQ provider, then page search.
+    setLoading(true);
+    addMsg({ role: 'bot', isTyping: true, text: '' });
+
+    const resolved = await resolverRef.current.resolve(q, botContext);
+    const resolvedLabel = !resolved ? 'unrecognized' : resolved.kind === 'disambiguation' ? 'disambiguation' : (resolved.action?.id ?? resolved.manifest.id);
+    logBotQuery(q, resolverRef.current.resolverType, resolvedLabel);
+
+    if (resolved?.kind === 'disambiguation') {
+      setLoading(false);
+      setMsgs(prev => {
+        const withoutTyping = prev.filter(m => !m.isTyping);
+        return [...withoutTyping, { id: uid(), role: 'bot' as const, text: '', disambiguation: resolved, disambiguationQuery: q }];
+      });
       return;
     }
 
-    setLoading(true);
-    addMsg({ role: 'bot', isTyping: true, text: '' });
+    if (resolved?.kind === 'resolved') {
+      setLoading(false);
+      setMsgs(prev => prev.filter(m => !m.isTyping));
+      renderResolvedIntent(resolved, q);
+      return;
+    }
+
+    // FAQ provider — unified topic classification + lookup (fixes the
+    // previous PARENT_FAQ/QA_TOPICS disconnect: same topic_key drives both).
+    const topicKey = faqProviderRef.current.classify(q);
+    if (topicKey) {
+      const answer = await faqProviderRef.current.lookup(topicKey);
+      if (answer) {
+        setLoading(false);
+        setMsgs(prev => prev.filter(m => !m.isTyping));
+        addMsg({ role: 'bot', text: answer });
+        return;
+      }
+    }
 
     let pages: FlatEntry[] = [];
     let reply = '';
@@ -467,7 +443,7 @@ export function AIBot() {
       };
       return [...withoutTyping, botReply];
     });
-  }, [addMsg, router]);
+  }, [addMsg, router, botContext, renderResolvedIntent]);
 
   return (
     <>
@@ -570,7 +546,7 @@ export function AIBot() {
             </button>
           </div>
 
-          {/* Todo Widget */}
+          {/* Todo Widget — apps/user/todos/, shared with the dashboard's Smart To-Do widget */}
           <div style={{ borderBottom: '1px solid var(--bd)', flexShrink: 0 }}>
             <button
               onClick={() => setShowTodos(t => !t)}
@@ -580,7 +556,7 @@ export function AIBot() {
               }}
             >
               <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em', flex: 1 }}>
-                ✓ To-Do ({todos.filter(t => !t.done).length} pending)
+                ✓ To-Do ({todos.filter(t => !t.completed).length} pending)
               </span>
               <span style={{ fontSize: 11, color: 'var(--pu)' }}>{showTodos ? '▲' : '▼'}</span>
             </button>
@@ -592,13 +568,19 @@ export function AIBot() {
                 {todos.map(t => (
                   <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: '1px solid var(--bd)' }}>
                     <input
-                      type="checkbox" checked={t.done}
-                      onChange={() => setTodos(prev => prev.map(x => x.id === t.id ? { ...x, done: !x.done } : x))}
+                      type="checkbox" checked={t.completed}
+                      onChange={() => {
+                        setTodos(prev => prev.map(x => x.id === t.id ? { ...x, completed: !x.completed } : x));
+                        toggleTodo(t.id, !t.completed).catch(() => {});
+                      }}
                       style={{ cursor: 'pointer', accentColor: 'var(--pu)' }}
                     />
-                    <span style={{ flex: 1, fontSize: 12, color: t.done ? 'var(--ink-3)' : 'var(--ink-1)', textDecoration: t.done ? 'line-through' : 'none' }}>{t.text}</span>
+                    <span style={{ flex: 1, fontSize: 12, color: t.completed ? 'var(--ink-3)' : 'var(--ink-1)', textDecoration: t.completed ? 'line-through' : 'none' }}>{t.text}</span>
                     <button
-                      onClick={() => setTodos(prev => prev.filter(x => x.id !== t.id))}
+                      onClick={() => {
+                        setTodos(prev => prev.filter(x => x.id !== t.id));
+                        deleteTodo(t.id).catch(() => {});
+                      }}
                       style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-3)', fontSize: 14, lineHeight: 1 }}
                     >×</button>
                   </div>
@@ -608,8 +590,9 @@ export function AIBot() {
                     value={todoInput} onChange={e => setTodoInput(e.target.value)}
                     onKeyDown={e => {
                       if (e.key === 'Enter' && todoInput.trim()) {
-                        setTodos(prev => [...prev, { id: String(Date.now()), text: todoInput.trim(), done: false }]);
+                        const text = todoInput.trim();
                         setTodoInput('');
+                        createTodo(text).then(created => { if (created) setTodos(prev => [...prev, created]); });
                       }
                     }}
                     placeholder="Add task…" style={{
@@ -620,8 +603,9 @@ export function AIBot() {
                   <button
                     onClick={() => {
                       if (todoInput.trim()) {
-                        setTodos(prev => [...prev, { id: String(Date.now()), text: todoInput.trim(), done: false }]);
+                        const text = todoInput.trim();
                         setTodoInput('');
+                        createTodo(text).then(created => { if (created) setTodos(prev => [...prev, created]); });
                       }
                     }}
                     style={{
@@ -729,7 +713,37 @@ export function AIBot() {
                           <StudentLookupResults
                             students={m.studentResults}
                             query={m.studentQuery || ''}
-                            onViewProfile={(student) => setProfileStudent(student)}
+                            onViewProfile={(student) => {
+                              setProfileStudent(student);
+                              botContext.setLastViewedEntity({ type: 'student', id: student.id, label: student.fullName || 'this student' } as LastViewedEntity);
+                            }}
+                          />
+                        </div>
+                      )}
+                      {m.genericResults && (
+                        <div style={{ width: '100%' }}>
+                          <GenericEntityResults manifest={m.genericResults.manifest} results={m.genericResults.results} query={m.genericResults.query} />
+                        </div>
+                      )}
+                      {m.disambiguation && (
+                        <div style={{ width: '100%' }}>
+                          <DisambiguationCard
+                            result={m.disambiguation}
+                            onResolved={(resolvedIntent) => handleDisambiguation(m.id, resolvedIntent, m.disambiguationQuery || '')}
+                          />
+                        </div>
+                      )}
+                      {m.confirmation && (
+                        <div style={{ width: '100%' }}>
+                          <ConfirmationCard
+                            action={m.confirmation.action}
+                            params={m.confirmation.params}
+                            context={botContext}
+                            onDone={(result) => {
+                              setMsgs(prev => prev.filter(x => x.id !== m.id));
+                              addMsg({ role: 'bot', text: result.success ? `✅ ${result.message}` : `⚠️ ${result.message}` });
+                            }}
+                            onCancel={() => setMsgs(prev => prev.filter(x => x.id !== m.id))}
                           />
                         </div>
                       )}
