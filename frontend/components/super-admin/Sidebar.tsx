@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { ChevronRight, Menu, X, LayoutDashboard, Building2, CreditCard, FileText, Settings, LogOut } from 'lucide-react';
+import { ChevronRight, Menu, X, LayoutDashboard, Building2, CreditCard, FileText, Settings, LogOut, Bot } from 'lucide-react';
 import { API_BASE_URL } from '@/lib/api';
 import { clearAuthTokens, getAccessToken, getRefreshToken } from '@/lib/auth';
 
@@ -72,6 +72,11 @@ export default function SuperAdminSidebar({ collapsed = false, onToggleCollapse 
       label: 'Policies',
       href: '/super-admin/policies',
       icon: <Settings className="w-5 h-5" />,
+    },
+    {
+      label: 'Bot Telemetry',
+      href: '/super-admin/bot-telemetry',
+      icon: <Bot className="w-5 h-5" />,
     },
   ];
 
