@@ -1,19 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { API_BASE_URL } from "@/lib/api";
-import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { clearAuthTokens, getAccessToken, getRefreshToken } from "@/lib/auth";
 import { BackButton } from "@/components/common/BackButton";
-
-type MePayload = {
-  id?: number;
-  username?: string;
-  first_name?: string;
-  last_name?: string;
-  email?: string;
-};
+import { usePermissions } from "@/hooks/usePermissions";
 
 function getInitialsFromName(name: string): string {
   const words = name
@@ -31,31 +23,8 @@ export function Topbar({ onMenuToggle, mobileMenuOpen }: { onMenuToggle?: () => 
   const pathname = usePathname();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
-  const [currentUser, setCurrentUser] = useState<MePayload | null>(null);
+  const { me: currentUser } = usePermissions();
   const showBackButton = pathname !== "/dashboard";
-
-  useEffect(() => {
-    let mounted = true;
-
-    const loadCurrentUser = async () => {
-      try {
-        const me = await apiRequestWithRefresh<MePayload>("/api/v1/auth/me/");
-        if (mounted) {
-          setCurrentUser(me);
-        }
-      } catch {
-        if (mounted) {
-          setCurrentUser(null);
-        }
-      }
-    };
-
-    void loadCurrentUser();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   const currentUserLabel = useMemo(() => {
     const first = String(currentUser?.first_name || "").trim();

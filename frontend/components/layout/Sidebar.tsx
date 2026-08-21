@@ -5,13 +5,9 @@ import { usePathname } from "next/navigation";
 import styles from "@/components/layout/Sidebar.module.css";
 import { sidebarMenu, SidebarItem } from "@/components/layout/sidebar-menu.data";
 import { SidebarSection } from "@/components/layout/SidebarSection";
-import { apiRequestWithRefresh } from "@/lib/api-auth";
+import { usePermissions, type MeData } from "@/hooks/usePermissions";
 
-type MePayload = {
-  is_superuser: boolean;
-  is_school_admin: boolean;
-  permission_codes: string[];
-};
+type MePayload = Pick<MeData, "is_superuser" | "is_school_admin" | "permission_codes">;
 
 function routeActive(pathname: string, route?: string): boolean {
   if (!route) return false;
@@ -125,27 +121,11 @@ export function Sidebar({ mobileOpen = false, onMobileClose }: { mobileOpen?: bo
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [activeId, setActiveId] = useState("");
   const [menuItems, setMenuItems] = useState<SidebarItem[]>(sidebarMenu);
+  const { me } = usePermissions();
 
   useEffect(() => {
-    let mounted = true;
-
-    const loadMenu = async () => {
-      try {
-        const me = await apiRequestWithRefresh<MePayload>("/api/v1/auth/me/");
-        if (!mounted) return;
-        setMenuItems(filterSidebarByPermissions(sidebarMenu, me));
-      } catch {
-        if (!mounted) return;
-        setMenuItems(sidebarMenu);
-      }
-    };
-
-    void loadMenu();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
+    setMenuItems(me ? filterSidebarByPermissions(sidebarMenu, me) : sidebarMenu);
+  }, [me]);
 
   useEffect(() => {
     setExpanded(buildDefaultExpanded(menuItems, pathname));
