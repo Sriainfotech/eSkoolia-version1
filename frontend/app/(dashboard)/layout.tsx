@@ -15,8 +15,6 @@ import { PageNotesPanel } from "@/components/notes/PageNotesPanel";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 
-import { getAccessToken } from "@/lib/auth";
-import { API_BASE_URL } from "@/lib/api";
 import { saveRecentLS, shouldTrack } from "@/lib/recentsStore";
 
 const USE_NEW_NAV = process.env.NEXT_PUBLIC_NEW_NAV === "1";
@@ -26,13 +24,9 @@ function useRecentsTracking() {
   useEffect(() => {
     if (!shouldTrack(pathname)) return;
     saveRecentLS(pathname);
-    const token = getAccessToken();
-    fetch(`${API_BASE_URL}/api/user/recents/`, {
+    fetch("/api/user/recents/", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: pathname }),
     }).catch(() => {});
   }, [pathname]);
