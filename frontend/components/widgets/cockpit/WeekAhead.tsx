@@ -3,6 +3,10 @@ import { useState, useEffect, useCallback } from 'react';
 import { Plus, Sparkles, ChevronLeft, ChevronRight, Trash2, X, Check, Calendar, Clock } from 'lucide-react';
 import { getAccessToken } from '@/lib/auth';
 import { API_BASE_URL } from '@/lib/api';
+import {
+  listCalendarEvents, createCalendarEvent, updateCalendarEvent, deleteCalendarEvent,
+  type CalendarEvent,
+} from '@/lib/bot/calendarEventsApi';
 
 const CATEGORY_COLORS: Record<string, { bg: string; border: string; text: string; dot: string }> = {
   academic:  { bg: '#EEEAFF', border: '#6D4AFF', text: '#4C35BE', dot: '#6D4AFF' },
@@ -53,8 +57,6 @@ const DAY_SHORT  = ['M',   'T',   'W',   'T',   'F',   'S',   'S'];
 // School hours 7am–5pm in the modal planner
 const HOUR_SLOTS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00'];
 
-const LS_KEY = 'eskoolia_week_events_v2';
-
 function getWeekStart(offset = 0): Date {
   const d = new Date();
   const day = d.getDay();
@@ -79,11 +81,22 @@ function formatDate(d: Date): string {
   return d.toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
 }
 
-function loadEvents(weekKey: string): WeekEvent[] {
-  try { return JSON.parse(localStorage.getItem(`${LS_KEY}_${weekKey}`) || '[]'); } catch { return []; }
+function fromRemote(e: CalendarEvent): WeekEvent {
+  return {
+    id: String(e.id), dayIndex: e.dayIndex, time: e.time, title: e.title,
+    category: (e.category as Category) in CATEGORY_COLORS ? (e.category as Category) : 'personal',
+    note: e.note || undefined, done: e.done, aiGenerated: e.aiGenerated,
+  };
 }
-function saveEvents(weekKey: string, events: WeekEvent[]) {
-  try { localStorage.setItem(`${LS_KEY}_${weekKey}`, JSON.stringify(events)); } catch {}
+
+/** apps/assistant/models.py::PersonalCalendarEvent — replaces the previous
+ *  eskoolia_week_events_v2_* localStorage-only persistence, so a staff
+ *  member's planner survives a localStorage clear or a different device.
+ *  NOT the same thing as the /api/calendar/week-ahead/ call below (a
+ *  separate, still-unbuilt read-only academic-calendar feed). */
+async function loadEvents(weekKey: string): Promise<WeekEvent[]> {
+  const rows = await listCalendarEvents(weekKey);
+  return rows.map(fromRemote);
 }
 function weekKey(d: Date) { return d.toISOString().slice(0, 10); }
 
@@ -105,13 +118,13 @@ export function WeekAhead() {
   const weekStart = getWeekStart(weekOffset);
   const wk = weekKey(weekStart);
 
-  useEffect(() => { setEvents(loadEvents(wk)); }, [wk]);
+  useEffect(() => { loadEvents(wk).then(setEvents); }, [wk]);
 
   // Listen for events added by the AI bot
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { weekKey?: string };
-      if (detail?.weekKey === wk) setEvents(loadEvents(wk));
+      if (detail?.weekKey === wk) loadEvents(wk).then(setEvents);
     };
     window.addEventListener('eskoolia-planner-updated', handler);
     return () => window.removeEventListener('eskoolia-planner-updated', handler);
@@ -131,13 +144,18 @@ export function WeekAhead() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wk]);
 
+  // PlannerModal owns the actual create/delete/toggle API calls (it
+  // already awaits them before calling onSave) — this just mirrors its
+  // result back into the compact widget's own `events` state.
   const saveAndSet = useCallback((evts: WeekEvent[]) => {
     setEvents(evts);
-    saveEvents(wk, evts);
-  }, [wk]);
+  }, []);
 
   const toggleDone = (id: string) => {
-    saveAndSet(events.map(e => e.id === id ? { ...e, done: !e.done } : e));
+    const next = events.map(e => e.id === id ? { ...e, done: !e.done } : e);
+    saveAndSet(next);
+    const numericId = Number(id);
+    if (!Number.isNaN(numericId)) updateCalendarEvent(numericId, { done: !events.find(e => e.id === id)?.done }).catch(() => {});
   };
 
   const todayIdx = getTodayIdx();
@@ -306,37 +324,56 @@ function PlannerModal({ weekOffset, events, onClose, onSave, onWeekChange }: Pla
 
   // Re-load events when offset changes
   const [localEvents, setLocalEvents] = useState<WeekEvent[]>(events);
-  useEffect(() => { setLocalEvents(loadEvents(wk)); }, [wk]);
+  useEffect(() => { loadEvents(wk).then(setLocalEvents); }, [wk]);
 
-  const saveLocal = (evts: WeekEvent[]) => {
+  /** Mutations below persist to apps.assistant.PersonalCalendarEvent
+   *  first, then mirror the result into local + parent state — this is
+   *  what makes planner tasks survive a localStorage clear / a different
+   *  device (they previously lived only in eskoolia_week_events_v2_*). */
+  const applyLocal = (evts: WeekEvent[]) => {
     setLocalEvents(evts);
-    saveEvents(wk, evts);
     onSave(evts);
   };
 
-  const addEvent = () => {
+  const addEvent = async () => {
     if (!form.title.trim()) return;
     const slot = adding ?? { dayIndex: todayIdx, time: form.time };
-    const ev: WeekEvent = {
-      id: String(Date.now()),
+    const created = await createCalendarEvent(wk, {
       dayIndex: slot.dayIndex,
       time: adding?.time ?? form.time,
       title: form.title.trim(),
       category: form.category,
       note: form.note.trim() || undefined,
-    };
-    saveLocal([...localEvents, ev]);
+    });
+    if (created) applyLocal([...localEvents, fromRemote(created)]);
     setAdding(null);
     setForm({ title: '', category: 'academic', note: '', time: '09:00' });
   };
 
-  const deleteEvent = (id: string) => { saveLocal(localEvents.filter(e => e.id !== id)); setEditingId(null); };
-  const toggleDone = (id: string) => saveLocal(localEvents.map(e => e.id === id ? { ...e, done: !e.done } : e));
+  const deleteEvent = async (id: string) => {
+    setEditingId(null);
+    const numericId = Number(id);
+    if (Number.isNaN(numericId)) return;
+    const ok = await deleteCalendarEvent(numericId);
+    if (ok) applyLocal(localEvents.filter(e => e.id !== id));
+  };
 
-  const acceptAI = (s: Omit<WeekEvent, 'id'>) => {
-    const ev: WeekEvent = { ...s, id: `ai-${Date.now()}` };
-    const next = [...localEvents.filter(e => !(e.dayIndex === s.dayIndex && e.time === s.time && e.aiGenerated)), ev];
-    saveLocal(next);
+  const toggleDone = async (id: string) => {
+    const numericId = Number(id);
+    if (Number.isNaN(numericId)) return;
+    const current = localEvents.find(e => e.id === id);
+    const updated = await updateCalendarEvent(numericId, { done: !current?.done });
+    if (updated) applyLocal(localEvents.map(e => e.id === id ? fromRemote(updated) : e));
+  };
+
+  const acceptAI = async (s: Omit<WeekEvent, 'id'>) => {
+    const created = await createCalendarEvent(wk, {
+      dayIndex: s.dayIndex, time: s.time, title: s.title, category: s.category,
+      note: s.note, aiGenerated: true,
+    });
+    if (!created) return;
+    const next = [...localEvents.filter(e => !(e.dayIndex === s.dayIndex && e.time === s.time && e.aiGenerated)), fromRemote(created)];
+    applyLocal(next);
   };
 
   const eventsForSlot = (dayIndex: number, time: string) =>
