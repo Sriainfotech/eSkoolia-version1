@@ -24,6 +24,10 @@ export interface MeData {
   school_name: string | null;
   role_names: string[];
   must_change_password: boolean;
+  /** Tenant plan/ABAC feature ids currently enabled for this school — see
+   *  apps/tenancy/feature_flags.py's get_tenant_features(). Additive field;
+   *  older cached payloads simply lack it (defaulted to [] below). */
+  enabled_features: string[];
 }
 
 // ── Cache ─────────────────────────────────────────────────────────────────────
@@ -73,6 +77,7 @@ function fetchMe(force = false): Promise<MeData> {
           school_branding: { name: null, brand_color: null, logo_url: null },
           school_id: null, school_name: null,
           role_names: [], must_change_password: false,
+          enabled_features: [],
         };
         return fallback;
       });
@@ -132,5 +137,12 @@ export function usePermissions() {
     return codes.some((c) => c === '*' || c.startsWith(`${prefix}.`));
   }
 
-  return { me, can, canAnyPrefix };
+  /** ABAC check — is this tenant-plan feature enabled? Deny while loading
+   *  (mirrors can()'s deny-while-loading stance) rather than fail open. */
+  function hasFeature(featureFlag: string): boolean {
+    if (!me) return false;
+    return me.enabled_features.includes(featureFlag);
+  }
+
+  return { me, can, canAnyPrefix, hasFeature };
 }
