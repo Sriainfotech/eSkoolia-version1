@@ -77,6 +77,10 @@ class FeesType(models.Model):
 
     class Meta:
         ordering = ['name']
+        indexes = [
+            models.Index(fields=['is_deleted'], name='idx_feestype_is_deleted'),
+            models.Index(fields=['status'], name='idx_feestype_status'),
+        ]
 
     def __str__(self):
         return f"{self.fees_group.name} - {self.name}"
@@ -215,6 +219,11 @@ class FeeSchedule(models.Model):
                 name='unique_schedule_without_group'
             ),
         ]
+        indexes = [
+            models.Index(fields=['is_deleted'], name='idx_feeschedule_is_deleted'),
+            models.Index(fields=['status'], name='idx_feeschedule_status'),
+            models.Index(fields=['due_date'], name='idx_feeschedule_due_date'),
+        ]
 
     def clean(self):
         super().clean()
@@ -267,6 +276,10 @@ class ConcessionRule(models.Model):
     class Meta:
         unique_together = ('academic_year', 'name')
         ordering = ['name']
+        indexes = [
+            models.Index(fields=['is_deleted'], name='idx_concessionrule_is_deleted'),
+            models.Index(fields=['status'], name='idx_concessionrule_status'),
+        ]
 
     def clean(self):
         super().clean()
@@ -318,6 +331,10 @@ class LateFeeRule(models.Model):
     class Meta:
         unique_together = ('academic_year', 'name')
         ordering = ['name']
+        indexes = [
+            models.Index(fields=['is_deleted'], name='idx_latefeerule_is_deleted'),
+            models.Index(fields=['status'], name='idx_latefeerule_status'),
+        ]
 
     def clean(self):
         super().clean()
@@ -354,6 +371,9 @@ class FeeAssignment(models.Model):
 
     class Meta:
         ordering = ['-due_date']
+        indexes = [
+            models.Index(fields=['due_date'], name='idx_feeassignment_due_date'),
+        ]
 
     @property
     def status(self) -> str:
@@ -409,6 +429,10 @@ class Payment(models.Model):
 
     class Meta:
         ordering = ['-paid_at']
+        indexes = [
+            models.Index(fields=['status'], name='idx_payment_status'),
+            models.Index(fields=['paid_at'], name='idx_payment_paid_at'),
+        ]
 
     def __str__(self):
         return f"Payment of {self.amount_paid} for {self.student} via {self.method}"

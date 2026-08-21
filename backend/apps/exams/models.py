@@ -255,6 +255,9 @@ class ExamRoutine(models.Model):
                 name="uq_exam_routine_scope_date_period",
             ),
         ]
+        indexes = [
+            models.Index(fields=["exam_date"], name="idx_exam_routine_exam_date"),
+        ]
 
     def clean(self):
         if not self.school_id:

@@ -50,6 +50,9 @@ class ClassSubjectAssignment(models.Model):
                 name="uq_class_section_subject_assignment",
             ),
         ]
+        indexes = [
+            models.Index(fields=["active_status"], name="idx_csa_active_status"),
+        ]
 
 
 class ClassTeacherAssignment(models.Model):
@@ -90,6 +93,9 @@ class ClassTeacherAssignment(models.Model):
                 fields=["school", "academic_year", "school_class", "section"],
                 name="uq_class_teacher_assignment_scope",
             ),
+        ]
+        indexes = [
+            models.Index(fields=["active_status"], name="idx_cta_active_status"),
         ]
 
 
@@ -163,12 +169,37 @@ class ClassRoutineSlot(models.Model):
         related_name="routine_slots",
     )
     day = models.CharField(max_length=10, choices=DAY_CHOICES)
-    day_id = models.PositiveSmallIntegerField(null=True, blank=True)
-    class_period_id = models.PositiveIntegerField(null=True, blank=True)
+    day_id = models.PositiveSmallIntegerField(
+        null=True, blank=True,
+        help_text="Deprecated legacy numeric day — use `day` instead.",
+    )
+    class_period_id = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Deprecated loose reference — use `period` instead.",
+    )
+    period = models.ForeignKey(
+        "core.ClassPeriod",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="routine_slots_period",
+        help_text="Real FK replacement for the legacy `class_period_id` loose reference.",
+    )
     start_time = models.TimeField()
     end_time = models.TimeField()
-    room_id = models.PositiveIntegerField(null=True, blank=True)
+    room_id = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Deprecated loose reference — use `class_room` instead.",
+    )
     room = models.CharField(max_length=50, blank=True)
+    class_room = models.ForeignKey(
+        "core.ClassRoom",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="routine_slots_room",
+        help_text="Real FK replacement for the legacy `room_id` loose reference.",
+    )
     is_break = models.BooleanField(default=False)
     active_status = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -182,6 +213,9 @@ class ClassRoutineSlot(models.Model):
                 fields=["school", "academic_year", "school_class", "section", "day", "start_time"],
                 name="uq_class_routine_slot",
             ),
+        ]
+        indexes = [
+            models.Index(fields=["active_status"], name="idx_crs_active_status"),
         ]
 
 
@@ -413,6 +447,9 @@ class Lesson(models.Model):
     class Meta:
         db_table = "lessons"
         ordering = ["school_class_id", "section_id", "subject_id", "id"]
+        indexes = [
+            models.Index(fields=["active_status"], name="idx_lesson_active_status"),
+        ]
 
 
 class LessonTopic(models.Model):
@@ -549,8 +586,55 @@ class LessonPlanner(models.Model):
     note = models.TextField(blank=True)
     lesson_date = models.DateField()
     competed_date = models.DateField(null=True, blank=True)
-    completed_status = models.CharField(max_length=50, blank=True)
-    room_id = models.PositiveIntegerField(null=True, blank=True)
+
+    COMPLETED_STATUS_CHOICES = [
+        ("Planned", "Planned"),
+        ("In Progress", "In Progress"),
+        ("Completed", "Completed"),
+    ]
+    completed_status = models.CharField(
+        max_length=50, blank=True, choices=COMPLETED_STATUS_CHOICES,
+        help_text="Delivery progress of the lesson itself (not the review workflow below).",
+    )
+
+    # --- Review workflow: separate from completed_status above, which only
+    # tracks lesson-delivery progress. Nothing writes workflow_status yet —
+    # the submit/review actions are built with the Planning Studio frontend.
+    WORKFLOW_DRAFT = "draft"
+    WORKFLOW_SUBMITTED = "submitted"
+    WORKFLOW_UNDER_REVIEW = "under_review"
+    WORKFLOW_APPROVED = "approved"
+    WORKFLOW_REVISION_REQUESTED = "revision_requested"
+    WORKFLOW_STATUS_CHOICES = [
+        (WORKFLOW_DRAFT, "Draft"),
+        (WORKFLOW_SUBMITTED, "Submitted"),
+        (WORKFLOW_UNDER_REVIEW, "Under Review"),
+        (WORKFLOW_APPROVED, "Approved"),
+        (WORKFLOW_REVISION_REQUESTED, "Revision Requested"),
+    ]
+    workflow_status = models.CharField(max_length=20, choices=WORKFLOW_STATUS_CHOICES, default=WORKFLOW_DRAFT)
+    submitted_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="lesson_plans_submitted",
+    )
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="lesson_plans_reviewed",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    review_notes = models.TextField(blank=True)
+
+    room_id = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Deprecated loose reference — use `class_room` instead.",
+    )
+    class_room = models.ForeignKey(
+        "core.ClassRoom",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lesson_planners_room",
+        help_text="Real FK replacement for the legacy `room_id` loose reference.",
+    )
     teacher = models.ForeignKey(
         "users.User",
         on_delete=models.SET_NULL,
@@ -558,7 +642,18 @@ class LessonPlanner(models.Model):
         blank=True,
         related_name="lesson_plans",
     )
-    class_period_id = models.PositiveIntegerField(null=True, blank=True)
+    class_period_id = models.PositiveIntegerField(
+        null=True, blank=True,
+        help_text="Deprecated loose reference — use `period` instead.",
+    )
+    period = models.ForeignKey(
+        "core.ClassPeriod",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="lesson_planners_period",
+        help_text="Real FK replacement for the legacy `class_period_id` loose reference.",
+    )
     subject = models.ForeignKey("core.Subject", on_delete=models.CASCADE, related_name="lesson_plans")
     school_class = models.ForeignKey("core.Class", on_delete=models.CASCADE, related_name="lesson_plans")
     section = models.ForeignKey(
@@ -603,6 +698,27 @@ class LessonPlanTopic(models.Model):
         ordering = ["id"]
 
 
+class LessonPlanApprovalLog(models.Model):
+    """
+    Append-only activity feed for a lesson plan's review workflow — mirrors
+    the existing ClassTeacherAudit convention (no direct `school` FK; scope
+    via the parent record's school instead).
+    """
+
+    lesson_planner = models.ForeignKey(LessonPlanner, on_delete=models.CASCADE, related_name="approval_log")
+    action = models.CharField(max_length=20, choices=LessonPlanner.WORKFLOW_STATUS_CHOICES)
+    by = models.ForeignKey("users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="lesson_plan_approval_actions")
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "lesson_plan_approval_log"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.lesson_planner_id} — {self.action}"
+
+
 class ClassSubjectEntry(models.Model):
     """Simplified per-class subject catalog used during Foundation setup."""
 
@@ -642,6 +758,9 @@ class ClassSubjectEntry(models.Model):
                 fields=["school", "school_class", "code"],
                 name="uq_class_subject_entry",
             ),
+        ]
+        indexes = [
+            models.Index(fields=["active_status"], name="idx_cse_active_status"),
         ]
 
     def __str__(self):
