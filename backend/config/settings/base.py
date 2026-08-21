@@ -140,6 +140,7 @@ INSTALLED_APPS = [
     "apps.todos",
     "apps.calls_queue",
     "apps.settings",
+    "apps.assistant",
 ]
 
 # Guarded django-tenants integration

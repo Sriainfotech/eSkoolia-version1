@@ -36,6 +36,7 @@ urlpatterns = [
     path("api/chat/", include("apps.chat.urls")),
     path("api/notes/", include("apps.notes.urls")),
     path("api/user/todos/", include("apps.todos.urls")),
+    path("api/v1/assistant/", include("apps.assistant.urls")),
     path("api/ai/calls-queue/", include("apps.calls_queue.urls")),
     path("api/v1/settings/", include("apps.settings.urls")),
     path("api/ai/brief/", AIBriefView.as_view(), name="ai-brief"),
@@ -56,3 +57,5 @@ urlpatterns = [
 urlpatterns += [
     re_path(r"^media/(?P<path>.*)$", serve_media),
 ]
+
+
