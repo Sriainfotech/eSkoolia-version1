@@ -75,7 +75,9 @@ class MeView(APIView):
             "brand_color": None,
             "logo_url": None,
         }
-        # If SchoolTenant exists for this school, pull richer branding
+        # If SchoolTenant exists for this school, pull richer branding and
+        # the tenant's ABAC feature list (plan-based module gating).
+        enabled_features = None
         if school:
             try:
                 from apps.tenancy.models import SchoolTenant
@@ -85,8 +87,18 @@ class MeView(APIView):
                 if tenant:
                     school_branding["brand_color"] = getattr(tenant, "brand_color", None)
                     school_branding["logo_url"] = getattr(tenant, "logo_url", None)
+                    from apps.tenancy.feature_flags import get_tenant_features
+                    features = get_tenant_features(tenant_id=tenant.tenant_id)
+                    enabled_features = [fid for fid, info in features.items() if info.get("enabled")]
             except Exception:
-                pass  # SchoolTenant not available — silently fall back
+                pass  # SchoolTenant/feature lookup not available — fall back below
+        if enabled_features is None:
+            # No SchoolTenant/plan record resolvable — fail open (matches
+            # is_feature_enabled()'s own "monolithic mode: all features
+            # available" behavior in apps/tenancy/feature_flags.py) rather
+            # than silently hiding every module for un-provisioned schools.
+            from apps.tenancy.feature_flags import DEFAULT_FEATURES
+            enabled_features = list(DEFAULT_FEATURES["enterprise"].keys())
 
         class_section = None
         try:
@@ -115,6 +127,7 @@ class MeView(APIView):
                 "must_change_password": bool(getattr(user, "must_change_password", False)),
                 "llm_enabled": llm_enabled,
                 "class_section": class_section,
+                "enabled_features": enabled_features,
             },
             status=status.HTTP_200_OK,
         )
