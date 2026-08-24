@@ -1,5 +1,27 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Claude (24/08/2026)
+
+**Area:** Academics → Timetable — period time ranges, the slot-assignment modal's subject/teacher pickers, and the Teacher Schedule combobox
+
+### 1. Fixes
+- **Period headers only showed a start time** ("08:00") instead of a range. `columns` in `frontend/components/academics/timetable/TimetableWorkspace.tsx` already computed `end_time` per period (derived from Configure Hours' `period_duration_minutes`) but never rendered it. Now shows "08:00 – 08:40" in both the Class Timetable grid and the Teacher Schedule tab header.
+- **Slot modal's Subject dropdown listed every subject in the school**, not the ~14 actually assigned to that grade under Academics → Subjects. Root cause: it fetched from the global `/api/v1/core/subjects/` catalog, which is unrelated to the per-class `ClassSubjectEntry` model that Academics → Subjects actually manages (the two models aren't FK-linked — only matchable by name). Added `useClassSubjectEntries(classId)` (`frontend/hooks/useTimetableApi.ts`) hitting `/api/v1/academics/class-subject-entries/?class_id=<id>`, and filtered the dropdown to subjects whose name matches an active entry for that class.
+- **Slot modal's Teacher list showed every teacher who can teach that subject anywhere in the school**, ignoring that Staff Assignment already records exactly one teacher per (class, section, subject) in `ClassSubjectAssignment`. `StaffTeachersView.list` (`backend/apps/academics/views.py`) now accepts `class_id`/`section_id` and flags that one row's teacher as `is_assigned`; also added `is_on_leave_today` (checked against `LeaveRequest`, status approved, covering today — the timetable is a pure recurring weekly template with no concrete date attached to a slot, so this can only be a same-day heuristic, not a true per-slot check). Frontend now shows that one assigned teacher by default (auto-selected if free) and only reveals a substitute list when they're busy or on leave.
+  - Follow-up fix: the assignment lookup initially filtered strictly on `academic_year_id`, which missed real assignment rows saved with a different or null year — `StaffSubjectAssignmentsView` already tolerates this itself via a `Q(academic_year__isnull=True)` OR-clause when listing. Added the same exact-year-then-any-year fallback; this is what actually surfaced the already-assigned teacher for Grade 5 Sec A / Cricket once tested live.
+- **Teacher Schedule tab's teacher picker was a native `<select>`** styled to look like plain header text — clicking it popped the browser's unstyled default list, with no search. Replaced with a custom `TeacherPicker` combobox (search input + filtered scrollable list, closes on outside-click/Escape, autofocuses on open). Also had to drop `overflow-hidden` from the hero card's outer wrapper (moving `rounded-2xl` onto the inner gradient header div instead) — otherwise the dropdown panel was clipped by the card's corner-rounding mask.
+
+### Files changed
+- `frontend/components/academics/timetable/TimetableWorkspace.tsx`
+- `frontend/hooks/useTimetableApi.ts`
+- `frontend/types/academics.ts`
+- `backend/apps/academics/views.py`
+
+### Status
+✅ All changes type-check clean (`tsc --noEmit`) and the touched Django view parses clean. The subject-filtering and teacher-assignment fixes were verified live by the user against real Grade 5 / Grade 10 data mid-session (screenshots confirmed both the "too many subjects" and "assigned teacher not showing" bugs, then confirmed the academic-year fallback as the actual cause of the latter). The period-range and Teacher Schedule combobox changes were not yet visually confirmed by the user as of this entry — worth a quick check next session if not already done.
+
+---
+
 ## Update — Claude (05/08/2026)
 
 **Area:** Pre-production QA pass (12 of 14 phases complete) — 8 bugs found and fixed live against the shared Neon DB
