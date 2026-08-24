@@ -1,5 +1,5 @@
-import FoundationWorkspace from "@/components/academics/foundation/FoundationWorkspace";
+import TimetableWorkspace from "@/components/academics/timetable/TimetableWorkspace";
 
 export default function TimetableWorkspacePage() {
-  return <FoundationWorkspace initialTab="timetable" />;
+  return <TimetableWorkspace />;
 }

@@ -1,4 +1,11 @@
 from django.urls import path
+from .academics_views import (
+    AcademicsHomeworkEvaluationView,
+    AcademicsReportsDownloadFileView,
+    AcademicsReportsDownloadsView,
+    AcademicsReportsSummaryView,
+    AcademicsSyllabusProgressView,
+)
 from .views import (
     AcademicClassPerformanceReportView,
     AccountsExpenseReportView,
@@ -66,6 +73,11 @@ urlpatterns = [
 
     path("academics/class-report/", ClassReportView.as_view(), name="academics_class_report"),
     path("academics/class-routine-report/", ClassRoutineReportView.as_view(), name="academics_class_routine_report"),
+    path("academics/summary/", AcademicsReportsSummaryView.as_view(), name="academics_reports_summary"),
+    path("academics/syllabus-progress/", AcademicsSyllabusProgressView.as_view(), name="academics_syllabus_progress"),
+    path("academics/homework-evaluation/", AcademicsHomeworkEvaluationView.as_view(), name="academics_homework_evaluation"),
+    path("academics/downloads/", AcademicsReportsDownloadsView.as_view(), name="academics_reports_downloads"),
+    path("academics/downloads/<str:key>/", AcademicsReportsDownloadFileView.as_view(), name="academics_reports_download_file"),
 
     path("examination/exam-routine-report/", ExamRoutineReportView.as_view(), name="examination_exam_routine_report"),
     path("examination/teacher-class-routine-report/", TeacherClassRoutineReportView.as_view(), name="examination_teacher_class_routine_report"),

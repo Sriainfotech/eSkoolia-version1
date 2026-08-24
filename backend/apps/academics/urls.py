@@ -7,6 +7,7 @@ from .views import (
 	ClassTeacherAssignmentViewSet,
 	HomeworkSubmissionViewSet,
 	HomeworkViewSet,
+	LessonPlanApprovalLogViewSet,
 	LessonPlannerViewSet,
 	LessonTopicDetailViewSet,
 	LessonTopicViewSet,
@@ -36,6 +37,7 @@ router.register("lessons", LessonViewSet, basename="lesson")
 router.register("lesson-topics", LessonTopicViewSet, basename="lesson-topic")
 router.register("lesson-topic-details", LessonTopicDetailViewSet, basename="lesson-topic-detail")
 router.register("lesson-planners", LessonPlannerViewSet, basename="lesson-planner")
+router.register("lesson-plan-approval-log", LessonPlanApprovalLogViewSet, basename="lesson-plan-approval-log")
 # Staff Assignment Module routes
 router.register("staff/teachers", StaffTeachersView, basename="staff-teachers")
 router.register("staff/class-teachers", StaffClassTeachersView, basename="staff-class-teachers")

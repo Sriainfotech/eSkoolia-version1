@@ -9,9 +9,6 @@ import { usePermissions } from '@/hooks/usePermissions';
 const COMING_SOON_PATHS = new Set([
   '/hr/leave',
   '/hr/offboarding',
-  '/academics/timetable',
-  '/academics/planning-studio',
-  '/academics/academic-reports',
 ]);
 
 const FEES_SOON_BADGE_PATHS = new Set<string>([]);

@@ -17,15 +17,16 @@ class Migration(migrations.Migration):
         ("fees", "0014_add_dueinteraction"),
     ]
 
+    def forward(apps, schema_editor):
+        if schema_editor.connection.vendor != 'sqlite':
+            schema_editor.execute("ALTER TABLE fees_payment ALTER COLUMN collected_by_note SET DEFAULT '';")
+            schema_editor.execute("ALTER TABLE fees_payment ALTER COLUMN counter SET DEFAULT '';")
+
+    def reverse(apps, schema_editor):
+        if schema_editor.connection.vendor != 'sqlite':
+            schema_editor.execute("ALTER TABLE fees_payment ALTER COLUMN collected_by_note DROP DEFAULT;")
+            schema_editor.execute("ALTER TABLE fees_payment ALTER COLUMN counter DROP DEFAULT;")
+
     operations = [
-        migrations.RunSQL(
-            sql=[
-                "ALTER TABLE fees_payment ALTER COLUMN collected_by_note SET DEFAULT '';",
-                "ALTER TABLE fees_payment ALTER COLUMN counter SET DEFAULT '';",
-            ],
-            reverse_sql=[
-                "ALTER TABLE fees_payment ALTER COLUMN collected_by_note DROP DEFAULT;",
-                "ALTER TABLE fees_payment ALTER COLUMN counter DROP DEFAULT;",
-            ],
-        ),
+        migrations.RunPython(forward, reverse),
     ]

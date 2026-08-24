@@ -1,5 +1,5 @@
-import FoundationWorkspace from "@/components/academics/foundation/FoundationWorkspace";
+import ReportsWorkspace from "@/components/academics/reports/ReportsWorkspace";
 
 export default function AcademicReportsPage() {
-  return <FoundationWorkspace initialTab="reports" />;
+  return <ReportsWorkspace />;
 }

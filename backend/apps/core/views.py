@@ -16,7 +16,7 @@ from django.db import IntegrityError
 from django.db.models import Avg, Count, Q
 from django.db.models.functions import Lower
 from config.pagination import ApiPageNumberPagination
-from .models import AcademicYear, Class, ClassPeriod, ClassRoom, Section, Stream, Subject, Vehicle, TransportRoute, AssignVehicle
+from .models import AcademicYear, Class, ClassPeriod, ClassRoom, LevelScheduleConfig, Section, Stream, Subject, Vehicle, TransportRoute, AssignVehicle
 from .models import BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate
 from .models import VehicleDriverAssignment, TransportNotificationLog, RoutePerformanceLog
 from .models import ItemCategory, ItemStore, Supplier, Item, ItemReceive, ItemIssue, ItemSell
@@ -27,6 +27,7 @@ from .serializers import (
     ClassPeriodSerializer,
     ClassRoomSerializer,
     ClassSerializer,
+    LevelScheduleConfigSerializer,
     SectionSerializer,
     SubjectSerializer,
     VehicleSerializer,
@@ -677,8 +678,8 @@ class ClassRoomViewSet(TenantQueryMixin, viewsets.ModelViewSet):
         # Prevent deletion when room is already used in timetable or lesson planning.
         from apps.academics.models import ClassRoutineSlot, LessonPlanner
 
-        in_use = ClassRoutineSlot.objects.filter(school_id=room.school_id, room_id=room.id).exists() or \
-            LessonPlanner.objects.filter(school_id=room.school_id, room_id=room.id).exists()
+        in_use = ClassRoutineSlot.objects.filter(school_id=room.school_id, class_room_id=room.id).exists() or \
+            LessonPlanner.objects.filter(school_id=room.school_id, class_room_id=room.id).exists()
 
         if in_use:
             return Response(
@@ -697,6 +698,67 @@ class ClassRoomViewSet(TenantQueryMixin, viewsets.ModelViewSet):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class LevelScheduleConfigViewSet(TenantQueryMixin, viewsets.ModelViewSet):
+    model = LevelScheduleConfig
+    serializer_class = LevelScheduleConfigSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        academic_year_id = self.request.query_params.get("academic_year_id") or self.request.query_params.get("academic_year")
+        if academic_year_id:
+            queryset = queryset.filter(academic_year_id=academic_year_id)
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        # Configuring a level's hours is naturally a "save", not a one-time
+        # create — re-saving the same (school, academic_year, level_group)
+        # should update the existing row rather than fail. This also avoids
+        # ever hitting the uq_level_schedule_config_scope constraint from a
+        # normal save, so a genuine IntegrityError below means something
+        # else went wrong (e.g. a missing required field) and should say so.
+        academic_year_id = request.data.get("academic_year")
+        level_group = request.data.get("level_group")
+        existing = None
+        if request.user.school_id and academic_year_id and level_group:
+            existing = self.get_queryset().filter(academic_year_id=academic_year_id, level_group=level_group).first()
+
+        if existing:
+            serializer = self.get_serializer(existing, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            return Response({"success": True, "message": "Schedule configuration updated.", "data": serializer.data})
+
+        try:
+            return super().create(request, *args, **kwargs)
+        except IntegrityError as exc:
+            message = str(exc).lower()
+            if "uq_level_schedule_config_scope" in message:
+                return Response(
+                    {"success": False, "message": "Schedule configuration for this level and academic year already exists."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            return Response(
+                {"success": False, "message": "Unable to save schedule configuration — a required field may be missing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+    def update(self, request, *args, **kwargs):
+        try:
+            return super().update(request, *args, **kwargs)
+        except IntegrityError as exc:
+            message = str(exc).lower()
+            if "uq_level_schedule_config_scope" in message:
+                return Response(
+                    {"success": False, "message": "Another schedule configuration for this level and academic year already exists."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            return Response(
+                {"success": False, "message": "Unable to update schedule configuration — a required field may be missing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
 
 # ===== TRANSPORT MODULE VIEWSETS =====

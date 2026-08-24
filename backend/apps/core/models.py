@@ -147,6 +147,26 @@ class Class(models.Model):
 
         return 1000
 
+    # Level group is derived from numeric_order rather than stored as its own
+    # column: `save()` above already forces `name`/`numeric_order` to one of a
+    # fixed set of values (Nursery/LKG/UKG/Grade 1-12), so a stored `level`
+    # field would just be a second source of truth that could drift out of
+    # sync. Ranges mirror the Academics Timetable prototype's level groups.
+    LEVEL_GROUPS = [
+        ("pre_primary", "Pre-Primary", range(1, 4)),        # Nursery, LKG, UKG
+        ("primary", "Primary", range(4, 9)),                 # Grade 1-5
+        ("middle", "Middle", range(9, 12)),                  # Grade 6-8
+        ("secondary", "Secondary", range(12, 14)),           # Grade 9-10
+        ("senior_secondary", "Senior Secondary", range(14, 16)),  # Grade 11-12
+    ]
+
+    @property
+    def level(self):
+        for code, _label, order_range in self.LEVEL_GROUPS:
+            if self.numeric_order in order_range:
+                return code
+        return None
+
     @classmethod
     def valid_class_options(cls):
         return [{"value": name, "label": name} for name in cls.class_names]
@@ -295,6 +315,61 @@ class ClassRoom(models.Model):
 
     def __str__(self):
         return self.room_no
+
+
+class LevelScheduleConfig(models.Model):
+    """
+    Working-hours configuration for one level group (Pre-Primary, Primary, ...)
+    for one academic year — start/end time, period length, breaks, bus
+    dispersal, and working days. Feeds the Timetable module's period grid.
+    Nothing writes here yet; this is schema-only until the Timetable
+    frontend is built.
+    """
+
+    LEVEL_GROUP_CHOICES = [(code, label) for code, label, _range in Class.LEVEL_GROUPS]
+
+    WEEKDAY_CHOICES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="level_schedule_configs")
+    academic_year = models.ForeignKey(
+        "AcademicYear",
+        on_delete=models.CASCADE,
+        related_name="level_schedule_configs",
+    )
+    level_group = models.CharField(max_length=20, choices=LEVEL_GROUP_CHOICES)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    period_duration_minutes = models.PositiveSmallIntegerField()
+    periods_per_day = models.PositiveSmallIntegerField(
+        help_text="Server-computed on save from start/end time, period duration, and break durations.",
+    )
+    snack_break_after_period = models.PositiveSmallIntegerField(null=True, blank=True)
+    snack_break_minutes = models.PositiveSmallIntegerField(null=True, blank=True)
+    lunch_break_after_period = models.PositiveSmallIntegerField(null=True, blank=True)
+    lunch_break_minutes = models.PositiveSmallIntegerField(null=True, blank=True)
+    bus_dispersal_time = models.TimeField(null=True, blank=True)
+    pickup_time = models.TimeField(null=True, blank=True)
+    working_days = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=f"List of weekday codes, e.g. {WEEKDAY_CHOICES[:5]}",
+    )
+    is_configured = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "level_schedule_configs"
+        ordering = ["level_group"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "academic_year", "level_group"],
+                name="uq_level_schedule_config_scope",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.get_level_group_display()} ({self.academic_year_id})"
 
 
 # ===== TRANSPORT MODULE =====

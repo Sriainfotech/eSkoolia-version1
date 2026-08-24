@@ -7,6 +7,7 @@ from .models import (
 	Homework,
 	HomeworkSubmission,
 	Lesson,
+	LessonPlanApprovalLog,
 	LessonPlanner,
 	LessonPlanTopic,
 	LessonTopic,
@@ -28,3 +29,4 @@ admin.site.register(LessonTopic)
 admin.site.register(LessonTopicDetail)
 admin.site.register(LessonPlanner)
 admin.site.register(LessonPlanTopic)
+admin.site.register(LessonPlanApprovalLog)

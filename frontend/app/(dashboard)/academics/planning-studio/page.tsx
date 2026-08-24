@@ -1,5 +1,5 @@
-import FoundationWorkspace from "@/components/academics/foundation/FoundationWorkspace";
+import PlanningStudioWorkspace from "@/components/academics/planning-studio/PlanningStudioWorkspace";
 
 export default function PlanningStudioPage() {
-  return <FoundationWorkspace initialTab="planning" />;
+  return <PlanningStudioWorkspace />;
 }

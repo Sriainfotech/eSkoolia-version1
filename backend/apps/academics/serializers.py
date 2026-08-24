@@ -17,6 +17,7 @@ from .models import (
     Homework,
     HomeworkSubmission,
     Lesson,
+    LessonPlanApprovalLog,
     LessonPlanner,
     LessonPlanTopic,
     LessonTopic,
@@ -301,10 +302,12 @@ class ClassRoutineSlotSerializer(LegacyAliasMixin):
             "day",
             "day_id",
             "class_period_id",
+            "period",
             "start_time",
             "end_time",
             "room_id",
             "room",
+            "class_room",
             "is_break",
             "active_status",
             "created_at",
@@ -318,10 +321,29 @@ class ClassRoutineSlotSerializer(LegacyAliasMixin):
             "section",
             "subject",
             "teacher",
+            # `period`/`class_room` are read-only for now — no UI writes to
+            # them yet, and the write path needs the same cross-school
+            # validation as the other FKs above once the Timetable slot
+            # editor is actually built.
+            "period",
+            "class_room",
             "created_at",
             "updated_at",
         ]
         validators = []
+
+    def to_representation(self, instance):
+        ret = super().to_representation(instance)
+        if instance.subject:
+            ret["subject"] = {"id": instance.subject.id, "name": instance.subject.name}
+        else:
+            ret["subject"] = None
+            
+        if instance.teacher:
+            ret["teacher"] = {"id": instance.teacher.id, "get_full_name": getattr(instance.teacher, "get_full_name", lambda: "")()}
+        else:
+            ret["teacher"] = None
+        return ret
 
     def _normalize_room(self, attrs):
         room_id = attrs.get("room_id")
@@ -690,7 +712,7 @@ class HomeworkSerializer(LegacyAliasMixin):
 
 
 class UploadedContentSerializer(LegacyAliasMixin):
-    ALLOWED_FILE_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".txt", ".zip", ".jpg", ".jpeg", ".png", ".mp4", ".mp3"}
+    # Allowed any file extensions now
 
     class_id = serializers.PrimaryKeyRelatedField(source="class_id_ref", queryset=UploadedContent._meta.get_field("class_id_ref").related_model.objects.all(), allow_null=True, required=False)
     section_id = serializers.PrimaryKeyRelatedField(source="section_id_ref", queryset=UploadedContent._meta.get_field("section_id_ref").related_model.objects.all(), allow_null=True, required=False)
@@ -787,8 +809,6 @@ class UploadedContentSerializer(LegacyAliasMixin):
 
         if file_upload:
             extension = os.path.splitext(file_upload.name or "")[1].lower()
-            if extension not in self.ALLOWED_FILE_EXTENSIONS:
-                raise serializers.ValidationError({"message": "Invalid file format."})
             try:
                 saved_path = default_storage.save(
                     f"academics/uploaded-content/{file_upload.name}",
@@ -826,6 +846,11 @@ class LessonTopicDetailSerializer(LegacyAliasMixin):
     def validate(self, attrs):
         attrs = super().validate(attrs)
         topic_title = attrs.get("topic_title")
+        
+        # If this is a partial update and topic_title isn't provided, skip validating it
+        if topic_title is None and self.instance:
+            return attrs
+            
         if not isinstance(topic_title, str) or not topic_title.strip():
             raise serializers.ValidationError({"topic_title": "Topic title is required."})
         attrs["topic_title"] = topic_title.strip()
@@ -859,6 +884,27 @@ class LessonSerializer(LegacyAliasMixin):
     section_name = serializers.CharField(source="section.name", read_only=True)
     subject_name = serializers.CharField(source="subject.name", read_only=True)
     lesson_name = serializers.CharField(source="lesson_title", read_only=True)
+    topics_done = serializers.SerializerMethodField()
+    topics_total = serializers.SerializerMethodField()
+    topics_preview = serializers.SerializerMethodField()
+
+    def _topics(self, obj):
+        # One query per lesson, cached on the instance, shared by all three
+        # fields below — instead of one query per field.
+        if not hasattr(obj, "_topics_cache"):
+            obj._topics_cache = list(
+                LessonTopicDetail.objects.filter(lesson=obj).values("topic_title", "completed_status")
+            )
+        return obj._topics_cache
+
+    def get_topics_done(self, obj):
+        return sum(1 for t in self._topics(obj) if t["completed_status"] == "Completed")
+
+    def get_topics_total(self, obj):
+        return len(self._topics(obj))
+
+    def get_topics_preview(self, obj):
+        return [t["topic_title"] for t in self._topics(obj)[:6]]
 
     class Meta:
         model = Lesson
@@ -873,6 +919,9 @@ class LessonSerializer(LegacyAliasMixin):
             "section_name",
             "subject_name",
             "lesson_name",
+            "topics_done",
+            "topics_total",
+            "topics_preview",
             "academic_year",
             "school_class",
             "section",
@@ -1012,7 +1061,7 @@ class LessonTopicGroupCreateSerializer(serializers.Serializer):
         if lesson and (
             lesson.school_class_id != school_class.id
             or lesson.subject_id != subject.id
-            or (section and lesson.section_id != section.id)
+            or (section and lesson.section_id is not None and lesson.section_id != section.id)
         ):
             raise serializers.ValidationError({"lesson_id": ["Selected lesson does not match the chosen class, section, and subject."]})
 
@@ -1036,16 +1085,6 @@ class LessonTopicGroupCreateSerializer(serializers.Serializer):
         if len(cleaned_topics) > 100:
             raise serializers.ValidationError({"topic": ["You can save up to 100 topics at a time."]})
 
-        duplicate_scope = LessonTopic.objects.filter(
-            school=school,
-            academic_year=academic_year,
-            school_class=school_class,
-            section=section,
-            subject=subject,
-            lesson=lesson,
-        )
-        if duplicate_scope.exists():
-            raise serializers.ValidationError({"message": "Topic group already exists for this lesson."})
 
         attrs["topic"] = cleaned_topics
         attrs["school"] = school
@@ -1059,6 +1098,21 @@ class LessonPlanTopicSerializer(LegacyAliasMixin):
         model = LessonPlanTopic
         fields = ["id", "topic_id", "topic", "lesson_planner", "sub_topic_title", "created_at", "updated_at"]
         read_only_fields = ["id", "topic", "lesson_planner", "created_at", "updated_at"]
+
+
+class LessonPlanApprovalLogSerializer(serializers.ModelSerializer):
+    by_name = serializers.SerializerMethodField()
+    lesson_title = serializers.CharField(source="lesson_planner.lesson_detail.lesson_title", read_only=True, default="")
+
+    def get_by_name(self, obj):
+        if not obj.by:
+            return ""
+        return obj.by.get_full_name() or obj.by.username
+
+    class Meta:
+        model = LessonPlanApprovalLog
+        fields = ["id", "lesson_planner", "action", "by", "by_name", "lesson_title", "note", "created_at"]
+        read_only_fields = fields
 
 
 class LessonPlannerSerializer(LegacyAliasMixin):
@@ -1080,6 +1134,15 @@ class LessonPlannerSerializer(LegacyAliasMixin):
     topic_detail_name = serializers.CharField(source="topic_detail.topic_title", read_only=True)
     teacher_name = serializers.SerializerMethodField()
     topics = LessonPlanTopicSerializer(many=True, read_only=True)
+
+    # Corrected names for the typoed legacy columns, exposed at the API
+    # boundary only — the underlying `lecture_vedio`/`previous_knowlege`/
+    # `competed_date`/`lecture_youube_link` columns are left as-is rather
+    # than renamed on a live table.
+    video_url = serializers.CharField(source="lecture_vedio", required=False, allow_blank=True)
+    lecture_youtube_link = serializers.CharField(source="lecture_youube_link", required=False, allow_blank=True)
+    previous_knowledge = serializers.CharField(source="previous_knowlege", required=False, allow_blank=True)
+    completed_date = serializers.DateField(source="competed_date", required=False, allow_null=True)
 
     def get_teacher_name(self, obj):
         teacher = getattr(obj, "teacher", None)
@@ -1123,21 +1186,35 @@ class LessonPlannerSerializer(LegacyAliasMixin):
             "section",
             "sub_topic",
             "lecture_youube_link",
+            "lecture_youtube_link",
             "lecture_vedio",
+            "video_url",
             "attachment",
             "teaching_method",
             "general_objectives",
             "previous_knowlege",
+            "previous_knowledge",
             "comp_question",
             "zoom_setup",
             "presentation",
             "note",
             "lesson_date",
             "competed_date",
+            "completed_date",
             "completed_status",
             "room_id",
+            "class_room",
             "class_period_id",
+            "period",
             "routine_id",
+            # Review workflow — nothing writes these yet; the submit/review
+            # actions ship with the Planning Studio frontend.
+            "workflow_status",
+            "submitted_by",
+            "submitted_at",
+            "reviewed_by",
+            "reviewed_at",
+            "review_notes",
             "created_by",
             "updated_by",
             "topics",
@@ -1156,6 +1233,14 @@ class LessonPlannerSerializer(LegacyAliasMixin):
             "subject",
             "school_class",
             "section",
+            "class_room",
+            "period",
+            "workflow_status",
+            "submitted_by",
+            "submitted_at",
+            "reviewed_by",
+            "reviewed_at",
+            "review_notes",
             "created_by",
             "updated_by",
             "topics",
@@ -1242,7 +1327,7 @@ class LessonPlannerCreateSerializer(serializers.Serializer):
         if lesson and (
             lesson.school_class_id != school_class.id
             or lesson.subject_id != subject.id
-            or (section and lesson.section_id != section.id)
+            or (section and lesson.section_id is not None and lesson.section_id != section.id)
         ):
             raise serializers.ValidationError({"lesson": ["Selected lesson does not match the chosen class, section, and subject."]})
 
@@ -1305,17 +1390,20 @@ class LessonPlannerCreateSerializer(serializers.Serializer):
             attrs["sub_topic"] = cleaned_sub_topics
         else:
             if not topic_value:
-                raise serializers.ValidationError({"topic": ["A topic is required."]})
-            try:
-                topic_id = int(topic_value)
-            except (TypeError, ValueError):
-                raise serializers.ValidationError({"topic": ["Selected topic is invalid."]})
-            topic_detail = LessonTopicDetail.objects.filter(pk=topic_id).select_related("topic", "lesson").first()
-            if not topic_detail:
-                raise serializers.ValidationError({"topic": ["Selected topic was not found."]})
-            if topic_detail.lesson_id != lesson.id:
-                raise serializers.ValidationError({"topic": ["Selected topic does not belong to the chosen lesson."]})
-            attrs["topic"] = topic_detail
-            attrs["topic_detail"] = topic_detail
-            attrs["sub_topic"] = sub_topic_value.strip() if isinstance(sub_topic_value, str) else ""
+                attrs["topic"] = None
+                attrs["topic_detail"] = None
+                attrs["sub_topic"] = sub_topic_value.strip() if isinstance(sub_topic_value, str) else ""
+            else:
+                try:
+                    topic_id = int(topic_value)
+                except (TypeError, ValueError):
+                    raise serializers.ValidationError({"topic": ["Selected topic is invalid."]})
+                topic_detail = LessonTopicDetail.objects.filter(pk=topic_id).select_related("topic", "lesson").first()
+                if not topic_detail:
+                    raise serializers.ValidationError({"topic": ["Selected topic was not found."]})
+                if topic_detail.lesson_id != lesson.id:
+                    raise serializers.ValidationError({"topic": ["Selected topic does not belong to the chosen lesson."]})
+                attrs["topic"] = topic_detail
+                attrs["topic_detail"] = topic_detail
+                attrs["sub_topic"] = sub_topic_value.strip() if isinstance(sub_topic_value, str) else ""
         return attrs

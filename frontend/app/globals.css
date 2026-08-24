@@ -63,6 +63,20 @@ div:hover > .pin-remove-btn { opacity: 0.6 !important; }
   from { opacity: 0; transform: translateY(8px) scale(0.98); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
+/* Shared form control used by the Timetable / Planning Studio / Reports workspaces */
+.input {
+  width: 100%;
+  padding: 7px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-1);
+  color: var(--ink);
+  font-size: 13px;
+}
+.input:focus {
+  outline: none;
+  border-color: var(--brand);
+}
 @keyframes hr-slide-in {
   from { transform: translateX(100%); }
   to   { transform: translateX(0); }

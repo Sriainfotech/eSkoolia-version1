@@ -5,6 +5,7 @@ from .views import (
     ClassPeriodViewSet,
     ClassRoomViewSet,
     ClassViewSet,
+    LevelScheduleConfigViewSet,
     SectionViewSet,
     SectionReplaceView,
     SectionBulkDeleteView,
@@ -39,6 +40,7 @@ router.register("streams", StreamViewSet, basename="stream")
 router.register("subjects", SubjectViewSet, basename="subject")
 router.register("class-periods", ClassPeriodViewSet, basename="class-period")
 router.register("class-rooms", ClassRoomViewSet, basename="class-room")
+router.register("level-schedule-configs", LevelScheduleConfigViewSet, basename="level-schedule-config")
 
 # Transport Module Routes
 router.register("vehicles", VehicleViewSet, basename="vehicle")

@@ -113,9 +113,9 @@ export function MorningBrief() {
         <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', textAlign: 'center', padding: '8px 0' }}>Generating brief…</div>
       ) : brief && (
         <>
-          <p style={{ fontSize: 13.5, fontWeight: 600, color: '#fff', margin: '0 0 10px', lineHeight: 1.4 }}>{brief.headline}</p>
+          <p style={{ fontSize: 13.5, fontWeight: 600, color: '#fff', margin: '0 0 10px', lineHeight: 1.4 }}>{brief.headline || 'No headline available'}</p>
           <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 5 }}>
-            {brief.bullets.slice(0, 4).map((b, i) => (
+            {(brief.bullets || []).slice(0, 4).map((b, i) => (
               <li key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 7, fontSize: 11.5, color: 'rgba(255,255,255,0.82)', lineHeight: 1.4 }}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: BULLET_DOTS[i % BULLET_DOTS.length], flexShrink: 0, marginTop: 3 }} />
                 {b}

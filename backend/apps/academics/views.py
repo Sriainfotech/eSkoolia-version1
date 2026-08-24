@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import re
 
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, Q
 from django.utils import timezone
 from django.core.files.storage import default_storage
 from rest_framework import permissions, status, viewsets
@@ -12,7 +12,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import FormParser, MultiPartParser, JSONParser
 from rest_framework.response import Response
 from apps.access_control.models import UserRole
-from apps.core.models import Class as SchoolClass, Section
+from apps.core.models import Class as SchoolClass, ClassPeriod, LevelScheduleConfig, Section, Subject
 from apps.hr.models import Staff
 from apps.users.models import User
 from .models import (
@@ -25,6 +25,7 @@ from .models import (
     Homework,
     HomeworkSubmission,
     Lesson,
+    LessonPlanApprovalLog,
     LessonPlanner,
     LessonPlanTopic,
     LessonTopic,
@@ -41,6 +42,7 @@ from .serializers import (
     HomeworkSerializer,
     HomeworkSubmissionSerializer,
     LessonGroupCreateSerializer,
+    LessonPlanApprovalLogSerializer,
     LessonPlannerCreateSerializer,
     LessonPlannerSerializer,
     LessonSerializer,
@@ -561,6 +563,211 @@ class ClassRoutineSlotViewSet(TenantScopedModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @action(detail=False, methods=["get"])
+    def clashes(self, request):
+        """
+        School-wide scan for a teacher (or room) assigned to more than one
+        section at the same day + start_time. Read-only — the UI's "fix"
+        actions route back through the normal create/update/destroy above.
+        """
+        base_queryset = self.get_queryset().filter(is_break=False)
+
+        def _group_and_flag(queryset, key_field, label_field, label_getter):
+            groups = {}
+            for slot in queryset:
+                fk_id = getattr(slot, f"{key_field}_id")
+                if fk_id is None:
+                    continue
+                key = (slot.day, slot.start_time, fk_id)
+                groups.setdefault(key, []).append(slot)
+
+            out = []
+            for (day, start_time, _fk_id), slots in groups.items():
+                if len(slots) < 2:
+                    continue
+                out.append({
+                    "day": day,
+                    "start_time": start_time,
+                    label_field: label_getter(slots[0]),
+                    "slots": [
+                        {
+                            "slot_id": s.id,
+                            "class_id": s.school_class_id,
+                            "class_name": getattr(s.school_class, "name", ""),
+                            "section_id": s.section_id,
+                            "section_name": getattr(s.section, "name", ""),
+                            "subject_id": s.subject_id,
+                            "subject_name": getattr(s.subject, "name", "") if s.subject_id else "",
+                        }
+                        for s in slots
+                    ],
+                })
+            return out
+
+        teacher_slots = list(
+            base_queryset.filter(teacher__isnull=False).select_related(
+                "teacher", "school_class", "section", "subject"
+            )
+        )
+        teacher_clashes = _group_and_flag(
+            teacher_slots, "teacher", "teacher_id",
+            lambda s: s.teacher_id,
+        )
+        for clash in teacher_clashes:
+            teacher = next((s.teacher for s in teacher_slots if s.teacher_id == clash["teacher_id"]), None)
+            clash["teacher_name"] = (teacher.get_full_name() or teacher.username) if teacher else ""
+
+        room_slots = list(
+            base_queryset.filter(class_room__isnull=False).select_related(
+                "class_room", "school_class", "section", "subject"
+            )
+        )
+        room_clashes = _group_and_flag(
+            room_slots, "class_room", "room_id",
+            lambda s: s.class_room_id,
+        )
+        for clash in room_clashes:
+            room = next((s.class_room for s in room_slots if s.class_room_id == clash["room_id"]), None)
+            clash["room_name"] = getattr(room, "room_no", "") if room else ""
+
+        return Response({
+            "success": True,
+            "message": "Clash scan complete",
+            "data": {
+                "teacher_clashes": teacher_clashes,
+                "room_clashes": room_clashes,
+                "count": len(teacher_clashes) + len(room_clashes),
+            },
+        })
+
+    @action(detail=False, methods=["post"], url_path="auto-generate")
+    def auto_generate(self, request):
+        """
+        Fill EMPTY (day, period) slots for one section from its
+        ClassSubjectAssignment roster, skipping any period where the
+        assigned teacher already has a slot elsewhere. Deliberately does
+        NOT clear or overwrite existing slots first — unlike the prototype's
+        JS version, which resets the whole section before regenerating.
+        Re-running this is safe; it only ever fills gaps.
+
+        Known simplification, flagged for follow-up: subjects are cycled
+        round-robin across the day rather than weighted by periods/week,
+        since periods/week isn't yet linked to a school_class+subject pair
+        anywhere in the schema (ClassSubjectEntry.periods_per_week uses a
+        free-text subject name/code, not the core.Subject FK that
+        ClassSubjectAssignment and this model use).
+        """
+        section_id = request.data.get("section_id")
+        academic_year_id = request.data.get("academic_year_id")
+        if not section_id:
+            return Response(
+                {"success": False, "message": "section_id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+        try:
+            section = Section.objects.select_related("school_class").get(
+                pk=section_id, school_class__school_id=user.school_id,
+            )
+        except Section.DoesNotExist:
+            return Response({"success": False, "message": "Section not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        school_class = section.school_class
+        roster = list(
+            ClassSubjectAssignment.objects.filter(
+                school_id=user.school_id,
+                school_class=school_class,
+                section=section,
+                active_status=True,
+                teacher__isnull=False,
+            ).select_related("subject", "teacher")
+        )
+        if not roster:
+            return Response(
+                {"success": False, "message": "No subject-teacher assignments found for this section yet — assign them in Staff Assignment first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        periods = list(
+            ClassPeriod.objects.filter(school_id=user.school_id, period_type="class").order_by("start_time")
+        )
+        if not periods:
+            return Response(
+                {"success": False, "message": "No class periods configured for this school yet."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        working_days = None
+        level_group = getattr(school_class, "level", None)
+        if academic_year_id and level_group:
+            config = LevelScheduleConfig.objects.filter(
+                school_id=user.school_id, academic_year_id=academic_year_id, level_group=level_group,
+            ).first()
+            if config and config.working_days:
+                working_days = config.working_days
+        if not working_days:
+            working_days = ["mon", "tue", "wed", "thu", "fri"]
+
+        day_code_to_choice = {
+            "mon": "monday", "tue": "tuesday", "wed": "wednesday",
+            "thu": "thursday", "fri": "friday", "sat": "saturday", "sun": "sunday",
+        }
+        target_days = [day_code_to_choice[d] for d in working_days if d in day_code_to_choice]
+
+        existing = {
+            (slot.day, slot.start_time): slot
+            for slot in ClassRoutineSlot.objects.filter(school_id=user.school_id, school_class=school_class, section=section)
+        }
+
+        created = []
+        roster_len = len(roster)
+        with transaction.atomic():
+            for day in target_days:
+                roster_cursor = 0
+                for period in periods:
+                    if period.is_break:
+                        continue
+                    key = (day, period.start_time)
+                    if key in existing:
+                        continue  # never overwrite an existing assignment
+
+                    placed = False
+                    for _attempt in range(roster_len):
+                        candidate = roster[roster_cursor % roster_len]
+                        roster_cursor += 1
+                        teacher_busy = ClassRoutineSlot.objects.filter(
+                            school_id=user.school_id, day=day, start_time=period.start_time,
+                            teacher_id=candidate.teacher_id,
+                        ).exclude(section=section).exists()
+                        if teacher_busy:
+                            continue
+                        slot = ClassRoutineSlot.objects.create(
+                            school_id=user.school_id,
+                            academic_year_id=academic_year_id,
+                            school_class=school_class,
+                            section=section,
+                            subject=candidate.subject,
+                            teacher=candidate.teacher,
+                            day=day,
+                            period=period,
+                            start_time=period.start_time,
+                            end_time=period.end_time,
+                        )
+                        created.append(slot.id)
+                        placed = True
+                        break
+                    # if nothing in the roster is free this period, the slot
+                    # is left empty rather than double-booking someone.
+                    if not placed:
+                        continue
+
+        return Response({
+            "success": True,
+            "message": f"Auto-generated {len(created)} slot(s) for {section}.",
+            "data": {"created_count": len(created), "slot_ids": created},
+        })
+
 
 class ClassOptionalSubjectSetupViewSet(TenantScopedModelViewSet):
     model = ClassOptionalSubjectSetup
@@ -913,6 +1120,196 @@ class LessonViewSet(TenantScopedModelViewSet):
             )
         return Response(groups)
 
+    @action(detail=False, methods=["get"], url_path="overview")
+    def overview(self, request):
+        """
+        Per-section rollup for the 'All Classes' cards + Matrix view: real
+        per-subject coverage %, the class teacher, lesson count, and
+        homework due count — all computed from actual Lesson /
+        LessonTopicDetail / ClassTeacherAssignment / Homework data.
+
+        Built as a handful of grouped aggregate queries rather than looping
+        per (section, subject) — that N+1 version timed out against Neon
+        once a school had a realistic number of sections and subjects.
+        A Lesson (and its topics) with section=None applies to every
+        section of its class, so those rows are merged into each section's
+        totals in Python after the single aggregate query, rather than
+        fanned out in SQL.
+        """
+        user = request.user
+        if not user.school_id:
+            return Response([])
+
+        sections = list(
+            Section.objects.filter(school_class__school_id=user.school_id)
+            .select_related("school_class")
+            .order_by("school_class__numeric_order", "name")
+        )
+        subjects = {s.id: s.name for s in Subject.objects.filter(school_id=user.school_id)}
+        class_teachers = {
+            ct.section_id: ct.teacher
+            for ct in ClassTeacherAssignment.objects.filter(school_id=user.school_id, active_status=True).select_related("teacher")
+        }
+
+        # (school_class_id, section_id-or-None, subject_id, completed_status) -> count
+        topic_counts = {}
+        for row in (
+            LessonTopicDetail.objects.filter(lesson__school_id=user.school_id)
+            .values("lesson__school_class_id", "lesson__section_id", "lesson__subject_id", "completed_status")
+            .annotate(n=Count("id"))
+        ):
+            key = (row["lesson__school_class_id"], row["lesson__section_id"], row["lesson__subject_id"])
+            topic_counts.setdefault(key, {"done": 0, "total": 0})
+            topic_counts[key]["total"] += row["n"]
+            if row["completed_status"] == "Completed":
+                topic_counts[key]["done"] += row["n"]
+
+        # (school_class_id, section_id-or-None) -> lesson count
+        lesson_counts = {}
+        for row in (
+            Lesson.objects.filter(school_id=user.school_id, active_status=True)
+            .values("school_class_id", "section_id")
+            .annotate(n=Count("id"))
+        ):
+            key = (row["school_class_id"], row["section_id"])
+            lesson_counts[key] = lesson_counts.get(key, 0) + row["n"]
+
+        # (school_class_id, section_id-or-None) -> pending-evaluation homework count
+        hw_counts = {}
+        for row in (
+            Homework.objects.filter(school_id=user.school_id, evaluation_date__isnull=True)
+            .values("class_id_ref_id", "section_id_ref_id")
+            .annotate(n=Count("id"))
+        ):
+            key = (row["class_id_ref_id"], row["section_id_ref_id"])
+            hw_counts[key] = hw_counts.get(key, 0) + row["n"]
+
+        result = []
+        for section in sections:
+            school_class = section.school_class
+            class_wide = (school_class.id, None)
+            section_specific = (school_class.id, section.id)
+
+            subject_rows = []
+            done_total = 0
+            all_total = 0
+            for subject_id, subject_name in subjects.items():
+                agg = {"done": 0, "total": 0}
+                for key in (class_wide + (subject_id,), section_specific + (subject_id,)):
+                    hit = topic_counts.get(key)
+                    if hit:
+                        agg["done"] += hit["done"]
+                        agg["total"] += hit["total"]
+                if not agg["total"]:
+                    continue
+                done_total += agg["done"]
+                all_total += agg["total"]
+                subject_rows.append({
+                    "subject_id": subject_id, "subject_name": subject_name,
+                    "done": agg["done"], "total": agg["total"], "pct": round((agg["done"] / agg["total"]) * 100),
+                })
+
+            teacher = class_teachers.get(section.id)
+            result.append({
+                "class_id": school_class.id,
+                "class_name": school_class.name,
+                "section_id": section.id,
+                "section_name": section.name,
+                "level": school_class.level,
+                "teacher_id": teacher.id if teacher else None,
+                "teacher_name": (teacher.get_full_name() or teacher.username) if teacher else "",
+                "overall_pct": round((done_total / all_total) * 100) if all_total else 0,
+                "subjects": subject_rows,
+                "lessons_count": lesson_counts.get(class_wide, 0) + lesson_counts.get(section_specific, 0),
+                "hw_due_count": hw_counts.get(class_wide, 0) + hw_counts.get(section_specific, 0),
+            })
+
+        return Response(result)
+
+    @action(detail=False, methods=["get"], url_path="parent-syllabus-pdf")
+    def parent_syllabus_pdf(self, request):
+        """
+        Renders the syllabus (chapters + topics) for a class — or every class —
+        to a downloadable PDF, reusing the same reportlab dependency already
+        used by apps/reports (no new PDF library added).
+
+        Known gap: `term` is accepted for forward-compatibility with the
+        frontend filter but has no effect yet — Lesson/LessonTopic have no
+        term/semester field in the current schema, so this always renders
+        the full syllabus regardless of term.
+        """
+        try:
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import cm
+            from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, PageBreak
+        except ImportError:
+            return Response(
+                {"success": False, "message": "PDF export is unavailable on this server (reportlab not installed)."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        user = request.user
+        class_id = request.query_params.get("class_id")
+        detail = request.query_params.get("detail", "topics")
+        school_name = request.query_params.get("school_name") or getattr(user.school, "name", "School")
+
+        classes_qs = SchoolClass.objects.filter(school_id=user.school_id)
+        if class_id and class_id != "all":
+            classes_qs = classes_qs.filter(pk=class_id)
+        classes_qs = classes_qs.order_by("numeric_order", "name")
+
+        styles = getSampleStyleSheet()
+        subject_style = ParagraphStyle("SubjectHeading", parent=styles["Heading3"], textColor=colors.HexColor("#4F35CC"), spaceBefore=10, spaceAfter=4)
+        chapter_style = ParagraphStyle("ChapterHeading", parent=styles["Heading4"], spaceBefore=6, spaceAfter=2)
+        topic_style = ParagraphStyle("Topic", parent=styles["Normal"], leftIndent=14, spaceAfter=1)
+
+        story = []
+        any_content = False
+        for idx, school_class in enumerate(classes_qs):
+            lessons = (
+                Lesson.objects.filter(school_id=user.school_id, school_class=school_class, active_status=True)
+                .select_related("subject")
+                .order_by("subject__name", "id")
+            )
+            if not lessons.exists():
+                continue
+            any_content = True
+            if idx > 0:
+                story.append(PageBreak())
+
+            story.append(Paragraph(school_name, styles["Title"]))
+            story.append(Paragraph(f"Academic Syllabus — {school_class.name}", styles["Heading2"]))
+            story.append(Spacer(1, 10))
+
+            by_subject = {}
+            for lesson in lessons:
+                by_subject.setdefault(lesson.subject_id, {"name": lesson.subject.name, "lessons": []})
+                by_subject[lesson.subject_id]["lessons"].append(lesson)
+
+            for subject_data in by_subject.values():
+                story.append(Paragraph(subject_data["name"], subject_style))
+                for lesson in subject_data["lessons"]:
+                    topic_qs = LessonTopicDetail.objects.filter(lesson=lesson).order_by("id")
+                    story.append(Paragraph(f"{lesson.lesson_title} ({topic_qs.count()} topics)", chapter_style))
+                    if detail == "topics":
+                        for topic in topic_qs:
+                            story.append(Paragraph(f"• {topic.topic_title}", topic_style))
+
+        if not any_content:
+            return Response({"success": False, "message": "No syllabus content found for the selected class(es) yet."}, status=status.HTTP_404_NOT_FOUND)
+
+        output = __import__("io").BytesIO()
+        document = SimpleDocTemplate(output, pagesize=A4, title="Parent Syllabus", topMargin=1.5 * cm, bottomMargin=1.5 * cm)
+        document.build(story)
+        output.seek(0)
+
+        from django.http import HttpResponse
+        response = HttpResponse(output.getvalue(), content_type="application/pdf")
+        response["Content-Disposition"] = 'attachment; filename="parent_syllabus.pdf"'
+        return response
+
     @action(detail=False, methods=["delete"], url_path="delete-group")
     def delete_group(self, request):
         class_id = request.query_params.get("class_id")
@@ -1127,6 +1524,7 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
                 "subject_id": "subject_id",
                 "routine_id": "routine_id",
                 "lesson_date": "lesson_date",
+                "workflow_status": "workflow_status",
             },
         )
 
@@ -1202,7 +1600,14 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
                         sub_topic_title=sub_topics[index] if index < len(sub_topics) else "",
                     )
             else:
-                topic_detail = LessonTopicDetail.objects.get(pk=topic_value)
+                # LessonPlannerCreateSerializer.validate() already resolves
+                # non-customize `topic` into the actual LessonTopicDetail
+                # instance (see attrs["topic"] = topic_detail there) — it is
+                # not a raw id by the time it reaches here.
+                if topic_value is None:
+                    topic_detail = None
+                else:
+                    topic_detail = topic_value if isinstance(topic_value, LessonTopicDetail) else LessonTopicDetail.objects.get(pk=topic_value)
                 lesson_planner.topic = topic_detail
                 lesson_planner.topic_detail = topic_detail
                 lesson_planner.sub_topic = sub_topic_value if isinstance(sub_topic_value, str) else ""
@@ -1265,7 +1670,10 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
                         sub_topic_title=sub_topics[index] if index < len(sub_topics) else "",
                     )
             else:
-                topic_detail = LessonTopicDetail.objects.get(pk=topic_value)
+                if topic_value is None:
+                    topic_detail = None
+                else:
+                    topic_detail = LessonTopicDetail.objects.get(pk=topic_value)
                 instance.topic = topic_detail
                 instance.topic_detail = topic_detail
                 instance.sub_topic = sub_topic_value if isinstance(sub_topic_value, str) else ""
@@ -1410,6 +1818,75 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
             }
         )
 
+    @action(detail=True, methods=["post"], url_path="submit")
+    def submit(self, request, pk=None):
+        """Teacher (or admin, until the teacher portal ships) submits a draft plan for review."""
+        plan = self.get_object()
+        if plan.workflow_status not in (LessonPlanner.WORKFLOW_DRAFT, LessonPlanner.WORKFLOW_REVISION_REQUESTED):
+            return Response(
+                {"success": False, "message": f"Cannot submit a plan that is already '{plan.workflow_status}'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        plan.workflow_status = LessonPlanner.WORKFLOW_SUBMITTED
+        plan.submitted_by = request.user
+        plan.submitted_at = timezone.now()
+        plan.review_notes = ""
+        plan.save(update_fields=["workflow_status", "submitted_by", "submitted_at", "review_notes", "updated_at"])
+        LessonPlanApprovalLog.objects.create(
+            lesson_planner=plan, action=LessonPlanner.WORKFLOW_SUBMITTED, by=request.user,
+            note="Submitted for review",
+        )
+        return Response({"success": True, "message": "Lesson plan submitted for review.", "data": self.get_serializer(plan).data})
+
+    @action(detail=True, methods=["post"], url_path="review")
+    def review(self, request, pk=None):
+        """Coordinator/admin moves a submitted plan to under_review, approved, or revision_requested."""
+        plan = self.get_object()
+        new_status = request.data.get("workflow_status") or request.data.get("action")
+        valid_statuses = {
+            LessonPlanner.WORKFLOW_UNDER_REVIEW,
+            LessonPlanner.WORKFLOW_APPROVED,
+            LessonPlanner.WORKFLOW_REVISION_REQUESTED,
+        }
+        if new_status not in valid_statuses:
+            return Response(
+                {"success": False, "message": f"workflow_status must be one of {sorted(valid_statuses)}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        notes = (request.data.get("notes") or "").strip()
+        if new_status == LessonPlanner.WORKFLOW_REVISION_REQUESTED and not notes:
+            return Response(
+                {"success": False, "message": "Revision notes are required when requesting a revision."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        plan.workflow_status = new_status
+        plan.reviewed_by = request.user
+        plan.reviewed_at = timezone.now()
+        plan.review_notes = notes
+        plan.save(update_fields=["workflow_status", "reviewed_by", "reviewed_at", "review_notes", "updated_at"])
+        LessonPlanApprovalLog.objects.create(
+            lesson_planner=plan, action=new_status, by=request.user,
+            note=notes or f"Moved to {new_status}",
+        )
+        return Response({"success": True, "message": f"Plan {new_status}.", "data": self.get_serializer(plan).data})
+
+
+class LessonPlanApprovalLogViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only activity feed backing the Planning Studio Workflow tab's Audit Log panel."""
+    serializer_class = LessonPlanApprovalLogSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = LessonPlanApprovalLog.objects.select_related("lesson_planner", "by").filter(
+            lesson_planner__school_id=user.school_id
+        ) if user.school_id else LessonPlanApprovalLog.objects.none()
+        lesson_planner_id = self.request.query_params.get("lesson_planner_id")
+        if lesson_planner_id:
+            qs = qs.filter(lesson_planner_id=lesson_planner_id)
+        return qs.order_by("-created_at")
+
 
 # ============================================================
 # Staff Assignment Module Views
@@ -1436,6 +1913,37 @@ class StaffTeachersView(viewsets.ViewSet):
             | Q(department__dept_type__icontains="academic")
         )
 
+        # Optional filters for the Timetable slot picker: which teachers can
+        # teach a given subject, and are they already booked at a given
+        # day + time (so the UI can show them red/green).
+        subject_id = request.query_params.get("subject")
+        day = request.query_params.get("available_day")
+        start_time = request.query_params.get("available_start_time")
+        academic_year_id = request.query_params.get("academic_year_id")
+
+        if subject_id:
+            teacher_user_ids = ClassSubjectAssignment.objects.filter(
+                school_id=school_id, subject_id=subject_id, active_status=True, teacher__isnull=False,
+            ).values_list("teacher_id", flat=True)
+            qs = qs.filter(user_id__in=list(teacher_user_ids))
+
+        busy_teacher_ids = set()
+        if day and start_time:
+            busy_teacher_ids = set(
+                ClassRoutineSlot.objects.filter(
+                    school_id=school_id, day=day, start_time=start_time, teacher__isnull=False,
+                ).values_list("teacher_id", flat=True)
+            )
+
+        workload_by_teacher = {}
+        if academic_year_id:
+            counts = (
+                ClassRoutineSlot.objects.filter(school_id=school_id, academic_year_id=academic_year_id, teacher__isnull=False)
+                .values("teacher_id")
+                .annotate(total=Count("id"))
+            )
+            workload_by_teacher = {row["teacher_id"]: row["total"] for row in counts}
+
         data = []
         for s in qs:
             full_name = f"{s.first_name} {s.last_name}".strip()
@@ -1447,6 +1955,8 @@ class StaffTeachersView(viewsets.ViewSet):
                 "designation": s.designation.name if s.designation else "",
                 "department": s.department.name if s.department else "",
                 "photo": request.build_absolute_uri(s.staff_photo.url) if s.staff_photo else None,
+                "is_busy": s.user_id in busy_teacher_ids,
+                "periods_this_year": workload_by_teacher.get(s.user_id, 0),
             })
         return Response(data)
 

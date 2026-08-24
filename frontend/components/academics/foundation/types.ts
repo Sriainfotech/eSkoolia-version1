@@ -30,10 +30,14 @@ export interface Stream {
   created_at?: string;
 }
 
+export type ClassLevelGroup = "pre_primary" | "primary" | "middle" | "secondary" | "senior_secondary";
+
 export interface SchoolClass {
   id: number;
   name: string;
   numeric_order: number;
+  /** Read-only — derived server-side from numeric_order, not independently editable. */
+  level?: ClassLevelGroup | null;
   is_active: boolean;
   total_students: number;
   sections: Section[];

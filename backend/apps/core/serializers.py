@@ -1,7 +1,7 @@
 import re
 from rest_framework import serializers
 from .models import (
-    AcademicYear, Class, ClassPeriod, ClassRoom, ClassStream, Section, Stream, Subject, 
+    AcademicYear, Class, ClassPeriod, ClassRoom, ClassStream, LevelScheduleConfig, Section, Stream, Subject,
     Vehicle, TransportRoute, AssignVehicle,
     BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate,
     VehicleDriverAssignment, TransportNotificationLog, RoutePerformanceLog,
@@ -336,8 +336,8 @@ class ClassSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Class
-        fields = ["id", "school", "name", "numeric_order", "is_active", "sections", "total_students", "capacity", "streams", "stream_capacities", "stream_details", "created_at"]
-        read_only_fields = ["id", "school", "numeric_order", "sections", "total_students", "stream_details", "created_at"]
+        fields = ["id", "school", "name", "numeric_order", "level", "is_active", "sections", "total_students", "capacity", "streams", "stream_capacities", "stream_details", "created_at"]
+        read_only_fields = ["id", "school", "numeric_order", "level", "sections", "total_students", "stream_details", "created_at"]
 
 
 class StreamSerializer(serializers.ModelSerializer):
@@ -456,6 +456,70 @@ class ClassPeriodSerializer(serializers.ModelSerializer):
         model = ClassPeriod
         fields = ["id", "school", "period", "start_time", "end_time", "period_type", "is_break", "created_at", "updated_at"]
         read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+
+class LevelScheduleConfigSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LevelScheduleConfig
+        fields = [
+            "id", "school", "academic_year", "level_group",
+            "start_time", "end_time", "period_duration_minutes", "periods_per_day",
+            "snack_break_after_period", "snack_break_minutes",
+            "lunch_break_after_period", "lunch_break_minutes",
+            "bus_dispersal_time", "pickup_time", "working_days", "is_configured",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "school", "periods_per_day", "created_at", "updated_at"]
+
+    @staticmethod
+    def _to_minutes(value):
+        if value is None:
+            return None
+        return value.hour * 60 + value.minute
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        get = lambda key: attrs.get(key, getattr(self.instance, key, None))
+
+        start_time = get("start_time")
+        end_time = get("end_time")
+        period_duration = get("period_duration_minutes")
+        bus_dispersal = get("bus_dispersal_time")
+        pickup_time = get("pickup_time")
+        snack_after = get("snack_break_after_period")
+        snack_minutes = get("snack_break_minutes")
+        lunch_after = get("lunch_break_after_period")
+        lunch_minutes = get("lunch_break_minutes")
+
+        start_m = self._to_minutes(start_time)
+        end_m = self._to_minutes(end_time)
+        if start_m is not None and end_m is not None and end_m <= start_m:
+            raise serializers.ValidationError({"end_time": "End time must be after start time."})
+
+        bus_m = self._to_minutes(bus_dispersal)
+        if bus_m is not None and end_m is not None:
+            if bus_m < end_m:
+                raise serializers.ValidationError(
+                    {"bus_dispersal_time": "Bus dispersal time cannot be before the school end time."}
+                )
+            if bus_m > end_m + 60:
+                raise serializers.ValidationError(
+                    {"bus_dispersal_time": "Bus dispersal time should be within an hour of the school end time."}
+                )
+
+        pickup_m = self._to_minutes(pickup_time)
+        if pickup_m is not None and start_m is not None and pickup_m > start_m:
+            raise serializers.ValidationError(
+                {"pickup_time": "Pick-up time should be before the school start time."}
+            )
+
+        if start_m is not None and end_m is not None and period_duration:
+            break_minutes = (snack_minutes or 0 if snack_after else 0) + (lunch_minutes or 0 if lunch_after else 0)
+            teaching_minutes = max(0, (end_m - start_m) - break_minutes)
+            max_periods = max(1, teaching_minutes // period_duration)
+            attrs["periods_per_day"] = max_periods
+
+        return attrs
 
 
 class ClassRoomSerializer(serializers.ModelSerializer):
