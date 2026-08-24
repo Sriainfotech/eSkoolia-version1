@@ -7,6 +7,7 @@ import type {
   ClashEntry,
   ClassPeriod,
   ClassRoutineSlot,
+  ClassSubjectEntry,
   LevelScheduleConfig,
   PagedResponse,
   Teacher,
@@ -89,6 +90,16 @@ export function useClassPeriods() {
   return { periods: extractList(data), loading, error, refetch };
 }
 
+// ─── Class Subject Entries (subjects assigned to a given class) ───────────
+
+export function useClassSubjectEntries(classId: number | null) {
+  const { data, loading, error, refetch } = useFetch<PagedResponse<ClassSubjectEntry> | ClassSubjectEntry[]>(
+    classId ? `/api/v1/academics/class-subject-entries/?class_id=${classId}&page_size=200` : "",
+    [classId],
+  );
+  return { entries: classId ? extractList(data) : [], loading, error, refetch };
+}
+
 // ─── Class Routine Slots (the weekly grid) ─────────────────────────────────
 
 export function useSectionRoutine(sectionId: number | null) {
@@ -156,14 +167,19 @@ export function useClashes() {
 
 // ─── Teachers (for the slot picker) ────────────────────────────────────────
 
-export function useTeachersForSlot(subjectId: number | null, day: string | null, startTime: string | null, academicYearId?: number | null) {
+export function useTeachersForSlot(
+  subjectId: number | null, day: string | null, startTime: string | null,
+  academicYearId?: number | null, classId?: number | null, sectionId?: number | null,
+) {
   const params = new URLSearchParams();
   if (subjectId) params.set("subject", String(subjectId));
   if (day) params.set("available_day", day);
   if (startTime) params.set("available_start_time", startTime);
   if (academicYearId) params.set("academic_year_id", String(academicYearId));
+  if (classId) params.set("class_id", String(classId));
+  if (sectionId) params.set("section_id", String(sectionId));
   const { data, loading, error, refetch } = useFetch<Teacher[]>(
-    `/api/v1/academics/staff/teachers/?${params.toString()}`, [subjectId, day, startTime, academicYearId],
+    `/api/v1/academics/staff/teachers/?${params.toString()}`, [subjectId, day, startTime, academicYearId, classId, sectionId],
   );
   return { teachers: data ?? [], loading, error, refetch };
 }

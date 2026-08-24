@@ -9,6 +9,7 @@ export type {
   AcademicYear,
   ClassLevelGroup,
   ClassSubjectAssignment,
+  ClassSubjectEntry,
   PagedResponse,
   SchoolClass,
   Section,
@@ -24,6 +25,8 @@ export interface Teacher {
   department?: string;
   photo?: string | null;
   is_busy?: boolean;
+  is_on_leave_today?: boolean;
+  is_assigned?: boolean;
   periods_this_year?: number;
 }
 

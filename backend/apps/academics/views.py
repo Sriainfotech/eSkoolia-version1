@@ -13,7 +13,7 @@ from rest_framework.parsers import FormParser, MultiPartParser, JSONParser
 from rest_framework.response import Response
 from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, ClassPeriod, LevelScheduleConfig, Section, Subject
-from apps.hr.models import Staff
+from apps.hr.models import LeaveRequest, Staff
 from apps.users.models import User
 from .models import (
     ClassOptionalSubjectSetup,
@@ -1920,12 +1920,35 @@ class StaffTeachersView(viewsets.ViewSet):
         day = request.query_params.get("available_day")
         start_time = request.query_params.get("available_start_time")
         academic_year_id = request.query_params.get("academic_year_id")
+        class_id = request.query_params.get("class_id")
+        section_id = request.query_params.get("section_id")
 
         if subject_id:
             teacher_user_ids = ClassSubjectAssignment.objects.filter(
                 school_id=school_id, subject_id=subject_id, active_status=True, teacher__isnull=False,
             ).values_list("teacher_id", flat=True)
             qs = qs.filter(user_id__in=list(teacher_user_ids))
+
+        # The one teacher already assigned to this exact class + section + subject
+        # in Staff Assignment — the slot picker defaults to this teacher and only
+        # offers the rest of the list as substitutes when they're unavailable.
+        assigned_teacher_id = None
+        if subject_id and class_id and section_id:
+            assignment_qs = ClassSubjectAssignment.objects.filter(
+                school_id=school_id, subject_id=subject_id,
+                school_class_id=class_id, section_id=section_id,
+                active_status=True, teacher__isnull=False,
+            )
+            # Prefer the row for the requested academic year, but fall back to any
+            # matching row — StaffSubjectAssignmentsView.list() (below) tolerates a
+            # null academic_year on auto-created rows the same way.
+            assignment = None
+            if academic_year_id:
+                assignment = assignment_qs.filter(academic_year_id=academic_year_id).first()
+            if not assignment:
+                assignment = assignment_qs.order_by("-academic_year_id").first()
+            if assignment:
+                assigned_teacher_id = assignment.teacher_id
 
         busy_teacher_ids = set()
         if day and start_time:
@@ -1934,6 +1957,14 @@ class StaffTeachersView(viewsets.ViewSet):
                     school_id=school_id, day=day, start_time=start_time, teacher__isnull=False,
                 ).values_list("teacher_id", flat=True)
             )
+
+        today = timezone.localdate()
+        on_leave_teacher_ids = set(
+            LeaveRequest.objects.filter(
+                school_id=school_id, status=LeaveRequest.STATUS_APPROVED,
+                from_date__lte=today, to_date__gte=today,
+            ).values_list("staff__user_id", flat=True)
+        )
 
         workload_by_teacher = {}
         if academic_year_id:
@@ -1956,6 +1987,8 @@ class StaffTeachersView(viewsets.ViewSet):
                 "department": s.department.name if s.department else "",
                 "photo": request.build_absolute_uri(s.staff_photo.url) if s.staff_photo else None,
                 "is_busy": s.user_id in busy_teacher_ids,
+                "is_on_leave_today": s.user_id in on_leave_teacher_ids,
+                "is_assigned": assigned_teacher_id is not None and s.user_id == assigned_teacher_id,
                 "periods_this_year": workload_by_teacher.get(s.user_id, 0),
             })
         return Response(data)

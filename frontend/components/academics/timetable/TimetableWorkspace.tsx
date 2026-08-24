@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Calendar,
+  ChevronDown,
   Clock,
   Printer,
   RefreshCw,
   ScanLine,
+  Search,
   Shield,
   Trash2,
   Users as UsersIcon,
@@ -22,6 +24,7 @@ import {
   saveSlot,
   useClashes,
   useClassPeriods,
+  useClassSubjectEntries,
   useLevelScheduleConfigs,
   useSectionRoutine,
   useTeacherRoutine,
@@ -87,6 +90,16 @@ async function fetchList<T>(path: string): Promise<T[]> {
 
 function initials(name: string) {
   return name.split(" ").slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+}
+
+function timeToMinutes(value: string) {
+  const [hours, minutes] = value.slice(0, 5).split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(total: number) {
+  const normalized = total % (24 * 60);
+  return `${String(Math.floor(normalized / 60)).padStart(2, "0")}:${String(normalized % 60).padStart(2, "0")}:00`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -356,17 +369,27 @@ function ClassTimetableTab({
    *  – after period N == lunch_break_after_period → inject "lunch" col
    */
   const columns: ColDef[] = useMemo(() => {
-    const classPeriods = periods.filter((p) => !p.is_break);
     const ivAfter   = levelCfg?.snack_break_after_period ?? null;
     const lunchAfter = levelCfg?.lunch_break_after_period ?? null;
+    const classPeriods = periods.filter((p) => !p.is_break).slice(0, levelCfg?.periods_per_day ?? periods.length);
     const cols: ColDef[] = [];
+    let nextStart = levelCfg ? timeToMinutes(levelCfg.start_time) : null;
     classPeriods.forEach((p, idx) => {
       const num = idx + 1;
-      cols.push({ kind: "period", period: p, periodNum: num });
+      const start = nextStart === null ? p.start_time : minutesToTime(nextStart);
+      const end = nextStart === null
+        ? p.end_time
+        : minutesToTime(nextStart + (levelCfg?.period_duration_minutes ?? 0));
+      cols.push({ kind: "period", period: { ...p, start_time: start, end_time: end }, periodNum: num });
       if (ivAfter    !== null && num === ivAfter)
         cols.push({ kind: "interval", minutes: levelCfg?.snack_break_minutes ?? null });
       if (lunchAfter !== null && num === lunchAfter)
         cols.push({ kind: "lunch",    minutes: levelCfg?.lunch_break_minutes ?? null });
+      if (nextStart !== null) {
+        nextStart = nextStart + (levelCfg?.period_duration_minutes ?? 0);
+        if (num === ivAfter) nextStart += levelCfg?.snack_break_minutes ?? 0;
+        if (num === lunchAfter) nextStart += levelCfg?.lunch_break_minutes ?? 0;
+      }
     });
     return cols;
   }, [periods, levelCfg]);
@@ -485,7 +508,7 @@ function ClassTimetableTab({
         <div className="flex items-center justify-center gap-3 py-14 text-[13px] text-[#9EA2C4]">
           <RefreshCw size={16} className="animate-spin" /> Loading timetable…
         </div>
-      ) : periods.filter((p) => !p.is_break).length === 0 ? (
+      ) : columns.filter((col) => col.kind === "period").length === 0 ? (
         <div className="rounded-xl border border-[#FEF3C7] bg-[#FFFBEB] px-4 py-4 text-[13px] text-[#B45309]">
           No class periods configured yet — add them under Configure Hours first.
         </div>
@@ -522,7 +545,7 @@ function ClassTimetableTab({
                   return (
                     <th key={col.period.id} className="text-white text-center py-4 px-2" style={{ background: "#312E81", minWidth: 108 }}>
                       <div className="text-[12px] font-semibold">Period {col.periodNum}</div>
-                      <div className="text-[10px] font-normal opacity-60 mt-0.5">{col.period.start_time.slice(0, 5)}</div>
+                      <div className="text-[10px] font-normal opacity-60 mt-0.5">{col.period.start_time.slice(0, 5)} – {col.period.end_time.slice(0, 5)}</div>
                     </th>
                   );
                 })}
@@ -625,6 +648,35 @@ function ClassTimetableTab({
 // ─────────────────────────────────────────────────────────────────────────────
 // Slot assignment modal
 // ─────────────────────────────────────────────────────────────────────────────
+function TeacherRow({
+  t, selected, onSelect, badgeExtra,
+}: { t: Teacher; selected: boolean; onSelect: (id: number) => void; badgeExtra?: string }) {
+  const unavailable = !!t.is_busy || !!t.is_on_leave_today;
+  const statusLabel = t.is_busy ? "Busy" : t.is_on_leave_today ? "On Leave" : "Free";
+  return (
+    <button
+      onClick={() => onSelect(t.id)}
+      disabled={unavailable && !selected}
+      className={["flex items-center justify-between px-3 py-2.5 rounded-xl text-[12px] text-left border transition-all w-full",
+        selected ? "bg-[#EEEAFF] border-[#6D4AFF] border-2"
+          : unavailable ? "bg-[#FEF2F2] border-[#FCA5A5] opacity-60 cursor-not-allowed"
+          : "bg-[#F8F9FA] border-[#E8ECF5] hover:bg-[#EEEAFF] hover:border-[#A78BFA]",
+      ].join(" ")}
+    >
+      <div className="flex items-center gap-2">
+        <span className="w-7 h-7 rounded-full bg-[#4F35CC] text-white text-[10px] font-bold flex items-center justify-center shrink-0">
+          {initials(t.full_name)}
+        </span>
+        <span className="font-semibold text-[#15172A]">{t.full_name}</span>
+        {badgeExtra && <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-[#DDD5FF] text-[#4F35CC]">{badgeExtra}</span>}
+      </div>
+      <span className={["text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0", unavailable ? "bg-[#FEE2E2] text-[#EF4444]" : "bg-[#DCFCE7] text-[#16A34A]"].join(" ")}>
+        ● {statusLabel}
+      </span>
+    </button>
+  );
+}
+
 function SlotModal({
   section, subjects, day, startTime, endTime, existing, academicYearId, onClose, onSaved, onError,
 }: {
@@ -637,8 +689,28 @@ function SlotModal({
 }) {
   const [subjectId, setSubjectId] = useState<number | null>(existing?.subject_id ?? null);
   const [teacherId, setTeacherId] = useState<number | null>(existing?.teacher_id ?? null);
-  const { teachers, loading } = useTeachersForSlot(subjectId, day, startTime, academicYearId);
+  const { teachers, loading } = useTeachersForSlot(subjectId, day, startTime, academicYearId, section.school_class, section.id);
   const [saving, setSaving]   = useState(false);
+
+  /** The one teacher already on record for this subject in Staff Assignment — prefer them by default. */
+  const assignedTeacher = teachers.find((t) => t.is_assigned) ?? null;
+  const substituteTeachers = teachers.filter((t) => !t.is_assigned);
+  const assignedUnavailable = !!assignedTeacher && (!!assignedTeacher.is_busy || !!assignedTeacher.is_on_leave_today);
+
+  useEffect(() => {
+    if (teacherId !== null || !assignedTeacher) return;
+    if (!assignedTeacher.is_busy && !assignedTeacher.is_on_leave_today) setTeacherId(assignedTeacher.id);
+  }, [assignedTeacher, teacherId]);
+
+  /** Only offer subjects actually assigned to this class (Academics → Subjects), not the full school-wide catalog. */
+  const { entries: classSubjects, loading: classSubjectsLoading } = useClassSubjectEntries(section.school_class);
+  const availableSubjects = useMemo(() => {
+    if (classSubjectsLoading) return [];
+    const assignedNames = new Set(
+      classSubjects.filter((e) => e.active_status).map((e) => e.name.trim().toLowerCase()),
+    );
+    return subjects.filter((s) => assignedNames.has(s.name.trim().toLowerCase()));
+  }, [subjects, classSubjects, classSubjectsLoading]);
 
   const save = async () => {
     if (!subjectId) { if (existing) await remove(); else onClose(); return; }
@@ -672,39 +744,54 @@ function SlotModal({
         <h3 className="text-[15px] font-bold text-[#15172A] mb-0.5">{section.className} – Sec {section.name}</h3>
         <p className="text-[12px] text-[#6B7280] mb-4">{DAY_LABEL[day] ?? day} · {startTime.slice(0, 5)} – {endTime.slice(0, 5)}</p>
         <div className="rounded-lg bg-[#EEEAFF] text-[#4F35CC] text-[11px] px-3 py-2 mb-4">
-          💡 Busy teachers are hidden by availability filtering server-side.
+          💡 The teacher assigned to this subject (via Staff Assignment) is picked by default. If they're busy or on leave, choose a substitute below.
         </div>
         <label className="text-[11px] font-semibold text-[#5B5E72] block mb-1">Subject</label>
-        <select value={subjectId ?? ""} onChange={(e) => { setSubjectId(e.target.value ? +e.target.value : null); setTeacherId(null); }} className="input mb-4">
+        <select value={subjectId ?? ""} onChange={(e) => { setSubjectId(e.target.value ? +e.target.value : null); setTeacherId(null); }} className="input mb-4" disabled={classSubjectsLoading}>
           <option value="">— Free Period —</option>
-          {subjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          {availableSubjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
+        {!classSubjectsLoading && availableSubjects.length === 0 && (
+          <p className="text-[11px] text-[#EF4444] -mt-3 mb-4">No subjects are assigned to this class yet — add them under Academics → Subjects.</p>
+        )}
         <label className="text-[11px] font-semibold text-[#5B5E72] mb-1.5 block">Teacher</label>
-        <div className="max-h-48 overflow-y-auto flex flex-col gap-1.5 mb-5">
+        <div className="mb-5">
           {loading && <p className="text-[12px] text-[#9EA2C4]">Loading teachers…</p>}
-          {teachers.map((t: Teacher) => (
-            <button
-              key={t.id}
-              onClick={() => setTeacherId(t.id)}
-              disabled={!!t.is_busy && teacherId !== t.id}
-              className={["flex items-center justify-between px-3 py-2.5 rounded-xl text-[12px] text-left border transition-all",
-                teacherId === t.id ? "bg-[#EEEAFF] border-[#6D4AFF] border-2"
-                  : t.is_busy ? "bg-[#FEF2F2] border-[#FCA5A5] opacity-60 cursor-not-allowed"
-                  : "bg-[#F8F9FA] border-[#E8ECF5] hover:bg-[#EEEAFF] hover:border-[#A78BFA]",
-              ].join(" ")}
-            >
-              <div className="flex items-center gap-2">
-                <span className="w-7 h-7 rounded-full bg-[#4F35CC] text-white text-[10px] font-bold flex items-center justify-center shrink-0">
-                  {initials(t.full_name)}
-                </span>
-                <span className="font-semibold text-[#15172A]">{t.full_name}</span>
+
+          {!loading && subjectId && assignedTeacher && (
+            <>
+              <TeacherRow t={assignedTeacher} selected={teacherId === assignedTeacher.id} onSelect={setTeacherId} badgeExtra="Assigned" />
+              {assignedUnavailable && (
+                <div className="mt-2">
+                  <p className="text-[11px] text-[#EF4444] mb-1.5">
+                    {assignedTeacher.full_name} is {assignedTeacher.is_on_leave_today ? "on leave" : "already teaching another class"} for this period — choose a substitute:
+                  </p>
+                  <div className="max-h-40 overflow-y-auto flex flex-col gap-1.5">
+                    {substituteTeachers.map((t) => (
+                      <TeacherRow key={t.id} t={t} selected={teacherId === t.id} onSelect={setTeacherId} />
+                    ))}
+                    {substituteTeachers.length === 0 && (
+                      <p className="text-[12px] text-[#9EA2C4]">No other teachers are set up for this subject.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {!loading && subjectId && !assignedTeacher && (
+            <div>
+              <p className="text-[11px] text-[#B45309] mb-1.5">No teacher is assigned to this subject for this class yet — pick one:</p>
+              <div className="max-h-48 overflow-y-auto flex flex-col gap-1.5">
+                {teachers.map((t) => (
+                  <TeacherRow key={t.id} t={t} selected={teacherId === t.id} onSelect={setTeacherId} />
+                ))}
+                {teachers.length === 0 && <p className="text-[12px] text-[#9EA2C4]">No eligible teachers found.</p>}
               </div>
-              <span className={["text-[10px] font-semibold px-2 py-0.5 rounded-full", t.is_busy ? "bg-[#FEE2E2] text-[#EF4444]" : "bg-[#DCFCE7] text-[#16A34A]"].join(" ")}>
-                {t.is_busy ? "● Busy" : "● Free"}
-              </span>
-            </button>
-          ))}
-          {!loading && teachers.length === 0 && <p className="text-[12px] text-[#9EA2C4]">Pick a subject to see eligible teachers.</p>}
+            </div>
+          )}
+
+          {!loading && !subjectId && <p className="text-[12px] text-[#9EA2C4]">Pick a subject to see the assigned teacher.</p>}
         </div>
         <div className="flex gap-2">
           <button onClick={onClose} className="px-4 py-2 rounded-lg border border-[#DBE4F0] text-[#5B5E72] text-[13px] font-semibold hover:bg-[#F5F5FB] transition-colors">Cancel</button>
@@ -723,6 +810,89 @@ function SlotModal({
 // ─────────────────────────────────────────────────────────────────────────────
 // Teacher Schedule tab  ★ premium redesign
 // ─────────────────────────────────────────────────────────────────────────────
+/** Searchable teacher combobox — replaces a plain `<select>` whose native popup clashes with the dark hero card it sits in. */
+function TeacherPicker({
+  teachers, teacherId, onChange,
+}: { teachers: Teacher[]; teacherId: number | null; onChange: (id: number) => void }) {
+  const [open, setOpen]   = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef  = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const selected = teachers.find((t) => t.id === teacherId) ?? null;
+  const filtered = useMemo(
+    () => teachers.filter((t) => t.full_name.toLowerCase().includes(query.trim().toLowerCase())),
+    [teachers, query],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onClickOutside);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onClickOutside);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (open) { setQuery(""); requestAnimationFrame(() => inputRef.current?.focus()); }
+  }, [open]);
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 text-white text-[18px] font-extrabold w-full truncate text-left"
+      >
+        <span className="truncate">{selected ? selected.full_name : "Select teacher…"}</span>
+        <ChevronDown size={16} className="opacity-60 shrink-0" />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full mt-2 w-72 max-w-[calc(100vw-2rem)] rounded-xl bg-white shadow-2xl border border-[#E2E8F0] z-30 overflow-hidden">
+          <div className="p-2 border-b border-[#F1F5F9]">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-[#F8FAFC] border border-[#E8ECF5]">
+              <Search size={14} className="text-[#9EA2C4] shrink-0" />
+              <input
+                ref={inputRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search teacher…"
+                className="bg-transparent outline-none text-[13px] text-[#15172A] w-full"
+              />
+            </div>
+          </div>
+          <div className="max-h-56 overflow-y-auto py-1">
+            {filtered.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => { onChange(t.id); setOpen(false); }}
+                className={["w-full flex items-center gap-2 px-3 py-2 text-[13px] text-left transition-colors",
+                  t.id === teacherId ? "bg-[#EEEAFF] text-[#4F35CC] font-semibold" : "text-[#15172A] hover:bg-[#F8FAFC]",
+                ].join(" ")}
+              >
+                <span className="w-6 h-6 rounded-full bg-[#4F35CC] text-white text-[9px] font-bold flex items-center justify-center shrink-0">
+                  {initials(t.full_name)}
+                </span>
+                <span className="truncate">{t.full_name}</span>
+              </button>
+            ))}
+            {filtered.length === 0 && (
+              <p className="px-3 py-3 text-[12px] text-[#9EA2C4]">No teachers match "{query}".</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TeacherScheduleTab({ allSections }: { subjects: Subject[]; allSections: (Section & { className: string })[] }) {
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [teacherId, setTeacherId] = useState<number | null>(null);
@@ -752,8 +922,8 @@ function TeacherScheduleTab({ allSections }: { subjects: Subject[]; allSections:
   return (
     <div>
       {/* ── Hero header card ── */}
-      <div className="rounded-2xl border border-[#E2E8F0] bg-white shadow-sm overflow-hidden mb-5">
-        <div className="px-6 py-5 flex items-center gap-5 border-b border-[#F1F5F9]" style={{ background: "linear-gradient(135deg,#1E1B4B 0%,#312E81 100%)" }}>
+      <div className="rounded-2xl border border-[#E2E8F0] bg-white shadow-sm mb-5">
+        <div className="rounded-2xl px-6 py-5 flex items-center gap-5 border-b border-[#F1F5F9]" style={{ background: "linear-gradient(135deg,#1E1B4B 0%,#312E81 100%)" }}>
           {/* Avatar */}
           <div
             className="w-14 h-14 rounded-2xl flex items-center justify-center text-white text-[18px] font-extrabold shrink-0 shadow-lg"
@@ -764,14 +934,7 @@ function TeacherScheduleTab({ allSections }: { subjects: Subject[]; allSections:
           {/* Name + picker */}
           <div className="flex-1 min-w-0">
             <div className="text-white text-[11px] font-semibold opacity-60 uppercase tracking-widest mb-1">Teacher Schedule</div>
-            <select
-              value={teacherId ?? ""}
-              onChange={(e) => setTeacherId(e.target.value ? +e.target.value : null)}
-              className="bg-transparent text-white text-[18px] font-extrabold border-none outline-none cursor-pointer appearance-none w-full truncate"
-              style={{ WebkitAppearance: "none" }}
-            >
-              {teachers.map((t) => <option key={t.id} value={t.id} style={{ color: "#15172A" }}>{t.full_name}</option>)}
-            </select>
+            <TeacherPicker teachers={teachers} teacherId={teacherId} onChange={setTeacherId} />
             <div className="text-white/60 text-[11px] mt-0.5">Schedules are derived automatically from the Class Timetable.</div>
           </div>
           {/* Quick stats */}
@@ -801,7 +964,7 @@ function TeacherScheduleTab({ allSections }: { subjects: Subject[]; allSections:
                 {activePeriods.map((p, idx) => (
                   <th key={p.id} className="text-white text-center py-4 px-2" style={{ background: "#312E81", minWidth: 110 }}>
                     <div className="text-[12px] font-semibold">Period {idx + 1}</div>
-                    <div className="text-[10px] font-normal opacity-60 mt-0.5">{p.start_time.slice(0, 5)}</div>
+                    <div className="text-[10px] font-normal opacity-60 mt-0.5">{p.start_time.slice(0, 5)} – {p.end_time.slice(0, 5)}</div>
                   </th>
                 ))}
               </tr>
