@@ -2,19 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  BookOpen, CheckCircle2, ChevronDown, ChevronRight, ClipboardList,
-  FileText, LayoutGrid, Table2, User,
+  BookOpen, Check, CheckCircle2, ChevronDown, ChevronRight, ClipboardList,
+  FileText, LayoutGrid, Pencil, Table2, Trash2, User, X,
 } from "lucide-react";
 import { apiRequestWithRefresh, apiRequestWithRefreshResponse } from "@/lib/api-auth";
+import ConfirmDeleteDialog from "@/components/academics/foundation/ConfirmDeleteDialog";
 import {
   createHomework,
   createLesson,
   createLessonPlan,
   createLessonTopic,
+  deleteLessonPlan,
+  deleteLessonTopic,
   evaluateSubmission,
   parentSyllabusPdfUrl,
   reviewLessonPlan,
   submitLessonPlan,
+  updateLessonPlan,
+  updateLessonTopic,
   uploadContent,
   useApprovalLog,
   useClassOverview,
@@ -27,7 +32,7 @@ import {
   toggleTopicDone,
   type ClassOverviewRow,
 } from "@/hooks/usePlanningApi";
-import type { Homework, Lesson, LessonPlanner, SchoolClass, Section, Subject, WorkflowStatus } from "@/types/academics";
+import type { Homework, Lesson, LessonPlanner, LessonTopicDetail, SchoolClass, Section, Subject, WorkflowStatus } from "@/types/academics";
 
 type Tab = "overview" | "detail" | "subject" | "syllabus" | "workflow";
 
@@ -445,7 +450,7 @@ function ClassDetailTab({
           <div className="space-y-5">
             {selectedLesson ? (
               <>
-                <ChapterTopicsAndPlans lesson={selectedLesson} sections={sections} sameSyllabus={sameSyllabus} onTeachToast={showToast} />
+                <ChapterTopicsAndPlans lesson={selectedLesson} sections={sections} sameSyllabus={sameSyllabus} onTeachToast={showToast} onProgressChanged={refetch} />
                 <HomeworkPanel classId={classId} sectionId={sameSyllabus ? null : sectionId} subjectId={selectedLesson.subject} showToast={showToast} />
                 <UploadedContentPanel classId={classId} />
               </>
@@ -476,20 +481,29 @@ function InlineAddChapter({ onAdd }: { onAdd: (title: string) => void }) {
 }
 
 function ChapterTopicsAndPlans({
-  lesson, sections, sameSyllabus, onTeachToast,
+  lesson, sections, sameSyllabus, onTeachToast, onProgressChanged,
 }: {
   lesson: Lesson;
   sections: (Section & { className: string })[];
   sameSyllabus: boolean;
   onTeachToast: (m: string, t?: "success" | "error") => void;
+  onProgressChanged: () => void;
 }) {
   const { topics, loading, refetch } = useLessonTopics(lesson.id);
   const { plans, refetch: refetchPlans } = useLessonPlanners({ classId: lesson.school_class, sectionId: lesson.section, subjectId: lesson.subject });
   const lessonPlans = plans.filter((p) => p.lesson_id === lesson.id);
+  const blankForm = { sub_topic: "", lesson_date: new Date().toISOString().slice(0, 10), general_objectives: "", teaching_method: "Explanation", topic_ids: [] as number[] };
   const [showForm, setShowForm] = useState(false);
+  const [editingPlanId, setEditingPlanId] = useState<number | null>(null);
+  const [deletingPlan, setDeletingPlan] = useState<LessonPlanner | null>(null);
+  const [planBusy, setPlanBusy] = useState(false);
   const [showTopicForm, setShowTopicForm] = useState(false);
   const [newTopicTitle, setNewTopicTitle] = useState("");
-  const [form, setForm] = useState({ sub_topic: "", lesson_date: new Date().toISOString().slice(0, 10), general_objectives: "", teaching_method: "Explanation" });
+  const [editingTopicId, setEditingTopicId] = useState<number | null>(null);
+  const [editingTopicTitle, setEditingTopicTitle] = useState("");
+  const [deletingTopic, setDeletingTopic] = useState<LessonTopicDetail | null>(null);
+  const [topicBusy, setTopicBusy] = useState(false);
+  const [form, setForm] = useState(blankForm);
 
   const fallbackSectionId = lesson.section ?? sections.find((s) => (s.school_class as unknown as number) === lesson.school_class)?.id ?? null;
 
@@ -502,27 +516,118 @@ function ChapterTopicsAndPlans({
       });
       setNewTopicTitle(""); setShowTopicForm(false);
       void refetch();
+      void onProgressChanged();
       onTeachToast("Topic added.");
     } catch (e) { onTeachToast(e instanceof Error ? e.message : "Could not add topic.", "error"); }
   };
 
-  const addPlan = async () => {
+  const toggleTopic = async (id: number, done: boolean) => {
     try {
-      await createLessonPlan({
-        lesson: lesson.id,
-        class_id: lesson.school_class, section_id: sameSyllabus ? null : lesson.section, subject_id: lesson.subject,
-        sub_topic: form.sub_topic, lesson_date: form.lesson_date,
-        general_Objectives: form.general_objectives, teaching_method: form.teaching_method,
-      });
-      setShowForm(false);
-      setForm({ sub_topic: "", lesson_date: new Date().toISOString().slice(0, 10), general_objectives: "", teaching_method: "Explanation" });
+      await toggleTopicDone(id, done);
+      void refetch();
+      void onProgressChanged();
+    } catch (e) { onTeachToast(e instanceof Error ? e.message : "Could not update topic.", "error"); }
+  };
+
+  const startEditTopic = (t: LessonTopicDetail) => {
+    setEditingTopicId(t.id);
+    setEditingTopicTitle(t.topic_title);
+  };
+
+  const saveTopicEdit = async () => {
+    const id = editingTopicId;
+    const title = editingTopicTitle.trim();
+    setEditingTopicId(null);
+    if (!id) return;
+    const original = topics.find((t) => t.id === id);
+    if (!title || original?.topic_title === title) return;
+    try {
+      await updateLessonTopic(id, title);
+      void refetch();
+      onTeachToast("Topic updated.");
+    } catch (e) { onTeachToast(e instanceof Error ? e.message : "Could not update topic.", "error"); }
+  };
+
+  const confirmDeleteTopic = async () => {
+    if (!deletingTopic) return;
+    setTopicBusy(true);
+    try {
+      await deleteLessonTopic(deletingTopic.id);
+      onTeachToast("Topic deleted.");
+      setDeletingTopic(null);
+      void refetch();
+      void onProgressChanged();
+    } catch (e) { onTeachToast(e instanceof Error ? e.message : "Could not delete topic.", "error"); }
+    finally { setTopicBusy(false); }
+  };
+
+  const openCreatePlanForm = () => { setEditingPlanId(null); setForm(blankForm); setShowForm(true); };
+  const closePlanForm = () => { setShowForm(false); setEditingPlanId(null); setForm(blankForm); };
+
+  const startEditPlan = (p: LessonPlanner) => {
+    setEditingPlanId(p.id);
+    const topicIds = p.topics?.length ? p.topics.map((t) => t.topic_id) : (p.topic_id ? [p.topic_id] : []);
+    setForm({
+      sub_topic: p.sub_topic || "",
+      lesson_date: p.lesson_date,
+      general_objectives: p.general_objectives || "",
+      teaching_method: p.teaching_method || "Explanation",
+      topic_ids: topicIds,
+    });
+    setShowForm(true);
+  };
+
+  const toggleFormTopic = (topicId: number, checked: boolean) => {
+    setForm((f) => ({
+      ...f,
+      topic_ids: checked ? [...f.topic_ids, topicId] : f.topic_ids.filter((id) => id !== topicId),
+    }));
+  };
+
+  const savePlan = async () => {
+    const basePayload = {
+      lesson: lesson.id,
+      class_id: lesson.school_class, section_id: sameSyllabus ? null : lesson.section, subject_id: lesson.subject,
+      lesson_date: form.lesson_date,
+      general_Objectives: form.general_objectives, teaching_method: form.teaching_method,
+    };
+    const payload = form.topic_ids.length > 0
+      ? { ...basePayload, customize: "customize", topic: form.topic_ids, sub_topic: [], session_title: form.sub_topic }
+      : { ...basePayload, sub_topic: form.sub_topic };
+    try {
+      if (editingPlanId) {
+        await updateLessonPlan(editingPlanId, payload);
+        onTeachToast("Lesson updated.");
+        closePlanForm();
+      } else {
+        await createLessonPlan(payload);
+        onTeachToast("Lesson added — add another or close.");
+        setForm(blankForm);
+      }
       void refetchPlans();
-      onTeachToast("Lesson added.");
-    } catch (e) { onTeachToast(e instanceof Error ? e.message : "Could not add lesson.", "error"); }
+    } catch (e) { onTeachToast(e instanceof Error ? e.message : "Could not save lesson.", "error"); }
+  };
+
+  const confirmDeletePlan = async () => {
+    if (!deletingPlan) return;
+    setPlanBusy(true);
+    try {
+      await deleteLessonPlan(deletingPlan.id);
+      onTeachToast("Lesson deleted.");
+      setDeletingPlan(null);
+      void refetchPlans();
+    } catch (e) { onTeachToast(e instanceof Error ? e.message : "Could not delete lesson.", "error"); }
+    finally { setPlanBusy(false); }
   };
 
   const submit = async (id: number) => {
-    try { await submitLessonPlan(id); void refetchPlans(); onTeachToast("Submitted for review."); }
+    try {
+      await submitLessonPlan(id);
+      void refetchPlans();
+      void refetch();
+      void onProgressChanged();
+      onTeachToast("Submitted for review — linked topics marked done.");
+    }
     catch (e) { onTeachToast(e instanceof Error ? e.message : "Could not submit.", "error"); }
   };
 
@@ -540,7 +645,7 @@ function ChapterTopicsAndPlans({
               style={{ background: "rgba(255,255,255,0.15)", backdropFilter: "blur(4px)" }}
             />
             <button
-              onClick={() => setShowForm((s) => !s)}
+              onClick={() => (showForm ? closePlanForm() : openCreatePlanForm())}
               className="px-3 py-1.5 rounded-lg text-white text-[12px] font-semibold transition-all shadow-sm hover:shadow-md"
               style={{ background: "linear-gradient(135deg,#6D4AFF,#4F35CC)" }}
             >
@@ -553,18 +658,47 @@ function ChapterTopicsAndPlans({
       <div className="p-5">
         {showForm && (
           <div className="rounded-xl border border-[#E2E8F0] p-4 mb-4 grid grid-cols-2 gap-3" style={{ background: "#F8FAFC" }}>
+            <div className="col-span-2 text-[12px] font-bold text-[#15172A]">{editingPlanId ? "Edit Lesson" : "New Lesson"}</div>
             <input className="input col-span-2 shadow-sm" placeholder="Session title / notes" value={form.sub_topic} onChange={(e) => setForm({ ...form, sub_topic: e.target.value })} />
             <input type="date" className="input shadow-sm" value={form.lesson_date} onChange={(e) => setForm({ ...form, lesson_date: e.target.value })} />
             <select className="input shadow-sm" value={form.teaching_method} onChange={(e) => setForm({ ...form, teaching_method: e.target.value })}>
               <option>Explanation</option><option>Demonstration</option><option>Activity-based</option><option>Discussion</option>
             </select>
+            <div className="col-span-2 rounded-lg border border-[#E2E8F0] bg-white p-2">
+              <div className="text-[11px] font-semibold text-[#6B7280] mb-1 px-1">
+                {topics.length ? "Topics covered (select any)" : "No topics yet — add one below to link"}
+              </div>
+              {topics.length > 0 && (
+                <div className="max-h-28 overflow-y-auto">
+                  {topics.map((t) => (
+                    <label key={t.id} className="flex items-center gap-2 text-[12.5px] py-1 px-1 rounded hover:bg-[#F8FAFC] cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="w-3.5 h-3.5 rounded border-gray-300 text-[#4F35CC] focus:ring-[#4F35CC]"
+                        checked={form.topic_ids.includes(t.id)}
+                        onChange={(e) => toggleFormTopic(t.id, e.target.checked)}
+                      />
+                      <span className="text-[#15172A]">{t.topic_title}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
             <textarea className="input col-span-2 shadow-sm" rows={2} placeholder="Learning objectives" value={form.general_objectives} onChange={(e) => setForm({ ...form, general_objectives: e.target.value })} />
-            <button onClick={() => void addPlan()} disabled={!form.sub_topic.trim()} className="col-span-2 px-3 py-2.5 rounded-xl text-white text-[13px] font-bold transition-all disabled:opacity-40 shadow-sm hover:shadow-md" style={{ background: "linear-gradient(135deg,#6D4AFF,#4F35CC)" }}>Save Lesson</button>
+            <button onClick={() => void savePlan()} disabled={!form.sub_topic.trim()} className="px-3 py-2.5 rounded-xl text-white text-[13px] font-bold transition-all disabled:opacity-40 shadow-sm hover:shadow-md" style={{ background: "linear-gradient(135deg,#6D4AFF,#4F35CC)" }}>{editingPlanId ? "Update Lesson" : "Save & add another"}</button>
+            <button onClick={closePlanForm} className="px-3 py-2.5 rounded-xl border border-[#E2E8F0] text-[13px] font-bold text-[#6B7280] hover:bg-white transition-colors">{editingPlanId ? "Cancel" : "Close"}</button>
           </div>
         )}
 
         <div className="space-y-2 mb-6">
-          {lessonPlans.map((p: LessonPlanner) => <LessonPlanRow key={p.id} plan={p} onSubmit={() => void submit(p.id)} />)}
+          {lessonPlans.map((p: LessonPlanner) => {
+            const topicNames = p.topics?.length
+              ? p.topics.map((pt) => topics.find((t) => t.id === pt.topic_id)?.topic_title).filter((n): n is string => !!n)
+              : (p.topic_name ? [p.topic_name] : []);
+            return (
+              <LessonPlanRow key={p.id} plan={p} topicNames={topicNames} onSubmit={() => void submit(p.id)} onEdit={() => startEditPlan(p)} onDelete={() => setDeletingPlan(p)} />
+            );
+          })}
           {lessonPlans.length === 0 && <p className="text-[12px] text-[#9EA2C4] italic py-2">No lessons planned under this chapter yet.</p>}
         </div>
 
@@ -582,16 +716,69 @@ function ChapterTopicsAndPlans({
           {loading ? <p className="text-[12px] text-[#9EA2C4]">Loading…</p> : (
             <div className="grid grid-cols-1 gap-1.5">
               {topics.map((t) => (
-                <label key={t.id} className="flex items-center gap-3 text-[13px] py-2 px-3 rounded-xl hover:bg-[#FAFBFF] cursor-pointer transition-colors border border-transparent hover:border-[#F1F5F9]">
-                  <input type="checkbox" className="w-4 h-4 rounded border-gray-300 text-[#4F35CC] focus:ring-[#4F35CC]" checked={t.completed_status === "Completed"} onChange={async (e) => { await toggleTopicDone(t.id, e.target.checked); void refetch(); }} />
-                  <span className={["font-medium", t.completed_status === "Completed" ? "line-through text-[#9EA2C4]" : "text-[#15172A]"].join(" ")}>{t.topic_title}</span>
-                </label>
+                <div key={t.id} className="flex items-center gap-3 text-[13px] py-2 px-3 rounded-xl hover:bg-[#FAFBFF] transition-colors border border-transparent hover:border-[#F1F5F9]">
+                  <input type="checkbox" className="w-4 h-4 rounded border-gray-300 text-[#4F35CC] focus:ring-[#4F35CC] shrink-0" checked={t.completed_status === "Completed"} onChange={(e) => void toggleTopic(t.id, e.target.checked)} />
+                  {editingTopicId === t.id ? (
+                    <input
+                      autoFocus
+                      className="input flex-1 py-1 text-[13px]"
+                      value={editingTopicTitle}
+                      onChange={(e) => setEditingTopicTitle(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") void saveTopicEdit(); if (e.key === "Escape") setEditingTopicId(null); }}
+                    />
+                  ) : (
+                    <span
+                      onClick={() => void toggleTopic(t.id, t.completed_status !== "Completed")}
+                      className={["flex-1 font-medium cursor-pointer", t.completed_status === "Completed" ? "line-through text-[#9EA2C4]" : "text-[#15172A]"].join(" ")}
+                    >
+                      {t.topic_title}
+                    </span>
+                  )}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {editingTopicId === t.id ? (
+                      <>
+                        <button type="button" title="Save" onMouseDown={(e) => e.preventDefault()} onClick={() => void saveTopicEdit()} className="w-6 h-6 flex items-center justify-center rounded-md text-[#4F35CC] hover:bg-[#F5F4FF] transition-colors">
+                          <Check size={13} />
+                        </button>
+                        <button type="button" title="Cancel" onMouseDown={(e) => e.preventDefault()} onClick={() => setEditingTopicId(null)} className="w-6 h-6 flex items-center justify-center rounded-md text-[#9EA2C4] hover:text-red-500 hover:bg-red-50 transition-colors">
+                          <X size={13} />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" title="Edit topic" onClick={() => startEditTopic(t)} className="w-6 h-6 flex items-center justify-center rounded-md text-[#9EA2C4] hover:text-[#4F35CC] hover:bg-[#F5F4FF] transition-colors">
+                          <Pencil size={12} />
+                        </button>
+                        <button type="button" title="Delete topic" onClick={() => setDeletingTopic(t)} className="w-6 h-6 flex items-center justify-center rounded-md text-[#9EA2C4] hover:text-red-500 hover:bg-red-50 transition-colors">
+                          <Trash2 size={12} />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
               ))}
             </div>
           )}
           {!loading && topics.length === 0 && <p className="text-[12px] text-[#9EA2C4] italic pt-1">No topics yet — you can add them to break this chapter down.</p>}
         </div>
       </div>
+
+      <ConfirmDeleteDialog
+        open={!!deletingPlan}
+        title="Delete Lesson"
+        message={<>Delete <strong>&quot;{deletingPlan?.sub_topic || "this lesson"}&quot;</strong>? This cannot be undone.</>}
+        loading={planBusy}
+        onConfirm={() => void confirmDeletePlan()}
+        onCancel={() => setDeletingPlan(null)}
+      />
+      <ConfirmDeleteDialog
+        open={!!deletingTopic}
+        title="Delete Topic"
+        message={<>Delete <strong>&quot;{deletingTopic?.topic_title}&quot;</strong>? This cannot be undone.</>}
+        loading={topicBusy}
+        onConfirm={() => void confirmDeleteTopic()}
+        onCancel={() => setDeletingTopic(null)}
+      />
     </div>
   );
 }
@@ -607,23 +794,44 @@ const WORKFLOW_LABEL: Record<WorkflowStatus, string> = {
   draft: "Draft", submitted: "Submitted", under_review: "Under Review", approved: "Approved", revision_requested: "Revision Requested",
 };
 
-function LessonPlanRow({ plan, onSubmit }: { plan: LessonPlanner; onSubmit: () => void }) {
+function LessonPlanRow({ plan, topicNames, onSubmit, onEdit, onDelete }: { plan: LessonPlanner; topicNames: string[]; onSubmit: () => void; onEdit: () => void; onDelete: () => void }) {
   return (
-    <div className="flex items-center justify-between rounded-xl border border-[#E8ECF5] bg-[#FAFBFF] px-4 py-3 hover:shadow-sm transition-shadow">
-      <div>
-        <div className="text-[14px] font-bold text-[#15172A] mb-0.5">{plan.sub_topic || "Untitled lesson"}</div>
-        <div className="text-[11px] font-medium text-[#6B7280] flex items-center gap-1.5">
-          <span>📅 {plan.lesson_date}</span>
-          <span>·</span>
-          <span>{plan.completed_status || "Planned"}</span>
+    <div className="flex flex-col gap-2 rounded-xl border border-[#E8ECF5] bg-[#FAFBFF] px-4 py-3 hover:shadow-sm transition-shadow">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-[14px] font-bold text-[#15172A] mb-0.5">{plan.sub_topic || "Untitled lesson"}</div>
+          <div className="text-[11px] font-medium text-[#6B7280] flex items-center gap-1.5">
+            <span>📅 {plan.lesson_date}</span>
+            <span>·</span>
+            <span>{plan.completed_status || "Planned"}</span>
+            {topicNames.length > 0 && (
+              <>
+                <span>·</span>
+                <span className="text-[#4F35CC] font-semibold">🔗 {topicNames.join(", ")}</span>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className={["text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase tracking-widest", WORKFLOW_COLORS[plan.workflow_status]].join(" ")}>{WORKFLOW_LABEL[plan.workflow_status]}</span>
+          {(plan.workflow_status === "draft" || plan.workflow_status === "revision_requested") && (
+            <button onClick={onSubmit} className="px-3 py-1.5 rounded-lg bg-white border border-[#DBE4F0] text-[11px] font-bold text-[#4F35CC] hover:bg-[#F5F5FB] transition-colors shadow-sm">Submit →</button>
+          )}
+          <div className="flex items-center gap-1 shrink-0">
+            <button type="button" title="Edit lesson" onClick={onEdit} className="w-7 h-7 flex items-center justify-center rounded-md text-[#9EA2C4] hover:text-[#4F35CC] hover:bg-[#F5F4FF] transition-colors">
+              <Pencil size={13} />
+            </button>
+            <button type="button" title="Delete lesson" onClick={onDelete} className="w-7 h-7 flex items-center justify-center rounded-md text-[#9EA2C4] hover:text-red-500 hover:bg-red-50 transition-colors">
+              <Trash2 size={13} />
+            </button>
+          </div>
         </div>
       </div>
-      <div className="flex items-center gap-3">
-        <span className={["text-[10px] font-extrabold px-2.5 py-1 rounded-full uppercase tracking-widest", WORKFLOW_COLORS[plan.workflow_status]].join(" ")}>{WORKFLOW_LABEL[plan.workflow_status]}</span>
-        {(plan.workflow_status === "draft" || plan.workflow_status === "revision_requested") && (
-          <button onClick={onSubmit} className="px-3 py-1.5 rounded-lg bg-white border border-[#DBE4F0] text-[11px] font-bold text-[#4F35CC] hover:bg-[#F5F5FB] transition-colors shadow-sm">Submit →</button>
-        )}
-      </div>
+      {plan.workflow_status === "revision_requested" && plan.review_notes && (
+        <div className="text-[11.5px] text-[#B91C1C] bg-[#FEF2F2] border border-[#FECACA] rounded-lg px-3 py-2">
+          <span className="font-bold">Revision requested:</span> {plan.review_notes}
+        </div>
+      )}
     </div>
   );
 }
@@ -964,15 +1172,23 @@ function WorkflowTab({ showToast }: { showToast: (m: string, t?: "success" | "er
   // applied server-side via workflowStatus above, so `plans` needs no
   // further narrowing in that case.
   const shown = filter ? plans : plans.filter((p) => p.workflow_status !== "draft");
+  const [revisionTargetId, setRevisionTargetId] = useState<number | null>(null);
+  const [actingId, setActingId] = useState<number | null>(null);
 
-  const act = async (id: number, action: WorkflowStatus) => {
-    let notes = "";
-    if (action === "revision_requested") {
-      notes = prompt("Revision notes for the teacher:") ?? "";
-      if (!notes.trim()) { showToast("Revision notes are required.", "error"); return; }
-    }
-    try { await reviewLessonPlan(id, action, notes); void refetch(); showToast(`Plan ${action.replace("_", " ")}.`); }
-    catch (e) { showToast(e instanceof Error ? e.message : "Could not update the plan.", "error"); }
+  const act = async (id: number, action: WorkflowStatus, notes = "") => {
+    setActingId(id);
+    try {
+      await reviewLessonPlan(id, action, notes);
+      void refetch();
+      showToast(`Plan ${action.replace("_", " ")}.`);
+    } catch (e) { showToast(e instanceof Error ? e.message : "Could not update the plan.", "error"); }
+    finally { setActingId(null); }
+  };
+
+  const submitRevision = async (notes: string) => {
+    if (revisionTargetId === null) return;
+    await act(revisionTargetId, "revision_requested", notes);
+    setRevisionTargetId(null);
   };
 
   return (
@@ -1007,7 +1223,7 @@ function WorkflowTab({ showToast }: { showToast: (m: string, t?: "success" | "er
               <div className="flex gap-2 mt-2">
                 {p.workflow_status === "submitted" && <button onClick={() => void act(p.id, "under_review")} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-[#EEEAFF] text-[#4F35CC]">🔍 Start Review</button>}
                 <button onClick={() => void act(p.id, "approved")} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-[#DCFCE7] text-[#15803D]">✓ Approve</button>
-                <button onClick={() => void act(p.id, "revision_requested")} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-[#FEE2E2] text-[#B91C1C]">↩ Request Revision</button>
+                <button onClick={() => setRevisionTargetId(p.id)} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg bg-[#FEE2E2] text-[#B91C1C]">↩ Request Revision</button>
               </div>
             )}
           </div>
@@ -1025,6 +1241,79 @@ function WorkflowTab({ showToast }: { showToast: (m: string, t?: "success" | "er
           </div>
         ))}
         {entries.length === 0 && <p className="text-[12px] text-[#9EA2C4] italic">No activity logged yet — approvals and revisions will appear here as they happen.</p>}
+      </div>
+      <RevisionNotesDialog
+        open={revisionTargetId !== null}
+        loading={actingId === revisionTargetId}
+        onSubmit={(notes) => void submitRevision(notes)}
+        onCancel={() => setRevisionTargetId(null)}
+      />
+    </div>
+  );
+}
+
+function RevisionNotesDialog({
+  open, loading, onSubmit, onCancel,
+}: {
+  open: boolean;
+  loading: boolean;
+  onSubmit: (notes: string) => void;
+  onCancel: () => void;
+}) {
+  const [notes, setNotes] = useState("");
+
+  useEffect(() => {
+    if (open) setNotes("");
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !loading) onCancel();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, loading, onCancel]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={() => !loading && onCancel()} />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="revision-notes-title"
+        className="relative z-10 w-full max-w-[440px] rounded-2xl bg-white border border-[#E8ECEF] shadow-[0_10px_40px_rgba(0,0,0,0.18)] p-5"
+      >
+        <h3 id="revision-notes-title" className="text-[15px] font-bold text-[#1A1D1F] leading-tight mb-1">Request Revision</h3>
+        <p className="text-[12.5px] text-[#6F767E] mb-3">Let the teacher know what needs to change before this plan can be approved.</p>
+        <textarea
+          autoFocus
+          rows={4}
+          className="input w-full shadow-sm resize-none"
+          placeholder="Revision notes for the teacher…"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+        />
+        <div className="flex justify-end gap-2 mt-4">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={loading}
+            className="px-3.5 py-[7px] rounded-[10px] border border-[#E8ECEF] text-[13px] font-semibold text-[#6F767E] hover:bg-[#F0F2F5] transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSubmit(notes)}
+            disabled={loading || !notes.trim()}
+            className="px-3.5 py-[7px] rounded-[10px] bg-[#4F35CC] text-white text-[13px] font-semibold hover:bg-[#3F2AA3] transition-colors disabled:opacity-60"
+          >
+            {loading ? "Submitting…" : "Submit"}
+          </button>
+        </div>
       </div>
     </div>
   );

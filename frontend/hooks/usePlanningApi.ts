@@ -70,6 +70,11 @@ async function postJson<T>(path: string, body: unknown, method: "POST" | "PATCH"
   return (json.data ?? json) as T;
 }
 
+async function deleteJson(path: string): Promise<void> {
+  const res = await apiRequestWithRefreshResponse(path, { method: "DELETE" });
+  if (!res.ok) return throwApiError(res);
+}
+
 // ─── Overview (All Classes cards + Matrix) ──────────────────────────────────
 
 export interface ClassOverviewSubject {
@@ -129,6 +134,14 @@ export async function toggleTopicDone(id: number, done: boolean): Promise<void> 
   await postJson(`/api/v1/academics/lesson-topic-details/${id}/`, { completed_status: done ? "Completed" : "Planned" }, "PATCH");
 }
 
+export async function updateLessonTopic(id: number, topic_title: string): Promise<LessonTopicDetail> {
+  return postJson<LessonTopicDetail>(`/api/v1/academics/lesson-topic-details/${id}/`, { topic_title }, "PATCH");
+}
+
+export async function deleteLessonTopic(id: number): Promise<void> {
+  await deleteJson(`/api/v1/academics/lesson-topic-details/${id}/`);
+}
+
 // ─── Lesson Planners (the actual lesson plan + workflow) ───────────────────
 
 export function useLessonPlanners(filters: { classId?: number | null; sectionId?: number | null; subjectId?: number | null; workflowStatus?: WorkflowStatus | null }) {
@@ -150,6 +163,10 @@ export async function createLessonPlan(body: Record<string, unknown>): Promise<L
 
 export async function updateLessonPlan(id: number, body: Record<string, unknown>): Promise<LessonPlanner> {
   return postJson<LessonPlanner>(`/api/v1/academics/lesson-planners/${id}/`, body, "PATCH");
+}
+
+export async function deleteLessonPlan(id: number): Promise<void> {
+  await deleteJson(`/api/v1/academics/lesson-planners/${id}/`);
 }
 
 export async function submitLessonPlan(id: number): Promise<LessonPlanner> {

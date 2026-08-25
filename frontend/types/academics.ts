@@ -143,6 +143,9 @@ export interface LessonPlanner {
   subject_name?: string;
   lesson_id: number | null;
   lesson_name?: string;
+  topic_id: number | null;
+  topic_name?: string;
+  topics?: { id: number; topic_id: number; sub_topic_title: string }[];
   teacher_id: number | null;
   teacher_name?: string;
   lesson_date: string;

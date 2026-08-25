@@ -40,21 +40,20 @@ class AcademicsReportsSummaryView(AcademicsReportsBaseView):
 
         topic_qs = LessonTopicDetail.objects.filter(lesson__school_id=school_id)
         lesson_qs = Lesson.objects.filter(school_id=school_id, active_status=True)
-        homework_qs = Homework.objects.filter(school_id=school_id)
         if academic_year_id:
             lesson_qs = lesson_qs.filter(academic_year_id=academic_year_id)
-            homework_qs = homework_qs.filter(academic_year_id=academic_year_id)
             topic_qs = topic_qs.filter(lesson__academic_year_id=academic_year_id)
 
         total_topics = topic_qs.count()
         done_topics = topic_qs.filter(completed_status="Completed").count()
         avg_coverage_pct = round((done_topics / total_topics) * 100) if total_topics else 0
 
-        hw_pending = HomeworkSubmission.objects.filter(
-            homework__school_id=school_id, complete_status__in=["", "P"]
-        ).count() if not academic_year_id else HomeworkSubmission.objects.filter(
-            homework__school_id=school_id, homework__academic_year_id=academic_year_id, complete_status__in=["", "P"]
-        ).count()
+        # Count assignments, not individual submissions, so this tile agrees
+        # with the "Homework Evaluation Tracker" table's STATUS column right
+        # below it — an assignment with zero submissions yet is still
+        # "awaiting eval", same as one with unevaluated submissions.
+        homework_rows = AcademicsHomeworkEvaluationView().get(request).data.get("data", [])
+        hw_pending = sum(1 for row in homework_rows if row["status"] == "Pending")
 
         return Response({
             "success": True,
@@ -63,7 +62,7 @@ class AcademicsReportsSummaryView(AcademicsReportsBaseView):
                 "avg_coverage_pct": avg_coverage_pct,
                 "lessons_done_count": lesson_qs.count(),
                 "hw_pending_count": hw_pending,
-                "reports_ready_count": 5,
+                "reports_ready_count": len(DOWNLOAD_CATALOG),
             },
         })
 
@@ -123,9 +122,7 @@ class AcademicsHomeworkEvaluationView(AcademicsReportsBaseView):
                 marks_list = [s.marks for s in evaluated if s.marks is not None]
                 if marks_list and hw.marks:
                     avg_score = round(sum(marks_list) / len(marks_list) / hw.marks * 100)
-            status_label = "Evaluated" if evaluated.count() == total_students and total_students else (
-                "Pending" if total_students else "Pending"
-            )
+            status_label = "Evaluated" if total_students and evaluated.count() == total_students else "Pending"
             rows.append({
                 "id": hw.id,
                 "title": hw.description[:80] if hw.description else f"Homework #{hw.id}",

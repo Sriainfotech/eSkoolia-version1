@@ -1,5 +1,53 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Claude (25/08/2026)
+
+**Area:** Academics → Planning Studio — Lesson↔Topic linking, edit/delete for lessons and topics, revision-request UX, and Academics → Reports stat-tile accuracy
+
+### 1. Lesson ↔ Topic linking (the actual gap the whole session started from)
+- The UI's "Topic" checklist (`LessonTopicDetail`) was already mandatorily tied to a Chapter (`Lesson`), but a session-level "Lesson" (`LessonPlanner`) had no visible/settable link to the topic(s) it covers — the "+ Lesson" form never sent a `topic` value even though the backend already had the FK (`LessonPlanner.topic`/`topic_detail`) and full validation for it (`LessonPlannerCreateSerializer.validate()`).
+- Frontend now has a multi-select topic checklist in the "+ Lesson" form. Selecting 1+ topics sends the backend's existing "customize" mode (`customize: "customize"`, `topic: [ids]`, `sub_topic: []`) which creates `LessonPlanTopic` rows; 0 topics falls back to the original simple path.
+- **New backend field** `session_title` on `LessonPlannerCreateSerializer` (`backend/apps/academics/serializers.py`): in customize mode, `sub_topic` is repurposed by the existing design as a list of per-topic notes, which would otherwise blank out the lesson's own title. `session_title` carries the title through instead; wired into both `LessonPlannerViewSet.create()` and `.update()` (`backend/apps/academics/views.py`).
+- Lesson rows now show a `🔗 <topic names>` badge (comma-joined for multi-topic plans), sourced from `plan.topics[]`/`plan.topic_name` cross-referenced against the chapter's topic list.
+- **Bug found and fixed**: `LessonPlannerViewSet.update()` crashed with a 500 (`TypeError: Field 'id' expected a number but got <LessonTopicDetail ...>`) whenever a PATCH included a single (non-customize) `topic` value — `create()` already guarded for the fact that `validate()` resolves `topic` into an actual `LessonTopicDetail` *instance*, not a raw pk, but `update()` didn't have the same `isinstance()` check. This bug pre-dated this session; my new Edit-lesson feature was just the first caller to ever PATCH a `topic`, which surfaced it.
+
+### 2. Edit/Delete for Lessons and Topics (didn't exist before this session)
+- Added `deleteLessonPlan`, `deleteLessonTopic`, `updateLessonTopic`, and a `deleteJson` helper to `frontend/hooks/usePlanningApi.ts` (backend already fully supported delete/update on both `LessonPlannerViewSet` and `LessonTopicDetailViewSet` — this was frontend-only wiring).
+- Lesson rows: ✎/🗑 icons. Edit reopens the same "+ Lesson" form pre-filled (title, date, method, linked topics); delete goes through the existing `ConfirmDeleteDialog` (reused from `components/academics/foundation/`).
+- Topic rows: ✎/🗑 icons. Edit turns the label into an inline text field with explicit **✓ Save** / **✕ Cancel** buttons (Enter/Escape also work) — the first version relied on blur-to-save with no visible confirm control, which the user correctly flagged as looking broken; removed the `onBlur`-triggered save entirely since it could race with clicking an icon button.
+- "Quick-add loop": saving a *new* lesson now clears the form and keeps it open (toast: "Lesson added — add another or close") instead of closing it, so several lessons can be added to one chapter back-to-back. Editing an existing lesson still closes the form on save.
+
+### 3. Chapter completion % was silently stale, and a business rule was decided
+- Root cause: the left-nav chapter percentage (`topics_done`/`topics_total`, from `LessonSerializer` via `useLessonGroups`) lives in a completely separate fetch from the Chapter Details panel (`useLessonTopics`/`useLessonPlanners`) — nothing ever told the left nav to refetch after a topic was added/edited/deleted/checked or a lesson was submitted, so the % appeared to not respond to any action. Fixed by threading an `onProgressChanged` callback down into `ChapterTopicsAndPlans` and calling it after every action that can actually change the counts.
+- Decided (delegated to me by the user, "you can change accordingly"): merely *linking* a topic to a lesson is a planning action, not proof it was taught, so it should not by itself move the %. But **submitting** a lesson now auto-marks its linked topic(s) `completed_status = "Completed"` (`LessonPlannerViewSet.submit()`) — submission is the teacher's own confirmation the session happened. Manual topic checkboxes remain available for topics not tied to any lesson, or to correct a mistake. This does not retroactively backfill lessons submitted before this change.
+
+### 4. Revision-request UX
+- The reviewer's "↩ Request Revision" action used a native `window.prompt()` (the unstyled black browser dialog) — replaced with an in-app `RevisionNotesDialog` (same modal styling convention as `ConfirmDeleteDialog`: backdrop blur, Escape-to-close, disabled Submit until text is entered).
+- The teacher-facing lesson row showed a "REVISION REQUESTED" badge but never the reviewer's actual note (`plan.review_notes` — already returned by the API, just never rendered). Added a red notes banner under the row showing the reason. (The reviewer-side Workflow tab's Audit Log already showed the note text via `LessonPlanApprovalLog.note`, so that side needed no change.)
+
+### 5. Academics → Reports stat tiles (`backend/apps/reports/academics_views.py`)
+- "HW Pending" relabeled to "Homework Pending" (`frontend/components/academics/reports/ReportsWorkspace.tsx`).
+- Fixed a real count mismatch: the tile counted individual `HomeworkSubmission` rows awaiting evaluation (0, if no student had submitted yet), while the "Homework Evaluation Tracker" table right below it counted *assignments* not yet fully evaluated — an assignment with zero submissions is still "Pending" there. `AcademicsReportsSummaryView` now reuses `AcademicsHomeworkEvaluationView`'s per-assignment status rows so the tile and table always agree. Also simplified a redundant `"Pending" if x else "Pending"` ternary found in that status logic while touching it.
+- "Reports Ready" was hardcoded to `5` with no relation to anything real (the "Reports & Downloads" panel only ever lists 3 items). Changed to `len(DOWNLOAD_CATALOG)` so it can't drift again.
+
+### Files changed
+- `backend/apps/academics/serializers.py` (`session_title` field)
+- `backend/apps/academics/views.py` (`LessonPlannerViewSet.create/update/submit`)
+- `backend/apps/reports/academics_views.py` (`AcademicsReportsSummaryView`, `AcademicsHomeworkEvaluationView` status logic)
+- `frontend/types/academics.ts` (`LessonPlanner.topic_id/topic_name/topics[]`)
+- `frontend/hooks/usePlanningApi.ts` (`deleteJson`, `updateLessonTopic`, `deleteLessonTopic`, `deleteLessonPlan`)
+- `frontend/components/academics/planning-studio/PlanningStudioWorkspace.tsx` (large: `ChapterTopicsAndPlans`, `LessonPlanRow`, `WorkflowTab`, new `RevisionNotesDialog`)
+- `frontend/components/academics/reports/ReportsWorkspace.tsx` (label only)
+
+### Status
+✅ Every change type-checked clean (`tsc --noEmit`, `eslint`) and `manage.py check` stayed clean (only the same pre-existing, unrelated tenancy/URL-namespace warnings this repo always shows). The Lesson↔Topic link, the edit/delete icons, and the revision-notes banner were each confirmed live by the user against real data (screenshots) as the session went on — those are solid.
+
+⚠️ **Not yet live-verified**: the multi-topic checklist form, the "quick-add loop" UX, the Save/Cancel topic-edit buttons, the submit-auto-completes-topics behavior, and both Reports fixes were built/fixed after the user's last screenshot in this session — worth a quick visual pass next session if not already done.
+
+⚠️ **Open thread, not resolved**: earlier in the session the user reported clicking "Submit" on a lesson plan produced only an `OPTIONS 200` in the Network tab with no visible follow-up response ("response is not coming"). I talked them through checking the Network tab for a second (POST) row, the browser console, and the `runserver` log to tell a backend hang apart from a browser-side block — no findings ever came back. Static review of `LessonPlannerViewSet.submit()` and CORS settings found nothing obviously wrong, and it wasn't reproduced live, so this is still an open bug report, not something fixed.
+
+---
+
 ## Update — Claude (24/08/2026)
 
 **Area:** Academics → Timetable — period time ranges, the slot-assignment modal's subject/teacher pickers, and the Teacher Schedule combobox

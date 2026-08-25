@@ -1265,6 +1265,10 @@ class LessonPlannerCreateSerializer(serializers.Serializer):
     topic = serializers.JSONField(required=False)
     sub_topic = serializers.JSONField(required=False)
     customize = serializers.CharField(required=False, allow_blank=True)
+    # Session title shown on the lesson row/list. In "customize" (multi-topic)
+    # mode `sub_topic` is repurposed as a list of per-topic notes, so this
+    # separate field carries the plan's own title instead.
+    session_title = serializers.CharField(required=False, allow_blank=True, max_length=255)
     youtube_link = serializers.CharField(required=False, allow_blank=True)
     photo = serializers.CharField(required=False, allow_blank=True)
     teaching_method = serializers.CharField(required=False, allow_blank=True)

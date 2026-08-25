@@ -1559,6 +1559,7 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
         topic_value = data.get("topic")
         sub_topic_value = data.get("sub_topic")
         customize = data.get("customize")
+        session_title = (data.get("session_title") or "").strip()
 
         with transaction.atomic():
             lesson_planner = LessonPlanner.objects.create(
@@ -1599,6 +1600,9 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
                         topic=topic_detail,
                         sub_topic_title=sub_topics[index] if index < len(sub_topics) else "",
                     )
+                if session_title:
+                    lesson_planner.sub_topic = session_title
+                    lesson_planner.save(update_fields=["sub_topic", "updated_at"])
             else:
                 # LessonPlannerCreateSerializer.validate() already resolves
                 # non-customize `topic` into the actual LessonTopicDetail
@@ -1628,6 +1632,7 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
         topic_value = data.get("topic")
         sub_topic_value = data.get("sub_topic")
         customize = data.get("customize")
+        session_title = (data.get("session_title") or "").strip()
 
         with transaction.atomic():
             instance.academic_year = data.get("academic_year")
@@ -1669,11 +1674,18 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
                         topic=topic_detail,
                         sub_topic_title=sub_topics[index] if index < len(sub_topics) else "",
                     )
+                if session_title:
+                    instance.sub_topic = session_title
+                    instance.save(update_fields=["sub_topic", "updated_at"])
             else:
+                # LessonPlannerCreateSerializer.validate() already resolves
+                # non-customize `topic` into the actual LessonTopicDetail
+                # instance (see attrs["topic"] = topic_detail there) — it is
+                # not a raw id by the time it reaches here.
                 if topic_value is None:
                     topic_detail = None
                 else:
-                    topic_detail = LessonTopicDetail.objects.get(pk=topic_value)
+                    topic_detail = topic_value if isinstance(topic_value, LessonTopicDetail) else LessonTopicDetail.objects.get(pk=topic_value)
                 instance.topic = topic_detail
                 instance.topic_detail = topic_detail
                 instance.sub_topic = sub_topic_value if isinstance(sub_topic_value, str) else ""
@@ -1836,6 +1848,20 @@ class LessonPlannerViewSet(TenantScopedModelViewSet):
             lesson_planner=plan, action=LessonPlanner.WORKFLOW_SUBMITTED, by=request.user,
             note="Submitted for review",
         )
+
+        # Submitting a lesson confirms the topic(s) it covers were actually
+        # taught, so mark them done — this is what drives the chapter's
+        # completion % (LessonSerializer.get_topics_done). Manual checkboxes
+        # in the Topics list remain available for topics not tied to any
+        # lesson, or to correct/uncheck a mistaken submission.
+        linked_topic_ids = set(plan.topics.values_list("topic_id", flat=True))
+        if plan.topic_detail_id:
+            linked_topic_ids.add(plan.topic_detail_id)
+        if linked_topic_ids:
+            LessonTopicDetail.objects.filter(pk__in=linked_topic_ids).exclude(completed_status="Completed").update(
+                completed_status="Completed", competed_date=timezone.now().date(),
+            )
+
         return Response({"success": True, "message": "Lesson plan submitted for review.", "data": self.get_serializer(plan).data})
 
     @action(detail=True, methods=["post"], url_path="review")

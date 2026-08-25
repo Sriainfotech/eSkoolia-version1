@@ -29,7 +29,7 @@ export default function ReportsWorkspace() {
   const tiles = [
     { label: "Avg Coverage", value: loadingSummary ? "—" : `${summary?.avg_coverage_pct ?? 0}%`, sub: "all classes", icon: BookOpenCheck, bg: "#EEEAFF", fg: "#4F35CC" },
     { label: "Lessons Done", value: loadingSummary ? "—" : String(summary?.lessons_done_count ?? 0), sub: "this term", icon: CheckCircle2, bg: "#DCFCE7", fg: "#15803D" },
-    { label: "HW Pending", value: loadingSummary ? "—" : String(summary?.hw_pending_count ?? 0), sub: "awaiting eval", icon: ClipboardList, bg: "#FEF3C7", fg: "#B45309" },
+    { label: "Homework Pending", value: loadingSummary ? "—" : String(summary?.hw_pending_count ?? 0), sub: "awaiting eval", icon: ClipboardList, bg: "#FEF3C7", fg: "#B45309" },
     { label: "Reports Ready", value: loadingSummary ? "—" : String(summary?.reports_ready_count ?? 0), sub: "", icon: Download, bg: "#DBEAFE", fg: "#1D4ED8" },
   ];
 
