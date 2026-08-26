@@ -122,7 +122,7 @@ export function TeacherDayPlanner({ periods, loading }: Props) {
                       fontSize: 12, fontWeight: p.is_now ? 700 : 600,
                       color: p.is_now ? 'var(--ink, #15172A)' : p.is_done ? 'var(--muted, #5B5E72)' : 'var(--ink, #15172A)',
                     }}>
-                      P{p.period} · {p.subject}
+                      {p.period ? `P${p.period} · ` : ''}{p.subject}
                     </span>
                     {p.is_now && (
                       <span style={{

@@ -13,6 +13,7 @@ from rest_framework.parsers import FormParser, MultiPartParser, JSONParser
 from rest_framework.response import Response
 from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, ClassPeriod, LevelScheduleConfig, Section, Subject
+from apps.core.portal_scoping import scope_to_school, PortalScopeFilterBackend
 from apps.hr.models import Staff
 from apps.users.models import User
 from .models import (
@@ -78,11 +79,8 @@ class TenantScopedModelViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("You do not have permission to perform this action.")
 
     def get_queryset(self):
-        user = self.request.user
         qs = self.model.objects.all()
-        if user.school_id:
-            return qs.filter(school_id=user.school_id)
-        return qs.none()
+        return scope_to_school(qs, self.model, self.request.user)
 
     def perform_create(self, serializer):
         school = self.request.user.school
@@ -473,7 +471,10 @@ class ClassTeacherAssignmentViewSet(TenantScopedModelViewSet):
 class ClassRoutineSlotViewSet(TenantScopedModelViewSet):
     model = ClassRoutineSlot
     serializer_class = ClassRoutineSlotSerializer
-    permission_codes = {"*": "academics.core_setup.view"}
+    # "my_schedule" is exempted from the blanket RBAC gate below — it enforces
+    # its own equivalent check inline (see my_schedule()) because non-admin
+    # portals reach it via portal-scope resolvers instead of a permission code.
+    permission_codes = {"*": "academics.core_setup.view", "my_schedule": None}
 
     def get_queryset(self):
         queryset = super().get_queryset().select_related("school_class", "section", "subject", "teacher", "academic_year")
@@ -490,6 +491,34 @@ class ClassRoutineSlotViewSet(TenantScopedModelViewSet):
             },
         )
         return queryset.order_by("day", "start_time")
+
+    @action(detail=False, methods=["get"], url_path="my-schedule")
+    def my_schedule(self, request):
+        """
+        Portal-aware schedule, additive to list(): admin/custom-role callers
+        still need academics.core_setup.view (same gate as list()); teachers
+        and parents are narrowed to their own classes via the portal-scope
+        resolvers registered in apps.teacher_portal.portal_scopes /
+        apps.parent_portal.portal_scopes instead of an RBAC permission code.
+        Existing teacher_portal/parent_portal endpoints are unaffected.
+        """
+        portal_type = request.user.resolve_portal_type()
+        if portal_type in PortalScopeFilterBackend.ADMIN_LIKE:
+            if not request.user.is_superuser and not (
+                hasattr(request.user, "has_permission_code")
+                and request.user.has_permission_code("academics.core_setup.view")
+            ):
+                raise PermissionDenied("You do not have permission to perform this action.")
+
+        queryset = PortalScopeFilterBackend().filter_queryset(request, self.get_queryset(), self)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(
+            {
+                "success": True,
+                "message": "Schedule retrieved successfully",
+                "data": serializer.data,
+            }
+        )
 
     def _normalized_errors(self, serializer_errors):
         if isinstance(serializer_errors, dict):

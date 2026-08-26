@@ -27,13 +27,18 @@ from apps.attendance.holiday_utils import get_calendar_holiday
 
 from .permissions import IsTeacherPortalUser
 from .utils import (
+    assert_can_create_homework,
     build_my_classes,
+    build_pending_items,
     build_student_credentials,
     build_student_profile,
+    build_student_results,
     build_students_list,
+    build_subject_scope_q,
     build_teaching_summary,
     build_todays_periods,
     build_weekly_timetable,
+    get_current_academic_year,
 )
 
 
@@ -83,7 +88,7 @@ class TeacherMeView(APIView):
         todays_periods = build_todays_periods(user)
 
         pending_items = {
-            'homework_to_review': 0,
+            **build_pending_items(user),
             'attendance_pending': bool(summary['class_teacher_for']),
         }
 
@@ -668,3 +673,460 @@ class TeacherAttendanceStoreView(APIView):
             response_payload["message"] = f"{attendance_date} is a holiday ({calendar_holiday.name}) — marked as Holiday."
             response_payload["holiday_name"] = calendar_holiday.name
         return Response(response_payload, status=http_status.HTTP_200_OK)
+
+
+# ── Sprint 6: Homework ────────────────────────────────────────────────────────
+
+class HomeworkListCreateView(APIView):
+    """
+    GET /api/v1/teacher/homework/
+    Returns homework assignments for the authenticated teacher's scope.
+    Scoped by get_subject_scope(user) — only homework in the teacher's
+    assigned classes/subjects. Optional class_id/section_id/subject_id
+    query params narrow further within that scope.
+
+    POST /api/v1/teacher/homework/
+    Creates a homework assignment. school, academic_year and created_by
+    are set server-side. class_id/section_id/subject_id are validated
+    against the teacher's subject scope via assert_can_create_homework —
+    a teacher cannot create homework for a subject they don't teach.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def get(self, request):
+        from apps.academics.models import Homework
+        from apps.academics.serializers import HomeworkSerializer
+
+        user = request.user
+        scope_q = build_subject_scope_q(user, 'class_id_ref_id', 'section_id_ref_id', 'subject_id_ref_id')
+        qs = Homework.objects.select_related(
+            'class_id_ref', 'section_id_ref', 'subject_id_ref', 'created_by',
+        ).filter(scope_q, school=user.school, active_status=True)
+
+        class_id = request.query_params.get('class_id')
+        section_id = request.query_params.get('section_id')
+        subject_id = request.query_params.get('subject_id')
+        if class_id:
+            qs = qs.filter(class_id_ref_id=class_id)
+        if section_id:
+            qs = qs.filter(section_id_ref_id=section_id)
+        if subject_id:
+            qs = qs.filter(subject_id_ref_id=subject_id)
+
+        serializer = HomeworkSerializer(
+            qs.order_by('-homework_date', '-created_at'), many=True, context={'request': request},
+        )
+        return Response(serializer.data)
+
+    def post(self, request):
+        from apps.academics.serializers import HomeworkSerializer
+
+        user = request.user
+        serializer = HomeworkSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+
+        school_class = serializer.validated_data['class_id_ref']
+        section = serializer.validated_data.get('section_id_ref')
+        subject = serializer.validated_data['subject_id_ref']
+        assert_can_create_homework(user, school_class.id, section.id if section else None, subject.id)
+
+        academic_year = serializer.validated_data.get('academic_year') or get_current_academic_year(user.school)
+        homework = serializer.save(school=user.school, academic_year=academic_year, created_by=user)
+        return Response(
+            HomeworkSerializer(homework, context={'request': request}).data, status=http_status.HTTP_201_CREATED,
+        )
+
+
+class HomeworkDetailView(APIView):
+    """
+    GET    /api/v1/teacher/homework/<id>/
+    PATCH  /api/v1/teacher/homework/<id>/
+    DELETE /api/v1/teacher/homework/<id>/
+
+    Fetches, updates, or deletes a single homework assignment. In every
+    case the homework's (class, section, subject) triplet is asserted
+    against the teacher's subject scope before returning any data — a
+    teacher cannot read or modify homework outside their own subjects,
+    even by guessing an id.
+
+    DELETE is a soft delete (active_status=False), matching the Homework
+    model's existing active_status flag rather than removing the row.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def _get_homework(self, request, pk):
+        from apps.academics.models import Homework
+        from rest_framework.exceptions import NotFound
+
+        user = request.user
+        try:
+            homework = Homework.objects.select_related(
+                'class_id_ref', 'section_id_ref', 'subject_id_ref', 'created_by',
+            ).get(pk=pk, school=user.school, active_status=True)
+        except Homework.DoesNotExist:
+            raise NotFound("Homework not found.")
+
+        assert_can_create_homework(
+            user, homework.class_id_ref_id, homework.section_id_ref_id, homework.subject_id_ref_id,
+        )
+        return homework
+
+    def get(self, request, pk):
+        from apps.academics.serializers import HomeworkSerializer
+        homework = self._get_homework(request, pk)
+        return Response(HomeworkSerializer(homework, context={'request': request}).data)
+
+    def patch(self, request, pk):
+        from apps.academics.serializers import HomeworkSerializer
+
+        homework = self._get_homework(request, pk)
+        serializer = HomeworkSerializer(homework, data=request.data, partial=True, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+
+        # Re-check scope if the caller is moving the homework to a different class/section/subject
+        new_class = serializer.validated_data.get('class_id_ref', homework.class_id_ref)
+        new_section = serializer.validated_data.get('section_id_ref', homework.section_id_ref)
+        new_subject = serializer.validated_data.get('subject_id_ref', homework.subject_id_ref)
+        assert_can_create_homework(
+            request.user, new_class.id, new_section.id if new_section else None, new_subject.id,
+        )
+
+        homework = serializer.save()
+        return Response(HomeworkSerializer(homework, context={'request': request}).data)
+
+    def delete(self, request, pk):
+        homework = self._get_homework(request, pk)
+        homework.active_status = False
+        homework.save(update_fields=['active_status', 'updated_at'])
+        return Response(status=http_status.HTTP_204_NO_CONTENT)
+
+
+class HomeworkSubmissionsListView(APIView):
+    """
+    GET /api/v1/teacher/homework/<id>/submissions/
+
+    Returns every student submission recorded against one homework
+    assignment. The homework itself is scope-checked the same way as
+    HomeworkDetailView before any submissions are returned.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def get(self, request, pk):
+        from apps.academics.models import Homework, HomeworkSubmission
+        from apps.academics.serializers import HomeworkSubmissionSerializer
+        from rest_framework.exceptions import NotFound
+
+        user = request.user
+        try:
+            homework = Homework.objects.get(pk=pk, school=user.school, active_status=True)
+        except Homework.DoesNotExist:
+            raise NotFound("Homework not found.")
+
+        assert_can_create_homework(
+            user, homework.class_id_ref_id, homework.section_id_ref_id, homework.subject_id_ref_id,
+        )
+
+        submissions = HomeworkSubmission.objects.select_related('student', 'created_by').filter(
+            homework=homework,
+        ).order_by('student__roll_no', 'student__first_name')
+        return Response(
+            HomeworkSubmissionSerializer(submissions, many=True, context={'request': request}).data,
+        )
+
+
+class HomeworkSubmissionGradeView(APIView):
+    """
+    PATCH /api/v1/teacher/homework/submissions/<id>/grade/
+
+    Grades one student's homework submission — sets marks, complete_status
+    and/or note. The parent homework is scope-checked before the update is
+    allowed, same rule as every other homework endpoint. Only marks,
+    complete_status and note may be changed here — homework/student links
+    are immutable once a submission exists.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def patch(self, request, pk):
+        from apps.academics.models import HomeworkSubmission
+        from apps.academics.serializers import HomeworkSubmissionSerializer
+        from rest_framework.exceptions import NotFound
+
+        user = request.user
+        try:
+            submission = HomeworkSubmission.objects.select_related('homework', 'student').get(
+                pk=pk, homework__school=user.school,
+            )
+        except HomeworkSubmission.DoesNotExist:
+            raise NotFound("Submission not found.")
+
+        homework = submission.homework
+        assert_can_create_homework(
+            user, homework.class_id_ref_id, homework.section_id_ref_id, homework.subject_id_ref_id,
+        )
+
+        allowed = {k: v for k, v in request.data.items() if k in ('marks', 'complete_status', 'note')}
+        serializer = HomeworkSubmissionSerializer(
+            submission, data=allowed, partial=True, context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        submission = serializer.save()
+        return Response(HomeworkSubmissionSerializer(submission, context={'request': request}).data)
+
+
+# ── Sprint 6: Lesson Plans ─────────────────────────────────────────────────────
+
+class LessonPlanListCreateView(APIView):
+    """
+    GET /api/v1/teacher/lessons/
+    Lists lesson plans (LessonPlanner rows) within the teacher's subject
+    scope, filtered by get_subject_scope(user) on (class, section, subject).
+    Optional class_id/section_id/subject_id/workflow_status query params
+    narrow further within that scope.
+
+    POST /api/v1/teacher/lessons/
+    Creates a lesson plan. teacher and school are set server-side —
+    class_id/subject_id (and section_id if present) must match a subject
+    the requesting teacher is actually assigned to teach.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def get(self, request):
+        from apps.academics.models import LessonPlanner
+        from apps.academics.serializers import LessonPlannerSerializer
+
+        user = request.user
+        scope_q = build_subject_scope_q(user, 'school_class_id', 'section_id', 'subject_id')
+        qs = LessonPlanner.objects.select_related(
+            'school_class', 'section', 'subject', 'lesson', 'topic', 'lesson_detail', 'topic_detail', 'teacher',
+        ).prefetch_related('topics__topic').filter(scope_q, school=user.school)
+
+        class_id = request.query_params.get('class_id')
+        section_id = request.query_params.get('section_id')
+        subject_id = request.query_params.get('subject_id')
+        workflow_status = request.query_params.get('workflow_status')
+        if class_id:
+            qs = qs.filter(school_class_id=class_id)
+        if section_id:
+            qs = qs.filter(section_id=section_id)
+        if subject_id:
+            qs = qs.filter(subject_id=subject_id)
+        if workflow_status:
+            qs = qs.filter(workflow_status=workflow_status)
+
+        serializer = LessonPlannerSerializer(qs.order_by('-lesson_date'), many=True, context={'request': request})
+        return Response(serializer.data)
+
+    def post(self, request):
+        from apps.academics.serializers import LessonPlannerSerializer
+
+        user = request.user
+        serializer = LessonPlannerSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+
+        school_class = serializer.validated_data['school_class']
+        section = serializer.validated_data.get('section')
+        subject = serializer.validated_data['subject']
+        assert_can_create_homework(user, school_class.id, section.id if section else None, subject.id)
+
+        academic_year = serializer.validated_data.get('academic_year') or get_current_academic_year(user.school)
+        lesson_plan = serializer.save(
+            school=user.school, academic_year=academic_year, teacher=user, created_by=user, updated_by=user,
+        )
+        return Response(
+            LessonPlannerSerializer(lesson_plan, context={'request': request}).data,
+            status=http_status.HTTP_201_CREATED,
+        )
+
+
+class LessonPlanDetailView(APIView):
+    """
+    GET   /api/v1/teacher/lessons/<id>/
+    PATCH /api/v1/teacher/lessons/<id>/
+
+    Returns / updates one lesson plan, including its topics (LessonPlanTopic
+    rows via the serializer's `topics` field). Scope-checked the same way
+    as the list/create endpoint — the lesson plan's (class, section,
+    subject) triplet must be in the teacher's subject scope.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def _get_lesson_plan(self, request, pk):
+        from apps.academics.models import LessonPlanner
+        from rest_framework.exceptions import NotFound
+
+        user = request.user
+        try:
+            lesson_plan = LessonPlanner.objects.select_related(
+                'school_class', 'section', 'subject', 'lesson', 'topic', 'lesson_detail', 'topic_detail', 'teacher',
+            ).prefetch_related('topics__topic').get(pk=pk, school=user.school)
+        except LessonPlanner.DoesNotExist:
+            raise NotFound("Lesson plan not found.")
+
+        assert_can_create_homework(
+            user, lesson_plan.school_class_id, lesson_plan.section_id, lesson_plan.subject_id,
+        )
+        return lesson_plan
+
+    def get(self, request, pk):
+        from apps.academics.serializers import LessonPlannerSerializer
+        lesson_plan = self._get_lesson_plan(request, pk)
+        return Response(LessonPlannerSerializer(lesson_plan, context={'request': request}).data)
+
+    def patch(self, request, pk):
+        from apps.academics.serializers import LessonPlannerSerializer
+
+        lesson_plan = self._get_lesson_plan(request, pk)
+        serializer = LessonPlannerSerializer(
+            lesson_plan, data=request.data, partial=True, context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+
+        new_class = serializer.validated_data.get('school_class', lesson_plan.school_class)
+        new_section = serializer.validated_data.get('section', lesson_plan.section)
+        new_subject = serializer.validated_data.get('subject', lesson_plan.subject)
+        assert_can_create_homework(
+            request.user, new_class.id, new_section.id if new_section else None, new_subject.id,
+        )
+
+        lesson_plan = serializer.save(updated_by=request.user)
+        return Response(LessonPlannerSerializer(lesson_plan, context={'request': request}).data)
+
+
+class LessonTopicListView(APIView):
+    """
+    GET /api/v1/teacher/lesson-topics/?lesson=<id>
+
+    Lists LessonTopic groups (each with its nested LessonTopicDetail rows)
+    for one Lesson. lesson is required. Scope-checked against the
+    teacher's subject scope via the LessonTopic's own (class, section,
+    subject).
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def get(self, request):
+        from apps.academics.models import LessonTopic
+        from apps.academics.serializers import LessonTopicSerializer
+
+        lesson_id = request.query_params.get('lesson')
+        if not lesson_id:
+            raise ParseError("lesson query param is required.")
+
+        user = request.user
+        scope_q = build_subject_scope_q(user, 'school_class_id', 'section_id', 'subject_id')
+        qs = LessonTopic.objects.select_related(
+            'school_class', 'section', 'subject', 'lesson',
+        ).prefetch_related('topics').filter(scope_q, school=user.school, lesson_id=lesson_id, active_status=True)
+
+        serializer = LessonTopicSerializer(qs, many=True, context={'request': request})
+        return Response(serializer.data)
+
+
+# ── Sprint 7: Notices & Messages ────────────────────────────────────────────────
+
+class TeacherNoticesView(APIView):
+    """
+    GET /api/v1/teacher/notices/
+
+    Returns published notices for the teacher's school. Filters to
+    notices where inform_to is empty (broadcast to all) or contains
+    'teacher' — mirrors apps.parent_portal.views.ParentNoticesView's
+    'parent' check.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def get(self, request):
+        from apps.communication.models import NoticeBoard
+
+        user = request.user
+        today = date_type.today()
+        notices_qs = NoticeBoard.objects.filter(
+            school=user.school,
+            is_published=True,
+            publish_on__lte=today,
+        ).order_by('-publish_on', '-notice_date')[:50]
+
+        result = []
+        for n in notices_qs:
+            inform_to = n.inform_to or []
+            if inform_to and 'teacher' not in [str(x).lower() for x in inform_to]:
+                continue
+            result.append({
+                'id': n.id,
+                'title': n.notice_title,
+                'message': n.notice_message,
+                'notice_date': str(n.notice_date),
+                'publish_on': str(n.publish_on),
+            })
+
+        return Response(result)
+
+
+class TeacherMessagesView(APIView):
+    """
+    GET  /api/v1/teacher/messages/
+    Returns in-app messages where the teacher is sender or recipient.
+
+    POST /api/v1/teacher/messages/
+    Creates an in-app message. sender is set server-side to request.user;
+    recipient_id must be supplied in the body.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def get(self, request):
+        from django.db.models import Q
+        from apps.communication.models import InAppMessage
+        from apps.communication.serializers import InAppMessageSerializer
+
+        user = request.user
+        messages = InAppMessage.objects.select_related('sender', 'recipient').filter(
+            Q(sender=user) | Q(recipient=user),
+        ).order_by('-created_at')[:200]
+        return Response(InAppMessageSerializer(messages, many=True, context={'request': request}).data)
+
+    def post(self, request):
+        from apps.communication.serializers import InAppMessageSerializer
+
+        user = request.user
+        serializer = InAppMessageSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        message = serializer.save(sender=user, school=user.school)
+        return Response(
+            InAppMessageSerializer(message, context={'request': request}).data, status=http_status.HTTP_201_CREATED,
+        )
+
+
+# ── Sprint 6: Student Results tab ───────────────────────────────────────────────
+
+class StudentResultsView(APIView):
+    """
+    GET /api/v1/teacher/students/<pk>/results/
+
+    Returns exam marks for one student — the Results tab on the student
+    profile. Scope-checked via assert_can_view_class (through
+    build_student_results) exactly like StudentProfileView.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def get(self, request, pk):
+        results = build_student_results(request.user, pk)
+        return Response(results)

@@ -16,6 +16,7 @@ from django.db import IntegrityError
 from django.db.models import Avg, Count, Q
 from django.db.models.functions import Lower
 from config.pagination import ApiPageNumberPagination
+from .portal_scoping import scope_to_school
 from .models import AcademicYear, Class, ClassPeriod, ClassRoom, LevelScheduleConfig, Section, Stream, Subject, Vehicle, TransportRoute, AssignVehicle
 from .models import BusStop, BusLocation, TransportAlert, BusRoutePickupUpdate
 from .models import VehicleDriverAssignment, TransportNotificationLog, RoutePerformanceLog
@@ -58,9 +59,7 @@ class TenantQueryMixin:
     def get_queryset(self):
         user = self.request.user
         qs = self.model.objects.all()
-        if user.school_id:
-            return qs.filter(school_id=user.school_id)
-        return qs.none()
+        return scope_to_school(qs, self.model, user)
 
     def perform_create(self, serializer):
         school = getattr(self.request.user, "school", None)

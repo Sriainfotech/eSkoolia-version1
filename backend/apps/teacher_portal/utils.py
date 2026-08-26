@@ -202,12 +202,98 @@ def assert_can_create_homework(user, class_id: int, section_id: int, subject_id:
 
     Prevents a Hindi teacher from creating Maths homework for a class
     where they only teach Hindi.
+
+    Also used to gate lesson-plan creation — the underlying check (is this
+    teacher assigned to teach this subject in this class+section?) is the
+    same for both.
     """
     scope = get_subject_scope(user)
     if (class_id, section_id, subject_id) not in scope:
         raise PermissionDenied(
             "You are not assigned to teach this subject in this class and section."
         )
+
+
+def build_subject_scope_q(user, class_field: str, section_field: str, subject_field: str):
+    """
+    Turns get_subject_scope(user) into a Django Q object over an arbitrary
+    queryset's class/section/subject FK fields (possibly reached via `__`
+    relation traversal, e.g. "homework__class_id_ref_id").
+
+    Returns Q(pk__in=[]) — matches nothing — when the teacher has no subject
+    assignments at all, so callers never need a separate empty-scope branch.
+    """
+    from django.db.models import Q
+
+    scope = get_subject_scope(user)
+    if not scope:
+        return Q(pk__in=[])
+
+    q = Q()
+    for class_id, section_id, subject_id in scope:
+        q |= Q(**{class_field: class_id, section_field: section_id, subject_field: subject_id})
+    return q
+
+
+def build_student_results(user, student_pk: int) -> dict:
+    """
+    Returns exam marks for one student (the Results tab on the student
+    profile), gated the same way as build_student_profile: the teacher must
+    have an assignment in the student's class+section.
+    """
+    from apps.students.models import Student
+    from rest_framework.exceptions import NotFound
+
+    school = getattr(user, 'school', None)
+    try:
+        student = Student.objects.select_related('current_class', 'current_section').get(
+            pk=student_pk, school=school, is_active=True, is_deleted=False
+        )
+    except Student.DoesNotExist:
+        raise NotFound("Student not found.")
+
+    if student.current_class_id and student.current_section_id:
+        assert_can_view_class(user, student.current_class_id, student.current_section_id)
+
+    return _build_academic(student)
+
+
+def build_pending_items(user) -> dict:
+    """
+    Extra notification-chip counts for TeacherMeView.pending_items, beyond
+    attendance_pending (computed inline there from the class-teacher check).
+
+    homework_to_review  — submissions not yet marked complete, across every
+                           homework in the teacher's subject scope.
+    lesson_plans_pending — this teacher's own lesson plans still in Draft.
+    unread_messages      — unread in-app messages addressed to this teacher.
+    """
+    from apps.academics.models import HomeworkSubmission, LessonPlanner
+    from apps.communication.models import InAppMessage
+
+    school = getattr(user, 'school', None)
+    if not school:
+        return {'homework_to_review': 0, 'lesson_plans_pending': 0, 'unread_messages': 0}
+
+    scope_q = build_subject_scope_q(
+        user,
+        'homework__class_id_ref_id', 'homework__section_id_ref_id', 'homework__subject_id_ref_id',
+    )
+    homework_to_review = HomeworkSubmission.objects.filter(
+        scope_q, homework__school=school
+    ).exclude(complete_status='C').count()
+
+    lesson_plans_pending = LessonPlanner.objects.filter(
+        teacher=user, school=school, workflow_status=LessonPlanner.WORKFLOW_DRAFT,
+    ).count()
+
+    unread_messages = InAppMessage.objects.filter(recipient=user, is_read=False).count()
+
+    return {
+        'homework_to_review': homework_to_review,
+        'lesson_plans_pending': lesson_plans_pending,
+        'unread_messages': unread_messages,
+    }
 
 
 # ── Teaching summary (used by /teacher/me/) ───────────────────────────────────
