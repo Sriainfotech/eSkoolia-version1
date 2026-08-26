@@ -263,12 +263,13 @@ def seed_tenant_defaults(schema_name, school):
             except Exception as exc:
                 logger.warning(f"Failed to seed roles in {schema_name}: {exc}")
 
-            # Seed default departments (HR)
+            # Seed default departments (HR) - school required, unique on (school, name)
             try:
                 from apps.hr.models import Department
                 default_depts = ["Administration", "Academic", "Support"]
                 for dept_name in default_depts:
                     Department.objects.get_or_create(
+                        school=school,
                         name=dept_name,
                         defaults={"description": f"Default {dept_name} department"},
                     )
