@@ -3,8 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { chatRequest } from '@/lib/chatApi';
 import styles from './page.module.css';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+import { API_BASE_URL } from '@/lib/api';
 const COMMUNICATION_URL = `${API_BASE_URL}/api/v1/utilities/communication`;
 const ACCESS_CONTROL_URL = `${API_BASE_URL}/api/v1/access-control/login-access-control/`;
 

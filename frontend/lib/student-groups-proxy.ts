@@ -1,7 +1,4 @@
-const DEFAULT_API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-  process.env.NEXT_PUBLIC_API_URL ||
-  "http://127.0.0.1:8000";
+import { getBackendBaseUrl } from "@/lib/server-api";
 
 function buildHeaders(req: Request, hasBody: boolean): HeadersInit {
   const headers: Record<string, string> = {};
@@ -25,7 +22,7 @@ export async function proxyRequest(
   init?: { method?: string; body?: unknown }
 ): Promise<Response> {
   const hasBody = init?.body !== undefined;
-  return fetch(`${DEFAULT_API_BASE_URL}${path}`, {
+  return fetch(`${getBackendBaseUrl(req)}${path}`, {
     method: init?.method || req.method,
     headers: buildHeaders(req, hasBody),
     body: hasBody ? JSON.stringify(init?.body) : undefined,

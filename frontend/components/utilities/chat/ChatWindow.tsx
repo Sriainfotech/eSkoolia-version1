@@ -5,6 +5,7 @@ import axios from 'axios';
 import styles from './ChatWindow.module.css';
 import { getAccessToken } from '@/lib/auth';
 import { chatRequest } from '@/lib/chatApi';
+import { API_BASE_URL } from '@/lib/api';
 
 interface Message {
   id: number;
@@ -107,9 +108,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
     if (value.startsWith('http://') || value.startsWith('https://')) {
       return value;
     }
-    const base = process.env.NEXT_PUBLIC_API_URL || '';
     const path = value.startsWith('/') ? value : `/media/${value}`;
-    return `${base}${path}`;
+    return `${API_BASE_URL}${path}`;
   };
 
   const normalizeMessage = (raw: any): Message => {
@@ -263,7 +263,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
       try {
         const data: any = await chatRequest({
           method: 'get',
-          url: `${process.env.NEXT_PUBLIC_API_URL}/api/chat/messages/blocked_users/`,
+          url: `${API_BASE_URL}/api/chat/messages/blocked_users/`,
         });
         const blockedUsers = data?.blocked_users || [];
         const blocked = blockedUsers.some((row: any) => row?.blocked_user?.id === activeUser.user_id);
@@ -283,7 +283,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
       setError(null);
       const data: any = await chatRequest({
         method: 'get',
-        url: `${process.env.NEXT_PUBLIC_API_URL}/api/chat/messages/conversation/`,
+        url: `${API_BASE_URL}/api/chat/messages/conversation/`,
         params: { user_id: userId },
       });
       const items = data?.messages || data || [];
@@ -302,7 +302,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
       setError(null);
       const data: any = await chatRequest({
         method: 'get',
-        url: `${process.env.NEXT_PUBLIC_API_URL}/api/chat/groups/${groupId}/`,
+        url: `${API_BASE_URL}/api/chat/groups/${groupId}/`,
       });
       const items = data?.messages || [];
       const normalizedGroupMessages = (Array.isArray(items) ? items : []).map((item: any) => {
@@ -354,9 +354,9 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
 
       if (activeUser) {
         selectedFile ? payload.append('to_id', String(activeUser.user_id)) : (payload.to_id = activeUser.user_id);
-        url = `${process.env.NEXT_PUBLIC_API_URL}/api/chat/messages/`;
+        url = `${API_BASE_URL}/api/chat/messages/`;
       } else if (activeGroup) {
-        url = `${process.env.NEXT_PUBLIC_API_URL}/api/chat/groups/${activeGroup.id}/send/`;
+        url = `${API_BASE_URL}/api/chat/groups/${activeGroup.id}/send/`;
       } else {
         return;
       }
@@ -393,7 +393,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
 
       await chatRequest({
         method: 'post',
-        url: `${process.env.NEXT_PUBLIC_API_URL}/api/chat/messages/${isBlockedByMe ? 'unblock_user' : 'block_user'}/`,
+        url: `${API_BASE_URL}/api/chat/messages/${isBlockedByMe ? 'unblock_user' : 'block_user'}/`,
         data: { user_id: activeUser.user_id },
       });
 
@@ -542,9 +542,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
 
   useEffect(() => {
     const token = getAccessToken();
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-    if (!token || !apiUrl) {
+    if (!token) {
       setWsStatus('disconnected');
       return;
     }
@@ -557,7 +556,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ activeUser, activeGroup, onClos
       }
 
       setWsStatus('connecting');
-      const wsUrl = `${apiUrl.replace('http://', 'ws://').replace('https://', 'wss://')}/ws/chat/?token=${token}`;
+      const wsUrl = `${API_BASE_URL.replace('http://', 'ws://').replace('https://', 'wss://')}/ws/chat/?token=${token}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 

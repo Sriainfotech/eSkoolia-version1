@@ -8,8 +8,7 @@ import styles from './page.module.css';
 import { chatRequest } from '@/lib/chatApi';
 import { getAccessToken } from '@/lib/auth';
 import { useSearchParams } from 'next/navigation';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+import { API_BASE_URL } from '@/lib/api';
 
 interface User {
   id: number;
