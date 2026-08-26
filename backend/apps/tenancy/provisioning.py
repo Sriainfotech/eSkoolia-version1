@@ -216,65 +216,65 @@ def run_tenant_migrations(schema_name):
 def seed_tenant_defaults(schema_name, school):
     """Seed default data into the tenant schema.
 
-    Uses SET search_path (same as run_tenant_migrations) instead of
-    django_tenants.schema_context which requires the django-tenants DB backend.
+    Uses django_tenants.utils.schema_context, not a raw `SET search_path`.
+    The project's DB connection is django-tenants' own backend, which tracks
+    "current schema" internally (`connection.schema_name`) and silently
+    re-applies it on every new cursor - so a manual `SET search_path` gets
+    overwritten by the time the next ORM query runs, and every seed query
+    quietly lands back in the public schema instead of the tenant's.
+    schema_context() updates that internal tracking correctly.
+
     `school` is the shared `tenancy.School` row this tenant is linked to -
     required because AcademicYear (tenant-schema) and Role (shared) both carry
     a mandatory `school` FK.
     """
+    from django_tenants.utils import schema_context
+
     try:
-        with connection.cursor() as cursor:
-            cursor.execute(f"SET search_path = {schema_name}, public")
-
-        # Seed academic year
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(f"SET search_path = {schema_name}, public")
-            from apps.core.models import AcademicYear
-            current_year = datetime.now().year
-            AcademicYear.objects.get_or_create(
-                school=school,
-                name=f"{current_year}/{current_year + 1}",
-                defaults={
-                    "start_date": f"{current_year}-06-01",
-                    "end_date": f"{current_year + 1}-04-30",
-                    "is_current": True,
-                    "is_active": True,
-                },
-            )
-            logger.info(f"Seeded academic year in {schema_name}")
-        except Exception as exc:
-            logger.warning(f"Failed to seed academic year in {schema_name}: {exc}")
-
-        # Seed default RBAC roles (Role is a shared-app model, scoped by `school` FK)
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(f"SET search_path = {schema_name}, public")
-            from apps.access_control.models import Role
-            default_roles = ["Administrator", "Teacher", "Student", "Parent"]
-            for role_name in default_roles:
-                Role.objects.get_or_create(
+        with schema_context(schema_name):
+            # Seed academic year
+            try:
+                from apps.core.models import AcademicYear
+                current_year = datetime.now().year
+                AcademicYear.objects.get_or_create(
                     school=school,
-                    name=role_name,
+                    name=f"{current_year}/{current_year + 1}",
+                    defaults={
+                        "start_date": f"{current_year}-06-01",
+                        "end_date": f"{current_year + 1}-04-30",
+                        "is_current": True,
+                        "is_active": True,
+                    },
                 )
-            logger.info(f"Seeded default roles in {schema_name}")
-        except Exception as exc:
-            logger.warning(f"Failed to seed roles in {schema_name}: {exc}")
+                logger.info(f"Seeded academic year in {schema_name}")
+            except Exception as exc:
+                logger.warning(f"Failed to seed academic year in {schema_name}: {exc}")
 
-        # Seed default departments (HR)
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(f"SET search_path = {schema_name}, public")
-            from apps.hr.models import Department
-            default_depts = ["Administration", "Academic", "Support"]
-            for dept_name in default_depts:
-                Department.objects.get_or_create(
-                    name=dept_name,
-                    defaults={"description": f"Default {dept_name} department"},
-                )
-            logger.info(f"Seeded default departments in {schema_name}")
-        except Exception as exc:
-            logger.warning(f"Failed to seed departments in {schema_name}: {exc}")
+            # Seed default RBAC roles (Role is a shared-app model, scoped by `school` FK)
+            try:
+                from apps.access_control.models import Role
+                default_roles = ["Administrator", "Teacher", "Student", "Parent"]
+                for role_name in default_roles:
+                    Role.objects.get_or_create(
+                        school=school,
+                        name=role_name,
+                    )
+                logger.info(f"Seeded default roles in {schema_name}")
+            except Exception as exc:
+                logger.warning(f"Failed to seed roles in {schema_name}: {exc}")
+
+            # Seed default departments (HR)
+            try:
+                from apps.hr.models import Department
+                default_depts = ["Administration", "Academic", "Support"]
+                for dept_name in default_depts:
+                    Department.objects.get_or_create(
+                        name=dept_name,
+                        defaults={"description": f"Default {dept_name} department"},
+                    )
+                logger.info(f"Seeded default departments in {schema_name}")
+            except Exception as exc:
+                logger.warning(f"Failed to seed departments in {schema_name}: {exc}")
 
         logger.info(f"Default data seeding completed for schema {schema_name}")
         return True
@@ -282,13 +282,6 @@ def seed_tenant_defaults(schema_name, school):
     except Exception as exc:
         logger.error(f"Failed to seed defaults in schema {schema_name}: {exc}")
         raise
-
-    finally:
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("SET search_path = public")
-        except Exception:
-            pass
 
 
 def create_tenant_domain(tenant, subdomain):
