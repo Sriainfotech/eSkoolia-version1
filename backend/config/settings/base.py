@@ -282,11 +282,16 @@ if MULTI_TENANCY_ENABLED:
     # silently missing (no migrations, no models) the moment this flag is on.
     INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
 
-    # Optionally configure a database router placeholder (guarded by feature flag)
     # Note: database engine override happens below after DATABASES is defined
     TENANT_MODEL = "tenancy.SchoolTenant"
     TENANT_DOMAIN_MODEL = "tenancy.Domain"
-    DATABASE_ROUTERS = ["apps.tenancy.routers.TenantSyncRouter"]
+    # django-tenants' own AppConfig.ready() hard-requires its own router to
+    # be present (raises ImproperlyConfigured otherwise) - and it already
+    # does exactly what apps.tenancy.routers.TenantSyncRouter was trying to
+    # do, correctly, by reading SHARED_APPS/TENANT_APPS directly rather than
+    # a separately-maintained (and already out of sync - missing "master")
+    # hardcoded app-label set.
+    DATABASE_ROUTERS = ["django_tenants.routers.TenantSyncRouter"]
 else:
     # When MULTI_TENANCY_ENABLED is False, ensure DATABASE_ROUTERS is empty
     # to maintain monolithic behavior without any tenant routing interference.
