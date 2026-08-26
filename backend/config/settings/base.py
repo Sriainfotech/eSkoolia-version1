@@ -213,8 +213,6 @@ if MULTI_TENANCY_ENABLED:
         "rest_framework_simplejwt.token_blacklist",
         "drf_spectacular",
         "django_filters",
-        # global/shared project apps
-        "apps.core",
         # Keeping the User model shared (rather than a separate table per
         # tenant schema) preserves the existing login/permission model this
         # codebase already runs on - one global account per person, scoped
@@ -233,6 +231,14 @@ if MULTI_TENANCY_ENABLED:
     ]
 
     TENANT_APPS = [
+        # Per-school operational data (academic years, classes, subjects,
+        # transport, inventory, holidays) - moved out of SHARED_APPS: its
+        # own Vehicle model needs a foreign key into hr.Staff (a tenant
+        # app), which a shared/public-schema table cannot hold (there's no
+        # single hr_staff for it to point to once there's more than one
+        # school). Verified nothing in the shared apps depends on apps.core
+        # in the other direction.
+        "apps.core",
         # tenant specific apps
         "apps.students",
         "apps.admissions",
