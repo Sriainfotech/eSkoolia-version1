@@ -8,6 +8,7 @@ import { AlertTriangle, BusFront, CircleDot, Filter, MapPinned, RefreshCw, Route
 
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { extractListData, type ListApiResponse } from "@/lib/pagination";
+import { API_BASE_URL } from "@/lib/api";
 
 const MapContainer = dynamic(() => import("react-leaflet").then((module) => module.MapContainer), { ssr: false });
 const TileLayer = dynamic(() => import("react-leaflet").then((module) => module.TileLayer), { ssr: false });
@@ -265,8 +266,7 @@ function getRouteColor(index: number): string {
 }
 
 function buildWebSocketUrl(path: string): string {
-  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000";
-  const parsedBaseUrl = new URL(baseUrl);
+  const parsedBaseUrl = new URL(API_BASE_URL);
   const protocol = parsedBaseUrl.protocol === "https:" ? "wss:" : "ws:";
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${protocol}//${parsedBaseUrl.host}${normalizedPath}`;

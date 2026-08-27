@@ -1,7 +1,6 @@
 import axios, { AxiosRequestConfig } from 'axios';
 import { getAccessToken, getRefreshToken, setAuthTokens } from '@/lib/auth';
-
-const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+import { API_BASE_URL as apiBase } from '@/lib/api';
 
 async function refreshAccessToken(): Promise<string> {
   const refresh = getRefreshToken();

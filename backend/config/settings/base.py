@@ -207,12 +207,40 @@ if MULTI_TENANCY_ENABLED:
         "django.contrib.sessions",
         "django.contrib.messages",
         "django.contrib.staticfiles",
-        # global/shared project apps (review before enabling)
-        "apps.core",
+        # Framework/infra apps - no tenant-specific data of their own.
+        "channels",
+        "corsheaders",
+        "rest_framework",
+        "rest_framework_simplejwt.token_blacklist",
+        "drf_spectacular",
+        "django_filters",
+        # Keeping the User model shared (rather than a separate table per
+        # tenant schema) preserves the existing login/permission model this
+        # codebase already runs on - one global account per person, scoped
+        # to a school via request.user.school_id (see CLAUDE.md's tenancy
+        # policy) - not a separate account per school.
+        "apps.users",
+        "apps.access_control",
+        # Cross-school management surface - must run in the public schema
+        # to manage every tenant (see CLAUDE.md: apps/tenancy/super_admin/,
+        # apps/super_admin/ are the "genuine multi-tenant admin surfaces").
+        "apps.super_admin",
+        # Global/static reference data - already listed as tenant-agnostic
+        # in apps.tenancy.context.PUBLIC_PATH_PREFIXES (/api/v1/master/,
+        # /api/master/).
+        "apps.master",
     ]
 
     TENANT_APPS = [
-        # tenant specific apps (review before enabling)
+        # Per-school operational data (academic years, classes, subjects,
+        # transport, inventory, holidays) - moved out of SHARED_APPS: its
+        # own Vehicle model needs a foreign key into hr.Staff (a tenant
+        # app), which a shared/public-schema table cannot hold (there's no
+        # single hr_staff for it to point to once there's more than one
+        # school). Verified nothing in the shared apps depends on apps.core
+        # in the other direction.
+        "apps.core",
+        # tenant specific apps
         "apps.students",
         "apps.admissions",
         "apps.attendance",
@@ -227,6 +255,18 @@ if MULTI_TENANCY_ENABLED:
         "apps.communication",
         "apps.competitions",
         "apps.reports",
+        "apps.teacher_portal",
+        "apps.parent_portal",
+        "apps.dashboard",
+        "apps.notes",
+        "apps.todos",
+        "apps.calls_queue",
+        # Per-school configuration (fee structure, notification
+        # preferences, etc.), not global platform settings.
+        "apps.settings",
+        # Per-school audit trail, matching the same isolation principle as
+        # the school's own data rather than a combined cross-school log.
+        "auditlog",
     ]
 
     # Basic static validations
@@ -241,11 +281,24 @@ if MULTI_TENANCY_ENABLED:
     if duplicate_apps:
         raise RuntimeError(f"Apps duplicated in SHARED_APPS and TENANT_APPS: {duplicate_apps}")
 
-    # Optionally configure a database router placeholder (guarded by feature flag)
+    # Recompose INSTALLED_APPS for django-tenants: SHARED_APPS run in every
+    # schema (including public); TENANT_APPS run only in each tenant's own
+    # schema. Without this, django-tenants' migrate_schemas command and its
+    # per-schema app registry never see SHARED_APPS/TENANT_APPS at all - it
+    # only reads INSTALLED_APPS, so any app not folded in here would be
+    # silently missing (no migrations, no models) the moment this flag is on.
+    INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
+
     # Note: database engine override happens below after DATABASES is defined
     TENANT_MODEL = "tenancy.SchoolTenant"
     TENANT_DOMAIN_MODEL = "tenancy.Domain"
-    DATABASE_ROUTERS = ["apps.tenancy.routers.TenantSyncRouter"]
+    # django-tenants' own AppConfig.ready() hard-requires its own router to
+    # be present (raises ImproperlyConfigured otherwise) - and it already
+    # does exactly what apps.tenancy.routers.TenantSyncRouter was trying to
+    # do, correctly, by reading SHARED_APPS/TENANT_APPS directly rather than
+    # a separately-maintained (and already out of sync - missing "master")
+    # hardcoded app-label set.
+    DATABASE_ROUTERS = ["django_tenants.routers.TenantSyncRouter"]
 else:
     # When MULTI_TENANCY_ENABLED is False, ensure DATABASE_ROUTERS is empty
     # to maintain monolithic behavior without any tenant routing interference.

@@ -29,9 +29,12 @@ const NAV_TABS = [
   { label: 'Policies',   href: '/super-admin/policies',  icon: Settings        },
 ];
 
+const LOGIN_PATH = '/super-admin/login';
+
 export default function SuperAdminLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
+  const isLoginPage = pathname === LOGIN_PATH;
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [me, setMe] = useState<MePayload | null>(null);
   const [avatarOpen, setAvatarOpen] = useState(false);
@@ -41,6 +44,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
   const initials = displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || 'SA';
 
   useEffect(() => {
+    if (isLoginPage) return; // the login page has its own full-page layout, not this shell
     let mounted = true;
     const loadProfile = async () => {
       try {
@@ -53,12 +57,17 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
         }
         setIsAuthorized(true);
       } catch {
-        if (mounted) router.replace('/login');
+        if (mounted) router.replace(LOGIN_PATH);
       }
     };
     void loadProfile();
     return () => { mounted = false; };
-  }, [router]);
+  }, [router, isLoginPage]);
+
+  // The login page renders itself, full-page - skip the authorized-shell chrome entirely.
+  if (isLoginPage) {
+    return <>{children}</>;
+  }
 
   const handleLogout = async () => {
     if (loggingOut) return;
@@ -75,7 +84,7 @@ export default function SuperAdminLayout({ children }: { children: ReactNode }) 
       }
     } finally {
       clearAuthTokens();
-      router.replace('/login');
+      router.replace(LOGIN_PATH);
       setLoggingOut(false);
     }
   };

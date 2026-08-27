@@ -13,11 +13,12 @@ All operations are guarded by MULTI_TENANCY_ENABLED feature flag.
 import logging
 import time
 import re
+import uuid
 from datetime import datetime
 from django.conf import settings
-from django.db import connection
+from django.db import connection, transaction
 from django.utils import timezone
-from apps.tenancy.models import SchoolTenant, Domain
+from apps.tenancy.models import SchoolTenant, Domain, School
 from apps.tenancy.audit import log_audit
 
 logger = logging.getLogger(__name__)
@@ -174,9 +175,13 @@ def create_postgres_schema(schema_name):
 def run_tenant_migrations(schema_name):
     """Run Django migrations inside the tenant schema.
 
-    Uses SET search_path (same as TenantMainMiddleware) to avoid requiring the
-    django-tenants DB backend. Skipped entirely when MULTI_TENANCY_ENABLED=False
-    since all tables already exist in the public schema.
+    Uses a raw SET search_path before calling migrate - unlike most other
+    schema-scoped operations in this codebase, this one is safe: django-tenants'
+    own patched migrate command does its own internal schema switching per app
+    (visible in its "[schema:app]" progress output), so this SET is redundant
+    but harmless rather than load-bearing. Skipped entirely when
+    MULTI_TENANCY_ENABLED=False since all tables already exist in the public
+    schema.
     """
     if not is_provisioning_enabled():
         logger.info(f"Skipping tenant migrations for '{schema_name}': MULTI_TENANCY_ENABLED=False")
@@ -212,57 +217,69 @@ def run_tenant_migrations(schema_name):
                 cursor.execute("SET search_path = public")
         except Exception:
             pass
-def seed_tenant_defaults(schema_name):
+def seed_tenant_defaults(schema_name, school):
     """Seed default data into the tenant schema.
 
-    Uses SET search_path (same as run_tenant_migrations) instead of
-    django_tenants.schema_context which requires the django-tenants DB backend.
+    Uses django_tenants.utils.schema_context, not a raw `SET search_path`.
+    The project's DB connection is django-tenants' own backend, which tracks
+    "current schema" internally (`connection.schema_name`) and silently
+    re-applies it on every new cursor - so a manual `SET search_path` gets
+    overwritten by the time the next ORM query runs, and every seed query
+    quietly lands back in the public schema instead of the tenant's.
+    schema_context() updates that internal tracking correctly.
+
+    `school` is the shared `tenancy.School` row this tenant is linked to -
+    required because AcademicYear (tenant-schema) and Role (shared) both carry
+    a mandatory `school` FK.
     """
+    from django_tenants.utils import schema_context
+
     try:
-        with connection.cursor() as cursor:
-            cursor.execute(f"SET search_path = {schema_name}, public")
-
-        # Seed academic year
-        try:
-            from apps.academics.models import AcademicYear
-            current_year = datetime.now().year
-            AcademicYear.objects.get_or_create(
-                name=f"{current_year}/{current_year + 1}",
-                defaults={
-                    "year_start": f"{current_year}-01-01",
-                    "year_end": f"{current_year + 1}-12-31",
-                    "is_active": True,
-                },
-            )
-            logger.info(f"Seeded academic year in {schema_name}")
-        except Exception as exc:
-            logger.warning(f"Failed to seed academic year in {schema_name}: {exc}")
-
-        # Seed default RBAC roles
-        try:
-            from apps.access_control.models import Role
-            default_roles = ["Administrator", "Teacher", "Student", "Parent"]
-            for role_name in default_roles:
-                Role.objects.get_or_create(
-                    name=role_name,
-                    defaults={"description": f"Default {role_name} role"},
+        with schema_context(schema_name):
+            # Seed academic year
+            try:
+                from apps.core.models import AcademicYear
+                current_year = datetime.now().year
+                AcademicYear.objects.get_or_create(
+                    school=school,
+                    name=f"{current_year}/{current_year + 1}",
+                    defaults={
+                        "start_date": f"{current_year}-06-01",
+                        "end_date": f"{current_year + 1}-04-30",
+                        "is_current": True,
+                        "is_active": True,
+                    },
                 )
-            logger.info(f"Seeded default roles in {schema_name}")
-        except Exception as exc:
-            logger.warning(f"Failed to seed roles in {schema_name}: {exc}")
+                logger.info(f"Seeded academic year in {schema_name}")
+            except Exception as exc:
+                logger.warning(f"Failed to seed academic year in {schema_name}: {exc}")
 
-        # Seed default departments (HR)
-        try:
-            from apps.hr.models import Department
-            default_depts = ["Administration", "Academic", "Support"]
-            for dept_name in default_depts:
-                Department.objects.get_or_create(
-                    name=dept_name,
-                    defaults={"description": f"Default {dept_name} department"},
-                )
-            logger.info(f"Seeded default departments in {schema_name}")
-        except Exception as exc:
-            logger.warning(f"Failed to seed departments in {schema_name}: {exc}")
+            # Seed default RBAC roles (Role is a shared-app model, scoped by `school` FK)
+            try:
+                from apps.access_control.models import Role
+                default_roles = ["Administrator", "Teacher", "Student", "Parent"]
+                for role_name in default_roles:
+                    Role.objects.get_or_create(
+                        school=school,
+                        name=role_name,
+                    )
+                logger.info(f"Seeded default roles in {schema_name}")
+            except Exception as exc:
+                logger.warning(f"Failed to seed roles in {schema_name}: {exc}")
+
+            # Seed default departments (HR) - school required, unique on (school, name)
+            try:
+                from apps.hr.models import Department
+                default_depts = ["Administration", "Academic", "Support"]
+                for dept_name in default_depts:
+                    Department.objects.get_or_create(
+                        school=school,
+                        name=dept_name,
+                        defaults={"description": f"Default {dept_name} department"},
+                    )
+                logger.info(f"Seeded default departments in {schema_name}")
+            except Exception as exc:
+                logger.warning(f"Failed to seed departments in {schema_name}: {exc}")
 
         logger.info(f"Default data seeding completed for schema {schema_name}")
         return True
@@ -270,13 +287,6 @@ def seed_tenant_defaults(schema_name):
     except Exception as exc:
         logger.error(f"Failed to seed defaults in schema {schema_name}: {exc}")
         raise
-
-    finally:
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("SET search_path = public")
-        except Exception:
-            pass
 
 
 def create_tenant_domain(tenant, subdomain):
@@ -322,6 +332,8 @@ def provision_tenant(
     
     tenant_id = None
     schema_name = None
+    tenant = None
+    school = None
     start_time = time.time()
     
     try:
@@ -355,17 +367,26 @@ def provision_tenant(
             },
         )
         
-        # Step 2: Create SchoolTenant record
-        tenant = SchoolTenant.objects.create(
-            name=name,
-            short_code=subdomain_url[:10].upper(),
-            subdomain_url=subdomain_url,
-            schema_name=schema_name,
-            plan=plan,
-            status="provisioning",
-        )
+        # Step 2: Create the real ERP School row and its SchoolTenant billing/
+        # config record together, atomically - either both exist or neither does.
+        with transaction.atomic():
+            school = School.objects.create(
+                name=name,
+                code=schema_name,
+                subdomain=subdomain_url,
+            )
+            tenant = SchoolTenant.objects.create(
+                tenant_id=uuid.uuid4().hex[:32],
+                name=name,
+                short_code=subdomain_url[:10].upper(),
+                subdomain_url=subdomain_url,
+                schema_name=schema_name,
+                plan=plan,
+                status="provisioning",
+                school=school,
+            )
         tenant_id = tenant.tenant_id
-        logger.info(f"SchoolTenant created: {tenant.tenant_id} -> {schema_name}")
+        logger.info(f"School+SchoolTenant created: {tenant.tenant_id} -> {schema_name} (school_id={school.id})")
         
         log_audit(
             action="schema_created",
@@ -426,7 +447,7 @@ def provision_tenant(
         print("=" * 80)
         print(f"STEP 5: Seeding default data -> {schema_name}")
 
-        seed_tenant_defaults(schema_name)
+        seed_tenant_defaults(schema_name, school)
 
         print(f"STEP 5 completed in {time.time() - step_start:.2f} seconds")
         print("=" * 80)
@@ -496,12 +517,23 @@ def provision_tenant(
             except Exception as rollback_exc:
                 logger.error(f"Failed to rollback schema {schema_name}: {rollback_exc}")
         
-        if tenant_id:
+        # Delete the actual objects created in Step 2 directly (not a filter()
+        # lookup by tenant_id - that field wasn't reliably populated before
+        # this fix). School and SchoolTenant are deleted separately since the
+        # FK is SET_NULL, not CASCADE.
+        if tenant is not None:
             try:
-                SchoolTenant.objects.filter(tenant_id=tenant_id).delete()
+                tenant.delete()
                 logger.info(f"Rolled back tenant record: {tenant_id}")
             except Exception as rollback_exc:
                 logger.error(f"Failed to rollback tenant {tenant_id}: {rollback_exc}")
+
+        if school is not None:
+            try:
+                school.delete()
+                logger.info(f"Rolled back school record: {school.code}")
+            except Exception as rollback_exc:
+                logger.error(f"Failed to rollback school {school.code}: {rollback_exc}")
         
         logger.error(f"Tenant provisioning failed: {exc}", exc_info=True)
         raise

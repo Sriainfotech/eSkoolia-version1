@@ -44,9 +44,22 @@ def validate_tenancy_schema_state(output=None):
 
     try:
         with connection.cursor() as cursor:
+            existing_tables = set(connection.introspection.table_names(cursor))
+            if "django_migrations" not in existing_tables:
+                # Genuinely fresh, never-migrated database (e.g. right before
+                # the first `migrate_schemas --shared` on a new deployment) -
+                # not a schema inconsistency, just means no migrations have
+                # run yet. Report/system-checks call this function *before*
+                # migrate_schemas can run, so treating it as an error would
+                # make a brand-new database permanently unable to migrate.
+                message = "django_migrations table not found - database has not been migrated yet."
+                result["warnings"].append(message)
+                if output:
+                    output.write(message + "\n")
+                logger.info(message)
+                return result
             cursor.execute("SELECT name FROM django_migrations WHERE app = %s ORDER BY name", ["tenancy"])
             applied_migrations = {row[0] for row in cursor.fetchall()}
-            existing_tables = set(connection.introspection.table_names(cursor))
     except Exception as exc:
         message = f"Failed to inspect tenancy schema state: {exc}"
         result["errors"].append(message)

@@ -119,3 +119,19 @@ def my_school_info_view(request):
         })
     except School.DoesNotExist:
         return Response({"error": "School not found"}, status=404)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def whoami_view(request):
+    """Public diagnostic — reflects how TenantMainMiddleware resolved *this*
+    request (driven purely by the Host header it received). No auth needed,
+    since the point is to check routing before a session exists - e.g.
+    confirming a given subdomain reaches the right tenant end-to-end through
+    Nginx and the frontend's server-side proxying."""
+    tenant = getattr(request, "tenant", None)
+    return Response({
+        "host": request.get_host(),
+        "resolved_tenant": tenant.name if tenant else None,
+        "schema_name": getattr(request, "schema_name", None),
+    })

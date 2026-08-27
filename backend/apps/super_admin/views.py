@@ -20,7 +20,7 @@ import yaml
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
-from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Sum
+from django.db.models import Count, Q, Sum
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -317,13 +317,72 @@ class DashboardKPIView(SuperAdminBaseAPIView):
 
         total_schools = tenants.count()
         active_schools = tenants.exclude(status__in=["suspended", "archived", "pending"]).count()
-        active_students   = Student.objects.using("default").filter(status="active").count()
-        inactive_students = Student.objects.using("default").filter(status="inactive").count()
-        total_students    = active_students + inactive_students
-        total_staff = Staff.objects.using("default").count()
 
         current_start, current_end = current_month_range()
         previous_start, previous_end = previous_month_range()
+
+        # Student/Staff live inside each tenant's own Postgres schema (both
+        # are TENANT_APPS models) - there's no single shared table a SQL
+        # query could aggregate across every school at once, and the old
+        # OuterRef("pk")-against-Student.school_id subquery below was
+        # comparing the wrong id anyway (school_id points at tenancy.School,
+        # reached via tenant.school_id, not at this SchoolTenant row's own
+        # pk). Visits each tenant's schema directly and aggregates in Python
+        # instead - fine at current tenant counts; revisit with cached
+        # SchoolTenant.student_count/staff_count if this ever needs to scale
+        # to hundreds of tenants.
+        from django_tenants.utils import schema_context
+
+        active_students = 0
+        inactive_students = 0
+        total_staff = 0
+        current_month_students = 0
+        previous_month_students = 0
+        _state_groups: dict = {}
+        _plan_groups: dict = {}
+
+        for tenant in tenants.only("id", "school_id", "schema_name", "state", "plan"):
+            t_active = t_inactive = t_staff = t_current_new = t_previous_new = 0
+            if tenant.school_id and tenant.schema_name:
+                try:
+                    with schema_context(tenant.schema_name):
+                        t_active = Student.objects.filter(school_id=tenant.school_id, status="active").count()
+                        t_inactive = Student.objects.filter(school_id=tenant.school_id, status="inactive").count()
+                        t_staff = Staff.objects.filter(school_id=tenant.school_id).count()
+                        t_current_new = Student.objects.filter(
+                            school_id=tenant.school_id, created_at__gte=current_start, created_at__lt=current_end
+                        ).count()
+                        t_previous_new = Student.objects.filter(
+                            school_id=tenant.school_id, created_at__gte=previous_start, created_at__lt=previous_end
+                        ).count()
+                except Exception:
+                    t_active = t_inactive = t_staff = t_current_new = t_previous_new = 0
+
+            active_students += t_active
+            inactive_students += t_inactive
+            total_staff += t_staff
+            current_month_students += t_current_new
+            previous_month_students += t_previous_new
+
+            t_students = t_active + t_inactive
+            state_key = (tenant.state or "").strip()
+            g = _state_groups.setdefault(state_key, {"count": 0, "students": 0})
+            g["count"] += 1
+            g["students"] += t_students
+
+            plan_key = (tenant.plan or "trial").lower()
+            g2 = _plan_groups.setdefault(plan_key, {"count": 0, "students": 0})
+            g2["count"] += 1
+            g2["students"] += t_students
+
+        total_students = active_students + inactive_students
+
+        if previous_month_students:
+            students_trend = round(
+                ((current_month_students - previous_month_students) / previous_month_students) * 100, 1
+            )
+        else:
+            students_trend = 0.0
 
         current_month_invoices = invoices.filter(invoice_date__gte=current_start, invoice_date__lt=current_end)
         previous_month_invoices = invoices.filter(invoice_date__gte=previous_start, invoice_date__lt=previous_end)
@@ -404,19 +463,10 @@ class DashboardKPIView(SuperAdminBaseAPIView):
             # Otherwise treat as a GST state code and look it up
             return _STATE_NAMES.get(value.strip(), value)
 
-        # Fix #7 – compute MoM new-student enrollment trend
-        current_month_students = Student.objects.using("default").filter(
-            created_at__gte=current_start, created_at__lt=current_end
-        ).count()
-        previous_month_students = Student.objects.using("default").filter(
-            created_at__gte=previous_start, created_at__lt=previous_end
-        ).count()
-        if previous_month_students:
-            students_trend = round(
-                ((current_month_students - previous_month_students) / previous_month_students) * 100, 1
-            )
-        else:
-            students_trend = 0.0
+        # current_month_students/previous_month_students/students_trend and the
+        # per-state/per-plan student breakdowns were already computed in the
+        # per-tenant-schema loop above (_state_groups/_plan_groups) - see the
+        # comment there for why this can no longer be one SQL query/subquery.
 
         # Fix #6 – compute actual MRR per plan from current-month invoices
         # Fall back to _PLAN_PRICING estimate only for plans that have no invoices yet
@@ -425,35 +475,18 @@ class DashboardKPIView(SuperAdminBaseAPIView):
             plan_key = (inv.tenant.plan if inv.tenant else "trial").lower()
             actual_mrr_by_plan[plan_key] = actual_mrr_by_plan.get(plan_key, 0.0) + _invoice_grand_total(inv)
 
-        # Build a subquery for live student counts per school
-        _student_sq = (
-            Student.objects.filter(school_id=OuterRef("pk"))
-            .values("school_id")
-            .annotate(cnt=Count("id"))
-            .values("cnt")
-        )
-        tenants_with_students = tenants.annotate(
-            live_student_count=Coalesce(Subquery(_student_sq, output_field=IntegerField()), 0)
-        )
-
         state_breakdown = []
-        for row in tenants_with_students.values("state").annotate(
-            count=Count("id"), students=Sum("live_student_count")
-        ).order_by("-count"):
-            code = (row.get("state") or "").strip()
+        for code, agg in sorted(_state_groups.items(), key=lambda kv: -kv[1]["count"]):
             state_breakdown.append({
                 "state": normalize_state(code),  # Fix #10
                 "code": code,
-                "count": row.get("count") or 0,
-                "students": row.get("students") or 0,
+                "count": agg["count"],
+                "students": agg["students"],
             })
 
         plan_breakdown = []
-        for row in tenants_with_students.values("plan").annotate(
-            count=Count("id"), students=Sum("live_student_count")
-        ).order_by("-count"):
-            plan_key = (row.get("plan") or "trial").lower()
-            plan_count = row.get("count") or 0
+        for plan_key, agg in sorted(_plan_groups.items(), key=lambda kv: -kv[1]["count"]):
+            plan_count = agg["count"]
             # Fix #6 – prefer actual invoice revenue; fall back to plan pricing for new installs with no invoices
             if plan_key in actual_mrr_by_plan:
                 mrr_val = actual_mrr_by_plan[plan_key]
@@ -463,7 +496,7 @@ class DashboardKPIView(SuperAdminBaseAPIView):
                 "plan": plan_key.capitalize(),
                 "count": plan_count,
                 "mrr": mrr_val,
-                "students": row.get("students") or 0,
+                "students": agg["students"],
             })
 
         payload = {
@@ -506,31 +539,18 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
     }
 
     def get_queryset(self):
-        student_sq = (
-            Student.objects.filter(school_id=OuterRef("pk"))
-            .values("school_id")
-            .annotate(cnt=Count("id"))
-            .values("cnt")
-        )
-        active_student_sq = (
-            Student.objects.filter(school_id=OuterRef("pk"), status="active")
-            .values("school_id")
-            .annotate(cnt=Count("id"))
-            .values("cnt")
-        )
-        staff_sq = (
-            Staff.objects.filter(school_id=OuterRef("pk"))
-            .values("school_id")
-            .annotate(cnt=Count("id"))
-            .values("cnt")
-        )
+        # NOTE: live_student_count/live_active_student_count/live_staff_count
+        # used to be computed here via a Subquery(OuterRef("pk")) against
+        # Student/Staff - both broken, for two separate reasons: (1) Student
+        # and Staff are TENANT_APPS models living inside each school's own
+        # Postgres schema, so there's no single cross-schema table for a SQL
+        # subquery to join against, and (2) OuterRef("pk") compared against
+        # Student.school_id was comparing the wrong id anyway - school_id is a
+        # FK to tenancy.School, not to this SchoolTenant row. See
+        # _attach_live_counts(), called from get() after pagination, which
+        # queries each tenant's own schema directly using tenant.school_id.
         queryset = (
             self._public_queryset(SchoolTenant)
-            .annotate(
-                live_student_count=Coalesce(Subquery(student_sq, output_field=IntegerField()), 0),
-                live_active_student_count=Coalesce(Subquery(active_student_sq, output_field=IntegerField()), 0),
-                live_staff_count=Coalesce(Subquery(staff_sq, output_field=IntegerField()), 0),
-            )
             .order_by("-provisioned_at", "name")
         )
 
@@ -657,8 +677,40 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
             "archived":  base.filter(status="archived").count(),
         }
 
+    def _attach_live_counts(self, tenants):
+        """Count students/staff by visiting each tenant's own schema directly -
+        Student/Staff live inside each school's own Postgres schema, so there's
+        no single shared table a SQL query could aggregate across all of them
+        at once. Only called on the current page's items (not every tenant),
+        to keep this to a handful of schema switches per request."""
+        from django_tenants.utils import schema_context
+
+        tenants = list(tenants)
+        for tenant in tenants:
+            if not tenant.school_id or not tenant.schema_name:
+                tenant.live_student_count = tenant.student_count or 0
+                tenant.live_active_student_count = 0
+                tenant.live_staff_count = tenant.staff_count or 0
+                continue
+            try:
+                with schema_context(tenant.schema_name):
+                    tenant.live_student_count = Student.objects.filter(school_id=tenant.school_id).count()
+                    tenant.live_active_student_count = Student.objects.filter(
+                        school_id=tenant.school_id, status="active"
+                    ).count()
+                    tenant.live_staff_count = Staff.objects.filter(school_id=tenant.school_id).count()
+            except Exception:
+                tenant.live_student_count = tenant.student_count or 0
+                tenant.live_active_student_count = 0
+                tenant.live_staff_count = tenant.staff_count or 0
+        return tenants
+
     def get(self, request):
-        resp = self._paginate(request, self.get_queryset(), SchoolTenantListSerializer)
+        paginator = SuperAdminPagination()
+        page = paginator.paginate_queryset(self.get_queryset(), request, view=self)
+        self._attach_live_counts(page)
+        serializer = SchoolTenantListSerializer(page, many=True)
+        resp = paginator.get_paginated_response(serializer.data)
         resp.data["health_flags_counts"] = self._health_flags_counts()
         resp.data["status_counts"] = self._status_counts()
         return resp
@@ -864,45 +916,10 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                         defaults={"is_system": True, "is_active": True, "portal_type": portal},
                     )
 
-                # 6. Seed a current academic year (Apr–Mar cycle). Without this, every
-                #    academic-year-scoped feature (attendance, fees, homework, timetable,
-                #    lesson planning, etc.) has nothing to attach to until a school admin
-                #    manually creates one in Settings — which is easy to miss right after signup.
-                from apps.core.models import AcademicYear
-                today = timezone.localdate()
-                year_start = today.year if today.month >= 4 else today.year - 1
-                AcademicYear.objects.get_or_create(
-                    school=erp_school,
-                    name=f"{year_start}-{year_start + 1}",
-                    defaults={
-                        "board": data["board"] if data.get("board") in dict(AcademicYear.BOARD_CHOICES) else None,
-                        "start_date": f"{year_start}-04-01",
-                        "end_date": f"{year_start + 1}-03-31",
-                        "is_current": True,
-                        "is_active": True,
-                    },
-                )
-
-                # 7. Optional SMTP configuration. Many schools don't know how to set
-                #    this up themselves later, so super-admin can seed it directly
-                #    here. Entirely optional — a school works fine without it and can
-                #    still add/change it later in Settings > SMTP Settings.
-                smtp_host = (data.get("smtp_host") or "").strip()
-                smtp_from_email = (data.get("smtp_from_email") or "").strip()
-                if smtp_host and smtp_from_email:
-                    from apps.settings.models import SchoolSMTPSettings
-                    smtp_settings = SchoolSMTPSettings.objects.create(
-                        school=erp_school,
-                        name="Primary",
-                        host=smtp_host,
-                        port=data.get("smtp_port") or 587,
-                        username=data.get("smtp_username") or "",
-                        password=data.get("smtp_password") or "",
-                        use_tls=data.get("smtp_use_tls", True),
-                        from_email=smtp_from_email,
-                        sender_name=data.get("smtp_sender_name") or "",
-                    )
-                    smtp_settings.activate()
+                # AcademicYear/SMTP seeding used to happen here, but both live in
+                # the tenant's own schema (apps.core / apps.settings are
+                # TENANT_APPS), which doesn't exist yet at this point - moved
+                # below, after the schema is created and migrated.
 
         except Exception as exc:
             return Response(
@@ -912,8 +929,9 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
 
         # Schema-per-tenant setup is only needed when MULTI_TENANCY_ENABLED=True.
         # In single-schema mode all school data lives in public, isolated by ForeignKey(School).
-        # schema_context() from django-tenants requires TenantDatabaseWrapper (connection.tenant)
-        # which is only present when TenantMainMiddleware is active — skip entirely when disabled.
+        # Must happen before any tenant-scoped seeding below (AcademicYear, SMTP
+        # settings) - those models live inside the tenant's own schema, which
+        # doesn't exist until this step creates and migrates it.
         if getattr(settings, "MULTI_TENANCY_ENABLED", False):
             try:
                 from apps.tenancy.provisioning import create_postgres_schema, run_tenant_migrations
@@ -924,10 +942,75 @@ class SchoolTenantProvisionView(SuperAdminBaseAPIView):
                 logging.getLogger(__name__).error(
                     f"Schema provisioning failed for {tenant.tenant_id} ({tenant.schema_name}): {exc}"
                 )
+                # Roll back everything created above - a tenant with no schema
+                # is broken and would otherwise leak into the schools list.
+                # admin_user isn't cleaned up by erp_school.delete() alone since
+                # User.school is SET_NULL, not CASCADE.
+                for obj in (admin_user, erp_school, tenant):
+                    try:
+                        obj.delete()
+                    except Exception:
+                        logging.getLogger(__name__).error(
+                            f"Failed to roll back {obj!r} after schema setup failure for {tenant.tenant_id}"
+                        )
                 return Response(
-                    {"detail": f"School record created but schema setup failed: {exc}"},
+                    {"detail": f"Schema setup failed, provisioning rolled back: {exc}"},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
+
+            # 6. Seed a current academic year (Apr–Mar cycle). Without this, every
+            #    academic-year-scoped feature (attendance, fees, homework, timetable,
+            #    lesson planning, etc.) has nothing to attach to until a school admin
+            #    manually creates one in Settings — which is easy to miss right after
+            #    signup. 7. Optional SMTP configuration, same idea - a school works
+            #    fine without it. Both run inside the tenant's own schema now that it
+            #    exists, and both are best-effort: a failure here is logged, not
+            #    fatal, since the school itself was already provisioned successfully.
+            from django_tenants.utils import schema_context
+            import logging
+
+            with schema_context(tenant.schema_name):
+                try:
+                    from apps.core.models import AcademicYear
+                    today = timezone.localdate()
+                    year_start = today.year if today.month >= 4 else today.year - 1
+                    AcademicYear.objects.get_or_create(
+                        school=erp_school,
+                        name=f"{year_start}-{year_start + 1}",
+                        defaults={
+                            "board": data["board"] if data.get("board") in dict(AcademicYear.BOARD_CHOICES) else None,
+                            "start_date": f"{year_start}-04-01",
+                            "end_date": f"{year_start + 1}-03-31",
+                            "is_current": True,
+                            "is_active": True,
+                        },
+                    )
+                except Exception as exc:
+                    logging.getLogger(__name__).warning(
+                        f"Failed to seed academic year for {tenant.tenant_id}: {exc}"
+                    )
+
+                smtp_host = (data.get("smtp_host") or "").strip()
+                smtp_from_email = (data.get("smtp_from_email") or "").strip()
+                if smtp_host and smtp_from_email:
+                    try:
+                        from apps.settings.models import SchoolSMTPSettings
+                        smtp_settings = SchoolSMTPSettings.objects.create(
+                            school=erp_school,
+                            name="Primary",
+                            host=smtp_host,
+                            port=data.get("smtp_port") or 587,
+                            username=data.get("smtp_username") or "",
+                            password=data.get("smtp_password") or "",
+                            use_tls=data.get("smtp_use_tls", True),
+                            from_email=smtp_from_email,
+                            sender_name=data.get("smtp_sender_name") or "",
+                        )
+                        smtp_settings.activate()
+                    except Exception as exc:
+                        logging.getLogger(__name__).warning(
+                            f"Failed to seed SMTP settings for {tenant.tenant_id}: {exc}"
+                        )
 
         log_audit(
             action="school.provision",

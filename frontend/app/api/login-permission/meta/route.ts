@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-
-const DJANGO = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+import { getBackendBaseUrl } from '@/lib/server-api';
 
 export async function GET(req: Request) {
+  const DJANGO = getBackendBaseUrl(req);
   const auth = req.headers.get('authorization') || '';
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (auth) headers['Authorization'] = auth;
