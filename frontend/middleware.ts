@@ -1,15 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 
 /**
- * Defense in depth on top of the is_superuser check in
- * app/(super-admin)/layout.tsx: the platform console has no legitimate
- * reason to be reachable from a tenant subdomain, even for an authenticated
- * superuser. Restricting it to app.eskoolia.com means a leaked/stolen
- * super-admin session can't be used from anywhere else.
+ * Keeps app.eskoolia.com and every other *.eskoolia.com subdomain on
+ * opposite sides of a hard line:
+ *   - app.eskoolia.com serves ONLY the platform console (/super-admin/*).
+ *     Any regular tenant-app page requested there (/home, /login, etc.)
+ *     redirects to the super-admin login instead - "app" is a reserved,
+ *     non-tenant subdomain (apps/tenancy/resolvers.py) and would otherwise
+ *     render broken per-school widgets for an account with no school.
+ *   - Every other subdomain serves the regular app, NEVER /super-admin/*.
+ *     This is defense in depth on top of the is_superuser check in
+ *     app/(super-admin)/layout.tsx: a leaked/stolen super-admin session
+ *     still couldn't be used from a tenant subdomain.
  */
 export function middleware(request: NextRequest) {
   const rawHost = request.headers.get("host") || "";
   const hostname = rawHost.split(":")[0];
+  const pathname = request.nextUrl.pathname;
 
   const isLocalOrDev =
     hostname === "localhost" ||
@@ -18,7 +25,14 @@ export function middleware(request: NextRequest) {
     /devtunnels\.ms$/i.test(hostname) ||
     /\.githubpreview\.dev$/i.test(hostname);
 
-  if (isLocalOrDev || hostname === "app.eskoolia.com") {
+  if (isLocalOrDev) {
+    return NextResponse.next();
+  }
+
+  const isAppHost = hostname === "app.eskoolia.com";
+  const isSuperAdminPath = pathname.startsWith("/super-admin");
+
+  if (isAppHost === isSuperAdminPath) {
     return NextResponse.next();
   }
 
@@ -28,9 +42,12 @@ export function middleware(request: NextRequest) {
   // Host header itself is correctly forwarded. Build the redirect target
   // from that raw header directly instead.
   const proto = request.headers.get("x-forwarded-proto") || "https";
-  return NextResponse.redirect(`${proto}://${rawHost}/login`);
+  const target = isAppHost ? "/super-admin/login" : "/login";
+  return NextResponse.redirect(`${proto}://${rawHost}${target}`);
 }
 
 export const config = {
-  matcher: "/super-admin/:path*",
+  // Everything except Next.js internals and files with an extension
+  // (images, favicon, etc. under public/) - those must load on every host.
+  matcher: ["/((?!_next/|.*\\..*).*)"],
 };
