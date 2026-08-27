@@ -21,7 +21,13 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  return NextResponse.redirect(new URL("/login", request.url));
+  // request.nextUrl.clone(), not `new URL(path, request.url)` - the latter
+  // resolved to the internal Next.js server address (localhost:3004)
+  // instead of the real public hostname when running behind Nginx.
+  const url = request.nextUrl.clone();
+  url.pathname = "/login";
+  url.search = "";
+  return NextResponse.redirect(url);
 }
 
 export const config = {
