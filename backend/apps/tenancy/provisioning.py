@@ -175,9 +175,13 @@ def create_postgres_schema(schema_name):
 def run_tenant_migrations(schema_name):
     """Run Django migrations inside the tenant schema.
 
-    Uses SET search_path (same as TenantMainMiddleware) to avoid requiring the
-    django-tenants DB backend. Skipped entirely when MULTI_TENANCY_ENABLED=False
-    since all tables already exist in the public schema.
+    Uses a raw SET search_path before calling migrate - unlike most other
+    schema-scoped operations in this codebase, this one is safe: django-tenants'
+    own patched migrate command does its own internal schema switching per app
+    (visible in its "[schema:app]" progress output), so this SET is redundant
+    but harmless rather than load-bearing. Skipped entirely when
+    MULTI_TENANCY_ENABLED=False since all tables already exist in the public
+    schema.
     """
     if not is_provisioning_enabled():
         logger.info(f"Skipping tenant migrations for '{schema_name}': MULTI_TENANCY_ENABLED=False")

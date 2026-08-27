@@ -61,6 +61,7 @@ class TenantMainMiddleware(MiddlewareMixin):
         # If multi-tenancy is disabled, operate in monolithic mode
         if not is_multi_tenancy_enabled():
             clear_tenant_context()
+            connection.set_schema_to_public()
             request.tenant = None  # Explicitly mark as monolithic
             request.schema_name = None
             return None
@@ -69,6 +70,7 @@ class TenantMainMiddleware(MiddlewareMixin):
         # reachable regardless of whether the subdomain has an active schema.
         if request.path.startswith(self._PUBLIC_PATH_PREFIXES):
             clear_tenant_context()
+            connection.set_schema_to_public()
             request.tenant = None
             request.schema_name = None
             return None
@@ -89,6 +91,7 @@ class TenantMainMiddleware(MiddlewareMixin):
                     "No tenant resolved from request; operating in public schema"
                 )
                 clear_tenant_context()
+                connection.set_schema_to_public()
                 request.tenant = None
                 request.schema_name = None
                 return None
@@ -153,8 +156,12 @@ class TenantMainMiddleware(MiddlewareMixin):
         Returns:
             Response unchanged
         """
-        # Clear tenant context to prevent leakage to next request
+        # Clear tenant context to prevent leakage to next request. CONN_MAX_AGE
+        # is 0 (connection closed after every request) so this isn't currently
+        # a live risk, but resetting explicitly rather than relying on that
+        # setting never changing.
         clear_tenant_context()
+        connection.set_schema_to_public()
         return response
 
     def process_exception(self, request: HttpRequest, exception: Exception) -> Optional[HttpResponse]:
@@ -168,6 +175,7 @@ class TenantMainMiddleware(MiddlewareMixin):
             None (let exception propagate)
         """
         clear_tenant_context()
+        connection.set_schema_to_public()
         return None
 
     @staticmethod
@@ -193,16 +201,28 @@ class TenantMainMiddleware(MiddlewareMixin):
 
     @staticmethod
     def _set_schema_context(schema_name: str) -> None:
-        """Set PostgreSQL search_path to activate schema context.
-        
+        """Activate schema context for this request.
+
+        Uses connection.set_schema(), NOT a raw `SET search_path` SQL
+        command. The project's DB connection is django-tenants' own
+        backend, which tracks "current schema" internally and silently
+        re-applies it on every new cursor - so a manual `SET search_path`
+        gets overwritten by the time the next ORM query runs, and every
+        query after this one quietly lands back in the public schema
+        instead of the tenant's (confirmed directly: a raw SET here left
+        `SHOW search_path` still reporting 'public' on the very next
+        cursor, and a subsequent ORM query failed with "relation ...
+        does not exist" for a table that only exists in the tenant's
+        schema). set_schema() updates that internal tracking correctly,
+        matching the same fix already applied to
+        apps/tenancy/provisioning.py::seed_tenant_defaults().
+
         Args:
             schema_name: Schema name to activate
         """
         try:
-            with connection.cursor() as cursor:
-                # Set search_path: schema first, then public for system tables
-                cursor.execute(f"SET search_path = {schema_name}, public")
-                logger.debug(f"Schema context set: {schema_name}")
+            connection.set_schema(schema_name)
+            logger.debug(f"Schema context set: {schema_name}")
         except Exception as exc:
             logger.error(f"Failed to set schema context for {schema_name}: {exc}")
             raise
