@@ -8,7 +8,8 @@ import { NextRequest, NextResponse } from "next/server";
  * super-admin session can't be used from anywhere else.
  */
 export function middleware(request: NextRequest) {
-  const hostname = request.headers.get("host")?.split(":")[0] || "";
+  const rawHost = request.headers.get("host") || "";
+  const hostname = rawHost.split(":")[0];
 
   const isLocalOrDev =
     hostname === "localhost" ||
@@ -21,17 +22,13 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // request.nextUrl.clone(), not `new URL(path, request.url)` - the latter
-  // resolved to the internal Next.js server address (localhost:3004)
-  // instead of the real public hostname when running behind Nginx.
-  const url = request.nextUrl.clone();
-  url.pathname = "/login";
-  url.search = "";
-  const res = NextResponse.redirect(url);
-  res.headers.set("x-debug-raw-host", request.headers.get("host") || "(none)");
-  res.headers.set("x-debug-xfh", request.headers.get("x-forwarded-host") || "(none)");
-  res.headers.set("x-debug-nexturl-origin", request.nextUrl.origin);
-  return res;
+  // Not request.nextUrl.clone() / new URL(path, request.url) - both resolve
+  // against Next.js's own server bind address (localhost:3004) rather than
+  // the real public hostname when running behind Nginx, even though the raw
+  // Host header itself is correctly forwarded. Build the redirect target
+  // from that raw header directly instead.
+  const proto = request.headers.get("x-forwarded-proto") || "https";
+  return NextResponse.redirect(`${proto}://${rawHost}/login`);
 }
 
 export const config = {
