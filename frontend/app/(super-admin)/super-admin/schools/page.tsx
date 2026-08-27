@@ -778,7 +778,22 @@ export default function SuperAdminSchoolsPage() {
   }, []);
 
   const [provisioning, setProvisioning] = useState(false);
+  const [provisioningElapsed, setProvisioningElapsed] = useState(0);
   const [provisionError, setProvisionError] = useState<string | null>(null);
+
+  // Provisioning runs real migrations into a brand-new database schema
+  // (observed taking ~65-70s) with no server-side progress signal to poll -
+  // just a plain elapsed-time counter so it's clear this is still working,
+  // not frozen.
+  useEffect(() => {
+    if (!provisioning) {
+      setProvisioningElapsed(0);
+      return;
+    }
+    const start = Date.now();
+    const id = setInterval(() => setProvisioningElapsed(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [provisioning]);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [credsResult, setCredsResult] = useState<ProvisionSchoolResponse | null>(null);
   const [credsCopied, setCredsCopied] = useState<'user' | 'pass' | null>(null);
@@ -1065,7 +1080,34 @@ export default function SuperAdminSchoolsPage() {
       toast.success('School provisioned — admin credentials ready below.');
       await loadSchools();
     } catch (err) {
-      setProvisionError(err instanceof Error ? err.message : 'Provisioning failed.');
+      const message = err instanceof Error ? err.message : 'Provisioning failed.';
+      // Provisioning runs real migrations into a brand-new schema and can
+      // genuinely take over a minute server-side - a slow/gateway-timeout
+      // response here does NOT mean the school failed to create, only that
+      // this specific request didn't get an answer back in time. Check
+      // before telling the user it actually failed.
+      const looksLikeTimeout = /\b50[0-9]\b|timeout|timed out|failed to fetch|network/i.test(message);
+      if (looksLikeTimeout) {
+        setProvisionError('No response yet — checking whether the school was created anyway…');
+        setTimeout(async () => {
+          try {
+            const check = await getSchools({ search: sub });
+            const found = check.results?.find(s => s.subdomain_url === sub);
+            if (found) {
+              setProvisionError(null);
+              setAccAddOpen(false);
+              toast.success(`${provisionForm.name} was created successfully despite the slow response.`);
+              await loadSchools();
+            } else {
+              setProvisionError(`${message} — and the school doesn't appear to have been created. Please try again.`);
+            }
+          } catch {
+            setProvisionError(message);
+          }
+        }, 3000);
+      } else {
+        setProvisionError(message);
+      }
     } finally {
       setProvisioning(false);
     }
@@ -2216,13 +2258,21 @@ export default function SuperAdminSchoolsPage() {
               )}
               <button type="button" disabled={provisioning} onClick={() => void handleProvisionSubmit()}
                 className="inline-flex h-9 items-center gap-1.5 rounded-[9px] bg-[var(--pu)] px-3.5 text-[12.5px] font-[550] text-white shadow-[0_1px_2px_rgba(79,53,204,.25),inset_0_1px_0_rgba(255,255,255,.16)] transition hover:bg-[var(--pu-deep)] disabled:opacity-60">
-                <Check className="h-3.5 w-3.5" />
                 {provisioning
-                  ? (editSchool ? 'Saving\u2026' : 'Provisioning\u2026')
+                  ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                  : <Check className="h-3.5 w-3.5" />}
+                {provisioning
+                  ? (editSchool ? 'Saving\u2026' : `Provisioning\u2026 ${provisioningElapsed}s`)
                   : (editSchool ? 'Save changes' : 'Provision school')}
               </button>
             </div>
           </div>
+          {provisioning && !editSchool ? (
+            <p className="mt-2 flex items-center gap-1.5 text-[12px] text-[var(--ink-2)]">
+              <RefreshCw className="h-3 w-3 animate-spin shrink-0" />
+              Creating an isolated database for this school \u2014 this normally takes 60\u201390 seconds. Please don&apos;t close this window.
+            </p>
+          ) : null}
           {provisionError ? <p className="mt-2 text-[12px] text-[var(--danger)]">{provisionError}</p> : null}
         </Accordion>
       </div>
