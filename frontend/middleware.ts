@@ -27,7 +27,11 @@ export function middleware(request: NextRequest) {
   const url = request.nextUrl.clone();
   url.pathname = "/login";
   url.search = "";
-  return NextResponse.redirect(url);
+  const res = NextResponse.redirect(url);
+  res.headers.set("x-debug-raw-host", request.headers.get("host") || "(none)");
+  res.headers.set("x-debug-xfh", request.headers.get("x-forwarded-host") || "(none)");
+  res.headers.set("x-debug-nexturl-origin", request.nextUrl.origin);
+  return res;
 }
 
 export const config = {
