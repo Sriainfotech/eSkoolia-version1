@@ -1,4 +1,5 @@
-from datetime import date
+import calendar
+from datetime import date, timedelta
 from decimal import Decimal
 import json
 import re
@@ -22,8 +23,9 @@ from apps.access_control.models import UserRole
 from apps.core.models import AcademicYear, Class as SchoolClass, Section
 from apps.students.models import Student
 
-from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, Offboarding, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft
+from .models import ApprovalChainPolicy, Department, Designation, DepartmentType, LeaveApprovalStep, LeaveDefine, LeaveRequest, LeaveType, Offboarding, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft
 from .serializers import (
+    ApprovalChainPolicySerializer,
     DepartmentSerializer,
     DepartmentTypeSerializer,
     DesignationSerializer,
@@ -1322,8 +1324,18 @@ class LeaveDefineViewSet(SchoolScopedModelViewSet):
         return self.success_response("Leave define deleted successfully", data={})
 
 
+class ApprovalChainPolicyViewSet(SchoolScopedModelViewSet):
+    queryset = ApprovalChainPolicy.objects.select_related("school", "designation").all()
+    serializer_class = ApprovalChainPolicySerializer
+    filterset_fields = ["designation"]
+    ordering_fields = ["designation_id", "created_at"]
+    permission_codes = {"*": "human_resource.approval_chain.view"}
+
+
 class LeaveRequestViewSet(SchoolScopedModelViewSet):
-    queryset = LeaveRequest.objects.select_related("school", "staff", "leave_type", "approved_by").all()
+    queryset = LeaveRequest.objects.select_related(
+        "school", "staff", "staff__department", "staff__designation", "leave_type", "approved_by", "applied_by"
+    ).all()
     serializer_class = LeaveRequestSerializer
     filterset_fields = ["staff", "leave_type", "status", "from_date", "to_date"]
     search_fields = ["staff__staff_no", "staff__first_name", "staff__last_name", "reason"]
@@ -1332,6 +1344,9 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
         "*": "human_resource.apply_leave.view",
         "approve": "human_resource.apply_leave.view",
         "reject": "human_resource.apply_leave.view",
+        "stats": "human_resource.apply_leave.view",
+        "coverage": "human_resource.apply_leave.view",
+        "apply_on_behalf": "human_resource.apply_leave.apply_on_behalf",
     }
 
     def _current_staff(self):
@@ -1366,9 +1381,12 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
             return queryset
 
         current_staff = self._current_staff()
-        if current_staff:
-            return queryset.filter(staff_id=current_staff.id)
-        return queryset.none()
+        # A non-admin caller can see their own requests, plus any request
+        # where they're the resolved approver of a chain step (HOD,
+        # Principal, etc. reviewing someone else's leave).
+        own = Q(staff_id=current_staff.id) if current_staff else Q(pk__in=[])
+        approving = Q(approval_steps__approver_id=user.id)
+        return queryset.filter(own | approving).distinct()
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -1394,27 +1412,11 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
         if user.school_id and staff.school_id != user.school_id:
             raise ValidationError({"staff": "Selected staff member does not belong to your school."})
 
-        serializer.save(school=school, staff=staff)
+        from .approval_chain import start_chain
+        leave_request = serializer.save(school=school, staff=staff)
+        start_chain(leave_request)
 
-    def perform_update(self, serializer):
-        current_staff = self._current_staff()
-        if current_staff and not self.request.user.is_superuser:
-            serializer.save(staff=current_staff)
-            return
-        serializer.save()
-
-    @action(detail=True, methods=["post"], url_path="approve")
-    def approve(self, request, pk=None):
-        leave_request = self.get_object()
-        if leave_request.status != LeaveRequest.STATUS_PENDING:
-            raise ValidationError("Only pending leave requests can be approved.")
-
-        leave_request.status = LeaveRequest.STATUS_APPROVED
-        leave_request.approval_note = (request.data.get("approval_note") or "").strip()
-        leave_request.approved_by = request.user
-        leave_request.approved_at = timezone.now()
-        leave_request.save(update_fields=["status", "approval_note", "approved_by", "approved_at", "updated_at"])
-
+    def _deduct_leave_balance(self, leave_request):
         # Deduct the actual day count from the staff's leave balance — holiday
         # dates inside the range are excluded unless the leave type's
         # count_holidays_as_leave says otherwise (see holiday_utils.compute_leave_days).
@@ -1422,8 +1424,8 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
         # per (staff, leave_type, year) — a request spanning New Year's Eve
         # must deduct from two balance rows, not just from_date's year.
         from apps.settings.models import LeaveBalance
-
         from .holiday_utils import compute_leave_days_by_year
+
         days_by_year = compute_leave_days_by_year(
             leave_request.school_id, leave_request.leave_type, leave_request.from_date, leave_request.to_date
         )
@@ -1438,6 +1440,55 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
             balance.used_days = balance.used_days + days
             balance.save(update_fields=["used_days", "updated_at"])
             balances_by_year[year] = balance.used_days
+        return days_by_year, balances_by_year
+
+    def _check_can_act_on_step(self, user, step):
+        if user.is_superuser or user.is_school_admin:
+            return
+        if step.approver_id and step.approver_id == user.id:
+            return
+        raise PermissionDenied("You are not the assigned approver for this step.")
+
+    def perform_update(self, serializer):
+        current_staff = self._current_staff()
+        if current_staff and not self.request.user.is_superuser:
+            serializer.save(staff=current_staff)
+            return
+        serializer.save()
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        from .approval_chain import advance_after_step_approval, current_step
+
+        leave_request = self.get_object()
+        if leave_request.status != LeaveRequest.STATUS_PENDING:
+            raise ValidationError("Only pending leave requests can be approved.")
+
+        step = current_step(leave_request)
+        if not step:
+            raise ValidationError("No pending approval step found for this request.")
+        self._check_can_act_on_step(request.user, step)
+
+        note = (request.data.get("approval_note") or "").strip()
+        step.status = LeaveApprovalStep.STATUS_APPROVED
+        step.acted_at = timezone.now()
+        step.note = note
+        if not step.approver_id:
+            # Admin-override on a step whose role couldn't be resolved to
+            # anyone — record who actually acted.
+            step.approver = request.user
+        step.save(update_fields=["status", "acted_at", "note", "approver"])
+
+        if not advance_after_step_approval(leave_request, step):
+            return Response({"id": leave_request.id, "status": leave_request.status, "next_step": True})
+
+        leave_request.status = LeaveRequest.STATUS_APPROVED
+        leave_request.approval_note = note
+        leave_request.approved_by = request.user
+        leave_request.approved_at = timezone.now()
+        leave_request.save(update_fields=["status", "approval_note", "approved_by", "approved_at", "updated_at"])
+
+        days_by_year, balances_by_year = self._deduct_leave_balance(leave_request)
 
         return Response({
             "id": leave_request.id,
@@ -1449,16 +1500,143 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="reject")
     def reject(self, request, pk=None):
+        from .approval_chain import current_step
+
         leave_request = self.get_object()
         if leave_request.status != LeaveRequest.STATUS_PENDING:
             raise ValidationError("Only pending leave requests can be rejected.")
 
+        step = current_step(leave_request)
+        note = (request.data.get("approval_note") or "").strip()
+        if step:
+            self._check_can_act_on_step(request.user, step)
+            step.status = LeaveApprovalStep.STATUS_REJECTED
+            step.acted_at = timezone.now()
+            step.note = note
+            if not step.approver_id:
+                step.approver = request.user
+            step.save(update_fields=["status", "acted_at", "note", "approver"])
+
         leave_request.status = LeaveRequest.STATUS_REJECTED
-        leave_request.approval_note = (request.data.get("approval_note") or "").strip()
+        leave_request.approval_note = note
         leave_request.approved_by = request.user
         leave_request.approved_at = timezone.now()
         leave_request.save(update_fields=["status", "approval_note", "approved_by", "approved_at", "updated_at"])
         return Response({"id": leave_request.id, "status": leave_request.status})
+
+    @action(detail=False, methods=["get"], url_path="stats")
+    def stats(self, request):
+        from .approval_chain import current_step, is_stuck
+        from .coverage_utils import has_coverage_risk
+
+        queryset = self.filter_queryset(self.get_queryset())
+        today = timezone.localdate()
+
+        pending_scope = list(queryset.filter(status=LeaveRequest.STATUS_PENDING).prefetch_related("approval_steps"))
+        pending_approval = len(pending_scope)
+        applied_today = queryset.filter(created_at__date=today).count()
+        stuck_in_chain = sum(1 for lr in pending_scope if is_stuck(current_step(lr)))
+        at_risk_scope = queryset.filter(status__in=[LeaveRequest.STATUS_PENDING, LeaveRequest.STATUS_APPROVED])
+        coverage_at_risk = sum(1 for lr in at_risk_scope if has_coverage_risk(lr))
+
+        return Response({
+            "pending_approval": pending_approval,
+            "stuck_in_chain": stuck_in_chain,
+            "coverage_at_risk": coverage_at_risk,
+            "applied_today": applied_today,
+        })
+
+    @action(detail=False, methods=["get"], url_path="coverage")
+    def coverage(self, request):
+        queryset = self.get_queryset()
+
+        date_param = request.query_params.get("date")
+        if date_param:
+            try:
+                day = date.fromisoformat(date_param)
+            except ValueError:
+                raise ValidationError({"date": "Invalid date format, expected YYYY-MM-DD."})
+
+            def _row(lr):
+                return {
+                    "id": lr.id,
+                    "staff_name": f"{lr.staff.first_name} {lr.staff.last_name}".strip(),
+                    "leave_type_name": lr.leave_type.name,
+                }
+
+            day_qs = queryset.filter(from_date__lte=day, to_date__gte=day)
+            return Response({
+                "date": date_param,
+                "approved": [_row(lr) for lr in day_qs.filter(status=LeaveRequest.STATUS_APPROVED)],
+                "pending": [_row(lr) for lr in day_qs.filter(status=LeaveRequest.STATUS_PENDING)],
+            })
+
+        month_param = request.query_params.get("month") or timezone.localdate().strftime("%Y-%m")
+        try:
+            year_str, month_str = month_param.split("-")
+            year, month = int(year_str), int(month_str)
+            days_in_month = calendar.monthrange(year, month)[1]
+            month_start = date(year, month, 1)
+            month_end = date(year, month, days_in_month)
+        except (ValueError, calendar.IllegalMonthError):
+            raise ValidationError({"month": "Invalid month format, expected YYYY-MM."})
+
+        by_day = {d: {"approved": 0, "pending": 0, "rejected": 0} for d in range(1, days_in_month + 1)}
+        month_qs = queryset.filter(from_date__lte=month_end, to_date__gte=month_start)
+        for lr in month_qs:
+            cursor = max(lr.from_date, month_start)
+            segment_end = min(lr.to_date, month_end)
+            while cursor <= segment_end:
+                if lr.status == LeaveRequest.STATUS_APPROVED:
+                    by_day[cursor.day]["approved"] += 1
+                elif lr.status == LeaveRequest.STATUS_PENDING:
+                    by_day[cursor.day]["pending"] += 1
+                elif lr.status == LeaveRequest.STATUS_REJECTED:
+                    by_day[cursor.day]["rejected"] += 1
+                cursor += timedelta(days=1)
+
+        return Response({
+            "month": month_param,
+            "days": [
+                {"date": date(year, month, d).isoformat(), **counts}
+                for d, counts in sorted(by_day.items())
+            ],
+        })
+
+    @action(detail=False, methods=["post"], url_path="apply-on-behalf")
+    def apply_on_behalf(self, request):
+        user = request.user
+        school = user.school or getattr(request, "school", None)
+        if not school and not user.is_superuser:
+            raise PermissionDenied("School context is required.")
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        staff = serializer.validated_data.get("staff")
+        if not staff:
+            raise ValidationError({"staff": "Select the staff member to apply leave for."})
+        if user.school_id and staff.school_id != user.school_id:
+            raise ValidationError({"staff": "Selected staff member does not belong to your school."})
+
+        bypass_chain = bool(request.data.get("bypass_chain"))
+        leave_request = serializer.save(school=school, staff=staff, is_on_behalf=True, applied_by=user)
+
+        if bypass_chain:
+            # "Admin approved — bypass approval chain": used when both L1/L2
+            # approvers are unavailable. Approves immediately and deducts
+            # the balance, same as a normal final approval would.
+            leave_request.status = LeaveRequest.STATUS_APPROVED
+            leave_request.approval_note = (request.data.get("approval_note") or "Applied on behalf — admin bypass.").strip()
+            leave_request.approved_by = user
+            leave_request.approved_at = timezone.now()
+            leave_request.save(update_fields=["status", "approval_note", "approved_by", "approved_at", "updated_at"])
+            self._deduct_leave_balance(leave_request)
+        else:
+            from .approval_chain import start_chain
+            start_chain(leave_request)
+
+        return Response(self.get_serializer(leave_request).data, status=status.HTTP_201_CREATED)
 
 
 class StaffAttendanceViewSet(SchoolScopedModelViewSet):

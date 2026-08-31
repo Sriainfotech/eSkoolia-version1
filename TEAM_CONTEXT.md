@@ -1,5 +1,55 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Swetha D (31/08/2026)
+
+**Area:** HR → Leave Management page — full rebuild to match reference screenshots (Applications tab, Coverage calendar, stats, multi-step approval chain, Apply on Behalf), plus a hand-edited resolution of a git merge conflict in Academics
+
+### 0. Merge conflict resolved first
+- `backend/apps/academics/views.py` had unresolved `<<<<<<<`/`=======`/`>>>>>>>` markers from merging `acadamics-R` into `demo` (import block: `apps.hr.models.LeaveRequest, Staff` on HEAD vs `apps.core.portal_scoping.scope_to_school, PortalScopeFilterBackend` + `apps.hr.models.Staff` on the incoming side). Confirmed both `LeaveRequest` and `scope_to_school`/`PortalScopeFilterBackend` are actually used elsewhere in the file, merged into one non-duplicated import block. No other conflict markers existed in the file or elsewhere in the repo (other hits were docstring `====` separators, false positives). `manage.py check` clean afterward.
+
+### 1. The Leave tab existed but was a different feature entirely
+- `/hr/leave` was hidden behind a "Soon" badge in `ModuleSubNav.tsx` (`COMING_SOON_PATHS`) and the page behind it was a "Setup Wizard / Operations Board" toggle — unrelated to the requested design (stats tiles, Applications/Coverage sub-tabs, per-row approval-chain icons, Configure Policy / Apply on Behalf actions). Rebuilt the page from scratch rather than patching it; relocated the old Setup Wizard (Leave Types / Entitlement Matrix / Approval Chain steps) behind a new "Configure Policy" modal instead of deleting it.
+- **Found a real bug in the code being replaced**: `useHrApi.ts`'s `updateLeaveStatus()` sent `PATCH /leave-requests/{id}/` with `{action, note}` — fields the serializer doesn't have — so the old Approve/Reject buttons were silent no-ops (200 response, nothing actually changed). Fixed to call the real `POST .../approve/` / `.../reject/` actions.
+
+### 2. Backend additions (`apps/hr/`)
+- `LeaveRequest` gained `is_on_behalf`, `applied_by`, `half_day_type`, `absence_type` fields.
+- New `coverage_utils.py`: "Coverage risk" = 2+ other staff from the *same department* with overlapping approved/pending leave (confirmed with the user as the intended rule — no timetable/substitute model needed, it's a pure query over existing data).
+- `LeaveRequestSerializer` now returns `staff_name`, `staff_role`, `staff_grade`, `leave_type_name`, `duration`, `coverage_risk`, `applied_by_name`, `approved_by_name`, `approval_steps`, `days_stuck` — previously the frontend read fields the API never sent at all (the whole Operations Board table was rendering `undefined`).
+- Three new `LeaveRequestViewSet` actions: `GET stats/`, `GET coverage/?month=`/`?date=`, `POST apply-on-behalf/`.
+- **Approval chain (built after the user supplied reference screenshots mid-session)**: new `ApprovalChainPolicy` model (per-Designation, or null = "All Staff" default: L1/L2 approver *role* — HOD/Principal/Vice Principal/HR Admin, not a fixed person — `l2_trigger_days` duration threshold, `response_window_days` SLA) and `LeaveApprovalStep` (per-request, snapshotted). `apps/hr/approval_chain.py` resolves roles to people: HOD → `Department.head`, Principal/Vice Principal → matched by `Designation.name` (this project already uses those literal strings for `Designation.reports_to`), HR Admin → any `is_school_admin` user. L2 step is created lazily, only once L1 approves and duration ≥ `l2_trigger_days`.
+- **Found and fixed a real bug while wiring the chain**: `LeaveRequestViewSet.get_queryset()` only ever let `is_superuser`/`is_school_admin` or the request's own staff member see a leave request — meaning a non-admin HOD/Principal could never fetch or act on someone *else's* pending request, which is the entire point of the approval chain. Fixed to also include requests where the caller is the resolved approver on any step.
+- `apply-on-behalf` now accepts `bypass_chain` (the screenshot's "Admin approved — bypass approval chain" checkbox → auto-approves immediately, matching the reference) and `absence_type` (inferred from the modal's own subtitle: emergency/unplanned/retroactive — its "Supporting Documents" field was explicitly labeled "Upload available in full build" in the reference, so file upload was left out of scope).
+- New permission codes `human_resource.apply_leave.apply_on_behalf` and `human_resource.approval_chain.view` (migrations `access_control/0015`, `0016`).
+- New migrations `hr/0036`, `hr/0037`.
+
+### 3. Frontend (`frontend/app/(dashboard)/hr/leave/page.tsx`, `hooks/useHrApi.ts`, `types/hr.ts`)
+- Full rebuild: 4 stat tiles (Pending Approval / Stuck in Chain / Coverage at Risk / Applied Today), Applications tab (Staff/Type/Dates/Approval Chain icons/Status/Flags/view), Coverage tab (month calendar with approved/pending/rejected dots + day-detail panel), Configure Policy modal (Leave Types → Entitlements → real API-backed Approval Chain editor with "Publish Policy"), Apply on Behalf modal (staff/leave-type/dates/type-of-absence/role-filter/bypass-checkbox).
+- `types/hr.ts`'s pre-existing `LeaveApplication`/`ApprovalChain` interfaces had fields (`days_requested`, `l1_status`, `unavailable_approver`, etc.) that no backend endpoint ever produced — clearly scaffolded ahead of this exact feature but never wired up. Replaced with types matching what the API actually returns.
+
+### 4. Environment issue discovered, not fixed (out of scope, flagged for the team)
+- **`pytest` is broken locally for reasons unrelated to this session's changes**: `config/settings/test.py` inherits `MULTI_TENANCY_ENABLED` from whatever the local `.env` has it set to (currently `True`) via `from .base import *`, but then overrides `DATABASES["default"]["ENGINE"]` back to plain `django.db.backends.postgresql` — so `manage.py test`/pytest's `migrate_schemas` (still active because `django_tenants` is installed) crashes with `AttributeError: 'DatabaseWrapper' object has no attribute 'set_schema'` during test-DB setup, for *every* test including pre-existing ones (`TestStaffSerializer`, unrelated to this session). Verified this reproduces on `main`/pre-session code too — not a regression. Wrote real pytest tests for everything in this session anyway (`tests/test_hr.py`: `TestLeaveCoverageRisk`, `TestLeaveRequestStatsAndCoverageEndpoints`, `TestApplyOnBehalf`, `TestApprovalChain`) but verified the actual behavior manually against the live dev DB instead (throwaway school/staff/users, created → asserted → deleted each time) since pytest itself can't run.
+- Separately: `manage.py migrate <app>` is unreliable in this dev DB — for a `TENANT_APPS` app like `hr`, the plain command silently applies against some other/orphaned schema, not `public` (confirmed via direct `information_schema.columns` inspection: columns showed 0 rows in `public` right after a migration reported "OK"). `access_control` (a `SHARED_APPS` app) applies correctly with `--schema=public`, but that same flag makes `migrate hr --schema=public` report "no migrations to apply" (correctly, by its own SHARED/TENANT logic — `hr` just isn't public-schema in that view). Ended up hand-applying the `hr` migrations' schema operations directly via `connection.set_schema_to_public()` + `schema_editor()` and verified columns/constraints landed correctly in `public` (where the live app's queries actually resolve, confirmed via `SHOW search_path` = `public`). This dev DB also has ~70 leftover `school_*` Postgres schemas from old tenant experiments, unrelated to the 6 real `SchoolTenant` rows — none of which have `hr` tables migrated into them either. Worth a dedicated cleanup/fix session; did not touch it beyond hand-applying this session's own 3 migrations to `public`.
+
+### Files changed
+- `backend/apps/academics/views.py` (merge conflict resolution only)
+- `backend/apps/hr/models.py`, `serializers.py`, `views.py`, `urls.py` (new fields/models/endpoints)
+- `backend/apps/hr/approval_chain.py`, `coverage_utils.py` (new)
+- `backend/apps/hr/migrations/0036_*.py`, `0037_*.py` (new)
+- `backend/apps/access_control/migrations/0015_*.py`, `0016_*.py` (new), `management/commands/seed_permissions.py`
+- `backend/tests/test_hr.py` (new test classes, can't run locally — see §4)
+- `frontend/app/(dashboard)/hr/leave/page.tsx` (full rebuild)
+- `frontend/hooks/useHrApi.ts`, `frontend/types/hr.ts`
+- `frontend/components/nav/ModuleSubNav.tsx` (un-hid `/hr/leave` from `COMING_SOON_PATHS`)
+
+### Status
+✅ Backend verified end-to-end against the live dev DB via `APIClient` + throwaway data (created and cleaned up each time, no leftover rows): coverage-risk flagging, stats, coverage calendar (month + day), apply-on-behalf (both normal-chain and bypass paths), short-leave (L1-only) approval, long-leave L1→L2 escalation, wrong-actor rejection, stuck-in-chain detection, and the `ApprovalChainPolicy` CRUD endpoint. `tsc --noEmit` and `eslint` both clean on every touched frontend file. `manage.py check` clean (only the pre-existing, unrelated `fees` URL-namespace warning this repo always shows).
+
+⚠️ **Not yet live-verified in the browser** — I don't start dev servers per this project's convention (`CLAUDE.md`), so the actual page has not been visually confirmed against the reference screenshots yet. Worth a click-through next session if the user hasn't already done it themselves.
+
+⚠️ **Deliberately out of scope**: Configure Policy's Leave Types and Entitlements steps (wizard steps 1–2) were only *relocated* into the new modal, not rebuilt to match the reference screenshots' exact look (govt-mandated badges, statutory-min indicators, per-role entitlement matrix with an academic-year selector) — the user's ask was specifically the Applications/Coverage/stats page and the Approval Chain step; those two steps still use the pre-existing (and already-known-mismatched, per `frontend/types/hr.ts`'s old `LeaveType` shape vs the real backend model) local-state UI.
+
+---
+
 ## Update — Claude (25/08/2026)
 
 **Area:** Academics → Planning Studio — Lesson↔Topic linking, edit/delete for lessons and topics, revision-request UX, and Academics → Reports stat-tile accuracy

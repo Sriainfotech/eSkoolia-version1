@@ -197,13 +197,34 @@ export interface LeaveType {
 
 export type EntitlementMatrix = Record<string, Record<string, number>>;
 
-export interface ApprovalChain {
-  designation: string;
-  l1_approver: string;
-  l2_approver: string;
+export type ApproverRole = "HOD" | "Principal" | "Vice Principal" | "HR Admin" | "";
+
+export interface ApprovalChainPolicy {
+  id: number;
+  school: number;
+  designation: number | null;
+  designation_name: string; // "All Staff" when designation is null
+  l1_approver_role: ApproverRole;
+  l2_approver_role: ApproverRole;
   l2_trigger_days: number;
-  response_window: string;
+  response_window_days: number;
+  created_at: string;
+  updated_at: string;
 }
+
+export interface LeaveApprovalStep {
+  id: number;
+  sequence: number;
+  role_label: ApproverRole;
+  approver: number | null;
+  approver_name: string;
+  status: "pending" | "approved" | "rejected";
+  became_active_at: string;
+  acted_at: string | null;
+  note: string;
+}
+
+export type AbsenceType = "emergency" | "unplanned" | "retroactive" | "";
 
 export interface LeaveApplication {
   id: number;
@@ -213,25 +234,49 @@ export interface LeaveApplication {
   staff_grade: string;
   leave_type: number;
   leave_type_name: string;
-  leave_type_color: string;
   from_date: string;
   to_date: string;
-  start_date?: string;          // alias for from_date
-  end_date?: string;            // alias for to_date
   duration: number;
-  days_requested?: number;      // alias for duration
-  half_day: boolean;
-  half_day_type: "AM" | "PM" | null;
+  half_day_type: "AM" | "PM" | "";
+  absence_type: AbsenceType;
   reason: string;
-  admin_note: string;
-  status: "pending" | "approved" | "rejected" | "cancelled" | "stuck";
-  days_stuck: number;
-  l1_status: "pending" | "approved" | "rejected";
-  l2_status: "pending" | "approved" | "rejected" | null;
+  approval_note: string;
+  status: "pending" | "approved" | "rejected";
   coverage_risk: boolean;
-  unavailable_approver: boolean;
   is_on_behalf: boolean;
+  applied_by: number | null;
+  applied_by_name: string;
+  approved_by: number | null;
+  approved_by_name: string;
+  approval_steps: LeaveApprovalStep[];
+  days_stuck: number;
   created_at: string;
+}
+
+export interface LeaveStats {
+  pending_approval: number;
+  stuck_in_chain: number;
+  coverage_at_risk: number;
+  applied_today: number;
+}
+
+export interface CoverageDayCount {
+  date: string;
+  approved: number;
+  pending: number;
+  rejected: number;
+}
+
+export interface CoverageDayRecord {
+  id: number;
+  staff_name: string;
+  leave_type_name: string;
+}
+
+export interface CoverageDayDetail {
+  date: string;
+  approved: CoverageDayRecord[];
+  pending: CoverageDayRecord[];
 }
 
 export interface LeaveBalance {

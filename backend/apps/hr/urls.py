@@ -7,6 +7,7 @@ from .attendance_endpoints import (
 )
 
 from .views import (
+    ApprovalChainPolicyViewSet,
     DepartmentViewSet,
     DepartmentTypeViewSet,
     DesignationViewSet,
@@ -40,6 +41,7 @@ router.register("staff-documents", StaffDocumentViewSet, basename="hr-staff-docu
 router.register("leave-types", LeaveTypeViewSet, basename="hr-leave-type")
 router.register("leave-defines", LeaveDefineViewSet, basename="hr-leave-define")
 router.register("leave-requests", LeaveRequestViewSet, basename="hr-leave-request")
+router.register("approval-chain-policies", ApprovalChainPolicyViewSet, basename="hr-approval-chain-policy")
 router.register("staff-attendance", StaffAttendanceViewSet, basename="hr-staff-attendance")
 router.register("payroll", PayrollRecordViewSet, basename="hr-payroll")
 router.register("offboarding", OffboardingViewSet, basename="hr-offboarding")

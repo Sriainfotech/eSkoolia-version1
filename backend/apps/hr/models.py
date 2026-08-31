@@ -521,11 +521,31 @@ class LeaveRequest(models.Model):
         (STATUS_REJECTED, "Rejected"),
     ]
 
+    HALF_DAY_AM = "AM"
+    HALF_DAY_PM = "PM"
+    HALF_DAY_CHOICES = [
+        (HALF_DAY_AM, "Morning"),
+        (HALF_DAY_PM, "Afternoon"),
+    ]
+
+    ABSENCE_EMERGENCY = "emergency"
+    ABSENCE_UNPLANNED = "unplanned"
+    ABSENCE_RETROACTIVE = "retroactive"
+    ABSENCE_TYPE_CHOICES = [
+        (ABSENCE_EMERGENCY, "Emergency"),
+        (ABSENCE_UNPLANNED, "Unplanned"),
+        (ABSENCE_RETROACTIVE, "Retroactive"),
+    ]
+
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="leave_requests")
     staff = models.ForeignKey(Staff, on_delete=models.CASCADE, related_name="leave_requests")
     leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, related_name="leave_requests")
     from_date = models.DateField()
     to_date = models.DateField()
+    half_day_type = models.CharField(max_length=2, choices=HALF_DAY_CHOICES, blank=True)
+    # Only meaningful for is_on_behalf requests — why HR is filing this
+    # rather than the staff member themselves.
+    absence_type = models.CharField(max_length=12, choices=ABSENCE_TYPE_CHOICES, blank=True)
     reason = models.TextField(blank=True)
     attachment = models.CharField(max_length=300, blank=True)
     approval_note = models.TextField(blank=True)
@@ -538,6 +558,17 @@ class LeaveRequest(models.Model):
         related_name="approved_leave_requests",
     )
     approved_at = models.DateTimeField(null=True, blank=True)
+    # Set when HR/admin files this request for another staff member, rather
+    # than the staff member submitting it themselves — surfaced as a "By
+    # Admin" flag; the request still goes through the normal approval flow.
+    is_on_behalf = models.BooleanField(default=False)
+    applied_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="leave_requests_applied_on_behalf",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -546,6 +577,83 @@ class LeaveRequest(models.Model):
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["school", "status"], name="idx_hr_leave_sch_st"),
+        ]
+
+
+class ApprovalChainPolicy(models.Model):
+    """Who approves leave for a designation (or "All Staff" when
+    designation is null) — L1 always applies; L2 only kicks in once the
+    requested leave's duration reaches l2_trigger_days. Approvers are
+    resolved by ROLE (not a fixed person) at the moment a request needs a
+    step — see approval_chain.resolve_role_to_user()."""
+
+    ROLE_HOD = "HOD"
+    ROLE_PRINCIPAL = "Principal"
+    ROLE_VICE_PRINCIPAL = "Vice Principal"
+    ROLE_HR_ADMIN = "HR Admin"
+    ROLE_NONE = ""
+    APPROVER_ROLE_CHOICES = [
+        (ROLE_HOD, "HOD"),
+        (ROLE_PRINCIPAL, "Principal"),
+        (ROLE_VICE_PRINCIPAL, "Vice Principal"),
+        (ROLE_HR_ADMIN, "HR Admin"),
+        (ROLE_NONE, "—"),
+    ]
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="approval_chain_policies")
+    designation = models.ForeignKey(
+        Designation, on_delete=models.CASCADE, null=True, blank=True,
+        related_name="approval_chain_policies",
+        help_text="Null = the default 'All Staff' policy.",
+    )
+    l1_approver_role = models.CharField(max_length=20, choices=APPROVER_ROLE_CHOICES, default=ROLE_HOD)
+    l2_approver_role = models.CharField(max_length=20, choices=APPROVER_ROLE_CHOICES, blank=True, default=ROLE_NONE)
+    l2_trigger_days = models.PositiveSmallIntegerField(
+        default=0, help_text="Leave duration (days) at/above which L2 approval is also required. 0 = never.",
+    )
+    response_window_days = models.PositiveSmallIntegerField(
+        default=2, help_text="Days an approver has to act before the request is flagged 'stuck in chain'.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "hr_approval_chain_policies"
+        ordering = ["designation_id"]
+        constraints = [
+            models.UniqueConstraint(fields=["school", "designation"], name="uq_hr_chain_policy_scope"),
+        ]
+
+
+class LeaveApprovalStep(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    leave_request = models.ForeignKey(LeaveRequest, on_delete=models.CASCADE, related_name="approval_steps")
+    sequence = models.PositiveSmallIntegerField()
+    # Snapshot of the role this step represents (HOD/Principal/...) — kept
+    # even if the policy changes later so history stays accurate.
+    role_label = models.CharField(max_length=20, blank=True)
+    approver = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="leave_approval_steps",
+    )
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    response_window_days = models.PositiveSmallIntegerField(default=2)
+    became_active_at = models.DateTimeField()
+    acted_at = models.DateTimeField(null=True, blank=True)
+    note = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "hr_leave_approval_steps"
+        ordering = ["leave_request_id", "sequence"]
+        constraints = [
+            models.UniqueConstraint(fields=["leave_request", "sequence"], name="uq_hr_leave_step_seq"),
         ]
 
 
