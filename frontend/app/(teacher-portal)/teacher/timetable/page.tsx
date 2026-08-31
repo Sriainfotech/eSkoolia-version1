@@ -202,10 +202,16 @@ export default function TeacherTimetablePage() {
     );
   }
 
-  // All unique period numbers across the week (sorted)
-  const allPeriods = [...new Set(
-    data.days.flatMap(d => d.periods.map(p => p.period ?? 0))
-  )].filter(Boolean).sort((a, b) => a - b);
+  // All unique time slots across the week, sorted by start time. Rows are
+  // keyed by (from, to) rather than `period` — `period`/class_period_id is a
+  // deprecated legacy field (apps/academics/models.py::ClassRoutineSlot) and
+  // is null for any school that hasn't configured ClassPeriod rows, which
+  // would otherwise make every slot invisible despite real data existing.
+  const allTimeSlots = Array.from(
+    new Map(
+      data.days.flatMap(d => d.periods.map(p => [`${p.from}-${p.to}`, { from: p.from, to: p.to }]))
+    ).values()
+  ).sort((a, b) => a.from.localeCompare(b.from));
 
   return (
     <div>
@@ -259,7 +265,7 @@ export default function TeacherTimetablePage() {
       </div>
 
       {/* ── Timetable grid ────────────────────────────────────────────── */}
-      {allPeriods.length === 0 ? (
+      {allTimeSlots.length === 0 ? (
         <div style={{
           background: '#fff', border: '1.5px dashed var(--line,#dbe4f0)',
           borderRadius: 14, padding: '56px 24px', textAlign: 'center',
@@ -286,7 +292,7 @@ export default function TeacherTimetablePage() {
                   fontSize: 10, fontWeight: 800, letterSpacing: '0.08em',
                   textTransform: 'uppercase', color: 'var(--muted,#5B5E72)',
                 }}>
-                  Period
+                  Time
                 </th>
                 {data.days.map(d => (
                   <th key={d.day_key} style={{
@@ -309,9 +315,9 @@ export default function TeacherTimetablePage() {
               </tr>
             </thead>
             <tbody>
-              {allPeriods.map((periodNum) => (
-                <tr key={periodNum} style={{ borderBottom: '1px solid var(--line,#dbe4f0)' }}>
-                  {/* Period number */}
+              {allTimeSlots.map((time) => (
+                <tr key={`${time.from}-${time.to}`} style={{ borderBottom: '1px solid var(--line,#dbe4f0)' }}>
+                  {/* Time range */}
                   <td style={{
                     padding: '8px 14px',
                     fontSize: 11, fontWeight: 700,
@@ -320,11 +326,11 @@ export default function TeacherTimetablePage() {
                     borderRight: '1px solid var(--line,#dbe4f0)',
                     whiteSpace: 'nowrap',
                   }}>
-                    P{periodNum}
+                    {time.from}
                   </td>
                   {/* Day cells */}
                   {data.days.map(d => {
-                    const slot = d.periods.find(p => p.period === periodNum);
+                    const slot = d.periods.find(p => p.from === time.from && p.to === time.to);
                     return (
                       <td key={d.day_key} style={{
                         padding: '6px 8px',

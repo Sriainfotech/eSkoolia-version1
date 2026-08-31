@@ -18,6 +18,43 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from .permissions import IsParentPortalUser
 
+WEEKDAY_ORDER = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6}
+
+
+def _resolve_child(request):
+    """
+    Resolves ?child_id=<id> against the authenticated guardian's own
+    children. Returns the Student instance, or raises NotFound / a 400
+    ValidationError — never trusts child_id without this guardian check.
+
+    Shared by every parent-portal view added from item 5 onward, so the
+    "does this child belong to this guardian?" check is written exactly
+    once.
+    """
+    from rest_framework.exceptions import NotFound, ValidationError
+    from apps.students.models import Student
+
+    guardian = request.user.guardian_profile
+    child_id = request.query_params.get("child_id")
+    if not child_id:
+        raise ValidationError({"detail": "child_id is required."})
+
+    try:
+        return Student.objects.select_related("current_class", "current_section", "school").get(
+            id=child_id, guardian=guardian, status="active",
+        )
+    except (Student.DoesNotExist, ValueError):
+        raise NotFound("Not found.")
+
+
+def _current_academic_year(school):
+    from apps.core.models import AcademicYear
+
+    year = AcademicYear.objects.filter(school=school, is_current=True).first()
+    if year is None:
+        year = AcademicYear.objects.filter(school=school, is_active=True).first()
+    return year
+
 
 class ParentMeView(APIView):
     """
@@ -570,3 +607,392 @@ class ParentNoticesView(APIView):
             )
 
         return Response(result)
+
+
+# ── Item 5: Academics — Timetable, Homework, Syllabus ──────────────────────────
+
+class ParentTimetableView(APIView):
+    """
+    GET /api/v1/parent/timetable/?child_id=<id>
+
+    Returns the child's weekly timetable — every ClassRoutineSlot for the
+    child's current_class + current_section. child_id is validated against
+    the guardian's own children via _resolve_child before any query runs.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsParentPortalUser]
+
+    def get(self, request):
+        from apps.academics.models import ClassRoutineSlot
+
+        student = _resolve_child(request)
+        if not student.current_class_id:
+            return Response({"child_id": student.id, "slots": []})
+
+        year = _current_academic_year(student.school)
+        qs = ClassRoutineSlot.objects.select_related("subject", "teacher").filter(
+            school=student.school,
+            school_class_id=student.current_class_id,
+            section_id=student.current_section_id,
+            active_status=True,
+            is_break=False,
+        )
+        if year:
+            qs = qs.filter(academic_year=year)
+
+        slots = [
+            {
+                "day_of_week": slot.day,
+                "period_number": slot.period.period if slot.period else slot.class_period_id,
+                "subject": slot.subject.name if slot.subject else "",
+                "teacher": (
+                    f"{slot.teacher.first_name} {slot.teacher.last_name}".strip()
+                    if slot.teacher else ""
+                ),
+                "start_time": slot.start_time.strftime("%H:%M") if slot.start_time else None,
+                "end_time": slot.end_time.strftime("%H:%M") if slot.end_time else None,
+                "room": slot.room or "",
+            }
+            for slot in qs
+        ]
+        slots.sort(key=lambda s: (WEEKDAY_ORDER.get(s["day_of_week"], 99), s["start_time"] or ""))
+
+        return Response({"child_id": student.id, "slots": slots})
+
+
+class ParentHomeworkView(APIView):
+    """
+    GET /api/v1/parent/homework/?child_id=<id>
+
+    Returns Homework records for the child's current class (class-wide
+    homework, plus homework scoped to the child's own section), ordered by
+    homework_date desc. Each row includes the child's own submission
+    (status/marks/note) if the teacher has recorded one.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsParentPortalUser]
+
+    def get(self, request):
+        from django.db.models import Q
+        from apps.academics.models import Homework, HomeworkSubmission
+
+        student = _resolve_child(request)
+        if not student.current_class_id:
+            return Response([])
+
+        homeworks = list(
+            Homework.objects.select_related("subject_id_ref", "section_id_ref")
+            .filter(
+                Q(section_id_ref__isnull=True) | Q(section_id_ref_id=student.current_section_id),
+                school=student.school,
+                class_id_ref_id=student.current_class_id,
+                active_status=True,
+            )
+            .order_by("-homework_date")
+        )
+
+        submissions = {
+            s.homework_id: s
+            for s in HomeworkSubmission.objects.filter(
+                homework_id__in=[h.id for h in homeworks], student=student,
+            )
+        }
+
+        result = []
+        for h in homeworks:
+            submission = submissions.get(h.id)
+            result.append({
+                "id": h.id,
+                "subject": h.subject_id_ref.name if h.subject_id_ref else "",
+                "section_name": h.section_id_ref.name if h.section_id_ref else "",
+                "homework_date": str(h.homework_date),
+                "submission_date": str(h.submission_date),
+                "description": h.description,
+                "file": h.file or None,
+                "marks": float(h.marks) if h.marks is not None else None,
+                "submission": (
+                    {
+                        "complete_status": submission.complete_status,
+                        "marks": float(submission.marks) if submission.marks is not None else None,
+                        "note": submission.note,
+                        "file": submission.file or None,
+                    }
+                    if submission else None
+                ),
+            })
+
+        return Response(result)
+
+
+class ParentSyllabusView(APIView):
+    """
+    GET /api/v1/parent/syllabus/?child_id=<id>
+
+    Returns LessonTopic groups (with their nested LessonTopicDetail rows)
+    for every subject taught in the child's current class+section —
+    the syllabus / topic-coverage view.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsParentPortalUser]
+
+    def get(self, request):
+        from django.db.models import Q
+        from apps.academics.models import LessonTopic, LessonTopicDetail
+
+        student = _resolve_child(request)
+        if not student.current_class_id:
+            return Response([])
+
+        topics_qs = (
+            LessonTopic.objects.select_related("subject", "lesson")
+            .filter(
+                Q(section__isnull=True) | Q(section_id=student.current_section_id),
+                school=student.school,
+                school_class_id=student.current_class_id,
+                active_status=True,
+            )
+            .order_by("subject__name", "lesson__lesson_title")
+        )
+
+        details_by_lesson: dict = {}
+        for d in LessonTopicDetail.objects.filter(lesson_id__in=[t.lesson_id for t in topics_qs]):
+            details_by_lesson.setdefault(d.lesson_id, []).append(d)
+
+        result = []
+        for t in topics_qs:
+            details = details_by_lesson.get(t.lesson_id, [])
+            done = sum(1 for d in details if d.completed_status == "Completed")
+            result.append({
+                "id": t.id,
+                "subject": t.subject.name if t.subject else "",
+                "lesson_name": t.lesson.lesson_title if t.lesson else "",
+                "topics_done": done,
+                "topics_total": len(details),
+                "topics": [
+                    {"title": d.topic_title, "status": d.completed_status or "Pending"}
+                    for d in details
+                ],
+            })
+
+        return Response(result)
+
+
+# ── Item 6: Exam Results and Report Card ────────────────────────────────────────
+
+class ParentResultsView(APIView):
+    """
+    GET /api/v1/parent/results/?child_id=<id>
+
+    Returns the child's exam marks, grouped by exam type (term).
+    Only marks belonging to a published exam (exam.is_result_published)
+    are returned — unpublished results stay invisible to parents.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsParentPortalUser]
+
+    def get(self, request):
+        from apps.exams.models import ExamMark
+
+        student = _resolve_child(request)
+
+        marks_qs = ExamMark.objects.select_related(
+            "exam", "exam__exam_type", "schedule__subject",
+        ).filter(
+            student=student,
+            school=student.school,
+            exam__is_result_published=True,
+        ).order_by("exam__exam_type__title", "schedule__subject__name")
+
+        groups: dict = {}
+        for m in marks_qs:
+            term = m.exam.exam_type.title if (m.exam and m.exam.exam_type) else ""
+            groups.setdefault(term, []).append({
+                "subject": m.schedule.subject.name if (m.schedule and m.schedule.subject) else "",
+                "exam_name": m.exam.name if m.exam else "",
+                "obtained": float(m.obtained_marks) if m.obtained_marks is not None else 0.0,
+                "full_marks": float(m.schedule.full_marks) if (m.schedule and m.schedule.full_marks) else 100.0,
+                "pass_marks": float(m.schedule.pass_marks) if (m.schedule and m.schedule.pass_marks) else 33.0,
+                "absent": m.absent,
+                "exam_date": m.schedule.exam_date.isoformat() if (m.schedule and m.schedule.exam_date) else None,
+            })
+
+        return Response({
+            "child_id": student.id,
+            "terms": [{"term": term, "marks": rows} for term, rows in groups.items()],
+        })
+
+
+class ParentReportCardView(APIView):
+    """
+    GET /api/v1/parent/results/report-card/?child_id=<id>
+
+    Returns one row per subject per term, suitable for a report-card grid:
+    subject, term, obtained, full_marks, pass_marks, grade, pass_fail.
+    Grade is looked up from ExamGradeScale by percentage; only published
+    exam results are included.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsParentPortalUser]
+
+    def _grade_for(self, scales, percent):
+        for scale in scales:
+            if scale.min_percent <= percent <= scale.max_percent:
+                return scale.name
+        return ""
+
+    def get(self, request):
+        from apps.exams.models import ExamGradeScale, ExamMark
+
+        student = _resolve_child(request)
+
+        scales = list(ExamGradeScale.objects.filter(school=student.school).order_by("-min_percent"))
+
+        marks_qs = ExamMark.objects.select_related(
+            "exam", "exam__exam_type", "schedule__subject",
+        ).filter(
+            student=student,
+            school=student.school,
+            exam__is_result_published=True,
+        ).order_by("exam__exam_type__title", "schedule__subject__name")
+
+        rows = []
+        for m in marks_qs:
+            full_marks = float(m.schedule.full_marks) if (m.schedule and m.schedule.full_marks) else 100.0
+            pass_marks = float(m.schedule.pass_marks) if (m.schedule and m.schedule.pass_marks) else 33.0
+            obtained = float(m.obtained_marks) if m.obtained_marks is not None else 0.0
+            percent = (obtained / full_marks * 100) if full_marks else 0.0
+
+            if m.absent:
+                pass_fail = "Absent"
+            elif obtained >= pass_marks:
+                pass_fail = "Pass"
+            else:
+                pass_fail = "Fail"
+
+            rows.append({
+                "subject": m.schedule.subject.name if (m.schedule and m.schedule.subject) else "",
+                "term": m.exam.exam_type.title if (m.exam and m.exam.exam_type) else "",
+                "obtained": obtained,
+                "full_marks": full_marks,
+                "pass_marks": pass_marks,
+                "grade": self._grade_for(scales, percent) if not m.absent else "",
+                "pass_fail": pass_fail,
+            })
+
+        return Response({"child_id": student.id, "rows": rows})
+
+
+# ── Item 7: Messages (Two-Way) ───────────────────────────────────────────────────
+
+class ParentMessagesView(APIView):
+    """
+    GET  /api/v1/parent/messages/
+    Returns in-app messages where request.user (the guardian's portal
+    account) is sender or recipient.
+
+    POST /api/v1/parent/messages/
+    Creates a message to the school/teacher. sender is set server-side to
+    request.user; recipient_id must be supplied in the body.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsParentPortalUser]
+
+    def get(self, request):
+        from django.db.models import Q
+        from apps.communication.models import InAppMessage
+        from apps.communication.serializers import InAppMessageSerializer
+
+        user = request.user
+        messages = InAppMessage.objects.select_related("sender", "recipient").filter(
+            Q(sender=user) | Q(recipient=user),
+        ).order_by("-created_at")[:200]
+        return Response(InAppMessageSerializer(messages, many=True, context={"request": request}).data)
+
+    def post(self, request):
+        from apps.communication.serializers import InAppMessageSerializer
+
+        user = request.user
+        guardian = user.guardian_profile
+        serializer = InAppMessageSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        message = serializer.save(sender=user, school=guardian.school)
+        return Response(
+            InAppMessageSerializer(message, context={"request": request}).data, status=201,
+        )
+
+
+# ── Item 8: Behaviour Log ────────────────────────────────────────────────────────
+
+class ParentBehaviourView(APIView):
+    """
+    GET /api/v1/parent/behaviour/?child_id=<id>
+
+    Returns AssignedIncident records for the child — incident_title,
+    point, date, note. child_id is validated against the guardian's own
+    children via _resolve_child.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsParentPortalUser]
+
+    def get(self, request):
+        from apps.behaviour.models import AssignedIncident
+
+        student = _resolve_child(request)
+
+        incidents_qs = AssignedIncident.objects.select_related("incident").filter(
+            student=student, school=student.school,
+        ).order_by("-created_at")
+
+        result = [
+            {
+                "id": ai.id,
+                "incident_title": ai.incident.title if ai.incident else "",
+                "point": ai.point,
+                "date": ai.created_at.date().isoformat(),
+                "note": ai.incident.description if ai.incident else "",
+            }
+            for ai in incidents_qs
+        ]
+        return Response(result)
+
+
+# ── Item 9: Health Log ───────────────────────────────────────────────────────────
+
+class ParentHealthView(APIView):
+    """
+    GET /api/v1/parent/health/?child_id=<id>
+
+    Returns the child's medical profile fields as captured at admission —
+    vision, medical_conditions, allergies, vaccinations, is_pwd,
+    disability_types, etc. child_id is validated against the guardian's
+    own children via _resolve_child.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsParentPortalUser]
+
+    def get(self, request):
+        student = _resolve_child(request)
+
+        return Response({
+            "child_id": student.id,
+            "vision": student.vision,
+            "medical_conditions": student.medical_conditions,
+            "allergies": student.allergies,
+            "current_medications": student.current_medications,
+            "treating_doctor": student.treating_doctor,
+            "vaccinations": student.vaccinations,
+            "medical_notes": student.medical_notes,
+            "is_pwd": student.is_pwd,
+            "disability_types": student.disability_types,
+            "disability_percent": student.disability_percent,
+            "disability_accommodations": student.disability_accommodations,
+            "disability_notes": student.disability_notes,
+        })

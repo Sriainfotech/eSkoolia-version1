@@ -83,7 +83,7 @@ def school_class(school, academic_year):
     return Class.objects.create(
         school=school,
         name="Grade 5",
-        numeric_value=5,
+        numeric_order=5,
         is_active=True,
     )
 
@@ -92,12 +92,9 @@ def school_class(school, academic_year):
 def section(school, school_class, academic_year):
     from apps.core.models import Section
     return Section.objects.create(
-        school=school,
-        class_obj=school_class,
+        school_class=school_class,
         name="A",
-        academic_year=academic_year,
         capacity=40,
-        is_active=True,
     )
 
 

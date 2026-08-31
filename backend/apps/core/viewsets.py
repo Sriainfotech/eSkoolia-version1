@@ -11,6 +11,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 
 from .exceptions import InvalidQueryParams
+from .portal_scoping import scope_to_school
 from .responses import APIResponseMixin
 
 
@@ -41,9 +42,7 @@ class PaginatedModelViewSet(APIResponseMixin, viewsets.ModelViewSet):
         # school of their own, e.g. "Default School") — there is no
         # cross-school aggregation on ordinary per-school data views.
         if hasattr(self.model, 'school'):
-            if not user.school_id:
-                return queryset.none()
-            queryset = queryset.filter(school_id=user.school_id)
+            queryset = scope_to_school(queryset, self.model, user)
         
         # Apply search filtering
         search_query = self.request.query_params.get('search', '').strip()
