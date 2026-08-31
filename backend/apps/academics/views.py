@@ -13,12 +13,8 @@ from rest_framework.parsers import FormParser, MultiPartParser, JSONParser
 from rest_framework.response import Response
 from apps.access_control.models import UserRole
 from apps.core.models import Class as SchoolClass, ClassPeriod, LevelScheduleConfig, Section, Subject
-<<<<<<< HEAD
-from apps.hr.models import LeaveRequest, Staff
-=======
 from apps.core.portal_scoping import scope_to_school, PortalScopeFilterBackend
-from apps.hr.models import Staff
->>>>>>> 4c4cb3db07b13e74530894b46c42805b758c7e73
+from apps.hr.models import LeaveRequest, Staff
 from apps.users.models import User
 from .models import (
     ClassOptionalSubjectSetup,
