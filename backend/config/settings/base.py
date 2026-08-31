@@ -267,6 +267,7 @@ if MULTI_TENANCY_ENABLED:
         # Per-school audit trail, matching the same isolation principle as
         # the school's own data rather than a combined cross-school log.
         "auditlog",
+        "apps.assistant",
     ]
 
     # Basic static validations
