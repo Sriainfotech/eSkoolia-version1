@@ -31,7 +31,6 @@ import {
   FileBadge,
   FileBarChart,
   ShieldCheck,
-  Lock,
   LogIn,
   BookOpenCheck,
   BookmarkCheck,
@@ -116,11 +115,15 @@ export const MODULES: ModuleRoute[] = [
     ic: '#6D28D9',
     permission: 'access_control',
     sub: [
+      // "Assign Permissions" used to be a separate nav entry here, but its
+      // target page requires ?roleId=<id> (see roles/assign-permission/page.tsx)
+      // which no nav link can supply - it's only reachable meaningfully from
+      // inside a specific role's card on this Roles page. A standalone entry
+      // pointing at /roles was tried, but that made it an exact duplicate of
+      // this "Roles" entry (same path), which breaks React's list key and
+      // permanently mis-highlights "Roles" as active instead. Removed - the
+      // Roles page itself is the correct entry point for assigning permissions.
       { label: 'Roles', path: '/roles', icon: ShieldCheck, permission: 'access_control.assign_permission.view' },
-      // Assigning permissions requires picking a role first (the target page
-      // needs ?roleId=<id>, see roles/assign-permission/page.tsx) - link to
-      // the Roles list itself rather than the dead-end unparameterized path.
-      { label: 'Assign Permissions', path: '/roles', icon: Lock, permission: 'access_control.assign_permission.view' },
       { label: 'Login Permission', path: '/roles/login-permission', icon: LogIn, permission: 'access_control.due_fees_login_permission.view' },
     ],
   },
