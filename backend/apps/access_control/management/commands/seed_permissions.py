@@ -121,6 +121,8 @@ PERMISSIONS = [
     ("human_resource.leave_type.view", "Leave Type", "human_resource"),
     ("human_resource.leave_define.view", "Leave Define", "human_resource"),
     ("human_resource.apply_leave.view", "Apply Leave", "human_resource"),
+    ("human_resource.apply_leave.apply_on_behalf", "Apply Leave On Behalf", "human_resource"),
+    ("human_resource.approval_chain.view", "Approval Chain Policy", "human_resource"),
 
     ("accounts.chart_of_accounts.view", "Chart Of Accounts", "accounts"),
     ("accounts.bank_accounts.view", "Bank Accounts", "accounts"),

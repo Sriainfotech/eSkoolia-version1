@@ -12,6 +12,10 @@ import type {
   StaffDocument,
   LeaveType,
   LeaveApplication,
+  LeaveStats,
+  CoverageDayCount,
+  CoverageDayDetail,
+  ApprovalChainPolicy,
   OffboardingRecord,
   PaginatedHR,
 } from "@/types/hr";
@@ -25,6 +29,13 @@ function useFetch<T>(url: string, deps: unknown[] = [], fetchOptions?: { silent4
   const [error, setError] = useState<string | null>(null);
 
   const fetch = useCallback(async () => {
+    // An empty url means "conditionally disabled" (e.g. no day selected yet)
+    // — skip the request rather than hitting the API root.
+    if (!url) {
+      setData(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -499,24 +510,79 @@ export async function applyLeave(body: Partial<LeaveApplication>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<LeaveApplication>;
 }
 
+export async function applyOnBehalf(body: {
+  staff: number;
+  leave_type: number;
+  from_date: string;
+  to_date: string;
+  reason?: string;
+  half_day_type?: "AM" | "PM" | "";
+  absence_type?: "emergency" | "unplanned" | "retroactive" | "";
+  bypass_chain?: boolean;
+}) {
+  const res = await apiRequestWithRefreshResponse("/api/v1/hr/leave-requests/apply-on-behalf/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await throwHrApiError(res);
+  return res.json() as Promise<LeaveApplication>;
+}
+
+// The backend only exposes dedicated approve/reject actions today (no
+// generic PATCH-with-action endpoint) — this calls the real endpoint
+// instead of writing model fields directly.
 export async function updateLeaveStatus(
   id: number,
-  action: "approve" | "reject" | "cancel" | "approved" | "rejected" | "cancelled",
+  action: "approve" | "reject" | "approved" | "rejected",
   note?: string,
 ) {
-  // Normalize verb/noun forms
-  const verb = action.replace("approved", "approve").replace("rejected", "reject").replace("cancelled", "cancel");
-  const res = await apiRequestWithRefreshResponse(`/api/v1/hr/leave-requests/${id}/`, {
-    method: "PATCH",
+  const verb = action === "approved" ? "approve" : action === "rejected" ? "reject" : action;
+  const res = await apiRequestWithRefreshResponse(`/api/v1/hr/leave-requests/${id}/${verb}/`, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: verb, note }),
+    body: JSON.stringify({ approval_note: note ?? "" }),
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<LeaveApplication>;
+  if (!res.ok) await throwHrApiError(res);
+  return res.json() as Promise<{ id: number; status: string }>;
+}
+
+export function useLeaveStats() {
+  return useFetch<LeaveStats>("/api/v1/hr/leave-requests/stats/");
+}
+
+export function useLeaveCoverageMonth(month: string) {
+  return useFetch<{ month: string; days: CoverageDayCount[] }>(
+    `/api/v1/hr/leave-requests/coverage/?month=${encodeURIComponent(month)}`,
+    [month],
+  );
+}
+
+export function useLeaveCoverageDay(date: string | null) {
+  return useFetch<CoverageDayDetail>(
+    date ? `/api/v1/hr/leave-requests/coverage/?date=${encodeURIComponent(date)}` : "",
+    [date],
+  );
+}
+
+// ─── Approval Chain Policy ────────────────────────────────────────────────────
+export function useApprovalChainPolicies() {
+  return useFetch<PaginatedHR<ApprovalChainPolicy>>("/api/v1/hr/approval-chain-policies/?page_size=100");
+}
+
+export async function saveApprovalChainPolicy(id: number | null, body: Partial<ApprovalChainPolicy>) {
+  const url = id ? `/api/v1/hr/approval-chain-policies/${id}/` : "/api/v1/hr/approval-chain-policies/";
+  const res = await apiRequestWithRefreshResponse(url, {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await throwHrApiError(res);
+  return res.json() as Promise<ApprovalChainPolicy>;
 }
 
 // ─── Staff Attendance ───────────────────────────────────────────────────────

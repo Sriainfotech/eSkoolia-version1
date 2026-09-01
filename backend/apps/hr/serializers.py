@@ -10,7 +10,7 @@ from apps.core.models import Class as SchoolClass, Section
 from apps.students.models import Student
 from rest_framework import serializers
 
-from .models import Department, Designation, DepartmentType, LeaveDefine, LeaveRequest, LeaveType, Offboarding, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft, PREDEFINED_DEPARTMENT_TYPES
+from .models import ApprovalChainPolicy, Department, Designation, DepartmentType, LeaveApprovalStep, LeaveDefine, LeaveRequest, LeaveType, Offboarding, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft, PREDEFINED_DEPARTMENT_TYPES
 
 
 def _is_valid_person_name(value: str) -> bool:
@@ -2206,32 +2206,131 @@ class LeaveDefineSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class LeaveApprovalStepSerializer(serializers.ModelSerializer):
+    approver_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = LeaveApprovalStep
+        fields = ["id", "sequence", "role_label", "approver", "approver_name", "status", "became_active_at", "acted_at", "note"]
+        read_only_fields = fields
+
+    def get_approver_name(self, obj):
+        if obj.approver_id:
+            return obj.approver.get_full_name() or obj.approver.username
+        return "Unavailable" if obj.role_label else ""
+
+
+class ApprovalChainPolicySerializer(serializers.ModelSerializer):
+    designation_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = ApprovalChainPolicy
+        fields = [
+            "id", "school", "designation", "designation_name",
+            "l1_approver_role", "l2_approver_role", "l2_trigger_days", "response_window_days",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+    def get_designation_name(self, obj):
+        return obj.designation.name if obj.designation_id else "All Staff"
+
+    def validate(self, attrs):
+        request = self.context.get("request")
+        school_id = request.user.school_id if request else None
+        designation = attrs.get("designation") or getattr(self.instance, "designation", None)
+        if school_id and designation and designation.school_id != school_id:
+            raise serializers.ValidationError({"designation": "Selected designation does not belong to your school."})
+        return attrs
+
+
 class LeaveRequestSerializer(serializers.ModelSerializer):
+    staff_name = serializers.SerializerMethodField(read_only=True)
+    staff_role = serializers.SerializerMethodField(read_only=True)
+    staff_grade = serializers.SerializerMethodField(read_only=True)
+    leave_type_name = serializers.CharField(source="leave_type.name", read_only=True)
+    duration = serializers.SerializerMethodField(read_only=True)
+    coverage_risk = serializers.SerializerMethodField(read_only=True)
+    applied_by_name = serializers.SerializerMethodField(read_only=True)
+    approved_by_name = serializers.SerializerMethodField(read_only=True)
+    approval_steps = LeaveApprovalStepSerializer(many=True, read_only=True)
+    days_stuck = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = LeaveRequest
         fields = [
             "id",
             "school",
             "staff",
+            "staff_name",
+            "staff_role",
+            "staff_grade",
             "leave_type",
+            "leave_type_name",
             "from_date",
             "to_date",
+            "half_day_type",
+            "absence_type",
+            "duration",
             "reason",
             "attachment",
             "approval_note",
             "status",
             "approved_by",
+            "approved_by_name",
             "approved_at",
+            "is_on_behalf",
+            "applied_by",
+            "applied_by_name",
+            "coverage_risk",
+            "approval_steps",
+            "days_stuck",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "school", "approved_by", "approved_at", "created_at", "updated_at"]
+        read_only_fields = [
+            "id", "school", "approved_by", "approved_at",
+            "is_on_behalf", "applied_by", "created_at", "updated_at",
+        ]
         extra_kwargs = {
             "staff": {"required": False},
             "leave_type": {"required": True},
             "from_date": {"required": True},
             "to_date": {"required": True},
         }
+
+    def get_staff_name(self, obj):
+        return f"{obj.staff.first_name} {obj.staff.last_name}".strip()
+
+    def get_staff_role(self, obj):
+        return obj.staff.designation.name if obj.staff.designation_id else ""
+
+    def get_staff_grade(self, obj):
+        return obj.staff.department.name if obj.staff.department_id else ""
+
+    def get_duration(self, obj):
+        from .holiday_utils import compute_leave_days
+        return compute_leave_days(obj.school_id, obj.leave_type, obj.from_date, obj.to_date)
+
+    def get_coverage_risk(self, obj):
+        from .coverage_utils import has_coverage_risk
+        return has_coverage_risk(obj)
+
+    def get_applied_by_name(self, obj):
+        if not obj.applied_by_id:
+            return ""
+        return obj.applied_by.get_full_name() or obj.applied_by.username
+
+    def get_approved_by_name(self, obj):
+        if not obj.approved_by_id:
+            return ""
+        return obj.approved_by.get_full_name() or obj.approved_by.username
+
+    def get_days_stuck(self, obj):
+        from .approval_chain import current_step, days_stuck
+        if obj.status != LeaveRequest.STATUS_PENDING:
+            return 0
+        return days_stuck(current_step(obj))
 
     def validate_leave_type(self, value):
         if not value:

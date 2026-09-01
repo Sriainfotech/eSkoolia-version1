@@ -7,7 +7,6 @@ import { MODULES } from '@/lib/routes';
 import { usePermissions } from '@/hooks/usePermissions';
 
 const COMING_SOON_PATHS = new Set([
-  '/hr/leave',
   '/hr/offboarding',
 ]);
 
