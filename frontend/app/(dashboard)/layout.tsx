@@ -4,20 +4,19 @@ import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import AuthGate from "@/components/layout/AuthGate";
 
-/* ─── New nav (NEXT_PUBLIC_NEW_NAV=1) ─── */
+/* ─── Top nav (default) ─── */
 import { TopBarNew } from "@/components/nav/TopBar";
 import { CommandPalette, useCmdK } from "@/components/nav/CommandPalette";
 import { AIBot } from "@/components/AIBot";
 import { ModuleSubNav } from "@/components/nav/ModuleSubNav";
 import { PageNotesPanel } from "@/components/notes/PageNotesPanel";
 
-/* ─── Legacy nav (default) ─── */
+/* ─── Legacy sidebar nav — retired, kept for reference only ───
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
+──────────────────────────────────────────────────────────── */
 
 import { saveRecentLS, shouldTrack } from "@/lib/recentsStore";
-
-const USE_NEW_NAV = process.env.NEXT_PUBLIC_NEW_NAV === "1";
 
 function useRecentsTracking() {
   const pathname = usePathname();
@@ -55,6 +54,7 @@ function NewNavShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+/* ─── Legacy sidebar shell — retired, kept for reference only ───
 function LegacyShell({ children }: { children: React.ReactNode }) {
   useRecentsTracking();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -74,15 +74,12 @@ function LegacyShell({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+──────────────────────────────────────────────────────────── */
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   return (
     <AuthGate>
-      {USE_NEW_NAV ? (
-        <NewNavShell>{children}</NewNavShell>
-      ) : (
-        <LegacyShell>{children}</LegacyShell>
-      )}
+      <NewNavShell>{children}</NewNavShell>
     </AuthGate>
   );
 }

@@ -1254,6 +1254,7 @@ ${digitalMode ? '' : '<script>window.onload = function(){ window.print(); }</scr
                   onClick={() => {
                     if (!student.studentId) {
                       setUploadError('Student record must be enrolled first before uploading a signed form.');
+                      setUploadStatus('error');
                       return;
                     }
                     signedFormInputRef.current?.click();

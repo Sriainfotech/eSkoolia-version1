@@ -73,6 +73,79 @@ jobs:
       - name: Run tests
         run: pytest apps/admissions/ -v --cov=apps/admissions --cov-report=term-missing
 
+  # ─────── Tenancy flag matrix (regression guard) ───────
+  # Runs the same backend against MULTI_TENANCY_ENABLED=true AND =false.
+  # Added after the 2026-08-31 outage where middleware written assuming the
+  # flag was always on crashed every request once run with it off — that
+  # config was never exercised in CI before merge. See
+  # apps/tenancy/tests/test_middleware_flag_smoke.py for what's asserted.
+  tenancy-flag-matrix:
+    name: Tenancy flag matrix (MULTI_TENANCY_ENABLED=${{ matrix.multi_tenancy }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        multi_tenancy: ["true", "false"]
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: eskoolia_test
+          POSTGRES_USER: eskoolia
+          POSTGRES_PASSWORD: eskoolia
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+
+    defaults:
+      run:
+        working-directory: backend
+
+    env:
+      DATABASE_URL: postgres://eskoolia:eskoolia@localhost:5432/eskoolia_test
+      REDIS_URL: redis://localhost:6379/0
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      SECRET_KEY: ci-test-secret-key
+      SMS_PROVIDER: stub
+      AI_PROVIDER: stub
+      MULTI_TENANCY_ENABLED: ${{ matrix.multi_tenancy }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y libcairo2-dev pkg-config python3-dev libpango1.0-dev libgdk-pixbuf2.0-dev libffi-dev shared-mime-info
+
+      - name: Install dependencies
+        run: pip install -r requirements/dev.txt
+
+      - name: Django check
+        run: python manage.py check --deploy --fail-level ERROR
+
+      - name: Apply migrations (monolithic mode)
+        if: matrix.multi_tenancy == 'false'
+        run: python manage.py migrate --run-syncdb
+
+      - name: Apply shared-schema migrations (multi-tenant mode)
+        if: matrix.multi_tenancy == 'true'
+        run: python manage.py migrate_schemas --shared --noinput
+
+      - name: Tenancy middleware smoke tests
+        run: pytest apps/tenancy/tests/test_middleware_flag_smoke.py -v
+
   # ─────────────── Frontend ───────────────
   frontend:
     name: Frontend (Next.js)

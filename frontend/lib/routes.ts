@@ -117,7 +117,10 @@ export const MODULES: ModuleRoute[] = [
     permission: 'access_control',
     sub: [
       { label: 'Roles', path: '/roles', icon: ShieldCheck, permission: 'access_control.assign_permission.view' },
-      { label: 'Assign Permissions', path: '/roles/assign-permission', icon: Lock, permission: 'access_control.assign_permission.view' },
+      // Assigning permissions requires picking a role first (the target page
+      // needs ?roleId=<id>, see roles/assign-permission/page.tsx) - link to
+      // the Roles list itself rather than the dead-end unparameterized path.
+      { label: 'Assign Permissions', path: '/roles', icon: Lock, permission: 'access_control.assign_permission.view' },
       { label: 'Login Permission', path: '/roles/login-permission', icon: LogIn, permission: 'access_control.due_fees_login_permission.view' },
     ],
   },

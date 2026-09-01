@@ -321,17 +321,26 @@ class DashboardKPIView(SuperAdminBaseAPIView):
         current_start, current_end = current_month_range()
         previous_start, previous_end = previous_month_range()
 
-        # Student/Staff live inside each tenant's own Postgres schema (both
-        # are TENANT_APPS models) - there's no single shared table a SQL
-        # query could aggregate across every school at once, and the old
-        # OuterRef("pk")-against-Student.school_id subquery below was
-        # comparing the wrong id anyway (school_id points at tenancy.School,
-        # reached via tenant.school_id, not at this SchoolTenant row's own
-        # pk). Visits each tenant's schema directly and aggregates in Python
-        # instead - fine at current tenant counts; revisit with cached
-        # SchoolTenant.student_count/staff_count if this ever needs to scale
-        # to hundreds of tenants.
+        # Student/Staff live inside each tenant's own Postgres schema when
+        # multi-tenancy is enabled (both are TENANT_APPS models) - there's
+        # no single shared table a SQL query could aggregate across every
+        # school at once, and the old OuterRef("pk")-against-Student.school_id
+        # subquery below was comparing the wrong id anyway (school_id points
+        # at tenancy.School, reached via tenant.school_id, not at this
+        # SchoolTenant row's own pk). Visits each tenant's schema directly
+        # and aggregates in Python instead - fine at current tenant counts;
+        # revisit with cached SchoolTenant.student_count/staff_count if this
+        # ever needs to scale to hundreds of tenants.
+        # When MULTI_TENANCY_ENABLED is off (monolithic mode), every school's
+        # rows already live together in the one shared schema, so switching
+        # schemas would be both pointless and impossible (schema_context()
+        # needs the django-tenants DB backend, which isn't installed in
+        # monolithic mode) - skip it via nullcontext() instead.
+        from contextlib import nullcontext
+
         from django_tenants.utils import schema_context
+
+        from apps.tenancy.context import is_multi_tenancy_enabled
 
         active_students = 0
         inactive_students = 0
@@ -345,7 +354,8 @@ class DashboardKPIView(SuperAdminBaseAPIView):
             t_active = t_inactive = t_staff = t_current_new = t_previous_new = 0
             if tenant.school_id and tenant.schema_name:
                 try:
-                    with schema_context(tenant.schema_name):
+                    schema_ctx = schema_context(tenant.schema_name) if is_multi_tenancy_enabled() else nullcontext()
+                    with schema_ctx:
                         t_active = Student.objects.filter(school_id=tenant.school_id, status="active").count()
                         t_inactive = Student.objects.filter(school_id=tenant.school_id, status="inactive").count()
                         t_staff = Staff.objects.filter(school_id=tenant.school_id).count()
@@ -679,11 +689,18 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
 
     def _attach_live_counts(self, tenants):
         """Count students/staff by visiting each tenant's own schema directly -
-        Student/Staff live inside each school's own Postgres schema, so there's
-        no single shared table a SQL query could aggregate across all of them
-        at once. Only called on the current page's items (not every tenant),
-        to keep this to a handful of schema switches per request."""
+        Student/Staff live inside each school's own Postgres schema when
+        multi-tenancy is enabled, so there's no single shared table a SQL
+        query could aggregate across all of them at once. Only called on the
+        current page's items (not every tenant), to keep this to a handful of
+        schema switches per request. When MULTI_TENANCY_ENABLED is off, every
+        school already shares the one schema, so schema_context() is skipped
+        via nullcontext() - see the matching comment in DashboardKPIView.get()."""
+        from contextlib import nullcontext
+
         from django_tenants.utils import schema_context
+
+        from apps.tenancy.context import is_multi_tenancy_enabled
 
         tenants = list(tenants)
         for tenant in tenants:
@@ -693,7 +710,8 @@ class SchoolTenantListView(SuperAdminBaseAPIView):
                 tenant.live_staff_count = tenant.staff_count or 0
                 continue
             try:
-                with schema_context(tenant.schema_name):
+                schema_ctx = schema_context(tenant.schema_name) if is_multi_tenancy_enabled() else nullcontext()
+                with schema_ctx:
                     tenant.live_student_count = Student.objects.filter(school_id=tenant.school_id).count()
                     tenant.live_active_student_count = Student.objects.filter(
                         school_id=tenant.school_id, status="active"

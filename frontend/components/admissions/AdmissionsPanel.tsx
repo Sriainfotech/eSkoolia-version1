@@ -1021,7 +1021,15 @@ export function AdmissionsPanel() {
 
   const searchNow = async () => {
     if (!validateSearchDates(dateFrom, dateTo)) return;
-    await loadInquiries();
+    try {
+      setError("");
+      await loadInquiries();
+    } catch {
+      // Previously unhandled - a failed fetch (expired token, network blip)
+      // left the list unchanged with zero feedback, indistinguishable from
+      // "Search button does nothing".
+      setError("Unable to search admission queries. Please try again.");
+    }
   };
 
   return (
@@ -1063,7 +1071,6 @@ export function AdmissionsPanel() {
               <div className="form-group" style={{ minWidth: 220, flex: "1 1 220px" }}>
                 <label htmlFor="sc-source">Source</label>
                 <select id="sc-source" name="filter_source" value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} style={fieldStyle()}>
-                  <option value="" disabled>Select Source</option>
                   <option value="">All</option>
                   {sources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
@@ -1072,7 +1079,6 @@ export function AdmissionsPanel() {
               <div className="form-group" style={{ minWidth: 220, flex: "1 1 220px" }}>
                 <label htmlFor="sc-status">Status</label>
                 <select id="sc-status" name="filter_status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={fieldStyle()}>
-                  <option value="" disabled>Select Status</option>
                   <option value="">All</option>
                   <option value="1">Active</option>
                   <option value="2">Inactive</option>
