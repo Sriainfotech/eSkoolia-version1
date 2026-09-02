@@ -61,7 +61,6 @@ class TenantMainMiddleware(MiddlewareMixin):
         # If multi-tenancy is disabled, operate in monolithic mode
         if not is_multi_tenancy_enabled():
             clear_tenant_context()
-            connection.set_schema_to_public()
             request.tenant = None  # Explicitly mark as monolithic
             request.schema_name = None
             return None
@@ -70,7 +69,7 @@ class TenantMainMiddleware(MiddlewareMixin):
         # reachable regardless of whether the subdomain has an active schema.
         if request.path.startswith(self._PUBLIC_PATH_PREFIXES):
             clear_tenant_context()
-            connection.set_schema_to_public()
+            self._reset_to_public_schema()
             request.tenant = None
             request.schema_name = None
             return None
@@ -91,7 +90,7 @@ class TenantMainMiddleware(MiddlewareMixin):
                     "No tenant resolved from request; operating in public schema"
                 )
                 clear_tenant_context()
-                connection.set_schema_to_public()
+                self._reset_to_public_schema()
                 request.tenant = None
                 request.schema_name = None
                 return None
@@ -161,22 +160,38 @@ class TenantMainMiddleware(MiddlewareMixin):
         # a live risk, but resetting explicitly rather than relying on that
         # setting never changing.
         clear_tenant_context()
-        connection.set_schema_to_public()
+        self._reset_to_public_schema()
         return response
 
     def process_exception(self, request: HttpRequest, exception: Exception) -> Optional[HttpResponse]:
         """Clear tenant context on exception.
-        
+
         Args:
             request: Django HTTP request
             exception: Exception that occurred
-            
+
         Returns:
             None (let exception propagate)
         """
         clear_tenant_context()
-        connection.set_schema_to_public()
+        self._reset_to_public_schema()
         return None
+
+    @staticmethod
+    def _reset_to_public_schema() -> None:
+        """Reset the connection's tracked schema back to public.
+
+        connection.set_schema_to_public() only exists on django-tenants' own
+        postgresql backend, which base.py only swaps in when
+        MULTI_TENANCY_ENABLED is True. This method is only ever called from
+        branches that already require multi-tenancy to be active, but the
+        hasattr guard is kept anyway (mirrors how _set_schema_context's
+        counterpart, connection.set_schema(), is only ever reached the same
+        way) so this middleware can never 500 with AttributeError if it's
+        ever reached on a plain psycopg2 connection.
+        """
+        if hasattr(connection, "set_schema_to_public"):
+            connection.set_schema_to_public()
 
     @staticmethod
     def _verify_schema_exists(schema_name: str) -> bool:
