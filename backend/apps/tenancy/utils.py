@@ -31,7 +31,44 @@ TENANCY_MIGRATION_TABLES = {
 
 
 def validate_tenancy_schema_state(output=None):
-    """Inspect the physical tenancy schema against django_migrations."""
+    """Inspect the physical tenancy schema against django_migrations.
+
+    apps.tenancy is a SHARED app - its migrations and tables only ever exist
+    in the public schema, never per-tenant. This is a Django system check,
+    so it runs automatically before every management command invocation,
+    including the nested per-schema invocations django-tenants' own migrate
+    command makes while iterating tenant schemas - at that point the
+    connection's current schema is a TENANT schema, not public. Querying
+    django_migrations/table_names there without forcing public first
+    produces a false "drift detected": confirmed directly - it blocked
+    `migrate` from ever reaching existing tenant schemas the moment a new
+    batch of migrations landed, misreporting tenancy.0001-0006 as "applied
+    but tables missing" purely because it was looking in the wrong schema,
+    the same underlying architectural class of bug already fixed twice
+    today (provisioning.py's seed_tenant_defaults, middleware.py's schema
+    switching) - always force the correct schema context rather than trust
+    whatever happens to be ambient.
+    """
+    from django.conf import settings
+
+    if getattr(settings, "MULTI_TENANCY_ENABLED", False):
+        try:
+            from django_tenants.utils import schema_context, get_public_schema_name
+        except ImportError:
+            pass
+        else:
+            with schema_context(get_public_schema_name()):
+                return _validate_tenancy_schema_state_in_current_schema(output)
+
+    return _validate_tenancy_schema_state_in_current_schema(output)
+
+
+def _validate_tenancy_schema_state_in_current_schema(output=None):
+    """Do the actual inspection against whatever schema is currently active.
+
+    Split out from validate_tenancy_schema_state() so that function can
+    force public-schema context first; not meant to be called directly.
+    """
     result = {
         "applied_migrations": [],
         "existing_tables": [],
