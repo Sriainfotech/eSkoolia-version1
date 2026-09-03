@@ -12,10 +12,14 @@ import type {
   StaffDocument,
   LeaveType,
   LeaveApplication,
+  LeaveRequestDetail,
   LeaveStats,
   CoverageDayCount,
   CoverageDayDetail,
   ApprovalChainPolicy,
+  AcademicYearOption,
+  EntitlementMatrixResponse,
+  RoleOption,
   OffboardingRecord,
   PaginatedHR,
 } from "@/types/hr";
@@ -470,8 +474,9 @@ export async function createLeaveType(body: Partial<LeaveType>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<LeaveType>;
+  if (!res.ok) await throwHrApiError(res);
+  const json = await res.json() as { data: LeaveType };
+  return json.data;
 }
 
 export async function updateLeaveType(id: number, body: Partial<LeaveType>) {
@@ -480,8 +485,14 @@ export async function updateLeaveType(id: number, body: Partial<LeaveType>) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<LeaveType>;
+  if (!res.ok) await throwHrApiError(res);
+  const json = await res.json() as { data: LeaveType };
+  return json.data;
+}
+
+export async function deleteLeaveType(id: number) {
+  const res = await apiRequestWithRefreshResponse(`/api/v1/hr/leave-types/${id}/`, { method: "DELETE" });
+  if (!res.ok) await throwHrApiError(res);
 }
 
 // ─── Leave Applications ───────────────────────────────────────────────────────
@@ -523,6 +534,8 @@ export async function applyOnBehalf(body: {
   half_day_type?: "AM" | "PM" | "";
   absence_type?: "emergency" | "unplanned" | "retroactive" | "";
   bypass_chain?: boolean;
+  /** Required (and enforced server-side) when bypass_chain is true — why the approval chain is being bypassed. */
+  approval_note?: string;
 }) {
   const res = await apiRequestWithRefreshResponse("/api/v1/hr/leave-requests/apply-on-behalf/", {
     method: "POST",
@@ -551,8 +564,36 @@ export async function updateLeaveStatus(
   return res.json() as Promise<{ id: number; status: string }>;
 }
 
+/** Full Approval Chain bypass — immediately approves the whole request and
+ * marks every level "bypassed by admin". Requires a non-empty reason; the
+ * backend rejects the call outright unless the caller is a school admin. */
+export async function adminApproveLeave(id: number, reason: string) {
+  const res = await apiRequestWithRefreshResponse(`/api/v1/hr/leave-requests/${id}/admin-approve/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) await throwHrApiError(res);
+  return res.json() as Promise<{ id: number; status: string; approved_via_admin_override: boolean }>;
+}
+
 export function useLeaveStats() {
   return useFetch<LeaveStats>("/api/v1/hr/leave-requests/stats/");
+}
+
+// ─── Leave Request detail drawer (balance, coverage impact, substitute) ──────
+export function useLeaveRequestDetail(id: number | null) {
+  return useFetch<LeaveRequestDetail>(id ? `/api/v1/hr/leave-requests/${id}/detail/` : "", [id]);
+}
+
+export async function setSubstituteName(id: number, name: string) {
+  const res = await apiRequestWithRefreshResponse(`/api/v1/hr/leave-requests/${id}/substitute/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ substitute_staff_name: name }),
+  });
+  if (!res.ok) await throwHrApiError(res);
+  return res.json() as Promise<{ substitute_staff_name: string }>;
 }
 
 export function useLeaveCoverageMonth(month: string) {
@@ -569,9 +610,82 @@ export function useLeaveCoverageDay(date: string | null) {
   );
 }
 
+// ─── Academic Years (Configure Policy > Entitlements year selector) ──────────
+export function useAcademicYears() {
+  return useFetch<PaginatedHR<AcademicYearOption>>("/api/v1/core/academic-years/?page_size=200");
+}
+
+// ─── Roles (Configure Policy > Entitlements "+ Add role" picker) ────────────
+export function useRoles() {
+  return useFetch<PaginatedHR<RoleOption>>("/api/v1/access-control/roles/?page_size=200");
+}
+
+// ─── Entitlement Matrix (Configure Policy > Entitlements) ────────────────────
+export function useEntitlementMatrix(academicYearId: number | null) {
+  return useFetch<{ data: EntitlementMatrixResponse }>(
+    academicYearId ? `/api/v1/hr/leave-types/entitlement-matrix/?academic_year=${academicYearId}` : "",
+    [academicYearId],
+  );
+}
+
+export async function setEntitlementCell(body: {
+  leave_type: number; role: number | null; academic_year: number; days: number;
+}) {
+  const res = await apiRequestWithRefreshResponse("/api/v1/hr/leave-types/entitlement-matrix/cell/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await throwHrApiError(res);
+  return res.json() as Promise<{ success: boolean; message: string; data: { days: number } }>;
+}
+
+export async function addEntitlementRole(body: { role: number; academic_year: number }) {
+  const res = await apiRequestWithRefreshResponse("/api/v1/hr/leave-types/entitlement-matrix/roles/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await throwHrApiError(res);
+  return res.json() as Promise<{ success: boolean; message: string; data: { role: number; name: string } }>;
+}
+
+export async function removeEntitlementRole(body: { role: number | null; academic_year: number }) {
+  const res = await apiRequestWithRefreshResponse("/api/v1/hr/leave-types/entitlement-matrix/remove-role/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await throwHrApiError(res);
+  return res.json();
+}
+
+export async function resetEntitlementDefaults(body: { academic_year: number }) {
+  const res = await apiRequestWithRefreshResponse("/api/v1/hr/leave-types/entitlement-matrix/reset/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) await throwHrApiError(res);
+  return res.json();
+}
+
 // ─── Approval Chain Policy ────────────────────────────────────────────────────
 export function useApprovalChainPolicies() {
   return useFetch<PaginatedHR<ApprovalChainPolicy>>("/api/v1/hr/approval-chain-policies/?page_size=100");
+}
+
+export interface RoleCoverageEntry {
+  id: number;
+  name: string;
+  resolvable: boolean;
+}
+
+// Whether at least one active staff member could be resolved as an approver
+// for each role — lets the Approval Chain step warn before an admin picks a
+// role that will silently leave every matching step unassigned.
+export function useRoleCoverage() {
+  return useFetch<{ roles: RoleCoverageEntry[] }>("/api/v1/hr/approval-chain-policies/role-coverage/");
 }
 
 export async function saveApprovalChainPolicy(id: number | null, body: Partial<ApprovalChainPolicy>) {
@@ -583,6 +697,11 @@ export async function saveApprovalChainPolicy(id: number | null, body: Partial<A
   });
   if (!res.ok) await throwHrApiError(res);
   return res.json() as Promise<ApprovalChainPolicy>;
+}
+
+export async function deleteApprovalChainPolicy(id: number) {
+  const res = await apiRequestWithRefreshResponse(`/api/v1/hr/approval-chain-policies/${id}/`, { method: "DELETE" });
+  if (!res.ok) await throwHrApiError(res);
 }
 
 // ─── Staff Attendance ───────────────────────────────────────────────────────

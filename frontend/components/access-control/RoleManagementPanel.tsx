@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { apiRequestWithRefresh } from "@/lib/api-auth";
 import { TopToast } from "@/components/common/TopToast";
@@ -384,10 +383,10 @@ export function RoleManagementPanel() {
                       <button
                         type="button"
                         title="Assign permissions"
-                        onClick={(e) => { e.stopPropagation(); }}
+                        onClick={(e) => { e.stopPropagation(); router.push(`/roles/assign-permission?roleId=${role.id}`); }}
                         style={{ width: 22, height: 22, borderRadius: 5, border: "none", background: "var(--pu-soft)", color: "var(--pu)", cursor: "pointer", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}
                       >
-                        <Link href={`/roles/assign-permission?roleId=${role.id}`} style={{ color: "inherit", textDecoration: "none", fontSize: 10 }} title="Assign">🔑</Link>
+                        🔑
                       </button>
                       <button
                         type="button"

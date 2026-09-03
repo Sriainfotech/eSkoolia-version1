@@ -172,42 +172,104 @@ export interface StaffDocument {
   uploaded_at: string;
 }
 
+export type GenderScope = "all" | "male" | "female";
+
 export interface LeaveType {
   id: number;
-  code: string;
+  school: number;
   name: string;
-  color: string;
-  unit?: "Days" | "Hours";      // form field
-  max_days?: number;             // form field
-  status?: "active" | "inactive"; // convenience
-  description?: string;          // form field
+  max_days_per_year: number;
   is_paid: boolean;
-  carry_forward: boolean;
-  carry_max: number;
-  encash_days: number;
-  proof_required: boolean;
-  notice_days: number;
-  half_day_allowed: boolean;
-  statutory: boolean;
-  statutory_min: number;
-  max_consecutive: number;
   is_active: boolean;
+  is_builtin: boolean;
+  is_govt_mandated: boolean;
   created_at: string;
+  // Policy fields (LeaveType.POLICY_FIELDS on the backend) — writable via
+  // Configure Policy > Leave Types (this screen) and Settings > Leave Policy.
+  can_carry_forward: boolean;
+  max_carry_forward_days: number;
+  carry_forward_type: "limited" | "unlimited";
+  carry_forward_expiry_days: number;
+  carry_forward_mode: "automatic" | "manual";
+  policy_note: string;
+  applicable_departments: (string | number)[];
+  applicable_designations: (string | number)[];
+  applicable_employment_types: string[];
+  applicable_gender: GenderScope;
+  minimum_service_period: number;
+  attachment_required: boolean;
+  medical_certificate_required: boolean;
+  medical_certificate_after_days: number;
+  minimum_notice_period: number;
+  max_encashment_days: number;
+  minimum_leave_duration: number;
+  maximum_leave_duration: number;
+  maximum_consecutive_days: number;
+  allow_half_day: boolean;
+  allow_backdated_leave: boolean;
+  maximum_backdated_days: number;
+  allow_future_leave: boolean;
+  maximum_future_days: number;
+  sandwich_leave_enabled: boolean;
+  count_holidays_as_leave: boolean;
+  count_weekoffs_as_leave: boolean;
+  allow_negative_balance: boolean;
+  convert_to_lop: boolean;
+  allow_leave_cancellation: boolean;
+  cancellation_allowed_until: number;
+  allow_probation_leave: boolean;
+  allow_notice_period_leave: boolean;
+  allow_leave_extension: boolean;
+  allow_leave_combination: boolean;
 }
 
-export type EntitlementMatrix = Record<string, Record<string, number>>;
+export interface RoleOption {
+  id: number;
+  name: string;
+  is_active: boolean;
+  portal_type?: string;
+}
 
-export type ApproverRole = "HOD" | "Principal" | "Vice Principal" | "HR Admin" | "";
+export interface AcademicYearOption {
+  id: number;
+  name: string;
+  is_current: boolean;
+  start_date?: string;
+  end_date?: string;
+}
+
+export interface EntitlementColumn {
+  key: string; // "all_staff" or "role:<id>"
+  role_id: number | null;
+  name: string;
+  removable: boolean;
+}
+
+export interface EntitlementRow {
+  leave_type: LeaveType;
+  entitlements: Record<string, number>; // column key -> days; missing key = "—" (not entitled)
+}
+
+export interface EntitlementMatrixResponse {
+  academic_year: AcademicYearOption | null;
+  columns: EntitlementColumn[];
+  rows: EntitlementRow[];
+}
 
 export interface ApprovalChainPolicy {
   id: number;
   school: number;
   designation: number | null;
-  designation_name: string; // "All Staff" when designation is null
-  l1_approver_role: ApproverRole;
-  l2_approver_role: ApproverRole;
+  designation_name: string; // "All Designations" when designation is null
+  department: number | null;
+  department_name: string; // "All Departments" when department is null
+  l1_approver_role: number | null; // access_control.Role id
+  l1_approver_role_name: string;
+  l2_approver_role: number | null; // access_control.Role id
+  l2_approver_role_name: string;
   l2_trigger_days: number;
   response_window_days: number;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -215,10 +277,12 @@ export interface ApprovalChainPolicy {
 export interface LeaveApprovalStep {
   id: number;
   sequence: number;
-  role_label: ApproverRole;
-  approver: number | null;
+  role_label: string; // snapshot of the approver Role's name at step creation
+  approver: number | null; // originally assigned/resolved approver — never rewritten
   approver_name: string;
-  status: "pending" | "approved" | "rejected";
+  acted_by: number | null; // who actually performed the action (may differ from approver on an admin bypass)
+  acted_by_name: string;
+  status: "pending" | "approved" | "rejected" | "bypassed";
   became_active_at: string;
   acted_at: string | null;
   note: string;
@@ -241,6 +305,7 @@ export interface LeaveApplication {
   absence_type: AbsenceType;
   reason: string;
   approval_note: string;
+  substitute_staff_name: string;
   status: "pending" | "approved" | "rejected";
   coverage_risk: boolean;
   is_on_behalf: boolean;
@@ -248,9 +313,36 @@ export interface LeaveApplication {
   applied_by_name: string;
   approved_by: number | null;
   approved_by_name: string;
+  approved_via_admin_override: boolean;
   approval_steps: LeaveApprovalStep[];
+  projected_l2_role_label: string;
+  current_approval_level: string; // "L1" / "L2" / "" (not pending, or no chain)
   days_stuck: number;
   created_at: string;
+}
+
+export interface LeaveBalanceRow {
+  leave_type_id: number;
+  leave_type_name: string;
+  // null = no LeaveBalance row exists yet for this staff/type/year (not the
+  // same as an available balance of 0) — the drawer must render these
+  // distinctly, matching the entitlement matrix's own "—" convention.
+  available_days: number | null;
+  total_days: number | null;
+  used_days: number | null;
+}
+
+export interface CoverageImpact {
+  department_name: string;
+  available: number;
+  total: number;
+}
+
+export interface LeaveRequestDetail {
+  department_name: string;
+  leave_balances: LeaveBalanceRow[];
+  coverage_impact: CoverageImpact;
+  substitute_staff_name: string;
 }
 
 export interface LeaveStats {

@@ -11,6 +11,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { X, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -176,15 +177,23 @@ export function HrModal({
   gradientHeader?: boolean;
   children: React.ReactNode;
 }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     if (isOpen) document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !mounted) return null;
 
-  return (
+  // Rendered via portal directly under <body> — a modal opened from inside
+  // another open modal (e.g. Add Role from Configure Policy) would otherwise
+  // inherit its ancestor's backdrop-filter, which per spec creates a new
+  // containing block for position:fixed descendants and traps/clips them
+  // instead of covering the real viewport.
+  return createPortal(
     <div
       className="fixed inset-0 z-[1000] flex items-center justify-center p-4"
       style={{ background: "rgba(15,23,42,0.55)", backdropFilter: "blur(2px)" }}
@@ -195,32 +204,35 @@ export function HrModal({
         style={{ width: modalWidths[size], animation: "hr-fade-up 0.18s ease" }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div
-          className={[
-            "flex items-start justify-between gap-4 p-[18px_20px]",
-            gradientHeader
-              ? "bg-gradient-to-r from-[#8b5cf6] to-[#ec4899] text-white"
-              : "border-b border-[var(--line)]",
-          ].join(" ")}
-        >
-          <div>
-            <h2 className="m-0 text-[16px] font-[900]" style={{ fontFamily: "var(--serif)" }}>
-              {title}
-            </h2>
-            {subtitle && (
-              <p className="m-0 text-[12px] mt-1 opacity-80">{subtitle}</p>
-            )}
-          </div>
-          <button
-            onClick={onClose}
-            className="w-[28px] h-[28px] flex-none border border-[var(--line)] rounded-[8px] bg-white text-gray-500 flex items-center justify-center hover:bg-[var(--soft)] hover:text-[var(--brand)]"
+        {title && (
+          <div
+            className={[
+              "flex items-start justify-between gap-4 p-[18px_20px]",
+              gradientHeader
+                ? "bg-gradient-to-r from-[#8b5cf6] to-[#ec4899] text-white"
+                : "border-b border-[var(--line)]",
+            ].join(" ")}
           >
-            <X size={14} />
-          </button>
-        </div>
+            <div>
+              <h2 className="m-0 text-[16px] font-[900]" style={{ fontFamily: "var(--serif)" }}>
+                {title}
+              </h2>
+              {subtitle && (
+                <p className="m-0 text-[12px] mt-1 opacity-80">{subtitle}</p>
+              )}
+            </div>
+            <button
+              onClick={onClose}
+              className="w-[28px] h-[28px] flex-none border border-[var(--line)] rounded-[8px] bg-white text-gray-500 flex items-center justify-center hover:bg-[var(--soft)] hover:text-[var(--brand)]"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
         <div className="overflow-y-auto flex-1">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -479,11 +491,13 @@ export function HrField({
   label,
   required,
   error,
+  hint,
   children,
 }: {
   label: string;
   required?: boolean;
   error?: string;
+  hint?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -495,6 +509,7 @@ export function HrField({
         {required && <span className="text-[var(--red)] ml-1">*</span>}
       </label>
       {children}
+      {hint && !error && <span className="text-[11px] text-[var(--muted)]">{hint}</span>}
       {error && <span className="text-[11px] text-[var(--red)]">{error}</span>}
     </div>
   );

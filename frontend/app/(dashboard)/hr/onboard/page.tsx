@@ -1315,11 +1315,7 @@ function StepFamily({ f, set, showErrors, validatorRef }: {
 
   // ── Marital section errors ──────────────────────────────────────────────
   const spouseRaw = (f.spouse_parent_name ?? "").trim();
-  const spouseErr = isMarried && !spouseRaw && showErrors
-    ? "Spouse name is required."
-    : spouseRaw && !isValidPersonName(spouseRaw)
-      ? PERSON_NAME_ERR
-      : null;
+  const spouseErr = spouseRaw && !isValidPersonName(spouseRaw) ? PERSON_NAME_ERR : null;
 
   const childrenRaw = String(f.num_children ?? "").trim();
   const childrenErr = childrenRaw && (!/^\d+$/.test(childrenRaw) || Number(childrenRaw) > 15)
@@ -1419,7 +1415,6 @@ function StepFamily({ f, set, showErrors, validatorRef }: {
             <div className="flex flex-col gap-[9px]">
               <label className="text-[11px] uppercase tracking-[0.07em] text-[#64748b] font-[850]">
                 {isMarried ? "Spouse Name" : "Spouse / Parent Name"}
-                {isMarried && <span className="text-[var(--red)] ml-1">*</span>}
               </label>
               <HrInput
                 value={f.spouse_parent_name ?? ""}
@@ -4010,12 +4005,7 @@ export default function HrOnboardPage(props: any) {
       }
       if (form.marital_status === "Married") {
         const spouse = (form.spouse_parent_name ?? "").trim();
-        if (!spouse) {
-          setShowErrors(true);
-          toast("Spouse name is required for married staff.", "error");
-          return true;
-        }
-        if (!isValidPersonName(spouse)) {
+        if (spouse && !isValidPersonName(spouse)) {
           setShowErrors(true);
           toast(PERSON_NAME_ERR, "error");
           return true;

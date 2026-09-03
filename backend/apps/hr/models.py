@@ -205,6 +205,11 @@ class Staff(models.Model):
     )
     department = models.ForeignKey(Department, on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members")
     designation = models.ForeignKey(Designation, on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members")
+    reporting_manager = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="direct_reports",
+        help_text="Who this staff member reports to. Used as the leave-approval L1 (and their manager as L2) "
+                   "in preference to the designation/role-based Approval Chain policy.",
+    )
     contract_type = models.CharField(max_length=20, choices=CONTRACT_CHOICES, blank=True)
     location = models.CharField(max_length=255, blank=True)
     resume = models.CharField(max_length=300, blank=True)
@@ -332,6 +337,10 @@ class LeaveType(models.Model):
     # "built-in leave types cannot be deleted" rule.
     is_builtin = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    # Flags a statutory leave type (e.g. Maternity Benefit Act) so the UI can
+    # show a "Govt" badge and the Configure Policy > Leave Types reference
+    # panel can warn against dropping below the mandated minimum.
+    is_govt_mandated = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     # --- Settings > Leave Policy fields (school-wide policy on top of the
@@ -371,6 +380,9 @@ class LeaveType(models.Model):
     minimum_notice_period = models.PositiveSmallIntegerField(
         default=0, help_text="Minimum days' notice required before this leave can be applied for"
     )
+    max_encashment_days = models.PositiveSmallIntegerField(
+        default=0, help_text="Max unused days that can be encashed (paid out) per year; 0 = not encashable"
+    )
     minimum_leave_duration = models.PositiveSmallIntegerField(default=0, help_text="Minimum days per request; 0 = no minimum")
     maximum_leave_duration = models.PositiveSmallIntegerField(default=0, help_text="Maximum days per request; 0 = no maximum")
     maximum_consecutive_days = models.PositiveSmallIntegerField(default=0, help_text="Maximum consecutive days allowed; 0 = no limit")
@@ -408,7 +420,7 @@ class LeaveType(models.Model):
         "carry_forward_mode", "policy_note",
         "applicable_departments", "applicable_designations", "applicable_employment_types", "applicable_gender",
         "minimum_service_period", "attachment_required", "medical_certificate_required",
-        "medical_certificate_after_days", "minimum_notice_period",
+        "medical_certificate_after_days", "minimum_notice_period", "max_encashment_days",
         "minimum_leave_duration", "maximum_leave_duration", "maximum_consecutive_days",
         "allow_half_day", "allow_backdated_leave", "maximum_backdated_days",
         "allow_future_leave", "maximum_future_days",
@@ -461,6 +473,14 @@ class LeaveDefine(models.Model):
         related_name="leave_defines",
     )
     leave_type = models.ForeignKey(LeaveType, on_delete=models.CASCADE, related_name="leave_defines")
+    # Scopes a role's entitlement to one academic year, matching the
+    # school-wide AcademicYear model (apps.core) — the Configure Policy >
+    # Entitlements matrix reads/writes rows for whichever year is selected.
+    # Null = legacy row predating this field, treated as "All Staff" applies
+    # to the current year via fallback in the entitlement-matrix endpoint.
+    academic_year = models.ForeignKey(
+        "core.AcademicYear", on_delete=models.CASCADE, null=True, blank=True, related_name="leave_defines",
+    )
     days = models.PositiveSmallIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -474,6 +494,28 @@ class LeaveDefine(models.Model):
             models.Index(fields=["school", "student"], name="idx_hr_ld_sch_student"),
             models.Index(fields=["school", "school_class"], name="idx_hr_ld_sch_class"),
             models.Index(fields=["school", "section"], name="idx_hr_ld_sch_section"),
+            models.Index(fields=["school", "academic_year", "leave_type"], name="idx_hr_ld_sch_ay_lt"),
+        ]
+        constraints = [
+            # Postgres unique indexes never collapse NULLs, so the "All
+            # Staff" row (role IS NULL) needs its own partial constraint
+            # alongside the per-role one below.
+            models.UniqueConstraint(
+                fields=["school", "academic_year", "leave_type", "role"],
+                condition=models.Q(
+                    student__isnull=True, staff__isnull=True, school_class__isnull=True, section__isnull=True,
+                    role__isnull=False,
+                ),
+                name="uq_hr_ld_role_entitlement_scope",
+            ),
+            models.UniqueConstraint(
+                fields=["school", "academic_year", "leave_type"],
+                condition=models.Q(
+                    student__isnull=True, staff__isnull=True, school_class__isnull=True, section__isnull=True,
+                    role__isnull=True,
+                ),
+                name="uq_hr_ld_all_staff_entitlement_scope",
+            ),
         ]
 
 
@@ -549,6 +591,10 @@ class LeaveRequest(models.Model):
     reason = models.TextField(blank=True)
     attachment = models.CharField(max_length=300, blank=True)
     approval_note = models.TextField(blank=True)
+    # Free-text name of the arranged substitute/covering staff member — not
+    # a Staff FK since a substitute is often an external/temporary arrangement
+    # noted for coordination, not a formal system assignment.
+    substitute_staff_name = models.CharField(max_length=150, blank=True)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_PENDING)
     approved_by = models.ForeignKey(
         "users.User",
@@ -558,6 +604,10 @@ class LeaveRequest(models.Model):
         related_name="approved_leave_requests",
     )
     approved_at = models.DateTimeField(null=True, blank=True)
+    # True when this request was finalized via "Admin Approved" (a full
+    # bypass of the L1/L2 chain) rather than by the last real approval step
+    # completing normally — see LeaveRequestViewSet.admin_approve().
+    approved_via_admin_override = models.BooleanField(default=False)
     # Set when HR/admin files this request for another staff member, rather
     # than the staff member submitting it themselves — surfaced as a "By
     # Admin" flag; the request still goes through the normal approval flow.
@@ -581,39 +631,50 @@ class LeaveRequest(models.Model):
 
 
 class ApprovalChainPolicy(models.Model):
-    """Who approves leave for a designation (or "All Staff" when
-    designation is null) — L1 always applies; L2 only kicks in once the
-    requested leave's duration reaches l2_trigger_days. Approvers are
-    resolved by ROLE (not a fixed person) at the moment a request needs a
-    step — see approval_chain.resolve_role_to_user()."""
+    """Who approves leave for a (designation, department) combination — see
+    approval_chain.get_policy_for_staff() for the 4-tier match precedence,
+    down to the (null, null) "All Staff" default. L1 always applies; L2 only
+    kicks in once the requested leave's duration reaches l2_trigger_days.
 
-    ROLE_HOD = "HOD"
-    ROLE_PRINCIPAL = "Principal"
-    ROLE_VICE_PRINCIPAL = "Vice Principal"
-    ROLE_HR_ADMIN = "HR Admin"
-    ROLE_NONE = ""
-    APPROVER_ROLE_CHOICES = [
-        (ROLE_HOD, "HOD"),
-        (ROLE_PRINCIPAL, "Principal"),
-        (ROLE_VICE_PRINCIPAL, "Vice Principal"),
-        (ROLE_HR_ADMIN, "HR Admin"),
-        (ROLE_NONE, "—"),
-    ]
+    This is only the *fallback* chain: approval_chain.resolve_l1_approver()/
+    resolve_l2_approver() prefer the applicant's Staff.reporting_manager (an
+    actual org-chart link) when one is set, and only fall back to this
+    policy's l1_approver_role/l2_approver_role — resolved to a person via
+    approval_chain.resolve_role_to_user(), which matches the role's name
+    against a staff Designation (department-scoped first, then school-wide),
+    with a couple of legacy shortcuts (a role literally named "HOD" uses
+    Department.head; "HR Admin"/"School Admin" falls back to the
+    school-admin account) — when no Reporting Manager is configured."""
 
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="approval_chain_policies")
     designation = models.ForeignKey(
         Designation, on_delete=models.CASCADE, null=True, blank=True,
         related_name="approval_chain_policies",
-        help_text="Null = the default 'All Staff' policy.",
+        help_text="Null = applies regardless of designation.",
     )
-    l1_approver_role = models.CharField(max_length=20, choices=APPROVER_ROLE_CHOICES, default=ROLE_HOD)
-    l2_approver_role = models.CharField(max_length=20, choices=APPROVER_ROLE_CHOICES, blank=True, default=ROLE_NONE)
+    department = models.ForeignKey(
+        Department, on_delete=models.CASCADE, null=True, blank=True,
+        related_name="approval_chain_policies",
+        help_text="Null = applies regardless of department. A (designation, department) match beats "
+                   "(designation, any department), which beats (any designation, department), which "
+                   "beats the (null, null) 'All Staff' default.",
+    )
+    l1_approver_role = models.ForeignKey(
+        "access_control.Role", on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+        help_text="Role whose holder (matched by Designation name) approves at L1. Only used when the "
+                   "applicant has no Reporting Manager set — see Staff.reporting_manager.",
+    )
+    l2_approver_role = models.ForeignKey(
+        "access_control.Role", on_delete=models.SET_NULL, null=True, blank=True, related_name="+",
+        help_text="Role whose holder approves at L2, once l2_trigger_days is met. Blank = no L2 step.",
+    )
     l2_trigger_days = models.PositiveSmallIntegerField(
         default=0, help_text="Leave duration (days) at/above which L2 approval is also required. 0 = never.",
     )
     response_window_days = models.PositiveSmallIntegerField(
         default=2, help_text="Days an approver has to act before the request is flagged 'stuck in chain'.",
     )
+    is_active = models.BooleanField(default=True, help_text="Inactive rules are skipped during matching.")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -621,7 +682,7 @@ class ApprovalChainPolicy(models.Model):
         db_table = "hr_approval_chain_policies"
         ordering = ["designation_id"]
         constraints = [
-            models.UniqueConstraint(fields=["school", "designation"], name="uq_hr_chain_policy_scope"),
+            models.UniqueConstraint(fields=["school", "designation", "department"], name="uq_hr_chain_policy_scope"),
         ]
 
 
@@ -629,19 +690,32 @@ class LeaveApprovalStep(models.Model):
     STATUS_PENDING = "pending"
     STATUS_APPROVED = "approved"
     STATUS_REJECTED = "rejected"
+    STATUS_BYPASSED = "bypassed"
     STATUS_CHOICES = [
         (STATUS_PENDING, "Pending"),
         (STATUS_APPROVED, "Approved"),
         (STATUS_REJECTED, "Rejected"),
+        (STATUS_BYPASSED, "Bypassed by Admin"),
     ]
 
     leave_request = models.ForeignKey(LeaveRequest, on_delete=models.CASCADE, related_name="approval_steps")
     sequence = models.PositiveSmallIntegerField()
-    # Snapshot of the role this step represents (HOD/Principal/...) — kept
-    # even if the policy changes later so history stays accurate.
-    role_label = models.CharField(max_length=20, blank=True)
+    # Snapshot of the approver Role's name at the moment this step was
+    # created — kept even if the policy or the Role itself changes later,
+    # so history stays accurate. Sized to match access_control.Role.name.
+    role_label = models.CharField(max_length=30, blank=True)
+    # Who this step was originally resolved to when created — NEVER
+    # rewritten afterward, even when an admin acts on the step instead (see
+    # `acted_by`). This is the "Originally Assigned Approver" for audit.
     approver = models.ForeignKey(
         "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="leave_approval_steps",
+    )
+    # Who actually performed the approve/reject/bypass action — the "Actual
+    # Admin Who Performed Override" when different from `approver` (or just
+    # the approver themself acting normally). Set on every action so the
+    # audit trail never has to guess who did what.
+    acted_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="leave_approval_actions",
     )
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_PENDING)
     response_window_days = models.PositiveSmallIntegerField(default=2)
