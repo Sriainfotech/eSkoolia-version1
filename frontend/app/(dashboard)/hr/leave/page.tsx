@@ -9,7 +9,7 @@
  */
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Check, X, Eye, ChevronLeft, ChevronRight, ShieldAlert, SkipForward } from "lucide-react";
+import { Plus, Check, X, Eye, ChevronLeft, ChevronRight, ShieldAlert, SkipForward, CalendarPlus } from "lucide-react";
 import {
   HrButton, HrBadge, HrKpiCard, HrModal, HrField,
   HrInput, HrSelect, HrTextarea, HrHero, HrDrawer,
@@ -17,14 +17,26 @@ import {
 } from "@/components/hr/HrUi";
 import {
   useLeaveTypes,
-  useLeaveApplications, updateLeaveStatus, adminApproveLeave, applyOnBehalf,
+  useLeaveApplications, updateLeaveStatus, adminApproveLeave, applyOnBehalf, applyLeave,
   useLeaveStats, useLeaveCoverageMonth, useLeaveCoverageDay,
   useLeaveRequestDetail, setSubstituteName,
-  useStaffList,
+  useStaffList, useMyLeaveApplications, useMyLeaveBalance,
 } from "@/hooks/useHrApi";
 import { usePermissions } from "@/hooks/usePermissions";
-import type { LeaveApplication } from "@/types/hr";
+import type { LeaveApplication, LeaveType } from "@/types/hr";
 import { leaveTypeAbbrev } from "@/lib/hr/leaveTypeFormat";
+
+// A leave type restricted to one gender (LeaveType.applicable_gender, e.g.
+// Maternity Leave = female-only, Paternity Leave = male-only) shouldn't be
+// offered to staff it can never apply to — the backend already rejects it
+// at submit time (LeaveRequestSerializer.validate()), this just keeps it out
+// of the dropdown in the first place. An unknown gender is never hidden —
+// the backend stays the actual gate either way.
+function leaveTypeAllowsGender(lt: LeaveType, gender?: string | null): boolean {
+  if (lt.applicable_gender === "all" || !gender) return true;
+  return lt.applicable_gender === gender.toLowerCase();
+}
+
 // ─── Apply on Behalf ───────────────────────────────────────────────────────────
 function ApplyOnBehalfModal({
   isOpen, onClose, onSaved,
@@ -57,6 +69,8 @@ function ApplyOnBehalfModal({
 
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
   const visibleStaff = form.role ? staffOptions.filter((s) => s.designation_name === form.role) : staffOptions;
+  const selectedStaffGender = staffOptions.find((s) => String(s.id) === form.staff)?.gender;
+  const visibleLeaveTypes = leaveTypes.filter((lt) => leaveTypeAllowsGender(lt, selectedStaffGender));
   const resetForm = () => setForm({
     staff: "", leave_type: "", from_date: "", to_date: "", reason: "",
     half_day_type: "", absence_type: "", role: "", bypass_chain: false, bypass_reason: "",
@@ -100,7 +114,11 @@ function ApplyOnBehalfModal({
       <div className="p-[20px] grid gap-4">
         <div className="grid grid-cols-2 gap-4">
           <HrField label="Staff Member" required>
-            <HrSelect value={form.staff} onChange={(e) => set("staff", e.target.value)} disabled={staffLoading}>
+            <HrSelect
+              value={form.staff}
+              onChange={(e) => { set("staff", e.target.value); set("leave_type", ""); }}
+              disabled={staffLoading}
+            >
               <option value="">{staffLoading ? "Loading…" : "Select…"}</option>
               {visibleStaff.map((s) => (
                 <option key={s.id} value={s.id}>
@@ -121,10 +139,13 @@ function ApplyOnBehalfModal({
           <HrField label="Leave Type" required>
             <HrSelect value={form.leave_type} onChange={(e) => set("leave_type", e.target.value)} disabled={leaveTypesLoading}>
               <option value="">{leaveTypesLoading ? "Loading…" : "Select…"}</option>
-              {leaveTypes.map((lt) => <option key={lt.id} value={lt.id}>{lt.name}</option>)}
+              {visibleLeaveTypes.map((lt) => <option key={lt.id} value={lt.id}>{lt.name}</option>)}
             </HrSelect>
             {!leaveTypesLoading && !leaveTypesError && leaveTypes.length === 0 && (
               <div className="text-[12px] text-[var(--muted)]">No leave types configured yet — set them up under Configure Policy.</div>
+            )}
+            {!leaveTypesLoading && !leaveTypesError && leaveTypes.length > 0 && visibleLeaveTypes.length === 0 && (
+              <div className="text-[12px] text-[var(--muted)]">No leave types applicable to this staff member&apos;s gender.</div>
             )}
             {leaveTypesError && (
               <button type="button" onClick={() => void refetchLeaveTypes()} className="text-[12px] text-[var(--red)] underline text-left">
@@ -205,6 +226,191 @@ function ApplyOnBehalfModal({
   );
 }
 
+// ─── Apply Leave (self-service) ─────────────────────────────────────────────
+// The logged-in user applying for their own leave — distinct from "Apply on
+// Behalf" above (which is HR/admin filing for someone else). The backend
+// resolves the applicant's own Staff profile automatically (see
+// LeaveRequestViewSet.perform_create), so no staff picker is shown here.
+function ApplyLeaveModal({
+  isOpen, onClose, onSaved,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { toast } = useHrToast();
+  const { data: leaveTypeData, loading: leaveTypesLoading, error: leaveTypesError, refetch: refetchLeaveTypes } = useLeaveTypes();
+  const { data: myBalance } = useMyLeaveBalance();
+  const leaveTypes = leaveTypeData?.results ?? [];
+  const visibleLeaveTypes = leaveTypes.filter((lt) => leaveTypeAllowsGender(lt, myBalance?.staff_gender));
+
+  const [form, setForm] = useState({
+    leave_type: "", from_date: "", to_date: "", reason: "",
+    half_day: false, half_day_type: "AM" as "AM" | "PM",
+  });
+  const [saving, setSaving] = useState(false);
+
+  const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const resetForm = () => setForm({
+    leave_type: "", from_date: "", to_date: "", reason: "",
+    half_day: false, half_day_type: "AM",
+  });
+
+  const selectedType = visibleLeaveTypes.find((lt) => String(lt.id) === form.leave_type);
+  const sameDay = !!form.from_date && form.from_date === form.to_date;
+  const canHalfDay = !!selectedType?.allow_half_day && sameDay;
+
+  const duration = useMemo(() => {
+    if (!form.from_date || !form.to_date || form.to_date < form.from_date) return 0;
+    if (canHalfDay && form.half_day) return 0.5;
+    const from = new Date(`${form.from_date}T00:00:00`);
+    const to = new Date(`${form.to_date}T00:00:00`);
+    return Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
+  }, [form.from_date, form.to_date, form.half_day, canHalfDay]);
+
+  const noticeWarning = useMemo(() => {
+    if (!selectedType?.minimum_notice_period || !form.from_date) return "";
+    const noticeDays = Math.round(
+      (new Date(`${form.from_date}T00:00:00`).getTime() - new Date(new Date().toDateString()).getTime()) / 86400000,
+    );
+    if (noticeDays < selectedType.minimum_notice_period) {
+      return `${selectedType.name} usually needs ${selectedType.minimum_notice_period} day(s) notice — this request has less notice and may be flagged for your approver.`;
+    }
+    return "";
+  }, [selectedType, form.from_date]);
+
+  const proofNeeded = !!selectedType && (
+    selectedType.attachment_required ||
+    (selectedType.medical_certificate_required && (!selectedType.medical_certificate_after_days || duration >= selectedType.medical_certificate_after_days))
+  );
+
+  const handleSave = async () => {
+    if (!form.leave_type || !form.from_date || !form.to_date) {
+      toast("Leave type and dates are required", "error");
+      return;
+    }
+    if (form.to_date < form.from_date) {
+      toast('"To" date must be on or after the "From" date', "error");
+      return;
+    }
+    if (!form.reason.trim()) {
+      toast("Please add a reason for your leave", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      await applyLeave({
+        leave_type: Number(form.leave_type),
+        from_date: form.from_date,
+        to_date: form.to_date,
+        half_day_type: canHalfDay && form.half_day ? form.half_day_type : "",
+        reason: form.reason.trim(),
+      });
+      toast("Leave application submitted — status: Pending");
+      onSaved(); onClose();
+      resetForm();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Failed to apply leave", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <HrModal isOpen={isOpen} onClose={onClose} title="Apply Leave" subtitle="Submit your own leave request — it will route through your approval chain automatically." size="md">
+      <div className="p-[20px] grid gap-4">
+        <HrField label="Leave Type" required>
+          <HrSelect value={form.leave_type} onChange={(e) => set("leave_type", e.target.value)} disabled={leaveTypesLoading}>
+            <option value="">{leaveTypesLoading ? "Loading…" : "Select…"}</option>
+            {visibleLeaveTypes.map((lt) => (
+              <option key={lt.id} value={lt.id}>{lt.name}{lt.is_paid ? "" : " (Unpaid)"}</option>
+            ))}
+          </HrSelect>
+          {!leaveTypesLoading && !leaveTypesError && leaveTypes.length === 0 && (
+            <div className="text-[12px] text-[var(--muted)]">No leave types configured yet — contact HR admin.</div>
+          )}
+          {!leaveTypesLoading && !leaveTypesError && leaveTypes.length > 0 && visibleLeaveTypes.length === 0 && (
+            <div className="text-[12px] text-[var(--muted)]">No leave types applicable to your profile.</div>
+          )}
+          {leaveTypesError && (
+            <button type="button" onClick={() => void refetchLeaveTypes()} className="text-[12px] text-[var(--red)] underline text-left">
+              {leaveTypesError} — tap to retry
+            </button>
+          )}
+        </HrField>
+
+        <div className="grid grid-cols-2 gap-4">
+          <HrField label="From Date" required>
+            <HrInput type="date" value={form.from_date} onChange={(e) => set("from_date", e.target.value)} />
+          </HrField>
+          <HrField label="To Date" required>
+            <HrInput type="date" value={form.to_date} onChange={(e) => set("to_date", e.target.value)} />
+          </HrField>
+        </div>
+
+        {canHalfDay && (
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-[13px] text-gray-700 cursor-pointer">
+              <input type="checkbox" className="w-4 h-4 accent-[var(--brand)]" checked={form.half_day} onChange={(e) => set("half_day", e.target.checked)} />
+              This is a half-day
+            </label>
+            {form.half_day && (
+              <HrSelect value={form.half_day_type} onChange={(e) => set("half_day_type", e.target.value as "AM" | "PM")} className="max-w-[160px]">
+                <option value="AM">Morning (AM)</option>
+                <option value="PM">Afternoon (PM)</option>
+              </HrSelect>
+            )}
+          </div>
+        )}
+
+        {noticeWarning && (
+          <div className="flex items-start gap-2 text-[12.5px] leading-relaxed rounded-[10px] border border-[#fde68a] bg-[#fffbeb] text-[#92400e] px-3 py-2.5">
+            <span>⚠</span> <span>{noticeWarning}</span>
+          </div>
+        )}
+
+        <HrField label="Reason" required>
+          <HrTextarea value={form.reason} onChange={(e) => set("reason", e.target.value)} placeholder="Briefly describe the reason for leave…" />
+        </HrField>
+
+        {proofNeeded && (
+          <div className="text-[12.5px] leading-relaxed rounded-[10px] border border-[#bfdbfe] bg-[#eff6ff] text-[#1e40af] px-3 py-2.5">
+            {selectedType?.name} usually requires a supporting document (e.g. medical certificate) — please share it with HR after submitting.
+          </div>
+        )}
+
+        <div className="flex items-center justify-between rounded-[10px] bg-[#fafafa] border border-[var(--line)] px-3 py-2.5">
+          <span className="text-[12.5px] text-[var(--muted)]">Days requested</span>
+          <span className="text-[15px] font-[850]">{duration || 0}</span>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-[#f1f5f9]">
+          <HrButton variant="ghost" onClick={onClose}>Cancel</HrButton>
+          <HrButton variant="primary" onClick={() => void handleSave()} loading={saving}>
+            Submit Leave
+          </HrButton>
+        </div>
+      </div>
+    </HrModal>
+  );
+}
+
+// A superuser/school-admin is allowed to act directly on any pending step
+// (see LeaveRequestViewSet._check_can_act_on_step) without going through the
+// dedicated "Admin Approved" chain-bypass action — `approver` (who the step
+// was assigned to) is never rewritten in that case, only `acted_by` records
+// who actually clicked. Bypassed steps already surface this via "Bypassed
+// by:"; this catches the same situation for an ordinary approve/reject.
+function stepActedByStandIn(step: LeaveApplication["approval_steps"][number]) {
+  return (
+    step.status !== "pending" &&
+    step.status !== "bypassed" &&
+    !!step.acted_by &&
+    !!step.approver &&
+    step.acted_by !== step.approver
+  );
+}
+
 // ─── Approval Chain cell — one icon + approver name per chain step ───────────
 function ApprovalChainCell({ app }: { app: LeaveApplication }) {
   if (app.approval_steps.length === 0) {
@@ -250,6 +456,14 @@ function ApprovalChainCell({ app }: { app: LeaveApplication }) {
               </span>
             )}
             <span className="text-[11px] text-[var(--muted)] whitespace-nowrap">{step.approver_name || step.role_label || "—"}</span>
+            {stepActedByStandIn(step) && (
+              <span
+                className="text-[9.5px] font-[750] text-[#64748b] whitespace-nowrap"
+                title={`Assigned to ${step.approver_name || "—"}, but actually ${step.status} by ${step.acted_by_name}`}
+              >
+                via {step.acted_by_name}
+              </span>
+            )}
           </div>
           {(i < app.approval_steps.length - 1 || showProjectedL2) && (
             <div className="h-[2px] w-4 bg-[#e5e7eb] mt-[13px] flex-shrink-0" />
@@ -270,7 +484,12 @@ function ApprovalChainCell({ app }: { app: LeaveApplication }) {
 
 function FlagsCell({ app }: { app: LeaveApplication }) {
   const flags: React.ReactNode[] = [];
-  if (app.approved_via_admin_override) flags.push(<HrBadge key="override" variant="grey">Admin Approved</HrBadge>);
+  // Covers both the full chain-bypass ("Admin Approved") and an admin
+  // directly approving/rejecting a step that was assigned to someone else —
+  // see stepActedByStandIn() above for why the latter needs its own check.
+  if (app.approved_via_admin_override || app.approval_steps.some(stepActedByStandIn)) {
+    flags.push(<HrBadge key="override" variant="grey">Admin Approved</HrBadge>);
+  }
   if (app.coverage_risk) flags.push(<HrBadge key="cov" variant="amber">Coverage risk</HrBadge>);
   if (app.is_on_behalf) flags.push(<HrBadge key="beh" variant="blue">By Admin</HrBadge>);
   if (app.half_day_type) flags.push(<HrBadge key="hd" variant="grey">{app.half_day_type}</HrBadge>);
@@ -315,9 +534,10 @@ function ApprovalChainVisual({
       {steps.map((step, i) => {
         const isActive = i === activeIndex;
         const isFuture = activeIndex !== -1 && i > activeIndex;
+        const actedByStandIn = stepActedByStandIn(step);
         let caption: string;
-        if (step.status === "approved") caption = "Approved";
-        else if (step.status === "rejected") caption = "Rejected";
+        if (step.status === "approved") caption = actedByStandIn ? "Approved (by Admin)" : "Approved";
+        else if (step.status === "rejected") caption = actedByStandIn ? "Rejected (by Admin)" : "Rejected";
         else if (step.status === "bypassed") caption = "Bypassed by Admin";
         else if (isActive) caption = `Waiting ${daysAgo(step.became_active_at)}d`;
         else if (isFuture) caption = `Awaiting L${activeIndex + 1}`;
@@ -347,6 +567,11 @@ function ApprovalChainVisual({
               </span>
               {step.status === "bypassed" && step.acted_by_name && (
                 <span className="text-[11px] text-[#64748b] font-[700] text-center whitespace-nowrap">Bypassed by: {step.acted_by_name}</span>
+              )}
+              {actedByStandIn && (
+                <span className="text-[11px] text-[#64748b] font-[700] text-center whitespace-nowrap">
+                  {step.status === "approved" ? "Approved" : "Rejected"} by: {step.acted_by_name}
+                </span>
               )}
               <span className="text-[10px] text-[var(--muted)] text-center">{caption}</span>
             </div>
@@ -824,11 +1049,129 @@ function CoverageTab() {
   );
 }
 
+// ─── My Leave tab — self-service: balance, status, and history for the
+// logged-in user's own applications (their personal leave "dashboard") ──────
+function MyLeaveTab({ onApply, refreshKey }: { onApply: () => void; refreshKey: number }) {
+  const { data, loading, refetch } = useMyLeaveApplications();
+  const { data: balanceData, loading: balanceLoading } = useMyLeaveBalance();
+  const [viewing, setViewing] = useState<LeaveApplication | null>(null);
+
+  useEffect(() => { void refetch(); }, [refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const applications = data?.results ?? [];
+  const pendingCount = applications.filter((a) => a.status === "pending").length;
+  const approvedCount = applications.filter((a) => a.status === "approved").length;
+  const rejectedCount = applications.filter((a) => a.status === "rejected").length;
+
+  if (!loading && data && data.staff_linked === false) {
+    return (
+      <div className="bg-white border border-[var(--line)] rounded-[14px] py-14 text-center text-[var(--muted)]">
+        Your account isn&apos;t linked to a staff profile yet — contact your HR admin to enable self-service leave.
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="grid grid-cols-3 gap-3 mb-5">
+        <HrKpiCard label="My Pending" value={loading ? "—" : pendingCount} color="var(--amber)" />
+        <HrKpiCard label="My Approved" value={loading ? "—" : approvedCount} color="var(--green)" />
+        <HrKpiCard label="My Rejected" value={loading ? "—" : rejectedCount} color="var(--red)" />
+      </div>
+
+      <div className="section-head flex items-center justify-between mb-3">
+        <h3 className="text-[15px] font-[850]">My Leave Balance</h3>
+      </div>
+      {balanceLoading ? <HrSkeleton rows={1} /> : (
+        <div className="grid gap-3 mb-6" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+          {(balanceData?.leave_balances ?? []).map((b) => (
+            <div key={b.leave_type_id} className="bg-white border border-[var(--line)] rounded-[14px] p-3">
+              <div className="text-[11px] font-[800] text-[var(--muted)] uppercase truncate mb-1.5">{b.leave_type_name}</div>
+              <div className="text-[19px] font-[850]">
+                {b.available_days ?? "—"} <span className="text-[11.5px] text-[var(--muted)] font-[700]">/ {b.total_days ?? "—"} left</span>
+              </div>
+              {b.total_days ? (
+                <div className="h-[5px] rounded-full bg-[#f1f5f9] overflow-hidden mt-2">
+                  <div
+                    className="h-full rounded-full bg-[var(--brand)]"
+                    style={{ width: `${Math.max(4, 100 - ((b.used_days ?? 0) / b.total_days) * 100)}%` }}
+                  />
+                </div>
+              ) : null}
+            </div>
+          ))}
+          {!balanceLoading && (balanceData?.leave_balances ?? []).length === 0 && (
+            <div className="text-[13px] text-[var(--muted)]">No leave types configured yet.</div>
+          )}
+        </div>
+      )}
+
+      <div className="section-head flex items-center justify-between mb-3">
+        <h3 className="text-[15px] font-[850]">My Applications</h3>
+      </div>
+      {loading ? <HrSkeleton rows={4} /> : applications.length === 0 ? (
+        <div className="bg-white border border-[var(--line)] rounded-[14px] py-14 text-center text-[var(--muted)] grid gap-3 justify-items-center">
+          <span>You haven&apos;t applied for any leave yet.</span>
+          <HrButton variant="primary" size="sm" onClick={onApply}><CalendarPlus size={14} /> Apply Leave</HrButton>
+        </div>
+      ) : (
+        <div className="bg-white border border-[var(--line)] rounded-[14px] overflow-hidden overflow-x-auto" style={{ boxShadow: "var(--shadow)" }}>
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="bg-[#fafafa] text-[11px] uppercase text-[#64748b] tracking-[0.08em]">
+                <th className="px-4 py-3 text-left">Type</th>
+                <th className="px-4 py-3 text-left">Dates</th>
+                <th className="px-4 py-3 text-left">Approval Chain</th>
+                <th className="px-4 py-3 text-left">Status</th>
+                <th className="px-4 py-3 text-left">Flags</th>
+                <th className="px-4 py-3 text-left">​</th>
+              </tr>
+            </thead>
+            <tbody>
+              {applications.map((app) => (
+                <tr key={app.id} className="border-t border-[#f4f4f8] hover:bg-[#fafafd] transition-colors align-top">
+                  <td className="px-4 py-3">
+                    <span title={app.leave_type_name}>
+                      <HrBadge variant="purple">{leaveTypeAbbrev(app.leave_type_name)}</HrBadge>
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-[12px]">
+                    <div>{app.from_date} → {app.to_date}</div>
+                    <div className="text-[var(--muted)]">{app.duration}d</div>
+                  </td>
+                  <td className="px-4 py-3"><ApprovalChainCell app={app} /></td>
+                  <td className="px-4 py-3">
+                    <HrBadge variant={app.status === "approved" ? "green" : app.status === "rejected" ? "red" : "amber"}>
+                      {app.status}
+                    </HrBadge>
+                  </td>
+                  <td className="px-4 py-3"><FlagsCell app={app} /></td>
+                  <td className="px-4 py-3">
+                    <HrButton variant="icon" size="icon" onClick={() => setViewing(app)} title="View">
+                      <Eye size={14} />
+                    </HrButton>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <LeaveDetailDrawer app={viewing} onClose={() => setViewing(null)} onActed={() => void refetch()} />
+    </div>
+  );
+}
+
 // ─── Main Leave Page ──────────────────────────────────────────────────────────
+const LEAVE_TAB_LABELS = { applications: "Applications", my: "My Leave", coverage: "Coverage" } as const;
+
 export default function HrLeavePage() {
   const router = useRouter();
-  const [tab, setTab] = useState<"applications" | "coverage">("applications");
+  const [tab, setTab] = useState<"applications" | "my" | "coverage">("applications");
   const [onBehalfOpen, setOnBehalfOpen] = useState(false);
+  const [applyOpen, setApplyOpen] = useState(false);
+  const [myLeaveRefreshKey, setMyLeaveRefreshKey] = useState(0);
   const { data: stats, refetch: refetchStats } = useLeaveStats();
 
   return (
@@ -841,6 +1184,9 @@ export default function HrLeavePage() {
         actions={
           <>
             <HrButton variant="ghost" onClick={() => router.push("/hr/leave/setup")}>Configure Policy</HrButton>
+            <HrButton variant="soft" onClick={() => setApplyOpen(true)}>
+              <CalendarPlus size={14} /> Apply Leave
+            </HrButton>
             <HrButton variant="primary" onClick={() => setOnBehalfOpen(true)}>
               <Plus size={14} /> Apply on Behalf
             </HrButton>
@@ -856,27 +1202,39 @@ export default function HrLeavePage() {
       </div>
 
       <div className="flex gap-5 mb-5 border-b border-[var(--line)]">
-        {(["applications", "coverage"] as const).map((t) => (
+        {(["applications", "my", "coverage"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className="pb-3 text-[14px] font-[750] border-0 bg-transparent cursor-pointer capitalize"
+            className="pb-3 text-[14px] font-[750] border-0 bg-transparent cursor-pointer"
             style={{
               color: tab === t ? "var(--brand)" : "var(--muted)",
               borderBottom: tab === t ? "2px solid var(--brand)" : "2px solid transparent",
             }}
           >
-            {t}
+            {LEAVE_TAB_LABELS[t]}
           </button>
         ))}
       </div>
 
-      {tab === "applications" ? <ApplicationsTab /> : <CoverageTab />}
+      {tab === "applications" ? <ApplicationsTab /> : tab === "my" ? (
+        <MyLeaveTab onApply={() => setApplyOpen(true)} refreshKey={myLeaveRefreshKey} />
+      ) : <CoverageTab />}
 
       <ApplyOnBehalfModal
         isOpen={onBehalfOpen}
         onClose={() => setOnBehalfOpen(false)}
         onSaved={() => void refetchStats()}
+      />
+
+      <ApplyLeaveModal
+        isOpen={applyOpen}
+        onClose={() => setApplyOpen(false)}
+        onSaved={() => {
+          void refetchStats();
+          setMyLeaveRefreshKey((k) => k + 1);
+          setTab("my");
+        }}
       />
     </div>
   );

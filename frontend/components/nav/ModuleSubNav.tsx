@@ -6,9 +6,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { MODULES } from '@/lib/routes';
 import { usePermissions } from '@/hooks/usePermissions';
 
-const COMING_SOON_PATHS = new Set([
-  '/hr/offboarding',
-]);
+const COMING_SOON_PATHS = new Set<string>([]);
 
 const FEES_SOON_BADGE_PATHS = new Set<string>([]);
 

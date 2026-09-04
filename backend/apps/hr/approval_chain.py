@@ -33,6 +33,8 @@ If nobody can be resolved for a step, it's still created with approver=None
 ("unavailable") — human_resource.apply_leave.view holders who are school
 admins can still act on it (the "Admin override" path).
 """
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 
@@ -243,11 +245,21 @@ def current_step(leave_request):
 def is_stuck(step):
     if not step or step.status != LeaveApprovalStep.STATUS_PENDING:
         return False
-    elapsed_days = (timezone.now() - step.became_active_at).days
-    return elapsed_days > step.response_window_days
+    # timedelta.days truncates toward zero (floors), so comparing it against
+    # response_window_days as integers under-counts: a step waiting 1 day 21
+    # hours against a 1-day window reports elapsed_days=1, and 1 > 1 is False
+    # — it would silently need a full 2nd calendar day before ever flipping
+    # to stuck. Compare the actual elapsed timedelta instead.
+    elapsed = timezone.now() - step.became_active_at
+    return elapsed > timedelta(days=step.response_window_days)
 
 
 def days_stuck(step):
     if not is_stuck(step):
         return 0
-    return (timezone.now() - step.became_active_at).days - step.response_window_days
+    elapsed = timezone.now() - step.became_active_at
+    overage_days = (elapsed - timedelta(days=step.response_window_days)).days
+    # is_stuck() already confirmed elapsed exceeds the window, but the
+    # overage itself can still be under 24h (e.g. just tipped over) — floor
+    # that to 0, which would misleadingly read as "stuck 0d" in the UI.
+    return max(1, overage_days)
