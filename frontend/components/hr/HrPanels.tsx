@@ -447,6 +447,7 @@ type Staff = {
   show_public: boolean;
   department: number | null;
   designation: number | null;
+  reporting_manager: number | null;
   join_date: string;
   basic_salary: string;
   custom_field?: Record<string, unknown> | null;
@@ -1380,6 +1381,8 @@ export function HrStaffPanel() {
   const [roleId, setRoleId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [designationId, setDesignationId] = useState("");
+  const [reportingManagerId, setReportingManagerId] = useState("");
+  const [staffMembers, setStaffMembers] = useState<{ id: number; name: string; staff_no: string }[]>([]);
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [fathersName, setFathersName] = useState("");
@@ -1904,6 +1907,7 @@ export function HrStaffPanel() {
     setRoleId("");
     setDepartmentId("");
     setDesignationId("");
+    setReportingManagerId("");
     setFirstName("");
     setLastName("");
     setFathersName("");
@@ -2251,7 +2255,7 @@ export function HrStaffPanel() {
       setRolesError("");
 
       const [formOptionsResult, nextStaffNoResult, payrollSettingsResult] = await Promise.allSettled([
-        apiGet<{ data?: { roles?: Role[]; departments?: Department[]; designations?: Designation[] } }>("/api/v1/hr/staff/form-options/"),
+        apiGet<{ data?: { roles?: Role[]; departments?: Department[]; designations?: Designation[]; staff_members?: { id: number; name: string; staff_no: string }[] } }>("/api/v1/hr/staff/form-options/"),
         apiGet<{ staff_no?: string }>(`/api/v1/hr/staff/next-staff-no/?joining_date=${encodeURIComponent(joinDate)}`),
         apiGet<PayrollSettings>("/api/v1/hr/payroll/settings/"),
       ]);
@@ -2261,14 +2265,17 @@ export function HrStaffPanel() {
         const roleOptions = Array.isArray(options.roles) ? options.roles : [];
         const departmentOptions = Array.isArray(options.departments) ? options.departments : [];
         const designationOptions = Array.isArray(options.designations) ? options.designations : [];
+        const staffMemberOptions = Array.isArray(options.staff_members) ? options.staff_members : [];
         setRoles(roleOptions.map((role) => ({ id: role.id, name: role.name })));
         setDepartments(departmentOptions);
         setDesignations(designationOptions);
+        setStaffMembers(staffMemberOptions);
         setRolesError("");
       } else {
         setRoles([]);
         setDepartments([]);
         setDesignations([]);
+        setStaffMembers([]);
         setRolesError("Failed to load roles");
         setDropdownErrors((prev) => ({
           ...prev,
@@ -2432,6 +2439,7 @@ export function HrStaffPanel() {
         setRoleId(row.role ? String(row.role) : "");
         setDepartmentId(row.department ? String(row.department) : "");
         setDesignationId(row.designation ? String(row.designation) : "");
+        setReportingManagerId(row.reporting_manager ? String(row.reporting_manager) : "");
         setFirstName(row.first_name || "");
         setLastName(row.last_name || "");
         setFathersName(row.fathers_name || "");
@@ -2527,6 +2535,7 @@ export function HrStaffPanel() {
         role: roleId ? Number(roleId) : null,
         department: departmentId ? Number(departmentId) : null,
         designation: designationId ? Number(designationId) : null,
+        reporting_manager: reportingManagerId ? Number(reportingManagerId) : null,
         first_name: firstName.trim(),
         last_name: lastName.trim(),
         fathers_name: fathersName.trim(),
@@ -2907,6 +2916,7 @@ export function HrStaffPanel() {
                     </label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Department</span><select value={departmentId} onChange={(e) => { setDepartmentId(e.target.value); setDesignationId(""); }} style={fieldStyle()}><option value="">Department</option>{departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>{dropdownErrors.departments ? <span style={{ color: "#dc2626", fontSize: 12 }}>{dropdownErrors.departments}</span> : null}</label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Designation</span><select value={designationId} onChange={(e) => setDesignationId(e.target.value)} style={fieldStyle()}><option value="">Designation</option>{filteredDesignations.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>{dropdownErrors.designations ? <span style={{ color: "#dc2626", fontSize: 12 }}>{dropdownErrors.designations}</span> : null}</label>
+                    <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Reporting Manager</span><select value={reportingManagerId} onChange={(e) => setReportingManagerId(e.target.value)} style={fieldStyle()}><option value="">No reporting manager (use designation-based approval chain)</option>{staffMembers.filter((s) => s.id !== editingStaffId).map((s) => <option key={s.id} value={s.id}>{s.name}{s.staff_no ? ` (${s.staff_no})` : ""}</option>)}</select></label>
                     <label style={{ display: "grid", gap: 6 }}><span style={{ fontSize: 12, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>Date Of Joining *</span><input type="date" value={joinDate} onChange={(e) => { setJoinDate(e.target.value); clearFieldError("join_date"); }} style={{ ...fieldStyle(), borderColor: fieldErrors.join_date ? "#dc2626" : "var(--line)" }} />{fieldErrors.join_date ? <span style={{ color: "#dc2626", fontSize: 12 }}>{fieldErrors.join_date}</span> : null}</label>
                   </div>
                 </section>

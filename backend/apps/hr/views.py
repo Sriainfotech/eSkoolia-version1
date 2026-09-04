@@ -19,9 +19,10 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from apps.access_control.models import UserRole
+from apps.access_control.models import Role, UserRole
 from apps.core.models import AcademicYear, Class as SchoolClass, Section
 from apps.students.models import Student
+from apps.settings.leave_seed import ensure_default_entitlements, ensure_default_leave_types, reset_all_staff_entitlements
 
 from .models import ApprovalChainPolicy, Department, Designation, DepartmentType, LeaveApprovalStep, LeaveDefine, LeaveRequest, LeaveType, Offboarding, PayrollRecord, PayrollSettings, Staff, StaffAttendance, StaffDocument, StaffOnboardDocument, StaffOnboardDraft
 from .serializers import (
@@ -643,6 +644,7 @@ class StaffViewSet(SchoolScopedModelViewSet):
         role_qs = Role.objects.filter(is_active=True).order_by("name")
         dept_qs = Department.objects.filter(is_active=True).order_by("name")
         desg_qs = Designation.objects.filter(is_active=True).order_by("name")
+        staff_qs = Staff.objects.filter(status=Staff.STATUS_ACTIVE).order_by("first_name", "last_name")
 
         if school_id:
             # Keep role scope aligned with Login Permission meta/users endpoints:
@@ -650,6 +652,7 @@ class StaffViewSet(SchoolScopedModelViewSet):
             role_qs = role_qs.filter(Q(school_id=school_id) | Q(school__isnull=True))
             dept_qs = dept_qs.filter(school_id=school_id)
             desg_qs = desg_qs.filter(school_id=school_id)
+            staff_qs = staff_qs.filter(school_id=school_id)
 
         return Response(
             {
@@ -659,6 +662,10 @@ class StaffViewSet(SchoolScopedModelViewSet):
                     "roles": list(role_qs.values("id", "name")),
                     "departments": list(dept_qs.values("id", "name", "description", "is_active")),
                     "designations": list(desg_qs.values("id", "name", "department", "is_active")),
+                    "staff_members": [
+                        {"id": s.id, "name": f"{s.first_name} {s.last_name}".strip(), "staff_no": s.staff_no}
+                        for s in staff_qs
+                    ],
                 },
             },
             status=status.HTTP_200_OK,
@@ -1061,7 +1068,19 @@ class LeaveTypeViewSet(SchoolScopedModelViewSet):
     filterset_fields = ["is_paid", "is_active"]
     search_fields = ["name"]
     ordering_fields = ["name", "created_at"]
-    permission_codes = {"*": "human_resource.leave_type.view"}
+    permission_codes = {
+        "*": "human_resource.leave_type.view",
+        "entitlement_matrix": "human_resource.leave_define.view",
+        "set_entitlement_cell": "human_resource.leave_define.view",
+        "add_entitlement_role": "human_resource.leave_define.view",
+        "remove_entitlement_role": "human_resource.leave_define.view",
+        "reset_entitlement_defaults": "human_resource.leave_define.view",
+    }
+
+    def list(self, request, *args, **kwargs):
+        if request.user.school_id:
+            ensure_default_leave_types(request.user.school_id)
+        return super().list(request, *args, **kwargs)
 
     def success_response(self, message, data=None, status_code=status.HTTP_200_OK):
         return Response(
@@ -1160,6 +1179,163 @@ class LeaveTypeViewSet(SchoolScopedModelViewSet):
         instance = self.get_object()
         self.perform_destroy(instance)
         return self.success_response("Leave type deleted successfully", data={})
+
+    # ── Configure Policy > Entitlements ─────────────────────────────────
+    # "All Staff" is represented as role=None on LeaveDefine (same
+    # convention as ApprovalChainPolicy.designation=None), matching the
+    # reference design's default column. Role columns are considered
+    # "in the matrix" purely by row existence for that academic year — a
+    # missing row renders as "—" (not entitled) on the frontend, distinct
+    # from an explicit 0.
+
+    ENTITLEMENT_SCOPE = dict(student=None, staff=None, school_class=None, section=None)
+
+    def _resolve_academic_year(self, request, school_id):
+        requested_id = request.query_params.get("academic_year") or request.data.get("academic_year")
+        if requested_id:
+            year = AcademicYear.objects.filter(school_id=school_id, id=requested_id).first()
+            if year:
+                return year
+        year = AcademicYear.objects.filter(school_id=school_id, is_current=True).first()
+        if year:
+            return year
+        return AcademicYear.objects.filter(school_id=school_id, is_active=True).order_by("-start_date").first()
+
+    @action(detail=False, methods=["get"], url_path="entitlement-matrix")
+    def entitlement_matrix(self, request):
+        school_id = request.user.school_id
+        academic_year = self._resolve_academic_year(request, school_id)
+        if academic_year is None:
+            return self.success_response("No academic year configured for this school", {
+                "academic_year": None, "columns": [], "rows": [],
+            })
+
+        ensure_default_leave_types(school_id)
+        ensure_default_entitlements(school_id, academic_year)
+
+        leave_types = list(LeaveType.objects.filter(school_id=school_id, is_active=True).order_by("name"))
+        defines = LeaveDefine.objects.filter(
+            school_id=school_id, academic_year=academic_year, **self.ENTITLEMENT_SCOPE,
+        ).select_related("role")
+
+        role_names = {}
+        entitlements_by_type = {}
+        for d in defines:
+            col_key = f"role:{d.role_id}" if d.role_id else "all_staff"
+            if d.role_id and d.role_id not in role_names:
+                role_names[d.role_id] = d.role.name if d.role else f"Role {d.role_id}"
+            entitlements_by_type.setdefault(d.leave_type_id, {})[col_key] = d.days
+
+        columns = [{"key": "all_staff", "role_id": None, "name": "All Staff", "removable": False}]
+        for role_id, name in sorted(role_names.items(), key=lambda kv: kv[1].lower()):
+            columns.append({"key": f"role:{role_id}", "role_id": role_id, "name": name, "removable": True})
+
+        rows = [
+            {
+                "leave_type": LeaveTypeSerializer(lt).data,
+                "entitlements": entitlements_by_type.get(lt.id, {}),
+            }
+            for lt in leave_types
+        ]
+
+        return self.success_response("OK", {
+            "academic_year": {"id": academic_year.id, "name": academic_year.name, "is_current": academic_year.is_current},
+            "columns": columns,
+            "rows": rows,
+        })
+
+    @action(detail=False, methods=["post"], url_path="entitlement-matrix/cell")
+    def set_entitlement_cell(self, request):
+        school_id = request.user.school_id
+        leave_type = LeaveType.objects.filter(school_id=school_id, id=request.data.get("leave_type")).first()
+        if not leave_type:
+            raise ValidationError({"leave_type": "Leave type not found."})
+        academic_year = AcademicYear.objects.filter(school_id=school_id, id=request.data.get("academic_year")).first()
+        if not academic_year:
+            raise ValidationError({"academic_year": "Academic year not found."})
+
+        role = None
+        role_id = request.data.get("role")
+        if role_id:
+            role = Role.objects.filter(id=role_id).filter(Q(school_id=school_id) | Q(school__isnull=True)).first()
+            if not role:
+                raise ValidationError({"role": "Role not found."})
+
+        try:
+            days = int(request.data.get("days"))
+        except (TypeError, ValueError):
+            raise ValidationError({"days": "Days must be a whole number."})
+        if days < 0 or days > 366:
+            raise ValidationError({"days": "Days must be between 0 and 366."})
+
+        obj, _ = LeaveDefine.objects.update_or_create(
+            school_id=school_id, academic_year=academic_year, leave_type=leave_type, role=role,
+            **self.ENTITLEMENT_SCOPE,
+            defaults={"days": days},
+        )
+        return self.success_response("Entitlement updated", {"days": obj.days})
+
+    @action(detail=False, methods=["post"], url_path="entitlement-matrix/roles")
+    def add_entitlement_role(self, request):
+        school_id = request.user.school_id
+        role = Role.objects.filter(id=request.data.get("role")).filter(
+            Q(school_id=school_id) | Q(school__isnull=True)
+        ).first()
+        if not role:
+            raise ValidationError({"role": "Role not found."})
+        academic_year = AcademicYear.objects.filter(school_id=school_id, id=request.data.get("academic_year")).first()
+        if not academic_year:
+            raise ValidationError({"academic_year": "Academic year not found."})
+
+        leave_types = list(LeaveType.objects.filter(school_id=school_id, is_active=True))
+        existing_type_ids = set(
+            LeaveDefine.objects.filter(
+                school_id=school_id, academic_year=academic_year, role=role, **self.ENTITLEMENT_SCOPE,
+                leave_type_id__in=[lt.id for lt in leave_types],
+            ).values_list("leave_type_id", flat=True)
+        )
+        to_create = [
+            LeaveDefine(
+                school_id=school_id, academic_year=academic_year, leave_type=lt, role=role,
+                days=lt.max_days_per_year, **self.ENTITLEMENT_SCOPE,
+            )
+            for lt in leave_types if lt.id not in existing_type_ids
+        ]
+        if to_create:
+            LeaveDefine.objects.bulk_create(to_create)
+        return self.success_response("Role added to entitlement matrix", {"role": role.id, "name": role.name})
+
+    @action(detail=False, methods=["post"], url_path="entitlement-matrix/remove-role")
+    def remove_entitlement_role(self, request):
+        school_id = request.user.school_id
+        academic_year = AcademicYear.objects.filter(school_id=school_id, id=request.data.get("academic_year")).first()
+        if not academic_year:
+            raise ValidationError({"academic_year": "Academic year not found."})
+
+        role_id = request.data.get("role")
+        qs = LeaveDefine.objects.filter(school_id=school_id, academic_year=academic_year, **self.ENTITLEMENT_SCOPE)
+        if role_id:
+            role = Role.objects.filter(id=role_id).filter(Q(school_id=school_id) | Q(school__isnull=True)).first()
+            if not role:
+                raise ValidationError({"role": "Role not found."})
+            qs = qs.filter(role=role)
+        else:
+            remaining_columns = qs.exclude(role__isnull=True).values("role_id").distinct().count()
+            if remaining_columns == 0:
+                raise ValidationError({"role": "At least one entitlement column must remain."})
+            qs = qs.filter(role__isnull=True)
+
+        qs.delete()
+        return self.success_response("Role removed from entitlement matrix", {})
+
+    @action(detail=False, methods=["post"], url_path="entitlement-matrix/reset")
+    def reset_entitlement_defaults(self, request):
+        school_id = request.user.school_id
+        academic_year = AcademicYear.objects.filter(school_id=school_id, id=request.data.get("academic_year")).first()
+        if not academic_year:
+            raise ValidationError({"academic_year": "Academic year not found."})
+        reset_all_staff_entitlements(school_id, academic_year)
+        return self.success_response("Entitlements reset to defaults", {})
 
 
 class LeaveDefineViewSet(SchoolScopedModelViewSet):
@@ -1329,13 +1505,34 @@ class ApprovalChainPolicyViewSet(SchoolScopedModelViewSet):
     serializer_class = ApprovalChainPolicySerializer
     filterset_fields = ["designation"]
     ordering_fields = ["designation_id", "created_at"]
-    permission_codes = {"*": "human_resource.approval_chain.view"}
+    permission_codes = {
+        "*": "human_resource.approval_chain.view",
+        "role_coverage": "human_resource.approval_chain.view",
+    }
+
+    @action(detail=False, methods=["get"], url_path="role-coverage")
+    def role_coverage(self, request):
+        """For each active role available to this school, whether at least
+        one active staff member could be resolved as an approver for it —
+        lets Configure Policy > Approval Chain warn when a role picked as
+        L1/L2 won't resolve to anyone, instead of silently leaving every
+        matching step unassigned."""
+        from .approval_chain import role_has_resolvable_target
+
+        school_id = request.user.school_id
+        roles = Role.objects.filter(Q(school_id=school_id) | Q(school__isnull=True), is_active=True)
+        return Response({
+            "roles": [
+                {"id": r.id, "name": r.name, "resolvable": role_has_resolvable_target(r, school_id)}
+                for r in roles
+            ],
+        })
 
 
 class LeaveRequestViewSet(SchoolScopedModelViewSet):
     queryset = LeaveRequest.objects.select_related(
         "school", "staff", "staff__department", "staff__designation", "leave_type", "approved_by", "applied_by"
-    ).all()
+    ).prefetch_related("approval_steps", "approval_steps__approver", "approval_steps__acted_by").all()
     serializer_class = LeaveRequestSerializer
     filterset_fields = ["staff", "leave_type", "status", "from_date", "to_date"]
     search_fields = ["staff__staff_no", "staff__first_name", "staff__last_name", "reason"]
@@ -1344,9 +1541,12 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
         "*": "human_resource.apply_leave.view",
         "approve": "human_resource.apply_leave.view",
         "reject": "human_resource.apply_leave.view",
+        "admin_approve": "human_resource.apply_leave.view",
         "stats": "human_resource.apply_leave.view",
         "coverage": "human_resource.apply_leave.view",
         "apply_on_behalf": "human_resource.apply_leave.apply_on_behalf",
+        "full_detail": "human_resource.apply_leave.view",
+        "set_substitute": "human_resource.apply_leave.view",
     }
 
     def _current_staff(self):
@@ -1424,23 +1624,100 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
         # per (staff, leave_type, year) — a request spanning New Year's Eve
         # must deduct from two balance rows, not just from_date's year.
         from apps.settings.models import LeaveBalance
+        from apps.settings.leave_seed import resolve_entitlements_for_staff
         from .holiday_utils import compute_leave_days_by_year
 
         days_by_year = compute_leave_days_by_year(
             leave_request.school_id, leave_request.leave_type, leave_request.from_date, leave_request.to_date
         )
+        academic_year = (
+            AcademicYear.objects.filter(school_id=leave_request.school_id, is_current=True).first()
+            or AcademicYear.objects.filter(school_id=leave_request.school_id, is_active=True).order_by("-start_date").first()
+        )
+        entitled_days = resolve_entitlements_for_staff(
+            leave_request.school_id, academic_year, leave_request.staff.role_id,
+        ).get(leave_request.leave_type_id)
+
         balances_by_year = {}
         for year, days in days_by_year.items():
-            balance, _created = LeaveBalance.objects.get_or_create(
+            balance, created = LeaveBalance.objects.get_or_create(
                 school_id=leave_request.school_id,
                 staff_id=leave_request.staff_id,
                 leave_type_id=leave_request.leave_type_id,
                 year=year,
             )
+            update_fields = ["used_days", "updated_at"]
+            if created and entitled_days is not None:
+                balance.total_days = entitled_days
+                update_fields.append("total_days")
             balance.used_days = balance.used_days + days
-            balance.save(update_fields=["used_days", "updated_at"])
+            balance.save(update_fields=update_fields)
             balances_by_year[year] = balance.used_days
         return days_by_year, balances_by_year
+
+    def _bypass_approval_chain(self, leave_request, actor, reason):
+        """Full Approval Chain bypass — shared by admin_approve() (an
+        existing pending request) and apply_on_behalf()'s bypass_chain=True
+        path (a brand-new request that never started a chain at all).
+
+        For each level (L1 always; L2 only if the matched policy would
+        require it for this request's duration): if a step already exists,
+        convert it to `bypassed` in place; if it was never created yet,
+        resolve it via the same read-only escalation logic normal approval
+        uses and create it directly as `bypassed`. Either way, `approver`
+        (who this step was/would have been assigned to) is preserved
+        exactly as normal resolution would set it, and `acted_by` records
+        who actually performed the bypass — never the other way around.
+        Finalizes the request as Approved and deducts the balance, same as
+        a normal final approval would."""
+        from .approval_chain import get_policy_for_staff, resolve_l1_approver, resolve_l2_approver, DEFAULT_RESPONSE_WINDOW_DAYS
+        from .holiday_utils import compute_leave_days
+
+        with transaction.atomic():
+            staff = leave_request.staff
+            now = timezone.now()
+            existing_steps = {s.sequence: s for s in leave_request.approval_steps.all()}
+            policy = get_policy_for_staff(staff)
+            response_window = policy.response_window_days if policy else DEFAULT_RESPONSE_WINDOW_DAYS
+
+            def bypass_or_create(sequence, resolver):
+                step = existing_steps.get(sequence)
+                if step:
+                    if step.status == LeaveApprovalStep.STATUS_PENDING:
+                        step.status = LeaveApprovalStep.STATUS_BYPASSED
+                        step.acted_by = actor
+                        step.acted_at = now
+                        step.note = reason
+                        step.save(update_fields=["status", "acted_by", "acted_at", "note"])
+                    return
+                approver, role_label = resolver()
+                LeaveApprovalStep.objects.create(
+                    leave_request=leave_request, sequence=sequence, role_label=role_label, approver=approver,
+                    acted_by=actor, status=LeaveApprovalStep.STATUS_BYPASSED,
+                    response_window_days=response_window, became_active_at=now, acted_at=now, note=reason,
+                )
+
+            bypass_or_create(1, lambda: resolve_l1_approver(staff, policy))
+
+            l2_required = False
+            if policy and policy.l2_approver_role and policy.l2_trigger_days:
+                duration = compute_leave_days(
+                    leave_request.school_id, leave_request.leave_type, leave_request.from_date, leave_request.to_date,
+                )
+                l2_required = duration >= policy.l2_trigger_days
+            if 2 in existing_steps or l2_required:
+                bypass_or_create(2, lambda: resolve_l2_approver(staff, policy))
+
+            leave_request.status = LeaveRequest.STATUS_APPROVED
+            leave_request.approval_note = reason
+            leave_request.approved_by = actor
+            leave_request.approved_at = now
+            leave_request.approved_via_admin_override = True
+            leave_request.save(update_fields=[
+                "status", "approval_note", "approved_by", "approved_at", "approved_via_admin_override", "updated_at",
+            ])
+
+            return self._deduct_leave_balance(leave_request)
 
     def _check_can_act_on_step(self, user, step):
         if user.is_superuser or user.is_school_admin:
@@ -1473,11 +1750,12 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
         step.status = LeaveApprovalStep.STATUS_APPROVED
         step.acted_at = timezone.now()
         step.note = note
-        if not step.approver_id:
-            # Admin-override on a step whose role couldn't be resolved to
-            # anyone — record who actually acted.
-            step.approver = request.user
-        step.save(update_fields=["status", "acted_at", "note", "approver"])
+        # `approver` (who this step was originally resolved to) is never
+        # rewritten — `acted_by` records who actually performed the action,
+        # whether that's the assigned approver themself or an admin
+        # override, so the original assignment stays in the audit trail.
+        step.acted_by = request.user
+        step.save(update_fields=["status", "acted_at", "note", "acted_by"])
 
         if not advance_after_step_approval(leave_request, step):
             return Response({"id": leave_request.id, "status": leave_request.status, "next_step": True})
@@ -1513,9 +1791,8 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
             step.status = LeaveApprovalStep.STATUS_REJECTED
             step.acted_at = timezone.now()
             step.note = note
-            if not step.approver_id:
-                step.approver = request.user
-            step.save(update_fields=["status", "acted_at", "note", "approver"])
+            step.acted_by = request.user
+            step.save(update_fields=["status", "acted_at", "note", "acted_by"])
 
         leave_request.status = LeaveRequest.STATUS_REJECTED
         leave_request.approval_note = note
@@ -1523,6 +1800,37 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
         leave_request.approved_at = timezone.now()
         leave_request.save(update_fields=["status", "approval_note", "approved_by", "approved_at", "updated_at"])
         return Response({"id": leave_request.id, "status": leave_request.status})
+
+    @action(detail=True, methods=["post"], url_path="admin-approve")
+    def admin_approve(self, request, pk=None):
+        """A full bypass of the L1/L2 chain: finalizes the request as
+        Approved immediately, marks every level (already-created or not yet
+        reached) as "bypassed by admin", and keeps the originally-assigned
+        approver on each step untouched — only `acted_by` records who
+        actually performed this. Restricted to school admins/superusers
+        regardless of who the assigned approver on the current step is;
+        a normal L1/L2 approver gets a 403 even with apply_leave.view."""
+        if not (request.user.is_superuser or request.user.is_school_admin):
+            raise PermissionDenied("Only a school admin can use Admin Approved.")
+
+        leave_request = self.get_object()
+        if leave_request.status != LeaveRequest.STATUS_PENDING:
+            raise ValidationError("Only pending leave requests can be admin-approved.")
+
+        reason = (request.data.get("reason") or request.data.get("approval_note") or "").strip()
+        if not reason:
+            raise ValidationError({"reason": "A reason is required to use Admin Approved."})
+
+        days_by_year, balances_by_year = self._bypass_approval_chain(leave_request, request.user, reason)
+
+        return Response({
+            "id": leave_request.id,
+            "status": leave_request.status,
+            "approved_via_admin_override": True,
+            "days_deducted": sum(days_by_year.values()),
+            "days_deducted_by_year": days_by_year,
+            "leave_balance_used_days_by_year": balances_by_year,
+        })
 
     @action(detail=False, methods=["get"], url_path="stats")
     def stats(self, request):
@@ -1610,6 +1918,20 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
         if not school and not user.is_superuser:
             raise PermissionDenied("School context is required.")
 
+        # bypass_chain is the same "full Approval Chain bypass" Admin
+        # Approved performs, just triggered at creation instead of on an
+        # already-pending request — it gets the exact same admin-only gate
+        # and mandatory-reason rule, enforced here server-side (never rely
+        # on the frontend hiding the checkbox).
+        bypass_chain = bool(request.data.get("bypass_chain"))
+        bypass_reason = ""
+        if bypass_chain:
+            if not (user.is_superuser or user.is_school_admin):
+                raise PermissionDenied("Only a school admin can bypass the approval chain.")
+            bypass_reason = (request.data.get("approval_note") or "").strip()
+            if not bypass_reason:
+                raise ValidationError({"approval_note": "A reason is required to bypass the approval chain."})
+
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -1619,24 +1941,103 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
         if user.school_id and staff.school_id != user.school_id:
             raise ValidationError({"staff": "Selected staff member does not belong to your school."})
 
-        bypass_chain = bool(request.data.get("bypass_chain"))
         leave_request = serializer.save(school=school, staff=staff, is_on_behalf=True, applied_by=user)
 
         if bypass_chain:
-            # "Admin approved — bypass approval chain": used when both L1/L2
-            # approvers are unavailable. Approves immediately and deducts
-            # the balance, same as a normal final approval would.
-            leave_request.status = LeaveRequest.STATUS_APPROVED
-            leave_request.approval_note = (request.data.get("approval_note") or "Applied on behalf — admin bypass.").strip()
-            leave_request.approved_by = user
-            leave_request.approved_at = timezone.now()
-            leave_request.save(update_fields=["status", "approval_note", "approved_by", "approved_at", "updated_at"])
-            self._deduct_leave_balance(leave_request)
+            self._bypass_approval_chain(leave_request, user, bypass_reason)
         else:
             from .approval_chain import start_chain
             start_chain(leave_request)
 
         return Response(self.get_serializer(leave_request).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"], url_path="detail")
+    def full_detail(self, request, pk=None):
+        """Everything the view-drawer needs beyond the base serializer:
+        per-leave-type balance for this staff member, and a same-department
+        coverage headcount for the request's date range. Kept as a separate
+        action (not extra fields on the list serializer) so the Applications
+        table — which renders many rows at once — doesn't pay for these
+        extra queries on every load."""
+        from apps.settings.models import LeaveBalance
+        from apps.settings.leave_seed import resolve_entitlements_for_staff
+        from .coverage_utils import overlapping_department_requests
+
+        leave_request = self.get_object()
+        staff = leave_request.staff
+        year = leave_request.from_date.year
+
+        academic_year = (
+            AcademicYear.objects.filter(school_id=leave_request.school_id, is_current=True).first()
+            or AcademicYear.objects.filter(school_id=leave_request.school_id, is_active=True).order_by("-start_date").first()
+        )
+        entitled_days_by_type = resolve_entitlements_for_staff(leave_request.school_id, academic_year, staff.role_id)
+
+        leave_balances = []
+        for lt in LeaveType.objects.filter(school_id=leave_request.school_id, is_active=True).order_by("name"):
+            balance = LeaveBalance.objects.filter(staff_id=staff.id, leave_type_id=lt.id, year=year).first()
+            entitled_days = entitled_days_by_type.get(lt.id)
+            if balance and balance.total_days:
+                total_days = float(balance.total_days)
+                used_days = float(balance.used_days)
+                available_days = float(balance.available_days)
+            elif entitled_days is not None:
+                # No ledger row yet (or one exists with total_days never
+                # backfilled) — show what the configured entitlement would
+                # give, rather than a misleading "not yet allocated".
+                total_days = float(entitled_days)
+                used_days = float(balance.used_days) if balance else 0.0
+                available_days = total_days + (float(balance.carried_forward) if balance else 0.0) - used_days
+            else:
+                total_days = used_days = available_days = None
+            leave_balances.append({
+                "leave_type_id": lt.id,
+                "leave_type_name": lt.name,
+                "available_days": available_days,
+                "total_days": total_days,
+                "used_days": used_days,
+            })
+
+        department_name = staff.department.name if staff.department_id else ""
+        if staff.department_id:
+            total_department_staff = Staff.objects.filter(
+                school_id=leave_request.school_id, department_id=staff.department_id, status=Staff.STATUS_ACTIVE,
+            ).count()
+            unavailable_staff_ids = set(
+                overlapping_department_requests(leave_request).values_list("staff_id", flat=True)
+            )
+            unavailable_staff_ids.add(staff.id)
+            available = max(total_department_staff - len(unavailable_staff_ids), 0)
+        else:
+            total_department_staff = 0
+            available = 0
+
+        return Response({
+            "department_name": department_name,
+            "leave_balances": leave_balances,
+            "coverage_impact": {
+                "department_name": department_name,
+                "available": available,
+                "total": total_department_staff,
+            },
+            "substitute_staff_name": leave_request.substitute_staff_name,
+        })
+
+    @action(detail=True, methods=["post"], url_path="substitute")
+    def set_substitute(self, request, pk=None):
+        # A dedicated, single-field action rather than the generic PATCH
+        # endpoint — perform_update() forces staff=current_staff whenever
+        # the acting user has their own linked Staff profile (a guard
+        # against a staff member editing someone else's request), which
+        # would silently reassign this request's owner if an HR admin who
+        # also has a Staff record used the generic update path instead.
+        leave_request = self.get_object()
+        name = (request.data.get("substitute_staff_name") or "").strip()
+        if len(name) > 150:
+            raise ValidationError({"substitute_staff_name": "Must be 150 characters or fewer."})
+        leave_request.substitute_staff_name = name
+        leave_request.save(update_fields=["substitute_staff_name", "updated_at"])
+        return Response({"substitute_staff_name": leave_request.substitute_staff_name})
 
 
 class StaffAttendanceViewSet(SchoolScopedModelViewSet):

@@ -6,7 +6,7 @@ export default function HrLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   // On wizard/full-page routes, drop min-h-screen so the background
   // doesn't expand beyond the actual content and leave a blank area.
-  const fullPage = pathname === "/hr/onboard";
+  const fullPage = pathname === "/hr/onboard" || pathname === "/hr/leave/setup";
   return (
     <HrToastProvider>
       <div

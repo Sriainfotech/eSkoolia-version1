@@ -6,7 +6,7 @@ import re
 from django.utils import timezone
 from decimal import Decimal, InvalidOperation
 from apps.access_control.models import Role
-from apps.core.models import Class as SchoolClass, Section
+from apps.core.models import AcademicYear, Class as SchoolClass, Section
 from apps.students.models import Student
 from rest_framework import serializers
 
@@ -432,9 +432,20 @@ class StaffSerializer(serializers.ModelSerializer):
             "invalid": "Designation not found",
         },
     )
+    reporting_manager = serializers.PrimaryKeyRelatedField(
+        queryset=Staff.objects.all(),
+        required=False,
+        allow_null=True,
+        error_messages={
+            "does_not_exist": "Staff member not found",
+            "incorrect_type": "Staff member not found",
+            "invalid": "Staff member not found",
+        },
+    )
     department_name = serializers.SerializerMethodField(read_only=True)
     designation_name = serializers.SerializerMethodField(read_only=True)
     role_name = serializers.SerializerMethodField(read_only=True)
+    reporting_manager_name = serializers.SerializerMethodField(read_only=True)
     full_name = serializers.SerializerMethodField(read_only=True)
 
     personal_email = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -495,6 +506,8 @@ class StaffSerializer(serializers.ModelSerializer):
             "custom_field",
             "department",
             "designation",
+            "reporting_manager",
+            "reporting_manager_name",
             "contract_type",
             "location",
             "resume",
@@ -588,6 +601,23 @@ class StaffSerializer(serializers.ModelSerializer):
 
     def get_role_name(self, obj):
         return getattr(getattr(obj, "role", None), "name", None)
+
+    def get_reporting_manager_name(self, obj):
+        manager = getattr(obj, "reporting_manager", None)
+        if not manager:
+            return None
+        return f"{manager.first_name} {manager.last_name}".strip()
+
+    def validate_reporting_manager(self, value):
+        if not value:
+            return value
+        if self.instance and value.pk == self.instance.pk:
+            raise serializers.ValidationError("A staff member cannot report to themself.")
+        request = self.context.get("request")
+        school_id = request.user.school_id if request else None
+        if school_id and value.school_id != school_id:
+            raise serializers.ValidationError("Selected staff member does not belong to your school.")
+        return value
 
     def get_full_name(self, obj):
         parts = [p for p in [obj.first_name, getattr(obj, 'middle_name', ''), obj.last_name] if p]
@@ -1107,15 +1137,10 @@ class StaffSerializer(serializers.ModelSerializer):
             except (TypeError, ValueError):
                 raise serializers.ValidationError({"num_children": "Please enter a valid number of children."})
 
-        # On partial update, skip spouse validation unless marital_status or spouse_parent_name
-        # is explicitly included in the request — otherwise a minimal PATCH (e.g. status only)
-        # would incorrectly fire this check because marital_status comes from the instance.
-        if not self.partial or "marital_status" in self.initial_data or "spouse_parent_name" in self.initial_data:
-            spouse_name_raw = self._normalize_text_input(str(self.initial_data.get("spouse_parent_name", "")))
-            if marital_status_val == "married" and not spouse_name_raw:
-                raise serializers.ValidationError({"spouse_parent_name": "Spouse name is required."})
-            if spouse_name_raw and not _is_valid_person_name(spouse_name_raw):
-                raise serializers.ValidationError({"spouse_parent_name": "Please enter a valid name using alphabets only."})
+        # Spouse name is optional — only validate its format when provided, never require it.
+        spouse_name_raw = self._normalize_text_input(str(self.initial_data.get("spouse_parent_name", "")))
+        if spouse_name_raw and not _is_valid_person_name(spouse_name_raw):
+            raise serializers.ValidationError({"spouse_parent_name": "Please enter a valid name using alphabets only."})
 
         emergency_name_raw = self._normalize_text_input(str(self.initial_data.get("emergency_name", "")))
         if emergency_name_raw and not _is_valid_person_name(emergency_name_raw):
@@ -1948,8 +1973,14 @@ class LeaveTypeSerializer(serializers.ModelSerializer):
         # Policy fields (LeaveType.POLICY_FIELDS) are designed via Settings >
         # Leave Policy (apps.settings), which is now the primary place leave
         # types are created/edited/deleted — read-only here for display.
-        fields = ["id", "school", "name", "max_days_per_year", "is_paid", "is_active", "is_builtin", "created_at"] + LeaveType.POLICY_FIELDS
-        read_only_fields = ["id", "school", "is_builtin", "created_at"] + LeaveType.POLICY_FIELDS
+        fields = [
+            "id", "school", "name", "max_days_per_year", "is_paid", "is_active", "is_builtin", "is_govt_mandated",
+            "created_at",
+        ] + LeaveType.POLICY_FIELDS
+        # Policy fields are writable here too (Configure Policy > Leave
+        # Types edits rows directly), mirroring apps.settings.LeavePolicySerializer
+        # against the same model — both are authorized entry points.
+        read_only_fields = ["id", "school", "is_builtin", "created_at"]
 
     def validate_name(self, value):
         normalized = (value or "").strip()
@@ -1974,8 +2005,12 @@ class LeaveTypeSerializer(serializers.ModelSerializer):
     def validate_max_days_per_year(self, value):
         if value is None:
             raise serializers.ValidationError("Max days is required.")
-        if value <= 0:
-            raise serializers.ValidationError("Max days must be greater than 0.")
+        # Only reject negatives here — 0 is a legitimate ceiling for unpaid,
+        # case-by-case types (e.g. Loss of Pay) that aren't pre-banked.
+        # "Paid leave must have max days greater than 0" is enforced by
+        # validate() below, conditioned on is_paid.
+        if value < 0:
+            raise serializers.ValidationError("Max days cannot be negative.")
         if value > 365:
             raise serializers.ValidationError("Max days cannot exceed 365.")
         return value
@@ -2055,8 +2090,19 @@ class LeaveDefineSerializer(serializers.ModelSerializer):
             "invalid": "Leave type not found",
         },
     )
+    academic_year = serializers.PrimaryKeyRelatedField(
+        queryset=AcademicYear.objects.all(),
+        required=False,
+        allow_null=True,
+        error_messages={
+            "does_not_exist": "Academic year not found",
+            "incorrect_type": "Academic year not found",
+            "invalid": "Academic year not found",
+        },
+    )
 
     role_name = serializers.CharField(source="role.name", read_only=True)
+    academic_year_name = serializers.CharField(source="academic_year.name", read_only=True, default="")
     staff_name = serializers.SerializerMethodField(read_only=True)
     student_name = serializers.SerializerMethodField(read_only=True)
     class_name = serializers.CharField(source="school_class.name", read_only=True)
@@ -2080,6 +2126,8 @@ class LeaveDefineSerializer(serializers.ModelSerializer):
             "section_name",
             "leave_type",
             "leave_type_name",
+            "academic_year",
+            "academic_year_name",
             "days",
             "created_at",
             "updated_at",
@@ -2095,6 +2143,7 @@ class LeaveDefineSerializer(serializers.ModelSerializer):
             "class_name",
             "section_name",
             "leave_type_name",
+            "academic_year_name",
         ]
 
     def get_staff_name(self, obj):
@@ -2160,6 +2209,9 @@ class LeaveDefineSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"school_class": "Selected class does not belong to your school."})
         if school_id and section and section.school_class.school_id != school_id:
             raise serializers.ValidationError({"section": "Selected section does not belong to your school."})
+        academic_year = attrs.get("academic_year") if "academic_year" in attrs else getattr(self.instance, "academic_year", None)
+        if school_id and academic_year and academic_year.school_id != school_id:
+            raise serializers.ValidationError({"academic_year": "Selected academic year does not belong to your school."})
         if school_class and section and section.school_class_id != school_class.id:
             raise serializers.ValidationError({"section": "Selected section does not belong to selected class."})
         if student and school_class and student.current_class_id != school_class.id:
@@ -2208,10 +2260,14 @@ class LeaveDefineSerializer(serializers.ModelSerializer):
 
 class LeaveApprovalStepSerializer(serializers.ModelSerializer):
     approver_name = serializers.SerializerMethodField(read_only=True)
+    acted_by_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = LeaveApprovalStep
-        fields = ["id", "sequence", "role_label", "approver", "approver_name", "status", "became_active_at", "acted_at", "note"]
+        fields = [
+            "id", "sequence", "role_label", "approver", "approver_name",
+            "acted_by", "acted_by_name", "status", "became_active_at", "acted_at", "note",
+        ]
         read_only_fields = fields
 
     def get_approver_name(self, obj):
@@ -2219,28 +2275,69 @@ class LeaveApprovalStepSerializer(serializers.ModelSerializer):
             return obj.approver.get_full_name() or obj.approver.username
         return "Unavailable" if obj.role_label else ""
 
+    def get_acted_by_name(self, obj):
+        if not obj.acted_by_id:
+            return ""
+        return obj.acted_by.get_full_name() or obj.acted_by.username
+
 
 class ApprovalChainPolicySerializer(serializers.ModelSerializer):
     designation_name = serializers.SerializerMethodField(read_only=True)
+    department = serializers.PrimaryKeyRelatedField(
+        queryset=Department.objects.all(), required=False, allow_null=True,
+        error_messages={"does_not_exist": "Department not found", "incorrect_type": "Department not found"},
+    )
+    department_name = serializers.SerializerMethodField(read_only=True)
+    l1_approver_role = serializers.PrimaryKeyRelatedField(
+        queryset=Role.objects.all(), required=False, allow_null=True,
+        error_messages={"does_not_exist": "Role not found", "incorrect_type": "Role not found"},
+    )
+    l2_approver_role = serializers.PrimaryKeyRelatedField(
+        queryset=Role.objects.all(), required=False, allow_null=True,
+        error_messages={"does_not_exist": "Role not found", "incorrect_type": "Role not found"},
+    )
+    l1_approver_role_name = serializers.SerializerMethodField(read_only=True)
+    l2_approver_role_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = ApprovalChainPolicy
         fields = [
-            "id", "school", "designation", "designation_name",
-            "l1_approver_role", "l2_approver_role", "l2_trigger_days", "response_window_days",
+            "id", "school", "designation", "designation_name", "department", "department_name",
+            "l1_approver_role", "l1_approver_role_name",
+            "l2_approver_role", "l2_approver_role_name",
+            "l2_trigger_days", "response_window_days", "is_active",
             "created_at", "updated_at",
         ]
         read_only_fields = ["id", "school", "created_at", "updated_at"]
 
     def get_designation_name(self, obj):
-        return obj.designation.name if obj.designation_id else "All Staff"
+        return obj.designation.name if obj.designation_id else "All Designations"
+
+    def get_department_name(self, obj):
+        return obj.department.name if obj.department_id else "All Departments"
+
+    def get_l1_approver_role_name(self, obj):
+        return obj.l1_approver_role.name if obj.l1_approver_role_id else ""
+
+    def get_l2_approver_role_name(self, obj):
+        return obj.l2_approver_role.name if obj.l2_approver_role_id else ""
 
     def validate(self, attrs):
         request = self.context.get("request")
         school_id = request.user.school_id if request else None
-        designation = attrs.get("designation") or getattr(self.instance, "designation", None)
+        designation = attrs.get("designation") if "designation" in attrs else getattr(self.instance, "designation", None)
         if school_id and designation and designation.school_id != school_id:
             raise serializers.ValidationError({"designation": "Selected designation does not belong to your school."})
+
+        department = attrs.get("department") if "department" in attrs else getattr(self.instance, "department", None)
+        if school_id and department and department.school_id != school_id:
+            raise serializers.ValidationError({"department": "Selected department does not belong to your school."})
+
+        for field_name in ("l1_approver_role", "l2_approver_role"):
+            role = attrs.get(field_name) if field_name in attrs else getattr(self.instance, field_name, None)
+            if school_id and role and role.school_id and role.school_id != school_id:
+                raise serializers.ValidationError({field_name: "Selected role does not belong to your school."})
+
         return attrs
 
 
@@ -2255,6 +2352,8 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     approved_by_name = serializers.SerializerMethodField(read_only=True)
     approval_steps = LeaveApprovalStepSerializer(many=True, read_only=True)
     days_stuck = serializers.SerializerMethodField(read_only=True)
+    projected_l2_role_label = serializers.SerializerMethodField(read_only=True)
+    current_approval_level = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = LeaveRequest
@@ -2275,21 +2374,25 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
             "reason",
             "attachment",
             "approval_note",
+            "substitute_staff_name",
             "status",
             "approved_by",
             "approved_by_name",
             "approved_at",
+            "approved_via_admin_override",
             "is_on_behalf",
             "applied_by",
             "applied_by_name",
             "coverage_risk",
             "approval_steps",
+            "projected_l2_role_label",
+            "current_approval_level",
             "days_stuck",
             "created_at",
             "updated_at",
         ]
         read_only_fields = [
-            "id", "school", "approved_by", "approved_at",
+            "id", "school", "approved_by", "approved_at", "approved_via_admin_override",
             "is_on_behalf", "applied_by", "created_at", "updated_at",
         ]
         extra_kwargs = {
@@ -2315,6 +2418,40 @@ class LeaveRequestSerializer(serializers.ModelSerializer):
     def get_coverage_risk(self, obj):
         from .coverage_utils import has_coverage_risk
         return has_coverage_risk(obj)
+
+    def get_current_approval_level(self, obj):
+        if obj.status != LeaveRequest.STATUS_PENDING:
+            return ""
+        steps = list(obj.approval_steps.all())
+        pending = [s for s in steps if s.status == LeaveApprovalStep.STATUS_PENDING]
+        if not pending:
+            return ""
+        current = min(pending, key=lambda s: s.sequence)
+        return f"L{current.sequence}"
+
+    def get_projected_l2_role_label(self, obj):
+        """While the request is still sitting at L1, an L2 step doesn't
+        exist yet (it's only created once L1 approves — see
+        approval_chain.advance_after_step_approval). Surface the role that
+        *would* pick it up so the UI can show a "future" step placeholder
+        instead of implying this is a single-step chain."""
+        if obj.status != LeaveRequest.STATUS_PENDING:
+            return ""
+        steps = list(obj.approval_steps.all())
+        if len(steps) != 1 or steps[0].status != LeaveApprovalStep.STATUS_PENDING:
+            return ""
+
+        from .approval_chain import get_policy_for_staff
+        policy = get_policy_for_staff(obj.staff)
+        if not policy or not policy.l2_approver_role_id or not policy.l2_trigger_days:
+            return ""
+
+        from .holiday_utils import compute_leave_days
+        duration = compute_leave_days(obj.school_id, obj.leave_type, obj.from_date, obj.to_date)
+        if duration < policy.l2_trigger_days:
+            return ""
+
+        return policy.l2_approver_role.name
 
     def get_applied_by_name(self, obj):
         if not obj.applied_by_id:

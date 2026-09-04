@@ -1,5 +1,50 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Swetha D (03/09/2026)
+
+**Area:** Login lockout for non-superuser accounts (tenancy config), HR → Leave page crash, HR Leave approval-chain Designation/Role-matching gaps, and HR Staff onboarding's spouse-name validation
+
+### 1. Non-superuser login was completely broken over `127.0.0.1`/no-subdomain access
+- Surfaced while testing a principal-level (non-superuser) account: login itself succeeded, but every subsequent request (`/api/v1/hr/staff/`, `/designations/`, `/departments/`, ...) came back 401, force-logging the session out on the very first click. `runserver` logged `Rejecting non-superuser JWT auth without tenant context: <user>` for each one.
+- **Root cause**: `backend/.env` had `MULTI_TENANCY_ENABLED=True`. `TenantAwareJWTAuthentication` (`apps/tenancy/auth.py`) lets superusers through unconditionally but requires a *resolved tenant* for everyone else; `get_tenant_from_request` (`apps/tenancy/resolvers.py`) always returns `None` for `127.0.0.1`/`localhost` (no subdomain). So every non-superuser request to a non-public-path endpoint was rejected outright — testing only ever worked before because it was always done as a superuser, which bypasses the check entirely.
+- Confirmed with the user that flipping this back to `False` does **not** remove multi-school support — school isolation is enforced independently via `school_id` scoping in `apps/core/viewsets.py::PaginatedModelViewSet.get_queryset()`, unconditionally, regardless of this flag. The flag only gates the separate, not-yet-finished schema-per-tenant/subdomain-routing layer. Set `MULTI_TENANCY_ENABLED=False` in `.env` to match the monolithic-mode behavior this project's `CLAUDE.md` already documents as current.
+- **Found a second, real bug while restarting the server for that change**: `TenantContextMiddleware` (`apps/tenancy/middleware.py`) is *always* in `MIDDLEWARE`, regardless of the flag — but its "monolithic no-op" branches in `process_request`, `process_response`, and `process_exception` all unconditionally called `connection.set_schema_to_public()`, a method that only exists on django-tenants' DB backend, which the settings only install when the flag is `True` (`config/settings/base.py:429-430`). With the flag off, this raised `AttributeError` on literally every request (500 on `/api/v1/auth/login/`). This branch had presumably never been exercised before since the flag had always been `True` in this environment. Fixed by guarding all three call sites with `is_multi_tenancy_enabled()`.
+
+### 2. HR → Leave page crashed on open (`useAuth() must be used inside <AuthProvider>`)
+- `ApplyOnBehalfModal` and `LeaveDetailDrawer` inside `frontend/app/(dashboard)/hr/leave/page.tsx` called `useAuth()` from `lib/auth-context.tsx`. But the `(dashboard)` route group's layout wraps pages in `AuthGate`, not `AuthProvider` — in this codebase `AuthProvider` is only ever used by standalone pages that self-wrap (`login`, `change-password`, `reset-password`, `forgot-password`). Every other dashboard page gets the current user via `usePermissions()` instead. Fixed both call sites to use `usePermissions()`'s `me` (same `is_superuser`/`is_school_admin` shape), matching the rest of the app.
+
+### 3. Approval Chain: Designation dropdown wasn't filtered by Department
+- `AddChainRuleRow` (`frontend/components/hr/LeaveSetupWizard.tsx`) called `useDesignations()` with no argument, always loading every Designation regardless of which Department was selected in the same row — even though `Designation.department` is a mandatory FK (`apps/hr/models.py`) and the fetch hook already supports server-side filtering (`useDesignations(deptId?)`, `hooks/useHrApi.ts`). Picking a Designation from an unrelated Department silently created a policy rule that could never match anyone. Fixed to pass the selected `departmentId` through, and to clear the selected Designation whenever the Department changes.
+
+### 4. Approval Chain "⚠ no matching staff" warnings — two separate root causes, one systemic fix
+- **Case 1 (Role "Management" vs Designation "Manager")**: turned out to be a genuine naming mismatch, not a bug — the coverage check (`apps/hr/approval_chain.py`) requires an exact (case-insensitive) match between the configured Role's name and an active staff member's Designation name; the actual staff member held Designation "Manager", not "Management". No code change; flagged as a naming decision for the user.
+- **Case 2 (Role "Transport Incharge")**: the user wanted a specific staff member (Designation = "Bus Coordinator", separately assigned the RBAC Role "Transport Incharge") to resolve as L1 approver for the Driver designation, *without* changing his Designation. This exposed a real gap: `resolve_role_to_user()`/`role_has_resolvable_target()` only ever matched by Designation-name text — there was no path to resolve via a staff member's actually-assigned `Staff.role` FK at all. **Fixed**: both functions now match on `designation__name__iexact=role_name` **OR** `role_id=role.id` (`Q` OR), so a Role can resolve to whoever holds it directly, independent of Designation-title wording. Verified live: coverage check passes, and `resolve_role_to_user()` correctly resolves a different Driver-designation staff member's L1 approver to this user — Designation left untouched as "Bus Coordinator".
+  - ⚠️ Mid-investigation I renamed that Designation to "Transport Incharge" as a one-off data fix before the user clarified they specifically did **not** want that field changed — reverted immediately once corrected. Lesson: don't unilaterally rename a business-meaning field as a "fix" for an approval-routing gap when there are two plausible targets (Role vs Designation) and the user hasn't said which one should change.
+  - This is a **behavior change for the whole approval-chain system**, not just this one rule — any existing `ApprovalChainPolicy` row whose configured Role name happens to coincidentally match an unrelated Designation, or whose name matches someone's directly-assigned Role, will now resolve differently (more permissively) than before. Worth a sanity pass across existing policies next session, not just the one rule touched here.
+
+### 5. HR Staff onboarding: "Spouse name is required" was blocking saves, made optional per user decision
+- Root cause of the specific report was working-as-designed (a married staff record that genuinely had no stored spouse name — `spouse_parent_name` isn't a real DB column, it's one of several "extra" fields folded into a `custom_field` JSON blob on `Staff`, same mechanism as `nin`/`pan`/`emergency_*`). Confirmed via a direct serializer test that supplying a real value cleared the error cleanly.
+- Per explicit user decision ("this is not a mandatory field"), removed the "required when married" rule everywhere it existed — backend (`apps/hr/serializers.py` `validate()`) and three frontend spots in `frontend/app/(dashboard)/hr/onboard/page.tsx` (step-4 navigation guard, inline field error, required asterisk). Format validation (must look like a real name *if* one is entered) is unchanged.
+- ⚠️ Flagged, not fixed: saving this same staff record will likely hit a **different**, unrelated legacy-data validation error next, on `bank_account_name` ("Please enter a valid account holder name...") — same class of problem (an existing value that predates a since-tightened validation rule), different field. Out of scope this session.
+
+### Files changed
+- `backend/.env` (`MULTI_TENANCY_ENABLED` → `False`)
+- `backend/apps/tenancy/middleware.py` (guarded `set_schema_to_public()` calls behind `is_multi_tenancy_enabled()`)
+- `backend/apps/hr/approval_chain.py` (Role resolution now also matches `Staff.role` FK, not just Designation name)
+- `backend/apps/hr/serializers.py` (`spouse_parent_name` no longer required when married)
+- `frontend/app/(dashboard)/hr/leave/page.tsx` (`useAuth()` → `usePermissions()`)
+- `frontend/app/(dashboard)/hr/onboard/page.tsx` (spouse-name required-checks removed, 3 spots)
+- `frontend/components/hr/LeaveSetupWizard.tsx` (Designation dropdown filtered by selected Department)
+
+### Status
+✅ Backend changes verified directly against the live dev DB via Django shell (`StaffSerializer.is_valid()`, `role_has_resolvable_target()`, `resolve_role_to_user()`) rather than pytest — the pytest/`migrate_schemas` breakage documented in the 31/08 entry above wasn't re-checked this session, may still apply. Login flow re-tested end-to-end after both tenancy fixes (server restart required each time since `.env` is only read at process start). `tsc --noEmit` clean on every touched frontend file.
+
+⚠️ **Not yet live-verified in the browser by me** — per this project's convention I don't start dev servers; the user confirmed the original login-lockout and page-crash symptoms live, but the Designation-dropdown-by-department filter and the final spouse-name-optional change were not explicitly re-confirmed live as of this entry — worth a quick click-through next session if not already done.
+
+⚠️ **Team-wide heads-up**: `MULTI_TENANCY_ENABLED` in `backend/.env` is local, untracked config — worth confirming every team member's local `.env` agrees on `False` (monolithic mode, matching `CLAUDE.md`) so this exact lockout doesn't resurface for someone else testing a non-superuser account.
+
+---
+
 ## Update — Swetha D (31/08/2026)
 
 **Area:** HR → Leave Management page — full rebuild to match reference screenshots (Applications tab, Coverage calendar, stats, multi-step approval chain, Apply on Behalf), plus a hand-edited resolution of a git merge conflict in Academics

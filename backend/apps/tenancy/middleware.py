@@ -58,7 +58,10 @@ class TenantMainMiddleware(MiddlewareMixin):
         Raises:
             Http404: If subdomain is known but tenant doesn't exist
         """
-        # If multi-tenancy is disabled, operate in monolithic mode
+        # If multi-tenancy is disabled, operate in monolithic mode. No schema
+        # switching ever happens in this mode, so there's nothing to reset —
+        # set_schema_to_public() only exists on django-tenants' DB backend,
+        # which isn't in use when the flag is off (see base.py ENGINE swap).
         if not is_multi_tenancy_enabled():
             clear_tenant_context()
             request.tenant = None  # Explicitly mark as monolithic
@@ -160,7 +163,12 @@ class TenantMainMiddleware(MiddlewareMixin):
         # a live risk, but resetting explicitly rather than relying on that
         # setting never changing.
         clear_tenant_context()
+<<<<<<< HEAD
         self._reset_to_public_schema()
+=======
+        if is_multi_tenancy_enabled():
+            connection.set_schema_to_public()
+>>>>>>> Leave
         return response
 
     def process_exception(self, request: HttpRequest, exception: Exception) -> Optional[HttpResponse]:
@@ -174,7 +182,12 @@ class TenantMainMiddleware(MiddlewareMixin):
             None (let exception propagate)
         """
         clear_tenant_context()
+<<<<<<< HEAD
         self._reset_to_public_schema()
+=======
+        if is_multi_tenancy_enabled():
+            connection.set_schema_to_public()
+>>>>>>> Leave
         return None
 
     @staticmethod
