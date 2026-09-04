@@ -401,6 +401,14 @@ export interface AttendanceRecord {
   created_at: string;
 }
 
+// A checkable line item — used for both the handover/asset-return checklist
+// and the documents-to-issue list, so custom items can be added to either
+// while still tracking done/not-done per item.
+export interface OffboardingChecklistItem {
+  label: string;
+  done: boolean;
+}
+
 export interface OffboardingRecord {
   id: number;
   staff: number;
@@ -409,32 +417,30 @@ export interface OffboardingRecord {
   department: string;
   designation: string;
   joining_date: string;
+  exit_type: "Resignation" | "Termination" | "Retirement" | "End of Contract" | "Transfer" | "Voluntary Exit" | "";
+  exit_reason: string;
   last_working_day: string;
-  last_working_date?: string;   // alias
-  exit_type: "Resignation" | "Termination" | "Retirement" | "End of Contract" | "Transfer" | "Voluntary Exit";
-  exit_reason?: string;         // flat alias used in form
-  notice_period_status: string;
-  notice_period_days?: number;  // form field
-  exit_interview_conducted: string;
-  exit_interview_notes?: string; // form field
-  interview_date: string;
+  notice_period_status: "" | "Served" | "Bought Out" | "Waived" | "Partial";
+  notice_period_days: number | null;
+  exit_interview_conducted: "Pending" | "Scheduled" | "Conducted" | "Waived";
+  exit_interview_notes: string;
+  interview_date: string | null;
   primary_reason: string;
-  handover_checklist: Array<{ label: string; done: boolean }> | Record<string, boolean>;
-  financial_clearance?: Record<string, boolean>; // form field
-  ff_status: string;
+  handover_checklist: OffboardingChecklistItem[];
+  financial_clearance: Record<string, unknown>;
+  ff_status: "Pending" | "Processing" | "Cleared";
   salary_dues_cleared: boolean;
   advance_loan: number;
   gratuity_applicable: boolean;
-  pf_esi_settlement: string;
-  docs_to_issue: string[];
-  documents_to_issue?: string[]; // alias
-  hod_approval: string;
-  principal_approval: string;
-  hr_signoff: string;
-  finance_clearance: string;
+  pf_esi_settlement: "Pending" | "Approved" | "Rejected";
+  docs_to_issue: OffboardingChecklistItem[];
+  hod_approval: "Pending" | "Approved" | "Rejected";
+  principal_approval: "Pending" | "Approved" | "Rejected";
+  hr_signoff: "Pending" | "Approved" | "Rejected";
+  finance_clearance: "Pending" | "Approved" | "Rejected";
   hr_notes: string;
   status: "initiated" | "in_progress" | "completed";
-  is_complete?: boolean;         // computed from status
+  is_complete: boolean;
   completed_at: string | null;
   created_at: string;
 }

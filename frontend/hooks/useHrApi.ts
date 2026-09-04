@@ -610,6 +610,49 @@ export function useLeaveCoverageDay(date: string | null) {
   );
 }
 
+// ─── Self-service: My Leave (the logged-in user's own applications) ─────────
+// Separate from useLeaveApplications above — that hook's backing queryset
+// mixes "own" with "requests I approve" for the admin Applications table;
+// this one (my-leave/) is only ever the caller's own submitted requests.
+export interface MyLeaveResponse {
+  count: number;
+  next?: string | null;
+  previous?: string | null;
+  results: LeaveApplication[];
+  /** false when the logged-in user has no linked Staff profile yet. */
+  staff_linked: boolean;
+}
+
+export function useMyLeaveApplications(filters: { status?: string } = {}) {
+  const params = new URLSearchParams({ page_size: "100" });
+  if (filters.status) params.set("status", filters.status);
+  return useFetch<MyLeaveResponse>(
+    `/api/v1/hr/leave-requests/my-leave/?${params.toString()}`,
+    [filters.status],
+  );
+}
+
+export interface MyLeaveBalanceRow {
+  leave_type_id: number;
+  leave_type_name: string;
+  is_paid: boolean;
+  available_days: number | null;
+  total_days: number | null;
+  used_days: number | null;
+}
+
+export interface MyLeaveBalanceResponse {
+  leave_balances: MyLeaveBalanceRow[];
+  staff_linked: boolean;
+  /** The caller's own Staff.gender, e.g. for hiding Maternity/Paternity-style
+   * leave types that don't apply to them in the Apply Leave form. */
+  staff_gender?: string;
+}
+
+export function useMyLeaveBalance() {
+  return useFetch<MyLeaveBalanceResponse>("/api/v1/hr/leave-requests/my-balance/");
+}
+
 // ─── Academic Years (Configure Policy > Entitlements year selector) ──────────
 export function useAcademicYears() {
   return useFetch<PaginatedHR<AcademicYearOption>>("/api/v1/core/academic-years/?page_size=200");
@@ -828,7 +871,11 @@ export interface OffboardingFilters {
 
 export function useOffboarding(filters: OffboardingFilters = {}) {
   const params = new URLSearchParams({ page_size: "50" });
-  if (filters.dept) params.set("department", filters.dept);
+  // OffboardingViewSet.filterset_fields declares this as "staff__department"
+  // (django-filter uses the field path itself as the query param name) —
+  // plain "department" was silently ignored server-side, so this filter
+  // never actually applied.
+  if (filters.dept) params.set("staff__department", filters.dept);
   if (filters.status) params.set("status", filters.status);
   const exitVal = filters.exitType ?? filters.exit_reason;
   if (exitVal) params.set("exit_type", exitVal);

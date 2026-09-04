@@ -2023,6 +2023,83 @@ class LeaveRequestViewSet(SchoolScopedModelViewSet):
             "substitute_staff_name": leave_request.substitute_staff_name,
         })
 
+    @action(detail=False, methods=["get"], url_path="my-leave")
+    def my_leave(self, request):
+        """Self-service: the current user's own submitted leave requests only
+        — never requests they merely sit on the approval chain for. A
+        separate, additive read path from get_queryset() above (which mixes
+        "own" with "approving" for the admin Applications table) so the
+        personal 'My Leave' view can't accidentally show someone else's
+        request just because the caller happens to be their approver."""
+        staff = self._current_staff()
+        if not staff:
+            return Response({"count": 0, "results": [], "staff_linked": False})
+
+        queryset = LeaveRequest.objects.select_related(
+            "school", "staff", "staff__department", "staff__designation", "leave_type", "approved_by", "applied_by"
+        ).prefetch_related(
+            "approval_steps", "approval_steps__approver", "approval_steps__acted_by"
+        ).filter(staff=staff).order_by("-created_at")
+
+        status_param = request.query_params.get("status")
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+
+        page = self.paginate_queryset(queryset)
+        serializer = self.get_serializer(page if page is not None else queryset, many=True)
+        if page is not None:
+            response = self.get_paginated_response(serializer.data)
+            response.data["staff_linked"] = True
+            return response
+        return Response({"count": len(serializer.data), "results": serializer.data, "staff_linked": True})
+
+    @action(detail=False, methods=["get"], url_path="my-balance")
+    def my_balance(self, request):
+        """Self-service: the current user's own per-leave-type balance for
+        the personal 'My Leave' summary. Independent of full_detail() above,
+        which is scoped to one existing leave_request's staff rather than
+        "whoever is asking" — kept as its own read path so it never needs an
+        existing leave request to answer "what's my balance right now"."""
+        from apps.settings.models import LeaveBalance
+        from apps.settings.leave_seed import resolve_entitlements_for_staff
+
+        staff = self._current_staff()
+        if not staff:
+            return Response({"leave_balances": [], "staff_linked": False})
+
+        school_id = staff.school_id
+        year = timezone.localdate().year
+        academic_year = (
+            AcademicYear.objects.filter(school_id=school_id, is_current=True).first()
+            or AcademicYear.objects.filter(school_id=school_id, is_active=True).order_by("-start_date").first()
+        )
+        entitled_days_by_type = resolve_entitlements_for_staff(school_id, academic_year, staff.role_id)
+
+        leave_balances = []
+        for lt in LeaveType.objects.filter(school_id=school_id, is_active=True).order_by("name"):
+            balance = LeaveBalance.objects.filter(staff_id=staff.id, leave_type_id=lt.id, year=year).first()
+            entitled_days = entitled_days_by_type.get(lt.id)
+            if balance and balance.total_days:
+                total_days = float(balance.total_days)
+                used_days = float(balance.used_days)
+                available_days = float(balance.available_days)
+            elif entitled_days is not None:
+                total_days = float(entitled_days)
+                used_days = float(balance.used_days) if balance else 0.0
+                available_days = total_days + (float(balance.carried_forward) if balance else 0.0) - used_days
+            else:
+                total_days = used_days = available_days = None
+            leave_balances.append({
+                "leave_type_id": lt.id,
+                "leave_type_name": lt.name,
+                "is_paid": lt.is_paid,
+                "available_days": available_days,
+                "total_days": total_days,
+                "used_days": used_days,
+            })
+
+        return Response({"leave_balances": leave_balances, "staff_linked": True, "staff_gender": staff.gender})
+
     @action(detail=True, methods=["post"], url_path="substitute")
     def set_substitute(self, request, pk=None):
         # A dedicated, single-field action rather than the generic PATCH

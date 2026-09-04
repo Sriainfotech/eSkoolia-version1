@@ -15,7 +15,6 @@ const COMING_SOON_PATHS = new Set([
   '/academics/homework-list', '/academics/other-downloads-list', '/academics/study-material-list',
   '/academics/syllabus-list', '/academics/upload-content', '/academics/assignment-list',
   '/academics/lesson-planner',
-  '/hr/offboarding',
 ]);
 
 const FEES_SOON_BADGE_PATHS = new Set<string>([]);
