@@ -163,12 +163,7 @@ class TenantMainMiddleware(MiddlewareMixin):
         # a live risk, but resetting explicitly rather than relying on that
         # setting never changing.
         clear_tenant_context()
-<<<<<<< HEAD
         self._reset_to_public_schema()
-=======
-        if is_multi_tenancy_enabled():
-            connection.set_schema_to_public()
->>>>>>> Leave
         return response
 
     def process_exception(self, request: HttpRequest, exception: Exception) -> Optional[HttpResponse]:
@@ -182,12 +177,7 @@ class TenantMainMiddleware(MiddlewareMixin):
             None (let exception propagate)
         """
         clear_tenant_context()
-<<<<<<< HEAD
         self._reset_to_public_schema()
-=======
-        if is_multi_tenancy_enabled():
-            connection.set_schema_to_public()
->>>>>>> Leave
         return None
 
     @staticmethod
