@@ -93,7 +93,7 @@ export default function FoundationWorkspace({ initialTab = "foundation" }: Props
                     return current ? (
                       <button
                         onClick={() => setWzStep(1)}
-                        className="flex items-center gap-1 px-3 py-1 rounded-full text-[12px] font-semibold border bg-[#5B4FCF] text-white border-[#5B4FCF] transition-all"
+                        className="flex items-center gap-1 px-3 py-1 rounded-full text-[12px] font-semibold border bg-white text-[#5B4FCF] border-[#5B4FCF] transition-all"
                       >
                         {current.name}
                         <span>✓</span>

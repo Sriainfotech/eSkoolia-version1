@@ -29,6 +29,8 @@ const DEFAULT_API_BASE_URL = deriveApiBaseUrl();
 // On the dev tunnel OR a tenant subdomain, ignore the localhost env var so the
 // browser hits the correct host and the backend tenant middleware sees the subdomain.
 function pickApiBaseUrl(): string {
+  const explicit = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL;
+
   if (typeof window !== "undefined") {
     const host = window.location.hostname;
     const onTunnel = /devtunnels\.ms$/i.test(host) || /\.githubpreview\.dev$/i.test(host);
@@ -37,6 +39,11 @@ function pickApiBaseUrl(): string {
     // Host header carries the subdomain to the backend tenant middleware.
     const parts = host.split(".");
     if (parts.length >= 3 && parts[1] === "eskoolia") return DEFAULT_API_BASE_URL;
+    // An explicit env override (e.g. backend running on another device on the
+    // LAN) always wins over same-host defaults — this is what makes a
+    // cross-device setup (frontend and backend on different machines) work,
+    // regardless of which hostname the frontend itself was opened from.
+    if (explicit) return explicit;
     // On local dev, hit Django directly instead of going through Next.js
     // rewrites. The proxy layer can normalize trailing slashes on POST routes,
     // which breaks Django endpoints protected by APPEND_SLASH.
@@ -44,7 +51,7 @@ function pickApiBaseUrl(): string {
       return `http://127.0.0.1:${DEV_BACKEND_PORT}`;
     }
   }
-  return process.env.NEXT_PUBLIC_API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || DEFAULT_API_BASE_URL;
+  return explicit || DEFAULT_API_BASE_URL;
 }
 
 export const API_BASE_URL = pickApiBaseUrl();

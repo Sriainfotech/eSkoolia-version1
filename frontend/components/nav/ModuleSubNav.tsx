@@ -63,6 +63,15 @@ export function ModuleSubNav() {
 
   if (!mod || mod.sub.length === 0) return null;
 
+  // Standard light bar — same for every module (Examination's Command
+  // Center now matches this palette instead of the other way around).
+  const barBg = '#fff';
+  const barBorder = 'var(--bd)';
+  const textMuted = 'var(--ink-2)';
+  const textStrong = 'var(--ink-1)';
+  const chipBg = mod.bg;
+  const chipIcon = mod.ic;
+
   // Find the best-matching active tab (longest path match wins, preventing parent paths from being
   // active on child routes, e.g. /roles being active on /roles/login-permission)
   const activeTab = mod.sub.reduce<typeof mod.sub[0] | null>((best, s) => {
@@ -80,7 +89,7 @@ export function ModuleSubNav() {
       style={{
         flexShrink: 0, width: 28, height: 46, border: 'none', cursor: enabled ? 'pointer' : 'default',
         background: enabled
-          ? 'linear-gradient(to ' + (dir === 'left' ? 'right' : 'left') + ', #fff 60%, transparent)'
+          ? `linear-gradient(to ${dir === 'left' ? 'right' : 'left'}, ${barBg} 60%, transparent)`
           : 'transparent',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         opacity: enabled ? 1 : 0.25, transition: 'opacity 0.15s',
@@ -89,14 +98,14 @@ export function ModuleSubNav() {
       }}
     >
       {dir === 'left'
-        ? <ChevronLeft size={15} color="var(--ink-2)" strokeWidth={2} />
-        : <ChevronRight size={15} color="var(--ink-2)" strokeWidth={2} />
+        ? <ChevronLeft size={15} color={textMuted} strokeWidth={2} />
+        : <ChevronRight size={15} color={textMuted} strokeWidth={2} />
       }
     </button>
   );
 
   return (
-    <div style={{ background: '#fff', borderBottom: '1px solid var(--bd)', position: 'relative' }}>
+    <div style={{ background: barBg, borderBottom: `1px solid ${barBorder}`, position: 'relative' }}>
       <div style={{
         display: 'flex', alignItems: 'center', minHeight: 46,
         padding: mod.cleanTabs ? '0 18px' : '0 18px 0 8px', gap: 0,
@@ -107,16 +116,16 @@ export function ModuleSubNav() {
           <div style={{
             display: 'flex', alignItems: 'center', gap: 6,
             paddingRight: 12, marginRight: 7,
-            borderRight: '1px solid var(--bd)',
+            borderRight: `1px solid ${barBorder}`,
             flexShrink: 0,
           }}>
             <div style={{
               width: 20, height: 20, borderRadius: 6,
-              background: mod.bg, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: chipBg, display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-              <mod.icon size={11} color={mod.ic} strokeWidth={1.8} />
+              <mod.icon size={11} color={chipIcon} strokeWidth={1.8} />
             </div>
-            <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-2)', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: textMuted, whiteSpace: 'nowrap' }}>
               {mod.name}
             </span>
           </div>
@@ -159,7 +168,7 @@ export function ModuleSubNav() {
                   height: 46, padding: '1px 14px 0',
                   fontSize: 13, fontWeight: 600,
                   lineHeight: 1.25,
-                  color: isActive ? 'var(--pu)' : 'var(--ink-2)',
+                  color: isActive ? 'var(--pu)' : textMuted,
                   textDecoration: 'none', whiteSpace: 'nowrap',
                   transition: 'color 0.12s',
                   borderBottom: isActive ? '2px solid var(--pu)' : '2px solid transparent',
@@ -167,10 +176,10 @@ export function ModuleSubNav() {
                   cursor: subComingSoon ? 'default' : 'pointer',
                 }}
                 onMouseEnter={e => {
-                  if (!isActive && !subComingSoon) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--ink-1)';
+                  if (!isActive && !subComingSoon) (e.currentTarget as HTMLAnchorElement).style.color = textStrong;
                 }}
                 onMouseLeave={e => {
-                  if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = 'var(--ink-2)';
+                  if (!isActive) (e.currentTarget as HTMLAnchorElement).style.color = textMuted;
                 }}
               >
                 {!mod.cleanTabs && <SubIcon size={12} strokeWidth={1.8} />}

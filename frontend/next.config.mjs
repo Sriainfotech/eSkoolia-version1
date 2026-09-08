@@ -2,7 +2,15 @@
 // Derives the port from NEXT_PUBLIC_BACKEND_PORT so there is a single source
 // of truth — set it in .env and both the browser and proxy use the same port.
 const BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
-const BACKEND_URL = process.env.BACKEND_URL || `http://127.0.0.1:${BACKEND_PORT}`;
+// Falls back to NEXT_PUBLIC_API_URL/NEXT_PUBLIC_API_BASE_URL (the same vars
+// frontend/lib/api.ts reads) so a cross-device setup — backend running on
+// another machine on the LAN — also works for requests proxied through this
+// rewrite, not just the ones frontend code sends directly to API_BASE_URL.
+const BACKEND_URL =
+  process.env.BACKEND_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  `http://127.0.0.1:${BACKEND_PORT}`;
 
 const nextConfig = {
   reactStrictMode: true,
