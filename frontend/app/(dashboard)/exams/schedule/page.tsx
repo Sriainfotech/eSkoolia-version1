@@ -1,17 +1,40 @@
 "use client";
 /**
  * Examination › Schedule & Logistics — "every cycle" group: Timetable →
- * Admit Cards → Seat Plan. Static mockup only (per product ask): conflict
- * resolution and "generate" actions just flip local component state, nothing
- * calls the backend. Palette from lib/examTheme.ts.
+ * Admit Cards → Seat Plan. Wired to the real backend (apps/exams/views.py::
+ * ExamCommandCenterAPIView/DetailAPIView for the timetable + conflict
+ * detection, plus ExamPlanAdmitCard and ExamPlanSeatPlan for the other steps)
+ * via hooks/useExamsApi.ts — replaces the earlier static mockup. Conflicts
+ * surface the backend's real ExamRoutine.clean() message; there is no
+ * "suggest a free room" engine, so resolution means editing the slot.
+ * Palette from lib/examTheme.ts.
  */
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  ArrowLeft, Calendar, ExternalLink, Plus, AlertTriangle, Star,
-  CreditCard, Grid3x3, Check,
+  ArrowLeft, Calendar, Plus, AlertTriangle, CreditCard, Grid3x3, Check, X, Pencil, Trash2,
 } from "lucide-react";
 import { examTheme as T } from "@/lib/examTheme";
+import {
+  createExamRoutine,
+  deleteExamRoutine,
+  ExamsApiError,
+  generateAdmitCard,
+  generateSeatPlan,
+  saveAdmitCardSetting,
+  saveSeatPlanSetting,
+  searchAdmitCard,
+  searchSeatPlan,
+  updateExamRoutine,
+  useAdmitCardIndex,
+  useAdmitCardSetting,
+  useExamRoutines,
+  useExamScheduleCriteria,
+  useExamSetupSubjectsByClass,
+  useSeatPlanIndex,
+  useSeatPlanSetting,
+} from "@/hooks/useExamsApi";
+import type { AdmitCardSetting, ExamPlanStudentRecord, ExamRoutineRow, SeatPlanSetting } from "@/types/exams";
 
 type StepId = 1 | 2 | 3;
 const STEPS: { id: StepId; label: string }[] = [
@@ -20,35 +43,41 @@ const STEPS: { id: StepId; label: string }[] = [
   { id: 3, label: "Seat Plan" },
 ];
 
-const DAYS = [
-  { label: "MON", n: 14, exams: 6, conflictKey: null },
-  { label: "TUE", n: 15, exams: 8, conflictKey: null },
-  { label: "WED", n: 16, exams: 7, conflictKey: "room" as const },
-  { label: "THU", n: 17, exams: 6, conflictKey: null },
-  { label: "FRI", n: 18, exams: 5, conflictKey: "iyer" as const },
-  { label: "SAT", n: 19, exams: 7, conflictKey: null },
-  { label: "SUN", n: 20, exams: 0, conflictKey: null },
-  { label: "MON", n: 21, exams: 8, conflictKey: null },
-];
-
-interface ScheduleRow {
-  id: string; date: string; subject: string; cls: string; room: string; invigilator: string; marks: string;
-  conflictKey: "room" | "iyer" | null;
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-const BASE_ROWS: ScheduleRow[] = [
-  { id: "r1", date: "Sep 14 · 9:00–11:00", subject: "Mathematics", cls: "Grade 8A", room: "Room 101", invigilator: "Mr. Rao", marks: "80 / 26", conflictKey: null },
-  { id: "r2", date: "Sep 16 · 10:00–12:00", subject: "Science", cls: "Grade 8B", room: "Room 204", invigilator: "Mr. Sharma", marks: "80 / 26", conflictKey: "room" },
-  { id: "r3", date: "Sep 16 · 10:00–12:00", subject: "Mathematics", cls: "Grade 9A", room: "Room 204", invigilator: "Ms. Iyer", marks: "80 / 26", conflictKey: "room" },
-  { id: "r4", date: "Sep 17 · 9:00–11:00", subject: "English", cls: "Grade 8A", room: "Room 101", invigilator: "Mrs. Fernandes", marks: "80 / 26", conflictKey: null },
-  { id: "r5", date: "Sep 18 · 9:00–11:00", subject: "Social Science", cls: "Grade 6C", room: "Room 205", invigilator: "Ms. Iyer", marks: "80 / 26", conflictKey: "iyer" },
-];
+function formatTime(value: string) {
+  return value ? value.slice(0, 5) : "";
+}
 
-const STUDENTS = [
-  { id: "s1", name: "Ananya Rao", cls: "Grade 8A", room: "Room 101" },
-  { id: "s2", name: "Kabir Malhotra", cls: "Grade 8A", room: "Room 101" },
-  { id: "s3", name: "Zara Sheikh", cls: "Grade 8A", room: "Room 101" },
-];
+interface RoutineConflict {
+  routineId: number;
+  type: "room" | "class" | "teacher";
+  detail: string;
+}
+
+function detectConflicts(rows: ExamRoutineRow[]): RoutineConflict[] {
+  const conflicts: RoutineConflict[] = [];
+  const overlaps = (a: ExamRoutineRow, b: ExamRoutineRow) => a.start_time < b.end_time && b.start_time < a.end_time;
+  for (let i = 0; i < rows.length; i += 1) {
+    for (let j = i + 1; j < rows.length; j += 1) {
+      const a = rows[i];
+      const b = rows[j];
+      if (!overlaps(a, b)) continue;
+      if (a.room && a.room.toUpperCase() === b.room.toUpperCase()) {
+        conflicts.push({ routineId: a.id, type: "room", detail: `Room ${a.room} double-booked: ${a.class_name} ${a.subject} and ${b.class_name} ${b.subject} at ${formatTime(a.start_time)}` });
+      }
+      if (a.class_id === b.class_id && (a.section_id ?? null) === (b.section_id ?? null)) {
+        conflicts.push({ routineId: a.id, type: "class", detail: `${a.class_name}-${a.section || "All"} double-booked: ${a.subject} and ${b.subject} overlap at ${formatTime(a.start_time)}` });
+      }
+      if (a.teacher_id && a.teacher_id === b.teacher_id) {
+        conflicts.push({ routineId: a.id, type: "teacher", detail: `${a.teacher} is assigned to two rooms at ${formatTime(a.start_time)}: ${a.room} and ${b.room}` });
+      }
+    }
+  }
+  return conflicts;
+}
 
 function Eyebrow({ children }: { children: React.ReactNode }) {
   return (
@@ -82,22 +111,192 @@ function Chip({ label, checked, onToggle }: { label: string; checked: boolean; o
   );
 }
 
+const selectSx: React.CSSProperties = {
+  height: 36, borderRadius: 8, border: `1px solid ${T.borderStrong}`,
+  padding: "0 10px", fontSize: 12.5, color: T.ink1, background: "#fff", outline: "none",
+};
+
 export default function ScheduleLogisticsPage() {
   const [step, setStep] = useState<StepId>(1);
-  const [roomConflict, setRoomConflict] = useState(true);
-  const [iyerConflict, setIyerConflict] = useState(true);
-  const [admitFields, setAdmitFields] = useState({
-    photo: true, name: true, admissionNo: true, classSection: true, examName: true, ayLabel: false,
-  });
-  const [seatFields, setSeatFields] = useState({ school: true, roll: true, photo: true, seatLabel: false });
-  const [generatedAdmit, setGeneratedAdmit] = useState<Set<string>>(new Set(["s1"]));
-  const [generatedSeat, setGeneratedSeat] = useState<Set<string>>(new Set(["s1"]));
 
-  const conflictCount = (roomConflict ? 1 : 0) + (iyerConflict ? 1 : 0);
-  const rows = BASE_ROWS.map((r) => ({
-    ...r,
-    isConflict: (r.conflictKey === "room" && roomConflict) || (r.conflictKey === "iyer" && iyerConflict),
-  }));
+  const { data: criteria } = useExamScheduleCriteria();
+  const [examTypeId, setExamTypeId] = useState<number | null>(null);
+  const [classId, setClassId] = useState<number | null>(null);
+  const [sectionId, setSectionId] = useState<number | null>(null);
+  const [date, setDate] = useState(todayIso());
+
+  useEffect(() => {
+    if (!criteria) return;
+    if (examTypeId === null && criteria.exam_types.length) setExamTypeId(criteria.exam_types[0].id);
+    if (classId === null && criteria.classes.length) setClassId(criteria.classes[0].id);
+  }, [criteria, examTypeId, classId]);
+
+  const sectionsForClass = useMemo(() => (criteria?.sections ?? []).filter((s) => s.class_id === classId), [criteria, classId]);
+  useEffect(() => {
+    if (!sectionsForClass.length) { setSectionId(null); return; }
+    if (!sectionsForClass.some((s) => s.id === sectionId)) setSectionId(sectionsForClass[0].id);
+  }, [sectionsForClass, sectionId]);
+
+  const { data: routines, loading: routinesLoading, refetch: refetchRoutines } = useExamRoutines({
+    date, exam_type_id: examTypeId ?? undefined,
+  });
+  const rows = useMemo(() => routines ?? [], [routines]);
+  const conflicts = useMemo(() => detectConflicts(rows), [rows]);
+  const conflictedIds = new Set(conflicts.map((c) => c.routineId));
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [editingRow, setEditingRow] = useState<ExamRoutineRow | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [formClassId, setFormClassId] = useState<number | null>(null);
+  const [formSectionId, setFormSectionId] = useState<number | null>(null);
+  const [formSubjectId, setFormSubjectId] = useState<number | null>(null);
+  const [formTeacherId, setFormTeacherId] = useState<number | null>(null);
+  const [formRoomId, setFormRoomId] = useState<number | null>(null);
+  const [formStart, setFormStart] = useState("09:00");
+  const [formEnd, setFormEnd] = useState("11:00");
+  const { data: formSubjects } = useExamSetupSubjectsByClass(formClassId);
+  const formSections = useMemo(() => (criteria?.sections ?? []).filter((s) => s.class_id === formClassId), [criteria, formClassId]);
+
+  const openNewSlot = () => {
+    setEditingRow(null);
+    setFormClassId(classId);
+    setFormSectionId(sectionId);
+    setFormSubjectId(null);
+    setFormTeacherId(null);
+    setFormRoomId(null);
+    setFormStart("09:00");
+    setFormEnd("11:00");
+    setSaveError(null);
+    setFormOpen(true);
+  };
+
+  const openEditSlot = (row: ExamRoutineRow) => {
+    setEditingRow(row);
+    setFormClassId(row.class_id);
+    setFormSectionId(row.section_id);
+    setFormSubjectId(row.subject_id);
+    setFormTeacherId(row.teacher_id);
+    setFormRoomId(row.room_id);
+    setFormStart(formatTime(row.start_time));
+    setFormEnd(formatTime(row.end_time));
+    setSaveError(null);
+    setFormOpen(true);
+  };
+
+  const handleSaveSlot = async () => {
+    if (!examTypeId || !formClassId || !formSubjectId) {
+      setSaveError("Class and subject are required.");
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const payload = {
+        exam_type_id: examTypeId,
+        class_id: formClassId,
+        section_id: formSectionId,
+        subject: formSubjectId,
+        teacher_id: formTeacherId,
+        room_id: formRoomId,
+        exam_date: date,
+        start_time: `${formStart}:00`,
+        end_time: `${formEnd}:00`,
+      };
+      if (editingRow) {
+        await updateExamRoutine(editingRow.id, payload);
+      } else {
+        await createExamRoutine(payload);
+      }
+      setFormOpen(false);
+      await refetchRoutines();
+    } catch (e) {
+      setSaveError(e instanceof ExamsApiError ? e.message : "Failed to save this slot — check for a scheduling conflict.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteSlot = async (row: ExamRoutineRow) => {
+    await deleteExamRoutine(row.id);
+    await refetchRoutines();
+  };
+
+  // ─── Admit cards ──────────────────────────────────────────────────────────
+  const { data: admitSettingData, refetch: refetchAdmitSetting } = useAdmitCardSetting();
+  const { data: admitIndex } = useAdmitCardIndex();
+  const [admitRecords, setAdmitRecords] = useState<ExamPlanStudentRecord[]>([]);
+  const [admitGenerated, setAdmitGenerated] = useState<Set<number>>(new Set());
+  const [admitLoading, setAdmitLoading] = useState(false);
+  const [admitGenerating, setAdmitGenerating] = useState(false);
+
+  useEffect(() => {
+    if (step !== 2 || !examTypeId || !classId || !sectionId) return;
+    setAdmitLoading(true);
+    searchAdmitCard({ exam: examTypeId, class_id: classId, section: sectionId })
+      .then((res) => { setAdmitRecords(res.records); setAdmitGenerated(new Set(res.old_admit_ids)); })
+      .catch(() => { setAdmitRecords([]); setAdmitGenerated(new Set()); })
+      .finally(() => setAdmitLoading(false));
+  }, [step, examTypeId, classId, sectionId]);
+
+  const toggleAdmitField = async (patch: Partial<AdmitCardSetting>) => {
+    await saveAdmitCardSetting(patch);
+    await refetchAdmitSetting();
+  };
+
+  const handleGenerateAdmit = async () => {
+    if (!examTypeId || !admitRecords.length) return;
+    setAdmitGenerating(true);
+    try {
+      const data: Record<string, { student_record_id: number }> = {};
+      admitRecords.forEach((r) => { data[String(r.student_record_id)] = { student_record_id: r.student_record_id }; });
+      await generateAdmitCard(examTypeId, data);
+      setAdmitGenerated(new Set(admitRecords.map((r) => r.student_record_id)));
+    } finally {
+      setAdmitGenerating(false);
+    }
+  };
+
+  // ─── Seat plan ────────────────────────────────────────────────────────────
+  const { data: seatSettingData, refetch: refetchSeatSetting } = useSeatPlanSetting();
+  useSeatPlanIndex();
+  const [seatRecords, setSeatRecords] = useState<ExamPlanStudentRecord[]>([]);
+  const [seatGenerated, setSeatGenerated] = useState<Set<number>>(new Set());
+  const [seatLoading, setSeatLoading] = useState(false);
+  const [seatGenerating, setSeatGenerating] = useState(false);
+
+  useEffect(() => {
+    if (step !== 3 || !examTypeId || !classId || !sectionId) return;
+    setSeatLoading(true);
+    searchSeatPlan({ exam: examTypeId, class_id: classId, section: sectionId })
+      .then((res) => { setSeatRecords(res.records); setSeatGenerated(new Set(res.seat_plan_ids)); })
+      .catch(() => { setSeatRecords([]); setSeatGenerated(new Set()); })
+      .finally(() => setSeatLoading(false));
+  }, [step, examTypeId, classId, sectionId]);
+
+  const toggleSeatField = async (patch: Partial<SeatPlanSetting>) => {
+    await saveSeatPlanSetting(patch);
+    await refetchSeatSetting();
+  };
+
+  const handleGenerateSeat = async () => {
+    if (!examTypeId || !seatRecords.length) return;
+    setSeatGenerating(true);
+    try {
+      const data: Record<string, { student_record_id: number }> = {};
+      seatRecords.forEach((r) => { data[String(r.student_record_id)] = { student_record_id: r.student_record_id }; });
+      await generateSeatPlan(examTypeId, data);
+      setSeatGenerated(new Set(seatRecords.map((r) => r.student_record_id)));
+    } finally {
+      setSeatGenerating(false);
+    }
+  };
+
+  const examTypeTitle = criteria?.exam_types.find((e) => e.id === examTypeId)?.title ?? "";
+  const className = criteria?.classes.find((c) => c.id === classId)?.class_name ?? "";
+  const sectionName = criteria?.sections.find((s) => s.id === sectionId)?.section_name ?? "";
+  const admitSetting = admitSettingData?.setting;
+  const seatSetting = seatSettingData?.setting;
 
   return (
     <div style={{ minHeight: "100%", background: T.page, padding: "12px 20px 40px" }}>
@@ -124,7 +323,7 @@ export default function ScheduleLogisticsPage() {
 
         {/* Hero */}
         <div style={{ marginBottom: 18 }}>
-          <Eyebrow>Schedule & Logistics · Half-Yearly Examination</Eyebrow>
+          <Eyebrow>Schedule & Logistics · {examTypeTitle || "Loading…"}</Eyebrow>
           <h1 style={{ margin: "6px 0 6px", display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 8, fontSize: 30 }}>
             <span style={{ fontFamily: "Georgia, serif", fontWeight: 900, color: T.ink1 }}>The part that&apos;s</span>
             <span style={{ fontFamily: '"Playfair Display", Georgia, serif', fontStyle: "italic", fontWeight: 500, color: T.purple }}>
@@ -160,147 +359,134 @@ export default function ScheduleLogisticsPage() {
           </div>
         </div>
 
-        {/* Header card */}
-        <div style={{
-          display: "flex", alignItems: "center", gap: 14, background: "#fff",
-          border: `1px solid ${T.border}`, borderRadius: 14, padding: "16px 18px", marginBottom: 16,
-        }}>
-          <div style={{ width: 36, height: 36, borderRadius: 10, background: T.purpleSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <Calendar size={16} color={T.purple} strokeWidth={2} />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14.5, fontWeight: 700, color: T.ink1 }}>Half-Yearly Examination</div>
-            <div style={{ fontSize: 12, color: T.ink2, marginTop: 2 }}>Grades 6-9 · 11 sections · Sep 14–21, 2026</div>
-          </div>
+        {/* Shared exam/class/section/date picker */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, padding: "14px 16px", marginBottom: 16 }}>
+          <select style={selectSx} value={examTypeId ?? ""} onChange={(e) => setExamTypeId(Number(e.target.value))}>
+            {(criteria?.exam_types ?? []).map((o) => <option key={o.id} value={o.id}>{o.title}</option>)}
+          </select>
+          <select style={selectSx} value={classId ?? ""} onChange={(e) => setClassId(Number(e.target.value))}>
+            {(criteria?.classes ?? []).map((o) => <option key={o.id} value={o.id}>{o.class_name}</option>)}
+          </select>
+          <select style={selectSx} value={sectionId ?? ""} onChange={(e) => setSectionId(Number(e.target.value))}>
+            {sectionsForClass.map((o) => <option key={o.id} value={o.id}>{o.section_name}</option>)}
+          </select>
           {step === 1 && (
-            <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-              <button type="button" style={{
-                display: "flex", alignItems: "center", gap: 6, height: 36, padding: "0 14px", borderRadius: 9,
-                border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.ink1, fontSize: 12.5, fontWeight: 600, cursor: "pointer",
-              }}>
-                View schedule report <ExternalLink size={12} />
-              </button>
-              <button type="button" style={{
-                display: "flex", alignItems: "center", gap: 6, height: 36, padding: "0 14px", borderRadius: 9,
-                border: `1px solid ${T.purple}`, background: T.purple, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer",
-              }}>
-                <Plus size={13} /> Assign new slot
-              </button>
-            </div>
+            <input type="date" style={selectSx} value={date} onChange={(e) => setDate(e.target.value)} />
           )}
         </div>
 
         {step === 1 && (
           <>
-            {conflictCount > 0 && (
-              <div style={{
-                display: "flex", alignItems: "center", gap: 12, background: T.dangerSoft,
-                border: `1px solid ${T.danger}44`, borderRadius: 12, padding: "12px 16px", marginBottom: 14,
-              }}>
-                <AlertTriangle size={16} color={T.danger} strokeWidth={2} style={{ flexShrink: 0 }} />
-                <div style={{ flex: 1, fontSize: 13, fontWeight: 600, color: T.danger }}>
-                  {conflictCount} conflict{conflictCount > 1 ? "s" : ""} need attention
-                </div>
-                <button
-                  type="button" onClick={() => { setRoomConflict(false); setIyerConflict(false); }}
-                  style={{
-                    height: 34, padding: "0 14px", borderRadius: 8, border: `1px solid ${T.danger}`,
-                    background: T.danger, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0,
-                  }}
-                >
-                  Auto-resolve all
-                </button>
-              </div>
-            )}
-
-            {(roomConflict || iyerConflict) && (
+            {conflicts.length > 0 && (
               <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, padding: 16, marginBottom: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700, color: T.ink1, marginBottom: 10 }}>
-                  <Star size={14} color={T.purple} strokeWidth={2} /> Suggested fixes
+                <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700, color: T.danger, marginBottom: 10 }}>
+                  <AlertTriangle size={14} strokeWidth={2} /> {conflicts.length} conflict{conflicts.length > 1 ? "s" : ""} need attention
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {roomConflict && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 10, background: T.hoverSoft }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink1 }}>
-                          Room 204, Sep 16, 10:00–12:00 — Grade 8B Science and Grade 9A Mathematics are both booked here.
-                        </div>
-                        <div style={{ fontSize: 11.5, color: T.ink3, marginTop: 2 }}>Room 203 is free at that time and fits Grade 9A.</div>
-                      </div>
+                  {conflicts.map((c, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 10, background: T.dangerSoft }}>
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: T.ink1 }}>{c.detail}</div>
                       <button
-                        type="button" onClick={() => setRoomConflict(false)}
+                        type="button"
+                        onClick={() => { const row = rows.find((r) => r.id === c.routineId); if (row) openEditSlot(row); }}
                         style={{ height: 32, padding: "0 12px", borderRadius: 8, border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.ink1, fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}
                       >
-                        Apply fix
+                        Resolve
                       </button>
                     </div>
-                  )}
-                  {iyerConflict && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 10, background: T.hoverSoft }}>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink1 }}>
-                          Ms. Iyer, Sep 18, 9:00 AM — assigned to invigilate two rooms in the same slot.
-                        </div>
-                        <div style={{ fontSize: 11.5, color: T.ink3, marginTop: 2 }}>Mr. Khan has no exam duty at that time.</div>
-                      </div>
-                      <button
-                        type="button" onClick={() => setIyerConflict(false)}
-                        style={{ height: 32, padding: "0 12px", borderRadius: 8, border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.ink1, fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}
-                      >
-                        Apply fix
-                      </button>
-                    </div>
-                  )}
+                  ))}
                 </div>
               </div>
             )}
 
-            {/* Day picker */}
-            <div style={{ display: "flex", gap: 8, marginBottom: 16, overflowX: "auto" }}>
-              {DAYS.map((d, i) => {
-                const conflict = (d.conflictKey === "room" && roomConflict) || (d.conflictKey === "iyer" && iyerConflict);
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700, color: T.ink1 }}>
+                <Calendar size={15} color={T.purple} /> {rows.length} exam{rows.length === 1 ? "" : "s"} on {date}
+              </div>
+              <button
+                type="button" onClick={openNewSlot}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6, height: 36, padding: "0 14px", borderRadius: 9,
+                  border: `1px solid ${T.purple}`, background: T.purple, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                }}
+              >
+                <Plus size={13} /> Assign new slot
+              </button>
+            </div>
+
+            {formOpen && (
+              <div style={{ background: "#fff", border: `1px solid ${T.purple}55`, borderRadius: 14, padding: 16, marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: T.ink1 }}>{editingRow ? "Edit slot" : "New slot"}</span>
+                  <button type="button" onClick={() => setFormOpen(false)} style={{ background: "none", border: "none", cursor: "pointer", color: T.ink3 }}><X size={16} /></button>
+                </div>
+                {saveError && <div style={{ background: T.dangerSoft, color: T.danger, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{saveError}</div>}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 10 }}>
+                  <select style={selectSx} value={formClassId ?? ""} onChange={(e) => { setFormClassId(Number(e.target.value)); setFormSubjectId(null); }}>
+                    {(criteria?.classes ?? []).map((o) => <option key={o.id} value={o.id}>{o.class_name}</option>)}
+                  </select>
+                  <select style={selectSx} value={formSectionId ?? ""} onChange={(e) => setFormSectionId(Number(e.target.value) || null)}>
+                    <option value="">All sections</option>
+                    {formSections.map((o) => <option key={o.id} value={o.id}>{o.section_name}</option>)}
+                  </select>
+                  <select style={selectSx} value={formSubjectId ?? ""} onChange={(e) => setFormSubjectId(Number(e.target.value))}>
+                    <option value="">Select subject</option>
+                    {(formSubjects ?? []).map((o) => <option key={o.id} value={o.id}>{o.subject_name}</option>)}
+                  </select>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                  <select style={selectSx} value={formTeacherId ?? ""} onChange={(e) => setFormTeacherId(Number(e.target.value) || null)}>
+                    <option value="">No teacher</option>
+                    {(criteria?.teachers ?? []).map((o) => <option key={o.id} value={o.id}>{o.full_name}</option>)}
+                  </select>
+                  <select style={selectSx} value={formRoomId ?? ""} onChange={(e) => setFormRoomId(Number(e.target.value) || null)}>
+                    <option value="">No room</option>
+                    {(criteria?.rooms ?? []).map((o) => <option key={o.id} value={o.id}>{o.room_no}</option>)}
+                  </select>
+                  <input type="time" style={selectSx} value={formStart} onChange={(e) => setFormStart(e.target.value)} />
+                  <input type="time" style={selectSx} value={formEnd} onChange={(e) => setFormEnd(e.target.value)} />
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+                  <button
+                    type="button" onClick={handleSaveSlot} disabled={saving}
+                    style={{ height: 36, padding: "0 16px", borderRadius: 9, border: `1px solid ${T.purple}`, background: T.purple, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: saving ? "default" : "pointer", opacity: saving ? 0.7 : 1 }}
+                  >
+                    {saving ? "Saving…" : editingRow ? "Save changes" : "Create slot"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 0.8fr 0.8fr 0.9fr 1fr 70px", gap: 8, padding: "10px 16px", fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${T.border}` }}>
+                <span>Subject</span><span>Class</span><span>Room</span><span>Time</span><span>Invigilator</span><span />
+              </div>
+              {routinesLoading && <div style={{ padding: 16, fontSize: 12.5, color: T.ink3 }}>Loading…</div>}
+              {!routinesLoading && rows.length === 0 && <div style={{ padding: 16, fontSize: 12.5, color: T.ink3 }}>No exams scheduled for this date yet.</div>}
+              {rows.map((r) => {
+                const isConflict = conflictedIds.has(r.id);
                 return (
                   <div
-                    key={i}
+                    key={r.id}
                     style={{
-                      minWidth: 62, textAlign: "center", padding: "8px 4px", borderRadius: 10,
-                      border: `1px solid ${conflict ? T.danger : T.border}`,
-                      background: conflict ? T.dangerSoft : "#fff", flexShrink: 0,
+                      display: "grid", gridTemplateColumns: "1fr 0.8fr 0.8fr 0.9fr 1fr 70px", gap: 8,
+                      padding: "12px 16px", fontSize: 12.5, color: T.ink1,
+                      background: isConflict ? T.dangerSoft : "#fff",
+                      borderBottom: `1px solid ${T.border}`, alignItems: "center",
                     }}
                   >
-                    <div style={{ fontSize: 10, fontWeight: 700, color: conflict ? T.danger : T.ink3 }}>{d.label}</div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: conflict ? T.danger : T.ink1 }}>{d.n}</div>
-                    <div style={{ fontSize: 10, color: conflict ? T.danger : T.ink3, marginTop: 2 }}>
-                      {d.exams > 0 ? `${d.exams} exams` : "—"}
-                    </div>
+                    <span>{r.subject}</span>
+                    <span>{r.class_name}-{r.section || "All"}</span>
+                    <span style={{ color: isConflict ? T.danger : T.ink1, fontWeight: isConflict ? 700 : 400 }}>{r.room || "—"}</span>
+                    <span>{formatTime(r.start_time)}–{formatTime(r.end_time)}</span>
+                    <span style={{ color: isConflict ? T.danger : T.ink1, fontWeight: isConflict ? 700 : 400 }}>{r.teacher || "—"}</span>
+                    <span style={{ display: "flex", gap: 6 }}>
+                      <button type="button" onClick={() => openEditSlot(r)} style={{ background: "none", border: "none", cursor: "pointer", color: T.ink3, padding: 2, display: "flex" }}><Pencil size={13} /></button>
+                      <button type="button" onClick={() => void handleDeleteSlot(r)} style={{ background: "none", border: "none", cursor: "pointer", color: T.ink3, padding: 2, display: "flex" }}><Trash2 size={13} /></button>
+                    </span>
                   </div>
                 );
               })}
-            </div>
-
-            {/* Schedule table */}
-            <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr 0.8fr 1fr 0.8fr", gap: 8, padding: "10px 16px", fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${T.border}` }}>
-                <span>Date & time</span><span>Subject</span><span>Class</span><span>Room</span><span>Invigilator</span><span>Marks</span>
-              </div>
-              {rows.map((r) => (
-                <div
-                  key={r.id}
-                  style={{
-                    display: "grid", gridTemplateColumns: "1.4fr 1fr 0.8fr 0.8fr 1fr 0.8fr", gap: 8,
-                    padding: "12px 16px", fontSize: 12.5, color: T.ink1,
-                    background: r.isConflict ? T.dangerSoft : "#fff",
-                    borderBottom: `1px solid ${T.border}`,
-                  }}
-                >
-                  <span>{r.date}</span>
-                  <span>{r.subject}</span>
-                  <span>{r.cls}</span>
-                  <span style={{ color: r.isConflict ? T.danger : T.ink1, fontWeight: r.isConflict ? 700 : 400 }}>{r.room}</span>
-                  <span style={{ color: r.isConflict && r.conflictKey === "iyer" ? T.danger : T.ink1, fontWeight: r.isConflict && r.conflictKey === "iyer" ? 700 : 400 }}>{r.invigilator}</span>
-                  <span>{r.marks}</span>
-                </div>
-              ))}
             </div>
           </>
         )}
@@ -313,7 +499,7 @@ export default function ScheduleLogisticsPage() {
               </div>
               <div>
                 <div style={{ fontSize: 14.5, fontWeight: 700, color: T.ink1 }}>Admit Cards</div>
-                <div style={{ fontSize: 12, color: T.ink2, marginTop: 2 }}>Generated straight from the timetable above — nothing to re-enter.</div>
+                <div style={{ fontSize: 12, color: T.ink2, marginTop: 2 }}>{className}-{sectionName} · {examTypeTitle}</div>
               </div>
             </div>
 
@@ -321,25 +507,28 @@ export default function ScheduleLogisticsPage() {
               <div style={{ fontSize: 11, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
                 Include on the card
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
-                <Chip label="Student photo" checked={admitFields.photo} onToggle={() => setAdmitFields((f) => ({ ...f, photo: !f.photo }))} />
-                <Chip label="Student name" checked={admitFields.name} onToggle={() => setAdmitFields((f) => ({ ...f, name: !f.name }))} />
-                <Chip label="Admission no." checked={admitFields.admissionNo} onToggle={() => setAdmitFields((f) => ({ ...f, admissionNo: !f.admissionNo }))} />
-                <Chip label="Class & section" checked={admitFields.classSection} onToggle={() => setAdmitFields((f) => ({ ...f, classSection: !f.classSection }))} />
-                <Chip label="Exam name" checked={admitFields.examName} onToggle={() => setAdmitFields((f) => ({ ...f, examName: !f.examName }))} />
-                <Chip label="Academic year label" checked={admitFields.ayLabel} onToggle={() => setAdmitFields((f) => ({ ...f, ayLabel: !f.ayLabel }))} />
-              </div>
+              {admitSetting && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                  <Chip label="Student photo" checked={admitSetting.student_photo} onToggle={() => toggleAdmitField({ student_photo: !admitSetting.student_photo })} />
+                  <Chip label="Student name" checked={admitSetting.student_name} onToggle={() => toggleAdmitField({ student_name: !admitSetting.student_name })} />
+                  <Chip label="Admission no." checked={admitSetting.admission_no} onToggle={() => toggleAdmitField({ admission_no: !admitSetting.admission_no })} />
+                  <Chip label="Class & section" checked={admitSetting.class_section} onToggle={() => toggleAdmitField({ class_section: !admitSetting.class_section })} />
+                  <Chip label="Exam name" checked={admitSetting.exam_name} onToggle={() => toggleAdmitField({ exam_name: !admitSetting.exam_name })} />
+                  <Chip label="Academic year label" checked={admitSetting.academic_year_label} onToggle={() => toggleAdmitField({ academic_year_label: !admitSetting.academic_year_label })} />
+                </div>
+              )}
 
               <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", padding: "0 4px 8px" }}>
-                <span>Student</span><span>Class</span><span>Status</span>
+                <span>Student</span><span>Admission No.</span><span>Status</span>
               </div>
+              {admitLoading && <div style={{ fontSize: 12.5, color: T.ink3, padding: "8px 4px" }}>Loading…</div>}
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                {STUDENTS.map((s) => {
-                  const done = generatedAdmit.has(s.id);
+                {admitRecords.map((s) => {
+                  const done = admitGenerated.has(s.student_record_id);
                   return (
-                    <div key={s.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, padding: "8px 4px", fontSize: 13, color: T.ink1, borderTop: `1px solid ${T.border}` }}>
-                      <span>{s.name}</span>
-                      <span>{s.cls}</span>
+                    <div key={s.student_record_id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, padding: "8px 4px", fontSize: 13, color: T.ink1, borderTop: `1px solid ${T.border}` }}>
+                      <span>{s.first_name} {s.last_name}</span>
+                      <span>{s.admission_no}</span>
                       <span>
                         {done
                           ? <span style={{ fontSize: 11, fontWeight: 700, color: T.ok, background: T.okSoft, borderRadius: 999, padding: "3px 10px" }}>Already generated</span>
@@ -348,13 +537,16 @@ export default function ScheduleLogisticsPage() {
                     </div>
                   );
                 })}
+                {!admitLoading && admitRecords.length === 0 && (
+                  <div style={{ fontSize: 12.5, color: T.ink3, padding: "8px 4px" }}>No exam schedule found for this class/section yet.</div>
+                )}
               </div>
 
               <button
-                type="button" onClick={() => setGeneratedAdmit(new Set(STUDENTS.map((s) => s.id)))}
-                style={{ marginTop: 16, height: 40, padding: "0 18px", borderRadius: 10, border: `1px solid ${T.ok}`, background: T.ok, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+                type="button" onClick={handleGenerateAdmit} disabled={admitGenerating || admitRecords.length === 0}
+                style={{ marginTop: 16, height: 40, padding: "0 18px", borderRadius: 10, border: `1px solid ${T.ok}`, background: T.ok, color: "#fff", fontSize: 13, fontWeight: 700, cursor: admitGenerating ? "default" : "pointer", opacity: admitGenerating || admitRecords.length === 0 ? 0.7 : 1 }}
               >
-                Generate Admit Cards
+                {admitGenerating ? "Generating…" : "Generate Admit Cards"}
               </button>
             </div>
           </>
@@ -368,7 +560,7 @@ export default function ScheduleLogisticsPage() {
               </div>
               <div>
                 <div style={{ fontSize: 14.5, fontWeight: 700, color: T.ink1 }}>Seat Plan</div>
-                <div style={{ fontSize: 12, color: T.ink2, marginTop: 2 }}>Rooms come from the timetable — assign seats within them.</div>
+                <div style={{ fontSize: 12, color: T.ink2, marginTop: 2 }}>{className}-{sectionName} · {examTypeTitle}</div>
               </div>
             </div>
 
@@ -376,23 +568,26 @@ export default function ScheduleLogisticsPage() {
               <div style={{ fontSize: 11, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 }}>
                 Include on the seating chart
               </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
-                <Chip label="School name" checked={seatFields.school} onToggle={() => setSeatFields((f) => ({ ...f, school: !f.school }))} />
-                <Chip label="Roll no." checked={seatFields.roll} onToggle={() => setSeatFields((f) => ({ ...f, roll: !f.roll }))} />
-                <Chip label="Student photo" checked={seatFields.photo} onToggle={() => setSeatFields((f) => ({ ...f, photo: !f.photo }))} />
-                <Chip label="Seat number label" checked={seatFields.seatLabel} onToggle={() => setSeatFields((f) => ({ ...f, seatLabel: !f.seatLabel }))} />
-              </div>
+              {seatSetting && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                  <Chip label="School name" checked={seatSetting.school_name} onToggle={() => toggleSeatField({ school_name: !seatSetting.school_name })} />
+                  <Chip label="Roll no." checked={seatSetting.roll_no} onToggle={() => toggleSeatField({ roll_no: !seatSetting.roll_no })} />
+                  <Chip label="Student photo" checked={seatSetting.student_photo} onToggle={() => toggleSeatField({ student_photo: !seatSetting.student_photo })} />
+                  <Chip label="Academic year label" checked={seatSetting.academic_year_label} onToggle={() => toggleSeatField({ academic_year_label: !seatSetting.academic_year_label })} />
+                </div>
+              )}
 
               <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", padding: "0 4px 8px" }}>
-                <span>Student</span><span>Room</span><span>Status</span>
+                <span>Student</span><span>Roll No.</span><span>Status</span>
               </div>
+              {seatLoading && <div style={{ fontSize: 12.5, color: T.ink3, padding: "8px 4px" }}>Loading…</div>}
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                {STUDENTS.map((s) => {
-                  const done = generatedSeat.has(s.id);
+                {seatRecords.map((s) => {
+                  const done = seatGenerated.has(s.student_record_id);
                   return (
-                    <div key={s.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, padding: "8px 4px", fontSize: 13, color: T.ink1, borderTop: `1px solid ${T.border}` }}>
-                      <span>{s.name}</span>
-                      <span>{s.room}</span>
+                    <div key={s.student_record_id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 8, padding: "8px 4px", fontSize: 13, color: T.ink1, borderTop: `1px solid ${T.border}` }}>
+                      <span>{s.first_name} {s.last_name}</span>
+                      <span>{s.roll_no}</span>
                       <span>
                         {done
                           ? <span style={{ fontSize: 11, fontWeight: 700, color: T.ok, background: T.okSoft, borderRadius: 999, padding: "3px 10px" }}>Already generated</span>
@@ -401,13 +596,16 @@ export default function ScheduleLogisticsPage() {
                     </div>
                   );
                 })}
+                {!seatLoading && seatRecords.length === 0 && (
+                  <div style={{ fontSize: 12.5, color: T.ink3, padding: "8px 4px" }}>No exam schedule found for this class/section yet.</div>
+                )}
               </div>
 
               <button
-                type="button" onClick={() => setGeneratedSeat(new Set(STUDENTS.map((s) => s.id)))}
-                style={{ marginTop: 16, height: 40, padding: "0 18px", borderRadius: 10, border: `1px solid ${T.ok}`, background: T.ok, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+                type="button" onClick={handleGenerateSeat} disabled={seatGenerating || seatRecords.length === 0}
+                style={{ marginTop: 16, height: 40, padding: "0 18px", borderRadius: 10, border: `1px solid ${T.ok}`, background: T.ok, color: "#fff", fontSize: 13, fontWeight: 700, cursor: seatGenerating ? "default" : "pointer", opacity: seatGenerating || seatRecords.length === 0 ? 0.7 : 1 }}
               >
-                Generate Seat Plan
+                {seatGenerating ? "Generating…" : "Generate Seat Plan"}
               </button>
             </div>
           </>

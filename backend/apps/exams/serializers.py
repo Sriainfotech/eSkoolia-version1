@@ -9,9 +9,11 @@ from .models import (
     Exam,
     ExamAttendanceChild,
     ExamGradeScale,
+    ExamGradeScaleGroup,
     ExamMark,
     ExamMarkRegister,
     ExamMarkRegisterPart,
+    ExamResultModerationFlag,
     ExamResultPublish,
     OnlineExam,
     OnlineExamTake,
@@ -19,6 +21,7 @@ from .models import (
     ExamSchedule,
     ExamSetup,
     ExamType,
+    ReportCardSetting,
     SeatPlan,
     SeatPlanSetting,
 )
@@ -37,6 +40,8 @@ class ExamTypeSerializer(serializers.ModelSerializer):
             "is_active",
             "is_average",
             "average_mark",
+            "counts_to_average",
+            "weight_percent",
             "created_at",
             "updated_at",
         ]
@@ -105,12 +110,38 @@ class ExamSerializer(serializers.ModelSerializer):
         return attrs
 
 
+class ExamGradeScaleGroupSerializer(serializers.ModelSerializer):
+    band_count = serializers.IntegerField(source="bands.count", read_only=True)
+
+    class Meta:
+        model = ExamGradeScaleGroup
+        fields = [
+            "id",
+            "school",
+            "name",
+            "style",
+            "min_pass_percent",
+            "is_default",
+            "band_count",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "school", "created_at", "updated_at"]
+
+    def validate_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("This field is required.")
+        return value
+
+
 class ExamGradeScaleSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExamGradeScale
         fields = [
             "id",
             "school",
+            "group",
             "name",
             "min_percent",
             "max_percent",
@@ -127,23 +158,28 @@ class ExamGradeScaleSerializer(serializers.ModelSerializer):
         name = (attrs.get("name") or getattr(self.instance, "name", "") or "").strip()
         min_percent = attrs.get("min_percent") or getattr(self.instance, "min_percent", None)
         max_percent = attrs.get("max_percent") or getattr(self.instance, "max_percent", None)
+        group = attrs.get("group") if "group" in attrs else getattr(self.instance, "group", None)
 
         if min_percent is not None and max_percent is not None and max_percent < min_percent:
             raise serializers.ValidationError({"max_percent": "Max percent cannot be lower than min percent."})
 
-        if school_id and min_percent is not None and max_percent is not None:
+        if school_id and group and min_percent is not None and max_percent is not None:
             queryset = ExamGradeScale.objects.filter(
                 school_id=school_id,
+                group=group,
                 min_percent__lte=max_percent,
                 max_percent__gte=min_percent,
             )
             if self.instance:
                 queryset = queryset.exclude(id=self.instance.id)
             if queryset.exists():
-                raise serializers.ValidationError("Grade ranges cannot overlap within the same school.")
+                raise serializers.ValidationError("Grade ranges cannot overlap within the same scale.")
 
-        if school_id and name:
-            duplicate_qs = ExamGradeScale.objects.filter(school_id=school_id, name__iexact=name)
+        if school_id and group and group.school_id != school_id:
+            raise serializers.ValidationError({"group": "Selected scale group does not belong to your school."})
+
+        if school_id and group and name:
+            duplicate_qs = ExamGradeScale.objects.filter(school_id=school_id, group=group, name__iexact=name)
             if self.instance:
                 duplicate_qs = duplicate_qs.exclude(id=self.instance.id)
             if duplicate_qs.exists():
@@ -306,6 +342,19 @@ class ExamSetupStoreRequestSerializer(serializers.Serializer):
 
         attrs["class"] = class_id
         attrs["exam_title"] = titles
+        return attrs
+
+
+class ExamSetupCloneRequestSerializer(serializers.Serializer):
+    from_exam_term_id = serializers.IntegerField(min_value=1)
+    to_exam_term_id = serializers.IntegerField(min_value=1)
+    class_id = serializers.IntegerField(min_value=1)
+    section = serializers.IntegerField(min_value=1)
+    subject = serializers.IntegerField(required=False, min_value=1)
+
+    def validate(self, attrs):
+        if attrs["from_exam_term_id"] == attrs["to_exam_term_id"]:
+            raise serializers.ValidationError({"to_exam_term_id": "Choose a different exam to clone into."})
         return attrs
 
 
@@ -642,6 +691,9 @@ class ExamResultPublishSerializer(serializers.ModelSerializer):
             "is_published",
             "published_at",
             "published_by",
+            "principal_signoff",
+            "principal_signoff_by",
+            "principal_signoff_at",
         ]
 
 
@@ -655,6 +707,60 @@ class ExamResultPublishStoreRequestSerializer(serializers.Serializer):
     exam_id = serializers.IntegerField(min_value=1)
     class_id = serializers.IntegerField(min_value=1)
     section_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+class ExamResultPublishSignoffRequestSerializer(serializers.Serializer):
+    exam_id = serializers.IntegerField(min_value=1)
+    class_id = serializers.IntegerField(min_value=1)
+    section_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+class ReportCardSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReportCardSetting
+        fields = [
+            "id",
+            "visible_to_class_teacher",
+            "visible_to_subject_teacher",
+            "template",
+            "include_photo",
+            "include_co_scholastic",
+            "include_attendance",
+            "include_comments",
+            "include_overall_notes",
+            "include_improvement",
+            "moderation_workflow",
+        ]
+
+
+class ExamResultModerationFlagSerializer(serializers.ModelSerializer):
+    student_name = serializers.SerializerMethodField()
+    class_name = serializers.CharField(source="school_class.name", read_only=True)
+    section_name = serializers.CharField(source="section.name", read_only=True)
+
+    class Meta:
+        model = ExamResultModerationFlag
+        fields = [
+            "id",
+            "exam_term",
+            "school_class",
+            "class_name",
+            "section",
+            "section_name",
+            "student",
+            "student_name",
+            "mark_register",
+            "reason",
+            "detail",
+            "status",
+            "resolved_by",
+            "resolved_at",
+            "created_at",
+        ]
+        read_only_fields = ["id", "resolved_by", "resolved_at", "created_at"]
+
+    def get_student_name(self, obj):
+        return f"{(obj.student.first_name or '').strip()} {(obj.student.last_name or '').strip()}".strip()
 
 
 class ExamReportStudentSearchRequestSerializer(serializers.Serializer):

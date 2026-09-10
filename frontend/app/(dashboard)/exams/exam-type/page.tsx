@@ -1,49 +1,68 @@
 "use client";
 /**
- * Examination › Exam Configuration — "set once, rarely changes" group.
- * Static mockup only (per product ask): exam types + grading scale are local
- * component state, nothing is sent to the backend yet. Palette from
- * lib/examTheme.ts (matches Command Center / Academics Foundation).
+ * Examination › Exam Configuration — "set once, rarely changes" group. Wired
+ * to the real backend (apps/exams/views.py — ExamTypeViewSet extended with
+ * counts_to_average/weight_percent, plus the new ExamGradeScaleGroupViewSet /
+ * ExamGradeScaleViewSet for named, style-scoped grading scales) via
+ * hooks/useExamsApi.ts — replaces the earlier static mockup. Edits are kept
+ * in local state and diffed against the server on "Save configuration",
+ * same pattern as exams/setup/page.tsx. Palette from lib/examTheme.ts.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Star, TrendingUp, Trash2, Plus } from "lucide-react";
 import { examTheme as T } from "@/lib/examTheme";
+import {
+  createExamType,
+  createGradeScaleBand,
+  createGradeScaleGroup,
+  deleteExamType,
+  deleteGradeScaleBand,
+  ExamsApiError,
+  updateExamType,
+  updateGradeScaleGroup,
+  useExamGradeScaleBands,
+  useExamGradeScaleGroups,
+  useExamTypes,
+} from "@/hooks/useExamsApi";
+import type { ExamGradeScaleGroup, ExamType, GradeScaleStyle } from "@/types/exams";
 
-interface ExamTypeRow { id: string; name: string; countsToAvg: boolean; weight: string }
-interface GradeRow { id: string; label: string; min: string; max: string; points: string; fail: boolean }
+interface ExamTypeRow { id: string; serverId: number | null; name: string; countsToAvg: boolean; weight: string }
+interface GradeRow { id: string; serverId: number | null; label: string; min: string; max: string; points: string; fail: boolean }
 
-type MarkingStyle = "percentage" | "letter" | "gpa";
+const STYLE_DEFAULT_NAME: Record<GradeScaleStyle, string> = {
+  percentage: "Percentage Scale",
+  letter: "Letter Grade Scale",
+  gpa: "GPA Scale",
+};
 
-const INITIAL_EXAM_TYPES: ExamTypeRow[] = [
-  { id: "1", name: "Periodic Test 1", countsToAvg: true, weight: "10" },
-  { id: "2", name: "Half-Yearly Examination", countsToAvg: true, weight: "20" },
-  { id: "3", name: "Periodic Test 2", countsToAvg: true, weight: "10" },
-  { id: "4", name: "Yearly Examination", countsToAvg: true, weight: "60" },
-];
+function toRow(t: ExamType): ExamTypeRow {
+  return { id: String(t.id), serverId: t.id, name: t.title, countsToAvg: t.counts_to_average, weight: t.weight_percent };
+}
 
-const INITIAL_LETTER_GRADES: GradeRow[] = [
-  { id: "a1", label: "A1", min: "91", max: "100", points: "10.0", fail: false },
-  { id: "a2", label: "A2", min: "81", max: "90", points: "9.0", fail: false },
-  { id: "b1", label: "B1", min: "71", max: "80", points: "8.0", fail: false },
-  { id: "b2", label: "B2", min: "61", max: "70", points: "7.0", fail: false },
-  { id: "c1", label: "C1", min: "51", max: "60", points: "6.0", fail: false },
-  { id: "c2", label: "C2", min: "41", max: "50", points: "5.0", fail: false },
-  { id: "d", label: "D", min: "33", max: "40", points: "4.0", fail: false },
-  { id: "e1", label: "E1 — Fail", min: "21", max: "32", points: "0", fail: true },
-  { id: "e2", label: "E2 — Fail", min: "0", max: "20", points: "0", fail: true },
-];
+function toGradeRow(g: { id: number; name: string; min_percent: string; max_percent: string; gpa: string; is_fail: boolean }): GradeRow {
+  return { id: String(g.id), serverId: g.id, label: g.name, min: g.min_percent, max: g.max_percent, points: g.gpa, fail: g.is_fail };
+}
 
-const INITIAL_GPA_GRADES: GradeRow[] = [
-  { id: "g10", label: "10.0", min: "91", max: "100", points: "", fail: false },
-  { id: "g9", label: "9.0", min: "81", max: "90", points: "", fail: false },
-  { id: "g8", label: "8.0", min: "71", max: "80", points: "", fail: false },
-  { id: "g7", label: "7.0", min: "61", max: "70", points: "", fail: false },
-  { id: "g6", label: "6.0", min: "51", max: "60", points: "", fail: false },
-  { id: "g5", label: "5.0", min: "41", max: "50", points: "", fail: false },
-  { id: "g4", label: "4.0", min: "33", max: "40", points: "", fail: false },
-  { id: "g0", label: "0.0", min: "0", max: "32", points: "", fail: true },
-];
+// Mirrors the backend's inclusive-range overlap check (apps/exams/serializers.py
+// ExamGradeScaleSerializer.validate) so a conflict — e.g. two bands left at the
+// "Add grade band" default of 0-0 — is reported with the offending band names
+// instead of surfacing the generic 400 from the API.
+function findOverlappingBandPair(rows: GradeRow[]): [GradeRow, GradeRow] | null {
+  const named = rows.filter((r) => r.label.trim());
+  for (let i = 0; i < named.length; i++) {
+    for (let j = i + 1; j < named.length; j++) {
+      const a = named[i];
+      const b = named[j];
+      const aMin = Number(a.min || "0");
+      const aMax = Number(a.max || "0");
+      const bMin = Number(b.min || "0");
+      const bMax = Number(b.max || "0");
+      if (aMin <= bMax && aMax >= bMin) return [a, b];
+    }
+  }
+  return null;
+}
 
 function Toggle({ on, onChange, danger }: { on: boolean; onChange: (v: boolean) => void; danger?: boolean }) {
   return (
@@ -110,7 +129,7 @@ function gradeRowsEditor(
   const update = (id: string, patch: Partial<GradeRow>) =>
     setRows((r) => r.map((row) => (row.id === id ? { ...row, ...patch } : row)));
   const remove = (id: string) => setRows((r) => r.filter((row) => row.id !== id));
-  const add = () => setRows((r) => [...r, { id: String(Date.now()), label: "", min: "0", max: "0", points: "", fail: false }]);
+  const add = () => setRows((r) => [...r, { id: `new-${Date.now()}`, serverId: null, label: "", min: "0", max: "0", points: "", fail: false }]);
 
   const cols = showPoints ? "1.3fr 0.8fr 0.8fr 0.8fr 0.7fr 24px" : "1.3fr 0.8fr 0.8fr 0.7fr 24px";
 
@@ -124,8 +143,8 @@ function gradeRowsEditor(
       {rows.map((row) => (
         <div key={row.id} style={{ display: "grid", gridTemplateColumns: cols, gap: 8, alignItems: "center" }}>
           <input style={inputSx} value={row.label} onChange={(e) => update(row.id, { label: e.target.value })} />
-          <input style={{ ...inputSx, textAlign: "center" }} value={row.min} onChange={(e) => update(row.id, { min: e.target.value.replace(/[^0-9]/g, "") })} />
-          <input style={{ ...inputSx, textAlign: "center" }} value={row.max} onChange={(e) => update(row.id, { max: e.target.value.replace(/[^0-9]/g, "") })} />
+          <input style={{ ...inputSx, textAlign: "center" }} value={row.min} onChange={(e) => update(row.id, { min: e.target.value.replace(/[^0-9.]/g, "") })} />
+          <input style={{ ...inputSx, textAlign: "center" }} value={row.max} onChange={(e) => update(row.id, { max: e.target.value.replace(/[^0-9.]/g, "") })} />
           {showPoints && (
             <input style={{ ...inputSx, textAlign: "center" }} value={row.points} onChange={(e) => update(row.id, { points: e.target.value })} />
           )}
@@ -150,19 +169,108 @@ function gradeRowsEditor(
 }
 
 export default function ExamConfigurationPage() {
-  const [examTypes, setExamTypes] = useState<ExamTypeRow[]>(INITIAL_EXAM_TYPES);
-  const [letterGrades, setLetterGrades] = useState<GradeRow[]>(INITIAL_LETTER_GRADES);
-  const [gpaGrades, setGpaGrades] = useState<GradeRow[]>(INITIAL_GPA_GRADES);
-  const [letterScaleName, setLetterScaleName] = useState("CBSE 9-Point Scale (School)");
-  const [gpaScaleName, setGpaScaleName] = useState("10-Point GPA Scale");
+  const { data: examTypesData, refetch: refetchExamTypes } = useExamTypes();
+  const { data: groupsData, refetch: refetchGroups } = useExamGradeScaleGroups();
+
+  const [examTypes, setExamTypes] = useState<ExamTypeRow[]>([]);
+  const [markingStyle, setMarkingStyle] = useState<GradeScaleStyle>("letter");
+  const [scaleName, setScaleName] = useState("");
   const [minPassPct, setMinPassPct] = useState("33");
-  const [markingStyle, setMarkingStyle] = useState<MarkingStyle>("letter");
+  const [gradeRows, setGradeRows] = useState<GradeRow[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  useEffect(() => {
+    if (examTypesData) setExamTypes(examTypesData.results.map(toRow));
+  }, [examTypesData]);
+
+  const groups = groupsData?.results ?? [];
+  const activeGroup: ExamGradeScaleGroup | undefined = groups.find((g) => g.style === markingStyle);
+
+  // Ensure a group exists for the currently-selected style so band edits always have somewhere to attach.
+  useEffect(() => {
+    if (!groupsData) return;
+    if (activeGroup) return;
+    void createGradeScaleGroup({ name: STYLE_DEFAULT_NAME[markingStyle], style: markingStyle, is_default: groups.length === 0 }).then(() => refetchGroups());
+  }, [groupsData, activeGroup, markingStyle, groups.length, refetchGroups]);
+
+  useEffect(() => {
+    if (activeGroup) { setScaleName(activeGroup.name); setMinPassPct(activeGroup.min_pass_percent); }
+  }, [activeGroup?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const { data: bandsData, refetch: refetchBands } = useExamGradeScaleBands(activeGroup?.id ?? null);
+  useEffect(() => {
+    if (bandsData) setGradeRows(bandsData.results.map(toGradeRow));
+  }, [bandsData]);
 
   const updateType = (id: string, patch: Partial<ExamTypeRow>) =>
     setExamTypes((rows) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   const removeType = (id: string) => setExamTypes((rows) => rows.filter((r) => r.id !== id));
   const addType = () =>
-    setExamTypes((rows) => [...rows, { id: String(Date.now()), name: "", countsToAvg: false, weight: "0" }]);
+    setExamTypes((rows) => [...rows, { id: `new-${Date.now()}`, serverId: null, name: "", countsToAvg: false, weight: "0" }]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSaveError(null);
+    setSaveSuccess(false);
+    try {
+      const originalTypeIds = new Set((examTypesData?.results ?? []).map((t) => t.id));
+      const keptTypeIds = new Set(examTypes.filter((r) => r.serverId).map((r) => r.serverId));
+      for (const id of originalTypeIds) {
+        if (!keptTypeIds.has(id)) await deleteExamType(id);
+      }
+      for (const row of examTypes) {
+        if (!row.name.trim()) continue;
+        const patch = { title: row.name.trim(), counts_to_average: row.countsToAvg, weight_percent: row.weight || "0" };
+        if (row.serverId) await updateExamType(row.serverId, patch);
+        else await createExamType(patch);
+      }
+
+      if (activeGroup) {
+        if (activeGroup.name !== scaleName || activeGroup.min_pass_percent !== minPassPct) {
+          await updateGradeScaleGroup(activeGroup.id, { name: scaleName || STYLE_DEFAULT_NAME[markingStyle], min_pass_percent: minPassPct });
+        }
+
+        if (markingStyle !== "percentage") {
+          const overlap = findOverlappingBandPair(gradeRows);
+          if (overlap) {
+            throw new Error(`"${overlap[0].label.trim()}" and "${overlap[1].label.trim()}" have overlapping percentage ranges — adjust their Min %/Max % before saving.`);
+          }
+
+          // Delete all existing bands and recreate from scratch rather than updating
+          // in place: the backend rejects a band whose new range overlaps any sibling's
+          // *current* range, so updating boundary-adjacent bands one at a time (e.g.
+          // narrowing band A while widening band B into the gap) spuriously fails
+          // against the other band's still-old, not-yet-saved range. Bands aren't
+          // referenced by id elsewhere (looked up by percentage at read time), so
+          // recreating them is safe.
+          for (const band of bandsData?.results ?? []) {
+            await deleteGradeScaleBand(band.id);
+          }
+          for (const row of gradeRows) {
+            if (!row.label.trim()) continue;
+            const patch = {
+              group: activeGroup.id,
+              name: row.label.trim(),
+              min_percent: row.min || "0",
+              max_percent: row.max || "0",
+              gpa: row.points || "0",
+              is_fail: row.fail,
+            };
+            await createGradeScaleBand(patch);
+          }
+        }
+      }
+
+      await Promise.all([refetchExamTypes(), refetchGroups(), refetchBands()]);
+      setSaveSuccess(true);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Failed to save configuration.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div style={{ minHeight: "100%", background: T.page, padding: "12px 20px 40px" }}>
@@ -197,15 +305,21 @@ export default function ExamConfigurationPage() {
             </span>
           </h1>
           <p style={{ fontSize: 13, color: T.ink2, lineHeight: 1.6, maxWidth: 640, margin: 0 }}>
-            Nothing here is a preset — name your own exam types, weight them however your report cards
-            actually work, and build a grading scale from a blank table. Change it here once and every
-            future Exam Setup inherits it.
+            Name your own exam types, weight them however your report cards actually work, and build a
+            grading scale from a blank table. Change it here once and every future Exam Setup inherits it.
           </p>
         </div>
 
+        {saveError && (
+          <div style={{ background: T.dangerSoft, color: T.danger, borderRadius: 10, padding: "10px 14px", fontSize: 12.5, fontWeight: 600, marginBottom: 14 }}>{saveError}</div>
+        )}
+        {saveSuccess && (
+          <div style={{ background: T.okSoft, color: T.ok, borderRadius: 10, padding: "10px 14px", fontSize: 12.5, fontWeight: 600, marginBottom: 14 }}>Configuration saved.</div>
+        )}
+
         <div style={{ display: "grid", gridTemplateColumns: "minmax(320px, 1fr) minmax(420px, 1.35fr)", gap: 18, alignItems: "start" }}>
           {/* Exam types */}
-          <SectionCard icon={Star} title="Exam types your school uses" subtitle="Every field below is editable — these are examples from one school's setup, not built-in options.">
+          <SectionCard icon={Star} title="Exam types your school uses" subtitle="Add, rename or remove — weight and averaging apply wherever this exam type is referenced.">
             <div style={{ display: "grid", gridTemplateColumns: "1fr 150px 90px 24px", gap: 8, fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em" }}>
               <span>Name</span><span>Counts to report card avg.</span><span>Weight %</span><span />
             </div>
@@ -220,7 +334,7 @@ export default function ExamConfigurationPage() {
                 </div>
                 <input
                   style={{ ...inputSx, textAlign: "center" }} value={row.weight}
-                  onChange={(e) => updateType(row.id, { weight: e.target.value.replace(/[^0-9]/g, "") })}
+                  onChange={(e) => updateType(row.id, { weight: e.target.value.replace(/[^0-9.]/g, "") })}
                 />
                 <TrashBtn onClick={() => removeType(row.id)} />
               </div>
@@ -266,7 +380,7 @@ export default function ExamConfigurationPage() {
                 </div>
                 <input
                   style={{ ...inputSx, maxWidth: 140 }} value={minPassPct}
-                  onChange={(e) => setMinPassPct(e.target.value.replace(/[^0-9]/g, ""))}
+                  onChange={(e) => setMinPassPct(e.target.value.replace(/[^0-9.]/g, ""))}
                 />
                 <p style={{ fontSize: 11.5, color: T.ink3, lineHeight: 1.5, margin: "8px 0 0" }}>
                   Report cards show the raw percentage — no grade or GPA conversion happens. Switch back to
@@ -280,19 +394,11 @@ export default function ExamConfigurationPage() {
                 <div style={{ fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>
                   Scale name
                 </div>
-                <input style={inputSx} value={letterScaleName} onChange={(e) => setLetterScaleName(e.target.value)} />
+                <input style={inputSx} value={scaleName} onChange={(e) => setScaleName(e.target.value)} />
                 <p style={{ fontSize: 11.5, color: T.ink3, lineHeight: 1.5, margin: "8px 0 14px" }}>
-                  This 9-band scale (A1–E2) is what CBSE prescribes for a school&apos;s own Periodic Test / Half-Yearly /
-                  Yearly reporting. It&apos;s different from the Board&apos;s own Class 10/12 result grading, which CBSE
-                  computes centrally on a relative, cohort-wide basis — not something this module needs to replicate.
+                  Build the grade bands (e.g. A1–E2) this school actually uses — nothing is preset.
                 </p>
-                {gradeRowsEditor(letterGrades, setLetterGrades, "Grade label", true)}
-                <button
-                  type="button"
-                  style={{ background: "none", border: "none", color: T.purple, fontSize: 12.5, fontWeight: 600, cursor: "pointer", textAlign: "left", padding: "10px 0 0" }}
-                >
-                  + Add another grading scale
-                </button>
+                {gradeRowsEditor(gradeRows, setGradeRows, "Grade label", true)}
               </div>
             )}
 
@@ -301,26 +407,28 @@ export default function ExamConfigurationPage() {
                 <div style={{ fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 }}>
                   Scale name
                 </div>
-                <input style={inputSx} value={gpaScaleName} onChange={(e) => setGpaScaleName(e.target.value)} />
+                <input style={inputSx} value={scaleName} onChange={(e) => setScaleName(e.target.value)} />
                 <p style={{ fontSize: 11.5, color: T.ink3, lineHeight: 1.5, margin: "8px 0 14px" }}>
                   No letter labels — the GPA value itself is what shows on the report card.
                 </p>
-                {gradeRowsEditor(gpaGrades, setGpaGrades, "GPA value", false)}
+                {gradeRowsEditor(gradeRows, setGradeRows, "GPA value", false)}
               </div>
             )}
           </SectionCard>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20 }}>
-          <span style={{ fontSize: 12, color: T.ink3 }}>Applies to every future exam · last edited 3 months ago</span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginTop: 20 }}>
           <button
             type="button"
+            onClick={handleSave}
+            disabled={saving}
             style={{
               height: 42, padding: "0 22px", borderRadius: 10, border: `1px solid ${T.purple}`,
-              background: T.purple, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: "pointer",
+              background: T.purple, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: saving ? "default" : "pointer",
+              opacity: saving ? 0.7 : 1,
             }}
           >
-            Save configuration
+            {saving ? "Saving…" : "Save configuration"}
           </button>
         </div>
       </div>
