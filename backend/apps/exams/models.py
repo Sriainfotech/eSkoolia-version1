@@ -5,6 +5,8 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
 
+SHARED_EXAM_ROOMS = {"EXAM-HALL", "AUDITORIUM", "SPORTS-HALL"}
+
 
 class ExamType(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="exam_types")
@@ -21,6 +23,8 @@ class ExamType(models.Model):
     is_active = models.BooleanField(default=True)
     is_average = models.BooleanField(default=False)
     average_mark = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal("0.00"))
+    counts_to_average = models.BooleanField(default=True)
+    weight_percent = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("0.00"))
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -75,8 +79,44 @@ class Exam(models.Model):
         return self.name
 
 
+class ExamGradeScaleGroup(models.Model):
+    STYLE_PERCENTAGE = "percentage"
+    STYLE_LETTER = "letter"
+    STYLE_GPA = "gpa"
+    STYLE_CHOICES = [
+        (STYLE_PERCENTAGE, "Percentage only"),
+        (STYLE_LETTER, "Letter grades"),
+        (STYLE_GPA, "GPA / points only"),
+    ]
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="exam_grade_scale_groups")
+    name = models.CharField(max_length=120)
+    style = models.CharField(max_length=12, choices=STYLE_CHOICES, default=STYLE_LETTER)
+    min_pass_percent = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal("33.00"))
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "exam_grade_scale_groups"
+        ordering = ["-is_default", "name"]
+        constraints = [
+            models.UniqueConstraint(fields=["school", "name"], name="uq_exam_grade_scale_group_school_name"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class ExamGradeScale(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="exam_grade_scales")
+    group = models.ForeignKey(
+        ExamGradeScaleGroup,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="bands",
+    )
     name = models.CharField(max_length=5)
     min_percent = models.DecimalField(
         max_digits=5,
@@ -97,7 +137,7 @@ class ExamGradeScale(models.Model):
         db_table = "exam_grade_scales"
         ordering = ["-min_percent"]
         constraints = [
-            models.UniqueConstraint(fields=["school", "name"], name="uq_exam_grade_scale_school_name"),
+            models.UniqueConstraint(fields=["school", "group", "name"], name="uq_exam_grade_scale_school_group_name"),
         ]
 
     def __str__(self):
@@ -289,9 +329,8 @@ class ExamRoutine(models.Model):
         if self.pk:
             base_qs = base_qs.exclude(pk=self.pk)
 
-        shared_rooms = {"EXAM-HALL", "AUDITORIUM", "SPORTS-HALL"}
         room_value = (self.room or "").strip()
-        if room_value and room_value.upper() not in shared_rooms:
+        if room_value and room_value.upper() not in SHARED_EXAM_ROOMS:
             room_conflict = base_qs.filter(room__iexact=room_value).select_related("exam_term", "school_class", "section", "subject").first()
             if room_conflict:
                 raise ValidationError(
@@ -505,6 +544,15 @@ class ExamResultPublish(models.Model):
         blank=True,
         related_name="exam_result_publishes",
     )
+    principal_signoff = models.BooleanField(default=False)
+    principal_signoff_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="exam_result_publish_signoffs",
+    )
+    principal_signoff_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -701,3 +749,100 @@ class SeatPlan(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["school", "academic_year", "exam_term", "student"], name="uq_seat_plan_scope"),
         ]
+
+
+class ReportCardSetting(models.Model):
+    TEMPLATE_CBSE = "cbse"
+    TEMPLATE_ICSE = "icse"
+    TEMPLATE_CAMBRIDGE = "cambridge"
+    TEMPLATE_IB = "ib"
+    TEMPLATE_CHOICES = [
+        (TEMPLATE_CBSE, "CBSE style"),
+        (TEMPLATE_ICSE, "ICSE style"),
+        (TEMPLATE_CAMBRIDGE, "Cambridge style"),
+        (TEMPLATE_IB, "IB style"),
+    ]
+
+    WORKFLOW_AS_YOU_GO = "as_you_go"
+    WORKFLOW_BULK = "bulk"
+    WORKFLOW_CUSTOM = "custom"
+    WORKFLOW_CHOICES = [
+        (WORKFLOW_AS_YOU_GO, "As-you-go"),
+        (WORKFLOW_BULK, "Bulk"),
+        (WORKFLOW_CUSTOM, "Custom"),
+    ]
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="report_card_settings")
+    academic_year = models.ForeignKey(
+        "core.AcademicYear",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="report_card_settings",
+    )
+    visible_to_class_teacher = models.BooleanField(default=True)
+    visible_to_subject_teacher = models.BooleanField(default=False)
+    template = models.CharField(max_length=20, choices=TEMPLATE_CHOICES, default=TEMPLATE_CBSE)
+    include_photo = models.BooleanField(default=True)
+    include_co_scholastic = models.BooleanField(default=True)
+    include_attendance = models.BooleanField(default=True)
+    include_comments = models.BooleanField(default=True)
+    include_overall_notes = models.BooleanField(default=True)
+    include_improvement = models.BooleanField(default=True)
+    moderation_workflow = models.CharField(max_length=12, choices=WORKFLOW_CHOICES, default=WORKFLOW_AS_YOU_GO)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "exam_report_card_settings"
+        ordering = ["-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["school", "academic_year"], name="uq_report_card_setting_scope"),
+        ]
+
+
+class ExamResultModerationFlag(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+
+    school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="exam_result_moderation_flags")
+    exam_term = models.ForeignKey(ExamType, on_delete=models.CASCADE, related_name="moderation_flags")
+    school_class = models.ForeignKey("core.Class", on_delete=models.CASCADE, related_name="exam_result_moderation_flags")
+    section = models.ForeignKey(
+        "core.Section",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="exam_result_moderation_flags",
+    )
+    student = models.ForeignKey("students.Student", on_delete=models.CASCADE, related_name="exam_result_moderation_flags")
+    mark_register = models.ForeignKey(
+        ExamMarkRegister,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="moderation_flags",
+    )
+    reason = models.CharField(max_length=255)
+    detail = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    resolved_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="exam_result_moderation_flags_resolved",
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "exam_result_moderation_flags"
+        ordering = ["-id"]

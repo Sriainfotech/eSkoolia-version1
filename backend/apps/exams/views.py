@@ -26,9 +26,11 @@ from .models import (
     ExamAttendance,
     ExamAttendanceChild,
     ExamGradeScale,
+    ExamGradeScaleGroup,
     ExamMark,
     ExamMarkRegister,
     ExamMarkRegisterPart,
+    ExamResultModerationFlag,
     ExamResultPublish,
     ExamRoutine,
     ExamSchedule,
@@ -36,6 +38,7 @@ from .models import (
     ExamType,
     OnlineExam,
     OnlineExamTake,
+    ReportCardSetting,
     SeatPlan,
     SeatPlanSetting,
 )
@@ -46,6 +49,7 @@ from .serializers import (
     ExamAttendanceReportSearchRequestSerializer,
     ExamAttendanceSearchRequestSerializer,
     ExamAttendanceStoreRequestSerializer,
+    ExamGradeScaleGroupSerializer,
     ExamGradeScaleSerializer,
     ExamMeritSearchRequestSerializer,
     ExamMarkSerializer,
@@ -53,7 +57,10 @@ from .serializers import (
     ExamMarkRegisterSerializer,
     ExamMarkRegisterStoreRequestSerializer,
     ExamReportStudentSearchRequestSerializer,
+    ExamResultModerationFlagSerializer,
     ExamResultPublishSearchRequestSerializer,
+    ExamResultPublishSerializer,
+    ExamResultPublishSignoffRequestSerializer,
     ExamResultPublishStoreRequestSerializer,
     ExamRoutineSerializer,
     ExamCommandCenterScheduleSerializer,
@@ -61,6 +68,7 @@ from .serializers import (
     ExamPlanGenerateRequestSerializer,
     ExamPlanSearchRequestSerializer,
     ExamScheduleSerializer,
+    ExamSetupCloneRequestSerializer,
     ExamSetupSerializer,
     ExamSetupStoreRequestSerializer,
     ExamSerializer,
@@ -71,6 +79,7 @@ from .serializers import (
     OnlineExamStoreRequestSerializer,
     OnlineExamTakeSerializer,
     OnlineExamUpdateRequestSerializer,
+    ReportCardSettingSerializer,
     SeatPlanSerializer,
     SeatPlanSettingSerializer,
 )
@@ -463,6 +472,62 @@ class ExamSetupSubjectByClassAPIView(ExamTenantMixin, APIView):
         return Response([{"id": s.id, "subject_name": s.name} for s in subjects])
 
 
+class ExamSetupCloneAPIView(ExamTenantMixin, APIView):
+    """Copies a prior exam term's ExamSetup rows into a new exam term for the same class/section."""
+
+    @transaction.atomic
+    def post(self, request):
+        serializer = ExamSetupCloneRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        school = self.get_school(request)
+        current_year = self.get_current_academic_year(school.id)
+
+        source_qs = ExamSetup.objects.filter(
+            school=school,
+            exam_term_id=data["from_exam_term_id"],
+            school_class_id=data["class_id"],
+            section_id=data["section"],
+        )
+        if data.get("subject"):
+            source_qs = source_qs.filter(subject_id=data["subject"])
+
+        source_rows = list(source_qs)
+        if not source_rows:
+            return Response({"message": "No prior setup found to clone from."}, status=status.HTTP_400_BAD_REQUEST)
+
+        subject_ids = {row.subject_id for row in source_rows}
+        ExamSetup.objects.filter(
+            school=school,
+            exam_term_id=data["to_exam_term_id"],
+            school_class_id=data["class_id"],
+            section_id=data["section"],
+            subject_id__in=subject_ids,
+        ).delete()
+
+        clones = [
+            ExamSetup(
+                school=school,
+                academic_year=current_year,
+                exam_term_id=data["to_exam_term_id"],
+                school_class_id=data["class_id"],
+                section_id=data["section"],
+                subject_id=row.subject_id,
+                exam_title=row.exam_title,
+                exam_mark=row.exam_mark,
+                created_by=request.user,
+            )
+            for row in source_rows
+        ]
+        ExamSetup.objects.bulk_create(clones)
+
+        return Response(
+            {"message": "Operation successful", "cloned_count": len(clones)},
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class ExamScheduleIndexAPIView(ExamTenantMixin, APIView):
     """Parity criteria for exam schedule create/report pages."""
 
@@ -755,6 +820,206 @@ class ExamCommandCenterDetailAPIView(ExamTenantMixin, APIView):
             return Response(status=status.HTTP_204_NO_CONTENT)
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+def _detect_routine_conflicts(school_id):
+    """Bulk-scan the school's ExamRoutine rows for the same overlap types ExamRoutine.clean() rejects
+    at save time (room / class+section / teacher double-booking) so Command Center can surface a live
+    count without re-running .clean() (and its extra queries) per row."""
+    from .models import SHARED_EXAM_ROOMS
+
+    routines = list(
+        ExamRoutine.objects.filter(school_id=school_id)
+        .select_related("exam_term", "school_class", "section", "subject", "teacher")
+        .order_by("exam_date", "start_time")
+    )
+    by_date = {}
+    for row in routines:
+        by_date.setdefault(row.exam_date, []).append(row)
+
+    def overlaps(a, b):
+        return a.start_time < b.end_time and b.start_time < a.end_time
+
+    conflicts = []
+    seen_pairs = set()
+    for day_rows in by_date.values():
+        for i, a in enumerate(day_rows):
+            for b in day_rows[i + 1 :]:
+                if not overlaps(a, b):
+                    continue
+                pair_key = tuple(sorted((a.id, b.id)))
+                if pair_key in seen_pairs:
+                    continue
+
+                room_a = (a.room or "").strip().upper()
+                room_b = (b.room or "").strip().upper()
+                if room_a and room_a == room_b and room_a not in SHARED_EXAM_ROOMS:
+                    seen_pairs.add(pair_key)
+                    conflicts.append(
+                        {
+                            "conflict_type": "room_conflict",
+                            "title": f"Room {a.room} double-booked",
+                            "detail": f"{a.exam_term.title} · {a.exam_date.isoformat()}, {a.start_time.strftime('%H:%M')}",
+                            "exam_date": a.exam_date.isoformat(),
+                        }
+                    )
+                    continue
+
+                if a.school_class_id == b.school_class_id and (a.section_id or None) == (b.section_id or None):
+                    seen_pairs.add(pair_key)
+                    class_name = a.school_class.name
+                    section_name = a.section.name if a.section else "All"
+                    conflicts.append(
+                        {
+                            "conflict_type": "class_conflict",
+                            "title": f"{class_name}-{section_name} double-booked",
+                            "detail": f"{a.subject.name} and {b.subject.name} overlap on {a.exam_date.isoformat()}",
+                            "exam_date": a.exam_date.isoformat(),
+                        }
+                    )
+                    continue
+
+                if a.teacher_id and a.teacher_id == b.teacher_id:
+                    seen_pairs.add(pair_key)
+                    teacher_name = (
+                        f"{(a.teacher.first_name or '').strip()} {(a.teacher.last_name or '').strip()}".strip()
+                        or a.teacher.username
+                    )
+                    conflicts.append(
+                        {
+                            "conflict_type": "teacher_conflict",
+                            "title": f"Invigilator clash — {teacher_name}",
+                            "detail": f"{a.exam_term.title} · {a.exam_date.isoformat()}, {a.start_time.strftime('%H:%M')}",
+                            "exam_date": a.exam_date.isoformat(),
+                        }
+                    )
+
+    return conflicts
+
+
+class ExamCommandCenterSummaryAPIView(ExamTenantMixin, APIView):
+    """Read-only KPI rollup backing the Command Center dashboard: live conflict count, marks-entered
+    percentage for the most active exam term, and how many class/section scopes are ready to publish."""
+
+    def get(self, request):
+        school = self.get_school(request)
+        school_id = school.id
+
+        conflicts = _detect_routine_conflicts(school_id)
+
+        current_term = (
+            ExamType.objects.filter(school_id=school_id, active_status=True, routines__isnull=False)
+            .order_by("-created_at")
+            .distinct()
+            .first()
+        ) or ExamType.objects.filter(school_id=school_id).order_by("-created_at").first()
+
+        needs_attention = [
+            {"severity": "danger", "title": c["title"], "detail": c["detail"]} for c in conflicts[:4]
+        ]
+
+        marks_percent = 0
+        pending_moderation_count = 0
+        ready_to_publish_count = 0
+        term_payload = None
+
+        if current_term:
+            scopes = (
+                ExamRoutine.objects.filter(school_id=school_id, exam_term=current_term)
+                .values("school_class_id", "section_id")
+                .distinct()
+            )
+
+            expected_total = 0
+            entered_total = ExamMarkRegister.objects.filter(school_id=school_id, exam_term=current_term).count()
+
+            ready_count = 0
+            for scope in scopes:
+                class_id = scope["school_class_id"]
+                section_id = scope["section_id"]
+
+                subject_ids = list(
+                    ExamRoutine.objects.filter(
+                        school_id=school_id,
+                        exam_term=current_term,
+                        school_class_id=class_id,
+                        section_id=section_id,
+                    ).values_list("subject_id", flat=True)
+                )
+                student_qs = Student.objects.filter(school_id=school_id, current_class_id=class_id, is_active=True)
+                if section_id:
+                    student_qs = student_qs.filter(current_section_id=section_id)
+                student_count = student_qs.count()
+                scope_expected = student_count * len(subject_ids)
+                expected_total += scope_expected
+
+                scope_entered = ExamMarkRegister.objects.filter(
+                    school_id=school_id,
+                    exam_term=current_term,
+                    school_class_id=class_id,
+                    section_id=section_id,
+                ).count()
+
+                already_published = ExamResultPublish.objects.filter(
+                    school_id=school_id,
+                    exam_term=current_term,
+                    school_class_id=class_id,
+                    section_id=section_id,
+                    is_published=True,
+                ).exists()
+
+                pending_flags = ExamResultModerationFlag.objects.filter(
+                    school_id=school_id,
+                    exam_term=current_term,
+                    school_class_id=class_id,
+                    section_id=section_id,
+                    status=ExamResultModerationFlag.STATUS_PENDING,
+                ).count()
+                pending_moderation_count += pending_flags
+
+                if scope_expected > 0 and scope_entered >= scope_expected and pending_flags == 0 and not already_published:
+                    ready_count += 1
+
+            ready_to_publish_count = ready_count
+            marks_percent = round((entered_total / expected_total) * 100) if expected_total else 0
+
+            term_payload = {"id": current_term.id, "title": current_term.title}
+
+            if pending_moderation_count:
+                needs_attention.append(
+                    {
+                        "severity": "info",
+                        "title": f"{pending_moderation_count} result(s) pending moderation",
+                        "detail": current_term.title,
+                    }
+                )
+            elif expected_total and marks_percent < 100:
+                missing = expected_total - entered_total
+                needs_attention.append(
+                    {
+                        "severity": "warn",
+                        "title": f"{missing} student(s) missing marks",
+                        "detail": current_term.title,
+                    }
+                )
+
+        needs_action_modules = set()
+        if conflicts:
+            needs_action_modules.add("Schedule & Logistics")
+        if pending_moderation_count:
+            needs_action_modules.add("Results & Reports")
+
+        return Response(
+            {
+                "current_exam_term": term_payload,
+                "needs_action_count": len(needs_action_modules),
+                "conflict_count": len(conflicts),
+                "marks_entered_percent": marks_percent,
+                "ready_to_publish_count": ready_to_publish_count,
+                "pending_moderation_count": pending_moderation_count,
+                "needs_attention": needs_attention[:6],
+            }
+        )
 
 
 class ExamRoomListAPIView(ExamTenantMixin, APIView):
@@ -1497,6 +1762,85 @@ class ExamMarksRegisterReportSearchAPIView(ExamTenantMixin, APIView):
         )
 
 
+class ExamMarksProgressSummaryAPIView(ExamTenantMixin, APIView):
+    """Per subject+class+section entered-vs-roster counts, backing the Conduct & Marks monitor table."""
+
+    def get(self, request):
+        exam_term_id = request.query_params.get("exam")
+        class_id = request.query_params.get("class_id")
+        section_id = request.query_params.get("section")
+        if not exam_term_id:
+            return Response({"detail": "exam is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        scope_qs = ExamRoutine.objects.filter(exam_term_id=exam_term_id, **self.school_filter(request)).select_related(
+            "school_class", "section", "subject", "teacher"
+        )
+        if class_id:
+            scope_qs = scope_qs.filter(school_class_id=class_id)
+        if section_id:
+            scope_qs = scope_qs.filter(section_id=section_id)
+
+        rows = []
+        for routine in scope_qs.order_by("subject__name", "school_class__name"):
+            student_qs = Student.objects.filter(
+                current_class_id=routine.school_class_id,
+                is_active=True,
+                **self.school_filter(request),
+            )
+            if routine.section_id:
+                student_qs = student_qs.filter(current_section_id=routine.section_id)
+            total = student_qs.count()
+
+            entered = ExamMarkRegister.objects.filter(
+                exam_term_id=exam_term_id,
+                school_class_id=routine.school_class_id,
+                section_id=routine.section_id,
+                subject_id=routine.subject_id,
+                **self.school_filter(request),
+            ).count()
+
+            if total == 0:
+                row_status = "not_started"
+            elif entered >= total:
+                row_status = "complete"
+            elif entered == 0:
+                row_status = "not_started"
+            else:
+                row_status = "in_progress"
+
+            teacher_name = ""
+            if routine.teacher_id:
+                first = (routine.teacher.first_name or "").strip()
+                last = (routine.teacher.last_name or "").strip()
+                teacher_name = f"{first} {last}".strip() or routine.teacher.username
+
+            rows.append(
+                {
+                    "subject_id": routine.subject_id,
+                    "subject_name": routine.subject.name,
+                    "class_id": routine.school_class_id,
+                    "class_name": routine.school_class.name,
+                    "section_id": routine.section_id,
+                    "section_name": routine.section.name if routine.section else "All",
+                    "teacher_name": teacher_name,
+                    "entered": entered,
+                    "total": total,
+                    "status": row_status,
+                }
+            )
+
+        total_entered = sum(r["entered"] for r in rows)
+        total_expected = sum(r["total"] for r in rows)
+        return Response(
+            {
+                "rows": rows,
+                "total_entered": total_entered,
+                "total_expected": total_expected,
+                "percent": round((total_entered / total_expected) * 100) if total_expected else 0,
+            }
+        )
+
+
 class ExamResultPublishIndexAPIView(ExamTenantMixin, APIView):
     """Parity criteria payload for result publish screen."""
 
@@ -1549,6 +1893,14 @@ class ExamResultPublishSearchAPIView(ExamTenantMixin, APIView):
         class_obj = Class.objects.filter(id=class_id, **self.school_filter(request)).first()
         section_obj = Section.objects.filter(id=section_id).first() if section_id else None
 
+        pending_moderation_count = ExamResultModerationFlag.objects.filter(
+            exam_term_id=exam_term_id,
+            school_class_id=class_id,
+            section_id=section_id,
+            status=ExamResultModerationFlag.STATUS_PENDING,
+            **self.school_filter(request),
+        ).count()
+
         return Response(
             {
                 "search_info": {
@@ -1559,6 +1911,8 @@ class ExamResultPublishSearchAPIView(ExamTenantMixin, APIView):
                 "total_mark_entries": marks_qs.count(),
                 "is_published": bool(published_row.is_published) if published_row else False,
                 "published_at": str(published_row.published_at) if published_row and published_row.published_at else None,
+                "principal_signoff": bool(published_row.principal_signoff) if published_row else False,
+                "pending_moderation_count": pending_moderation_count,
             }
         )
 
@@ -1592,6 +1946,19 @@ class ExamResultPublishStoreAPIView(ExamTenantMixin, APIView):
         school = self.get_school(request)
         current_year = self.get_current_academic_year(school.id)
 
+        pending_flags = ExamResultModerationFlag.objects.filter(
+            school=school,
+            exam_term_id=exam_term_id,
+            school_class_id=class_id,
+            section_id=section_id,
+            status=ExamResultModerationFlag.STATUS_PENDING,
+        ).count()
+        if pending_flags:
+            return Response(
+                {"message": f"{pending_flags} moderation flag(s) still need review before publishing."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         publish_row, _ = ExamResultPublish.objects.get_or_create(
             school=school,
             exam_term_id=exam_term_id,
@@ -1599,6 +1966,9 @@ class ExamResultPublishStoreAPIView(ExamTenantMixin, APIView):
             section_id=section_id,
             defaults={"academic_year": current_year},
         )
+        if not publish_row.principal_signoff:
+            return Response({"message": "Principal sign-off is required before publishing."}, status=status.HTTP_400_BAD_REQUEST)
+
         publish_row.academic_year = current_year
         publish_row.is_published = True
         publish_row.published_at = timezone.now()
@@ -1606,6 +1976,67 @@ class ExamResultPublishStoreAPIView(ExamTenantMixin, APIView):
         publish_row.save(update_fields=["academic_year", "is_published", "published_at", "published_by", "updated_at"])
 
         return Response({"message": "Operation successful"}, status=status.HTTP_200_OK)
+
+
+class ExamResultPublishSignoffAPIView(ExamTenantMixin, APIView):
+    """Records the principal sign-off gate that ExamResultPublishStoreAPIView requires before publishing."""
+
+    @transaction.atomic
+    def post(self, request):
+        serializer = ExamResultPublishSignoffRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        section_id = data.get("section_id")
+        if section_id in (0, "0"):
+            section_id = None
+
+        school = self.get_school(request)
+        current_year = self.get_current_academic_year(school.id)
+
+        publish_row, _ = ExamResultPublish.objects.get_or_create(
+            school=school,
+            exam_term_id=data["exam_id"],
+            school_class_id=data["class_id"],
+            section_id=section_id,
+            defaults={"academic_year": current_year},
+        )
+        publish_row.principal_signoff = True
+        publish_row.principal_signoff_by = request.user
+        publish_row.principal_signoff_at = timezone.now()
+        publish_row.save(update_fields=["principal_signoff", "principal_signoff_by", "principal_signoff_at", "updated_at"])
+
+        return Response(ExamResultPublishSerializer(publish_row).data, status=status.HTTP_200_OK)
+
+
+class ExamResultPublishReportCardSettingAPIView(ExamTenantMixin, APIView):
+    """One row per school+academic year holding report-card visibility/template/moderation-workflow choices."""
+
+    def get(self, request):
+        school = self.get_school(request)
+        year = self.get_current_academic_year(school.id)
+        setting = ReportCardSetting.objects.filter(school=school, academic_year=year).first()
+        if not setting:
+            setting = ReportCardSetting.objects.filter(school=school).order_by("-id").first()
+            if setting:
+                setting.pk = None
+                setting.academic_year = year
+                setting.save()
+            else:
+                setting = ReportCardSetting.objects.create(school=school, academic_year=year)
+        return Response({"setting": ReportCardSettingSerializer(setting).data})
+
+    def post(self, request):
+        school = self.get_school(request)
+        year = self.get_current_academic_year(school.id)
+        setting = ReportCardSetting.objects.filter(school=school, academic_year=year).first()
+        if not setting:
+            setting = ReportCardSetting(school=school, academic_year=year)
+
+        serializer = ReportCardSettingSerializer(setting, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(school=school, academic_year=year)
+        return Response({"message": "Operation successful", "setting": serializer.data}, status=status.HTTP_200_OK)
 
 
 class ExamReportIndexAPIView(ExamTenantMixin, APIView):
@@ -2023,13 +2454,49 @@ class ExamTypeViewSet(SchoolScopedModelViewSet):
     permission_codes = {"*": "examination.exam_type.view"}
 
 
+class ExamGradeScaleGroupViewSet(SchoolScopedModelViewSet):
+    queryset = ExamGradeScaleGroup.objects.select_related("school").prefetch_related("bands").all()
+    serializer_class = ExamGradeScaleGroupSerializer
+    filterset_fields = ["style", "is_default"]
+    search_fields = ["name"]
+    ordering_fields = ["name", "created_at"]
+    permission_codes = {"*": "examination.exam_type.view"}
+
+
 class ExamGradeScaleViewSet(SchoolScopedModelViewSet):
-    queryset = ExamGradeScale.objects.select_related("school").all()
+    queryset = ExamGradeScale.objects.select_related("school", "group").all()
     serializer_class = ExamGradeScaleSerializer
-    filterset_fields = ["is_fail"]
+    filterset_fields = ["is_fail", "group"]
     search_fields = ["name"]
     ordering_fields = ["min_percent", "max_percent", "name"]
     permission_codes = {"*": "examination.exam_type.view"}
+
+
+class ExamResultModerationFlagViewSet(SchoolScopedModelViewSet):
+    queryset = ExamResultModerationFlag.objects.select_related("student", "school_class", "section", "exam_term").all()
+    serializer_class = ExamResultModerationFlagSerializer
+    filterset_fields = ["exam_term", "school_class", "section", "status"]
+    search_fields = ["student__first_name", "student__last_name", "reason"]
+    ordering_fields = ["created_at"]
+    permission_codes = {"*": "examination.result_publish.view"}
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        flag = self.get_object()
+        flag.status = ExamResultModerationFlag.STATUS_APPROVED
+        flag.resolved_by = request.user
+        flag.resolved_at = timezone.now()
+        flag.save(update_fields=["status", "resolved_by", "resolved_at", "updated_at"])
+        return Response(ExamResultModerationFlagSerializer(flag).data)
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        flag = self.get_object()
+        flag.status = ExamResultModerationFlag.STATUS_REJECTED
+        flag.resolved_by = request.user
+        flag.resolved_at = timezone.now()
+        flag.save(update_fields=["status", "resolved_by", "resolved_at", "updated_at"])
+        return Response(ExamResultModerationFlagSerializer(flag).data)
 
 
 class ExamViewSet(SchoolScopedModelViewSet):
@@ -2445,10 +2912,10 @@ class ExamPlanAdmitCardSearchAPIView(ExamTenantMixin, APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        has_schedule = ExamSchedule.objects.filter(
-            exam_id=data["exam"],
+        has_schedule = ExamRoutine.objects.filter(
+            Q(section_id=data["section"]) | Q(section__isnull=True),
+            exam_term_id=data["exam"],
             school_class_id=data["class"],
-            section_id=data["section"],
             **self.school_filter(request),
         ).exists()
         if not has_schedule:
@@ -2558,10 +3025,10 @@ class ExamPlanSeatPlanSearchAPIView(ExamTenantMixin, APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        has_schedule = ExamSchedule.objects.filter(
-            exam_id=data["exam"],
+        has_schedule = ExamRoutine.objects.filter(
+            Q(section_id=data["section"]) | Q(section__isnull=True),
+            exam_term_id=data["exam"],
             school_class_id=data["class"],
-            section_id=data["section"],
             **self.school_filter(request),
         ).exists()
         if not has_schedule:

@@ -1,18 +1,20 @@
 "use client";
 /**
  * Examination · Command Center — landing hub for the Examination module.
- * Redesign target: 5 groups (by how often each one changes) replacing the old
- * flat 14-item exam menu (still live at /exams/*, unchanged — see lib/routes.ts).
- * Colors match components/academics/foundation/FoundationWorkspace.tsx exactly
- * (the app's established light hero/card pattern) rather than a bespoke palette.
- * Static mockup: metrics below are hardcoded, only the module-card /
- * "Needs attention" links are real navigation.
+ * Wired to the real backend (apps/exams/views.py::ExamCommandCenterSummaryAPIView,
+ * a read-only KPI rollup over live ExamRoutine conflicts, ExamMarkRegister
+ * completion and ExamResultPublish/ExamResultModerationFlag readiness) via
+ * hooks/useExamsApi.ts — replaces the earlier static mockup. Colors match
+ * components/academics/foundation/FoundationWorkspace.tsx (the app's
+ * established light hero/card pattern) rather than a bespoke palette.
  */
 import Link from "next/link";
 import {
   Star, Copy, Calendar, User, Smartphone, AlertTriangle, AlertCircle,
   CheckSquare, CheckCircle2, Sparkles, Plus, Info,
 } from "lucide-react";
+import { useExamCommandCenterSummary, useExamTypes } from "@/hooks/useExamsApi";
+import type { CommandCenterAttentionItem } from "@/types/exams";
 
 const L = {
   page: "var(--page, #FAFAFB)",
@@ -157,7 +159,23 @@ function QuickAction({ icon: Icon, label, href }: { icon: React.ElementType; lab
   );
 }
 
+function attentionIcon(severity: CommandCenterAttentionItem["severity"]) {
+  if (severity === "danger") return { icon: AlertTriangle, color: L.danger, bg: L.dangerSoft };
+  if (severity === "warn") return { icon: AlertCircle, color: L.warn, bg: L.warnSoft };
+  return { icon: Info, color: L.info, bg: L.infoSoft };
+}
+
 export default function ExamCommandCenterPage() {
+  const { data: summary, loading } = useExamCommandCenterSummary();
+  const { data: examTypes } = useExamTypes();
+
+  const examTypeCount = examTypes?.count ?? 0;
+  const termTitle = summary?.current_exam_term?.title ?? "no exam in focus";
+  const conflictCount = summary?.conflict_count ?? 0;
+  const marksPercent = summary?.marks_entered_percent ?? 0;
+  const readyCount = summary?.ready_to_publish_count ?? 0;
+  const pendingModeration = summary?.pending_moderation_count ?? 0;
+
   return (
     <div style={{ minHeight: "100%", background: L.page, padding: "12px 20px 40px" }}>
       <div style={{ background: L.card, border: `1px solid ${L.cardBorder}`, borderRadius: 16, padding: 24 }}>
@@ -172,7 +190,7 @@ export default function ExamCommandCenterPage() {
 
         {/* Hero */}
         <div style={{ marginBottom: 20 }}>
-          <Eyebrow>Examination · AY 2026-27</Eyebrow>
+          <Eyebrow>Examination · {termTitle}</Eyebrow>
           <h1 style={{ margin: "4px 0 6px", display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 8, fontSize: 34 }}>
             <span style={{ fontFamily: "Georgia, serif", fontWeight: 900, color: L.ink1 }}>Organized by</span>
             <span style={{ fontFamily: '"Playfair Display", Georgia, serif', fontStyle: "italic", fontWeight: 500, color: L.purple }}>
@@ -189,18 +207,18 @@ export default function ExamCommandCenterPage() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginBottom: 20 }}>
           <StatTile
             icon={AlertTriangle} iconColor={L.danger} iconBg={L.dangerSoft}
-            label="Needs your action" value="1" valueColor={L.danger}
-            note="module · 2 conflicts in Schedule & Logistics" noteColor={L.danger}
+            label="Needs your action" value={loading ? "…" : String(summary?.needs_action_count ?? 0)} valueColor={L.danger}
+            note={conflictCount > 0 ? `${conflictCount} conflict${conflictCount > 1 ? "s" : ""} in Schedule & Logistics` : "No conflicts detected"} noteColor={L.danger}
           />
           <StatTile
             icon={CheckSquare} iconColor={L.ok} iconBg={L.okSoft}
-            label="Marks entered" value="88%" valueColor={L.ok}
-            note="Periodic Test 1 · 14 pending in English" noteColor={L.ink2}
+            label="Marks entered" value={loading ? "…" : `${marksPercent}%`} valueColor={L.ok}
+            note={termTitle} noteColor={L.ink2}
           />
           <StatTile
             icon={CheckCircle2} iconColor={L.ok} iconBg={L.okSoft}
-            label="Ready to publish" value="1" valueColor={L.ink1}
-            note="exam · Science Olympiad Quiz · published" noteColor={L.ink2}
+            label="Ready to publish" value={loading ? "…" : String(readyCount)} valueColor={L.ink1}
+            note="class/section scope(s) fully entered, unmoderated-clear, unpublished" noteColor={L.ink2}
           />
         </div>
 
@@ -210,36 +228,42 @@ export default function ExamCommandCenterPage() {
             <ModuleCard
               icon={Star} badge="Set once"
               title="Exam Configuration"
-              descDot={L.ok}
-              description="4 exam types · CBSE 9-point grading scale (A1-E2) · last edited 3 months ago"
+              descDot={examTypeCount > 0 ? L.ok : L.warn}
+              description={examTypeCount > 0 ? `${examTypeCount} exam type${examTypeCount > 1 ? "s" : ""} configured` : "No exam types configured yet"}
               cta="Review configuration" ctaHref="/exams/exam-type" ctaVariant="outline"
             />
             <ModuleCard
               icon={Copy} badge="Per cycle"
               title="Exam Setup"
               descDot={L.warn}
-              description="3 of 4 exams cloned from last term · Yearly Examination still needs setup"
-              cta="Set up Yearly Examination" ctaHref="/exams/setup" ctaVariant="primary"
+              description="Configure classes, subjects and mark distribution for each exam"
+              cta="Go to Exam Setup" ctaHref="/exams/setup" ctaVariant="primary"
             />
             <ModuleCard
               icon={Calendar} badge="Every cycle"
               title="Schedule & Logistics"
-              descDot={L.danger}
-              description="2 conflicts in the Half-Yearly timetable · admit cards & seating wait on this"
-              cta="Resolve conflicts" ctaHref="/exams/schedule" ctaVariant="danger"
+              descDot={conflictCount > 0 ? L.danger : L.ok}
+              description={conflictCount > 0 ? `${conflictCount} conflict${conflictCount > 1 ? "s" : ""} in the timetable` : "No scheduling conflicts detected"}
+              cta={conflictCount > 0 ? "Resolve conflicts" : "Open schedule"} ctaHref="/exams/schedule" ctaVariant={conflictCount > 0 ? "danger" : "outline"}
             />
             <ModuleCard
               icon={User} badge="During exam"
               title="Conduct & Marks"
-              descDot={L.ok}
-              description="88% marks entered across 5 subjects · English still has 14 pending"
+              descDot={marksPercent >= 100 ? L.ok : L.warn}
+              description={`${marksPercent}% marks entered for ${termTitle}`}
               cta="View entry status" ctaHref="/exams/marks-register-create" ctaVariant="outline"
             />
             <ModuleCard
               icon={Smartphone} badge="After marks are in"
               title="Results & Reports"
-              descDot={L.ok}
-              description="Periodic Test 1 · Mathematics 8A ready — 4 of 5 publish checks complete"
+              descDot={readyCount > 0 ? L.ok : L.warn}
+              description={
+                readyCount > 0
+                  ? `${readyCount} class/section ready to publish`
+                  : pendingModeration > 0
+                    ? `${pendingModeration} result(s) pending moderation`
+                    : "No sections ready to publish yet"
+              }
               cta="Go to results & reports" ctaHref="/exams/result-publish" ctaVariant="outline"
               span2
             />
@@ -253,22 +277,14 @@ export default function ExamCommandCenterPage() {
                 <span style={{ fontSize: 13, fontWeight: 700, color: L.ink1 }}>Needs attention</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <AttentionItem
-                  icon={AlertTriangle} color={L.danger} bg={L.dangerSoft}
-                  title="Room 204 double-booked" sub="Half-Yearly · Sep 16, 10:00 AM"
-                />
-                <AttentionItem
-                  icon={AlertTriangle} color={L.danger} bg={L.dangerSoft}
-                  title="Invigilator clash — Ms. Iyer" sub="Half-Yearly · Sep 18, 9:00 AM"
-                />
-                <AttentionItem
-                  icon={AlertCircle} color={L.warn} bg={L.warnSoft}
-                  title="14 students missing marks" sub="Periodic Test 1 · English · Grade 7A"
-                />
-                <AttentionItem
-                  icon={Info} color={L.info} bg={L.infoSoft}
-                  title="3 results pending moderation" sub="Periodic Test 1 · Mathematics"
-                />
+                {loading && <div style={{ fontSize: 12, color: L.ink3 }}>Loading…</div>}
+                {!loading && (summary?.needs_attention.length ?? 0) === 0 && (
+                  <div style={{ fontSize: 12, color: L.ink3 }}>Nothing needs attention right now.</div>
+                )}
+                {(summary?.needs_attention ?? []).map((item, i) => {
+                  const { icon, color, bg } = attentionIcon(item.severity);
+                  return <AttentionItem key={i} icon={icon} color={color} bg={bg} title={item.title} sub={item.detail} />;
+                })}
               </div>
             </div>
 
@@ -278,7 +294,7 @@ export default function ExamCommandCenterPage() {
                 <span style={{ fontSize: 13, fontWeight: 700, color: L.ink1 }}>Quick actions</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <QuickAction icon={Plus} label="New exam" href="/exams/setup" />
+                <QuickAction icon={Plus} label="New exam setup" href="/exams/setup" />
                 <QuickAction icon={CheckSquare} label="Report card permissions" href="/exams/result-publish" />
                 <QuickAction icon={Calendar} label="Room & invigilator roster" href="/exams/schedule" />
               </div>

@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+	ExamGradeScaleGroupViewSet,
 	ExamGradeScaleViewSet,
 	ExamAttendanceCreateSearchAPIView,
 	ExamAttendanceIndexAPIView,
@@ -17,9 +18,11 @@ from .views import (
 	ExamPlanSeatPlanSettingAPIView,
 	ExamCommandCenterAPIView,
 	ExamCommandCenterDetailAPIView,
+	ExamCommandCenterSummaryAPIView,
 	ExamHolidayListAPIView,
 	ExamRoomListAPIView,
 	ExamMarkViewSet,
+	ExamMarksProgressSummaryAPIView,
 	ExamMarksRegisterCreateSearchAPIView,
 	ExamMarksRegisterIndexAPIView,
 	ExamMarksRegisterReportSearchAPIView,
@@ -29,14 +32,18 @@ from .views import (
 	ExamReportIndexAPIView,
 	ExamReportStudentPrintAPIView,
 	ExamReportStudentSearchAPIView,
+	ExamResultModerationFlagViewSet,
 	ExamResultPublishIndexAPIView,
+	ExamResultPublishReportCardSettingAPIView,
 	ExamResultPublishSearchAPIView,
+	ExamResultPublishSignoffAPIView,
 	ExamResultPublishStoreAPIView,
 	ExamScheduleIndexAPIView,
 	ExamSchedulePrintAPIView,
 	ExamScheduleReportSearchAPIView,
 	ExamScheduleSearchAPIView,
 	ExamScheduleStoreAPIView,
+	ExamSetupCloneAPIView,
 	ExamSetupIndexAPIView,
 	ExamSetupSearchAPIView,
 	ExamSetupStoreAPIView,
@@ -61,10 +68,12 @@ from .views import (
 
 router = DefaultRouter()
 router.register("types", ExamTypeViewSet, basename="exam-type")
+router.register("grade-scale-groups", ExamGradeScaleGroupViewSet, basename="exam-grade-scale-group")
 router.register("grade-scales", ExamGradeScaleViewSet, basename="exam-grade-scale")
 router.register("exams", ExamViewSet, basename="exam")
 router.register("schedules", ExamScheduleViewSet, basename="exam-schedule")
 router.register("marks", ExamMarkViewSet, basename="exam-mark")
+router.register("result-publish-moderation-flags", ExamResultModerationFlagViewSet, basename="exam-result-moderation-flag")
 
 urlpatterns = [
 	path("exam-type/", ExamTypeIndexAPIView.as_view(), name="exam-type-index"),
@@ -76,9 +85,11 @@ urlpatterns = [
 	path("exam-setup/search/", ExamSetupSearchAPIView.as_view(), name="exam-setup-search"),
 	path("exam-setup/store/", ExamSetupStoreAPIView.as_view(), name="exam-setup-store"),
 	path("exam-setup/subjects/", ExamSetupSubjectByClassAPIView.as_view(), name="exam-setup-subjects"),
+	path("exam-setup/clone/", ExamSetupCloneAPIView.as_view(), name="exam-setup-clone"),
 	path("exam-schedule/index/", ExamScheduleIndexAPIView.as_view(), name="exam-schedule-index"),
 	path("exam-schedule/search/", ExamScheduleSearchAPIView.as_view(), name="exam-schedule-search"),
 	path("exam-schedule/store/", ExamScheduleStoreAPIView.as_view(), name="exam-schedule-store"),
+	path("exam-command-center/summary/", ExamCommandCenterSummaryAPIView.as_view(), name="exam-command-center-summary"),
 	path("exam-command-center/", ExamCommandCenterAPIView.as_view(), name="exam-command-center"),
 	path("exam-command-center/<int:schedule_id>/", ExamCommandCenterDetailAPIView.as_view(), name="exam-command-center-detail"),
 	path("exam-rooms/", ExamRoomListAPIView.as_view(), name="exam-rooms"),
@@ -93,9 +104,16 @@ urlpatterns = [
 	path("exam-marks/create-search/", ExamMarksRegisterCreateSearchAPIView.as_view(), name="exam-marks-create-search"),
 	path("exam-marks/store/", ExamMarksRegisterStoreAPIView.as_view(), name="exam-marks-store"),
 	path("exam-marks/report-search/", ExamMarksRegisterReportSearchAPIView.as_view(), name="exam-marks-report-search"),
+	path("exam-marks/progress-summary/", ExamMarksProgressSummaryAPIView.as_view(), name="exam-marks-progress-summary"),
 	path("exam-result-publish/index/", ExamResultPublishIndexAPIView.as_view(), name="exam-result-publish-index"),
 	path("exam-result-publish/search/", ExamResultPublishSearchAPIView.as_view(), name="exam-result-publish-search"),
 	path("exam-result-publish/store/", ExamResultPublishStoreAPIView.as_view(), name="exam-result-publish-store"),
+	path("exam-result-publish/signoff/", ExamResultPublishSignoffAPIView.as_view(), name="exam-result-publish-signoff"),
+	path(
+		"exam-result-publish/report-card-setting/",
+		ExamResultPublishReportCardSettingAPIView.as_view(),
+		name="exam-result-publish-report-card-setting",
+	),
 	path("exam-report/index/", ExamReportIndexAPIView.as_view(), name="exam-report-index"),
 	path("exam-report/student-search/", ExamReportStudentSearchAPIView.as_view(), name="exam-report-student-search"),
 	path("exam-report/student-print/", ExamReportStudentPrintAPIView.as_view(), name="exam-report-student-print"),

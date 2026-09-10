@@ -1,35 +1,41 @@
 "use client";
 /**
  * Examination › Results & Reports — "after marks are in" group: report-card
- * setup, then a single publish gate per section (readiness checklist +
- * moderation queue + merit list + per-student downloads). Static mockup only
- * (per product ask) — see ExamResultPublishPanel.tsx (hidden, waiting on real
- * endpoints) for the eventual wired version. Palette from lib/examTheme.ts.
+ * setup, then a single publish gate per class/section (readiness checklist +
+ * moderation queue + merit list + per-student report). Wired to the real
+ * backend (apps/exams/views.py — the ExamResultPublish*, ReportCardSetting
+ * and ExamResultModerationFlag view classes) via hooks/useExamsApi.ts —
+ * replaces the earlier static mockup. Palette from lib/examTheme.ts.
  */
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  ArrowLeft, ClipboardList, Users, FileText, Check, AlertTriangle,
-  Award, Printer, Download,
+  ArrowLeft, ClipboardList, Users, FileText, Check, AlertTriangle, Award,
 } from "lucide-react";
 import { examTheme as T } from "@/lib/examTheme";
 import { Accordion, Badge, ExamPicker, StepPills, type Tone } from "@/components/exams/ExamUi";
+import {
+  approveModerationFlag,
+  ExamsApiError,
+  rejectModerationFlag,
+  saveReportCardSetting,
+  searchExamMerit,
+  searchExamResultPublish,
+  signoffExamResultPublish,
+  storeExamResultPublish,
+  useExamGradeScaleGroups,
+  useExamMarksProgress,
+  useExamResultPublishCriteria,
+  useModerationFlags,
+  useReportCardSetting,
+} from "@/hooks/useExamsApi";
+import type { MeritListRow, ReportCardSetting } from "@/types/exams";
 
 function Eyebrow({ children }: { children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color: T.ink2 }}>
       <span style={{ width: 5, height: 5, borderRadius: "50%", background: T.purple, display: "inline-block" }} />
       {children}
-    </div>
-  );
-}
-
-function StatTile({ label, value, valueColor, note }: { label: string; value: string; valueColor: string; note: string }) {
-  return (
-    <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, padding: "16px 18px" }}>
-      <div style={{ fontSize: 10.5, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 8 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 700, color: valueColor, lineHeight: 1, marginBottom: 6 }}>{value}</div>
-      <div style={{ fontSize: 11.5, color: T.ink2 }}>{note}</div>
     </div>
   );
 }
@@ -54,48 +60,119 @@ function ToggleRow({ label, sub, on, onChange, disabled }: { label: string; sub:
   );
 }
 
-interface ModerationFlag { id: string; student: string; detail: string; note: string }
-const INITIAL_FLAGS: ModerationFlag[] = [
-  { id: "f1", student: "Aarav Mehta", detail: "Mathematics 8A — 94/80, right on the C1/C2 boundary", note: "" },
-  { id: "f2", student: "Sanjay Kapoor", detail: "Mathematics 8A — 18/80, marked one entry has already submitted", note: "" },
-  { id: "f3", student: "Kavya Nair", detail: "Mathematics 8A — marked absent, but attendance shows present", note: "" },
-];
+const selectSx: React.CSSProperties = {
+  height: 34, borderRadius: 8, border: `1px solid ${T.borderStrong}`,
+  padding: "0 10px", fontSize: 12.5, color: T.ink1, background: "#fff", outline: "none",
+};
 
-const MERIT = [
-  { name: "Ananya Rao", cls: "8A", pct: "89.4%" },
-  { name: "Kabir Malhotra", cls: "8A", pct: "84.2%" },
-  { name: "Zara Sheikh", cls: "8A", pct: "82.6%" },
-];
-
-const STUDENTS = [
-  { name: "Ananya Rao", pct: "89.4%", grade: "A1" },
-  { name: "Kabir Malhotra", pct: "84.2%", grade: "A2" },
-  { name: "Zara Sheikh", pct: "82.6%", grade: "A2" },
-  { name: "Amar Mehta", pct: "68.0%", grade: "B1" },
-  { name: "Rohan Bhatt", pct: "62.4%", grade: "B2" },
-  { name: "Sanjay Kapoor", pct: "38.0%", grade: "D" },
-];
+function gradeToneFor(g: string): Tone {
+  return g.startsWith("A") ? "ok" : g.startsWith("B") ? "info" : g.startsWith("C") ? "warn" : "danger";
+}
 
 export default function ResultsAndReportsPage() {
-  const [exam, setExam] = useState("Unit Test 3");
+  const { data: criteria } = useExamResultPublishCriteria();
+  const [examTitle, setExamTitle] = useState("");
   const [step, setStep] = useState(1);
 
-  // Step 1 — setup
-  const [visibility, setVisibility] = useState({ classTeacher: true, subjectTeacher: false, admin: true });
-  const [template, setTemplate] = useState("CBSE style");
-  const [sections, setSections] = useState({
-    photo: true, coScholastic: true, attendance: true, comments: true, overallNotes: true, improvement: true,
+  useEffect(() => {
+    if (!examTitle && criteria?.exams.length) setExamTitle(criteria.exams[0].title);
+  }, [criteria, examTitle]);
+  const examId = criteria?.exams.find((e) => e.title === examTitle)?.id ?? null;
+
+  // ─── Step 1: report card setup ────────────────────────────────────────────
+  const { data: settingData, refetch: refetchSetting } = useReportCardSetting();
+  const setting = settingData?.setting;
+  const { data: scaleGroups } = useExamGradeScaleGroups();
+  const defaultScale = scaleGroups?.results.find((g) => g.is_default) ?? scaleGroups?.results[0];
+
+  const patchSetting = async (patch: Partial<ReportCardSetting>) => {
+    await saveReportCardSetting(patch);
+    await refetchSetting();
+  };
+
+  // ─── Step 2: publish ──────────────────────────────────────────────────────
+  const [classId, setClassId] = useState<number | null>(null);
+  const [sectionId, setSectionId] = useState<number | null>(null);
+  useEffect(() => {
+    if (!criteria) return;
+    if (classId === null && criteria.classes.length) setClassId(criteria.classes[0].id);
+  }, [criteria, classId]);
+  const sectionsForClass = useMemo(() => (criteria?.sections ?? []).filter((s) => s.class_id === classId), [criteria, classId]);
+  useEffect(() => {
+    if (!sectionsForClass.length) { setSectionId(null); return; }
+    if (!sectionsForClass.some((s) => s.id === sectionId)) setSectionId(sectionsForClass[0].id);
+  }, [sectionsForClass, sectionId]);
+
+  const [readiness, setReadiness] = useState<{
+    total_mark_entries: number; is_published: boolean; published_at: string | null;
+    principal_signoff: boolean; pending_moderation_count: number;
+  } | null>(null);
+  const [readinessLoading, setReadinessLoading] = useState(false);
+  const { data: progress } = useExamMarksProgress(examId, classId ?? undefined, sectionId ?? undefined);
+
+  const reloadReadiness = () => {
+    if (!examId || !classId) return;
+    setReadinessLoading(true);
+    searchExamResultPublish({ exam: examId, class_id: classId, section: sectionId ?? undefined })
+      .then((res) => setReadiness(res))
+      .catch(() => setReadiness(null))
+      .finally(() => setReadinessLoading(false));
+  };
+  useEffect(reloadReadiness, [examId, classId, sectionId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const { data: flagsData, refetch: refetchFlags } = useModerationFlags({
+    exam_term: examId ?? undefined, school_class: classId ?? undefined, section: sectionId ?? undefined, status: "pending",
   });
-  const [workflow, setWorkflow] = useState<"asyougo" | "bulk" | "custom">("asyougo");
+  const flags = flagsData?.results ?? [];
 
-  // Step 2 — publish
-  const [flags, setFlags] = useState(INITIAL_FLAGS);
-  const [reportCardsGenerated, setReportCardsGenerated] = useState(false);
-  const [principalSignoff, setPrincipalSignoff] = useState(false);
-  const [published, setPublished] = useState(false);
+  const [merit, setMerit] = useState<MeritListRow[]>([]);
+  useEffect(() => {
+    if (!examId || !classId) { setMerit([]); return; }
+    searchExamMerit({ exam: examId, class_id: classId, section: sectionId ?? undefined })
+      .then((res) => setMerit(res.merit_list))
+      .catch(() => setMerit([]));
+  }, [examId, classId, sectionId]);
 
-  const checksDone = [true, true, true, reportCardsGenerated, flags.length === 0].filter(Boolean).length;
-  const allChecksDone = checksDone === 5 && principalSignoff;
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [signingOff, setSigningOff] = useState(false);
+
+  const marksComplete = !!progress && progress.total_expected > 0 && progress.percent >= 100;
+  const moderationClear = (readiness?.pending_moderation_count ?? 0) === 0;
+  const signedOff = !!readiness?.principal_signoff;
+  const checksDone = [marksComplete, moderationClear, signedOff].filter(Boolean).length;
+  const allChecksDone = marksComplete && moderationClear && signedOff;
+
+  const handleSignoff = async () => {
+    if (!examId || !classId) return;
+    setSigningOff(true);
+    try {
+      await signoffExamResultPublish({ exam_id: examId, class_id: classId, section_id: sectionId });
+      reloadReadiness();
+    } finally {
+      setSigningOff(false);
+    }
+  };
+
+  const handleApprove = async (id: number) => { await approveModerationFlag(id); await refetchFlags(); reloadReadiness(); };
+  const handleReject = async (id: number) => { await rejectModerationFlag(id); await refetchFlags(); reloadReadiness(); };
+
+  const handlePublish = async () => {
+    if (!examId || !classId) return;
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      await storeExamResultPublish({ exam_id: examId, class_id: classId, section_id: sectionId });
+      reloadReadiness();
+    } catch (e) {
+      setPublishError(e instanceof ExamsApiError ? e.message : "Failed to publish.");
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const className = criteria?.classes.find((c) => c.id === classId)?.class_name ?? "";
+  const sectionName = criteria?.sections.find((s) => s.id === sectionId)?.section_name ?? "";
 
   return (
     <div style={{ minHeight: "100%", background: T.page, padding: "12px 20px 40px" }}>
@@ -122,7 +199,7 @@ export default function ResultsAndReportsPage() {
 
         {/* Hero */}
         <div style={{ marginBottom: 16 }}>
-          <Eyebrow>Results & Reports · {exam}</Eyebrow>
+          <Eyebrow>Results & Reports · {examTitle || "Loading…"}</Eyebrow>
           <h1 style={{ margin: "6px 0 6px", display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 8, fontSize: 30 }}>
             <span style={{ fontFamily: "Georgia, serif", fontWeight: 900, color: T.ink1 }}>One gate</span>
             <span style={{ fontFamily: '"Playfair Display", Georgia, serif', fontStyle: "italic", fontWeight: 500, color: T.purple }}>
@@ -130,14 +207,13 @@ export default function ResultsAndReportsPage() {
             </span>
           </h1>
           <p style={{ fontSize: 13, color: T.ink2, lineHeight: 1.6, maxWidth: 640, margin: "0 0 14px" }}>
-            Build the report cards first, then publish once — merit lists and student reports regenerate
-            from that action.
+            Marks entered, moderation cleared, principal signed off — then publish once.
           </p>
         </div>
 
         <ExamPicker
-          icon={ClipboardList} value={exam} onChange={setExam}
-          options={["Periodic Test 1", "Half-Yearly Examination", "Periodic Test 2", "Unit Test 3", "Yearly Examination"]}
+          icon={ClipboardList} value={examTitle} onChange={setExamTitle}
+          options={(criteria?.exams ?? []).map((e) => e.title)}
           note="Switching here switches Conduct & Marks too — one exam in focus at a time, everywhere."
         />
 
@@ -149,295 +225,269 @@ export default function ResultsAndReportsPage() {
           <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 0.8fr) minmax(360px, 1.6fr)", gap: 18, alignItems: "start" }}>
             <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, padding: 18 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: T.ink1, marginBottom: 4 }}>Who can see report cards?</div>
-              <ToggleRow label="Class Teacher" sub="Complete their own only" on={visibility.classTeacher} onChange={(v) => setVisibility((s) => ({ ...s, classTeacher: v }))} />
-              <ToggleRow label="Subject Teacher" sub="Marks entry only" on={visibility.subjectTeacher} onChange={(v) => setVisibility((s) => ({ ...s, subjectTeacher: v }))} />
-              <ToggleRow label="Admin" sub="Automatically always" on disabled onChange={() => {}} />
-              <button type="button" style={{ background: "none", border: "none", color: T.purple, fontSize: 12.5, fontWeight: 600, cursor: "pointer", textAlign: "left", padding: "10px 0 0" }}>
-                + Add a moderator role
-              </button>
+              {setting && (
+                <>
+                  <ToggleRow label="Class Teacher" sub="Complete their own only" on={setting.visible_to_class_teacher} onChange={(v) => patchSetting({ visible_to_class_teacher: v })} />
+                  <ToggleRow label="Subject Teacher" sub="Marks entry only" on={setting.visible_to_subject_teacher} onChange={(v) => patchSetting({ visible_to_subject_teacher: v })} />
+                  <ToggleRow label="Admin" sub="Automatically always" on disabled onChange={() => {}} />
+                </>
+              )}
             </div>
 
             <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, padding: 18 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: T.ink1, marginBottom: 4 }}>Report card structure</div>
-              <p style={{ fontSize: 11.5, color: T.ink3, lineHeight: 1.5, margin: "0 0 12px" }}>
-                This is just a fixed layout — later choose from a template library or upload the school&apos;s
-                own PDF/Word template; then this screen only picks values, not layout.
-              </p>
+              <div style={{ fontSize: 14, fontWeight: 700, color: T.ink1, marginBottom: 12 }}>Report card structure</div>
 
-              <div style={{ fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
-                Template (placeholder, not wired)
-              </div>
-              <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-                {["CBSE style", "ICSE style", "Cambridge style", "IB style"].map((t) => (
-                  <button
-                    key={t} type="button" onClick={() => setTemplate(t)}
-                    style={{
-                      height: 32, padding: "0 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
-                      border: `1px solid ${template === t ? T.purple : T.borderStrong}`,
-                      background: template === t ? T.purpleSoft : "#fff",
-                      color: template === t ? T.purple : T.ink2,
-                    }}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
+              {setting && (
+                <>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Template</div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+                    {([["cbse", "CBSE style"], ["icse", "ICSE style"], ["cambridge", "Cambridge style"], ["ib", "IB style"]] as const).map(([key, label]) => (
+                      <button
+                        key={key} type="button" onClick={() => patchSetting({ template: key })}
+                        style={{
+                          height: 32, padding: "0 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                          border: `1px solid ${setting.template === key ? T.purple : T.borderStrong}`,
+                          background: setting.template === key ? T.purpleSoft : "#fff",
+                          color: setting.template === key ? T.purple : T.ink2,
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
 
-              <div style={{ fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
-                Sections included
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
-                {([
-                  ["photo", "Student photo"], ["coScholastic", "Co-scholastic attendance"], ["attendance", "Attendance summary"],
-                  ["comments", "Subject teacher comments"], ["overallNotes", "Overall performance notes"], ["improvement", "Scope for improvement"],
-                ] as const).map(([key, label]) => {
-                  const on = sections[key];
-                  return (
-                    <button
-                      key={key} type="button" onClick={() => setSections((s) => ({ ...s, [key]: !s[key] }))}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 6, height: 30, padding: "0 10px", borderRadius: 999,
-                        fontSize: 12, fontWeight: 600, cursor: "pointer",
-                        border: `1px solid ${on ? T.purple : T.borderStrong}`,
-                        background: on ? T.purpleSoft : "#fff", color: on ? T.purple : T.ink2,
-                      }}
-                    >
-                      {on && <Check size={11} strokeWidth={3} />} {label}
-                    </button>
-                  );
-                })}
-              </div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Sections included</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+                    {([
+                      ["include_photo", "Student photo"], ["include_co_scholastic", "Co-scholastic attendance"], ["include_attendance", "Attendance summary"],
+                      ["include_comments", "Subject teacher comments"], ["include_overall_notes", "Overall performance notes"], ["include_improvement", "Scope for improvement"],
+                    ] as const).map(([key, label]) => {
+                      const on = setting[key];
+                      return (
+                        <button
+                          key={key} type="button" onClick={() => patchSetting({ [key]: !on } as Partial<ReportCardSetting>)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 6, height: 30, padding: "0 10px", borderRadius: 999,
+                            fontSize: 12, fontWeight: 600, cursor: "pointer",
+                            border: `1px solid ${on ? T.purple : T.borderStrong}`,
+                            background: on ? T.purpleSoft : "#fff", color: on ? T.purple : T.ink2,
+                          }}
+                        >
+                          {on && <Check size={11} strokeWidth={3} />} {label}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-              <div style={{ fontSize: 12, color: T.ink2, marginBottom: 16 }}>
-                Grading scale referenced: <strong style={{ color: T.ink1 }}>CBSE 9-Point Scale (School)</strong> ·{" "}
-                <Link href="/exams/exam-type" style={{ color: T.purple, fontWeight: 600, textDecoration: "none" }}>Change scale</Link>
-              </div>
+                  <div style={{ fontSize: 12, color: T.ink2, marginBottom: 16 }}>
+                    Grading scale referenced: <strong style={{ color: T.ink1 }}>{defaultScale?.name ?? "Not configured yet"}</strong> ·{" "}
+                    <Link href="/exams/exam-type" style={{ color: T.purple, fontWeight: 600, textDecoration: "none" }}>Change scale</Link>
+                  </div>
 
-              <div style={{ fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>
-                Moderation workflow
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {([
-                  ["asyougo", "As-you-go", "Flag & moderate as marks come in"],
-                  ["bulk", "Bulk", "Moderate all at once, right before publish"],
-                  ["custom", "Custom…", "Set your own rule per exam type"],
-                ] as const).map(([key, label, sub]) => (
-                  <button
-                    key={key} type="button" onClick={() => setWorkflow(key)}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 9, cursor: "pointer",
-                      border: `1px solid ${workflow === key ? T.purple : T.border}`,
-                      background: workflow === key ? T.purpleSoft : "#fff", textAlign: "left",
-                    }}
-                  >
-                    <span style={{
-                      width: 14, height: 14, borderRadius: "50%", border: `1.5px solid ${workflow === key ? T.purple : T.borderStrong}`,
-                      flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
-                    }}>
-                      {workflow === key && <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.purple }} />}
-                    </span>
-                    <span>
-                      <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink1 }}>{label}</span>
-                      <span style={{ fontSize: 11.5, color: T.ink3, marginLeft: 6 }}>— {sub}</span>
-                    </span>
-                  </button>
-                ))}
-              </div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Moderation workflow</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {([
+                      ["as_you_go", "As-you-go", "Flag & moderate as marks come in"],
+                      ["bulk", "Bulk", "Moderate all at once, right before publish"],
+                      ["custom", "Custom…", "Set your own rule per exam type"],
+                    ] as const).map(([key, label, sub]) => (
+                      <button
+                        key={key} type="button" onClick={() => patchSetting({ moderation_workflow: key })}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 9, cursor: "pointer",
+                          border: `1px solid ${setting.moderation_workflow === key ? T.purple : T.border}`,
+                          background: setting.moderation_workflow === key ? T.purpleSoft : "#fff", textAlign: "left",
+                        }}
+                      >
+                        <span style={{
+                          width: 14, height: 14, borderRadius: "50%", border: `1.5px solid ${setting.moderation_workflow === key ? T.purple : T.borderStrong}`,
+                          flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                        }}>
+                          {setting.moderation_workflow === key && <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.purple }} />}
+                        </span>
+                        <span>
+                          <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink1 }}>{label}</span>
+                          <span style={{ fontSize: 11.5, color: T.ink3, marginLeft: 6 }}>— {sub}</span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         ) : (
           <>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, marginBottom: 16 }}>
-              <StatTile label="Class average" value="74.2" valueColor={T.ink1} note="↑ 4.1 pts vs Half-Yearly" />
-              <StatTile label="Pass rate" value="94%" valueColor={T.ok} note="60/63 students · 3 in re-test" />
-              <StatTile label="Weakest area" value="English" valueColor={T.warn} note="Section avg. lowest of 6 subjects" />
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
+              <select style={selectSx} value={classId ?? ""} onChange={(e) => setClassId(Number(e.target.value))}>
+                {(criteria?.classes ?? []).map((o) => <option key={o.id} value={o.id}>{o.class_name}</option>)}
+              </select>
+              <select style={selectSx} value={sectionId ?? ""} onChange={(e) => setSectionId(Number(e.target.value) || null)}>
+                <option value="">All sections</option>
+                {sectionsForClass.map((o) => <option key={o.id} value={o.id}>{o.section_name}</option>)}
+              </select>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <Accordion title="Grade 6" right={<Badge tone="ok">2 sections · published</Badge>} />
-              <Accordion title="Grade 7" right={<Badge tone="warn">2 sections · marks entry in progress</Badge>} />
-              <Accordion title="Grade 8" right={<Badge tone="warn">Section A · {checksDone} of 5 checks complete</Badge>} defaultOpen>
-                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: T.ink1 }}>Section A</span>
-                    <Badge tone={allChecksDone ? "ok" : "warn"}>{checksDone} of 5 checks complete</Badge>
+            <Accordion
+              title={`${className}-${sectionName || "All"}`}
+              right={<Badge tone={allChecksDone ? "ok" : "warn"}>{checksDone} of 3 checks complete</Badge>}
+              defaultOpen
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {publishError && (
+                  <div style={{ background: T.dangerSoft, color: T.danger, borderRadius: 10, padding: "10px 14px", fontSize: 12.5, fontWeight: 600 }}>{publishError}</div>
+                )}
+                {readiness?.is_published && (
+                  <div style={{ background: T.okSoft, color: T.ok, borderRadius: 10, padding: "10px 14px", fontSize: 12.5, fontWeight: 600 }}>
+                    Published{readiness.published_at ? ` on ${new Date(readiness.published_at).toLocaleString()}` : ""}.
                   </div>
+                )}
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 14, alignItems: "start" }}>
-                    {/* Readiness checklist */}
-                    <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: T.ink1, marginBottom: 10 }}>
-                        <Check size={13} color={T.purple} /> Publish readiness — {checksDone}/5 complete
-                      </div>
-                      {[
-                        { label: "Marks entered for all sections", sub: "32/32", done: true },
-                        { label: "Grading scale applied", sub: "", done: true },
-                        { label: "Overall marks compiled", sub: "32/32 entered", done: true },
-                        { label: "Report cards generated", sub: reportCardsGenerated ? "32/32 ready" : "0/32 ready", done: reportCardsGenerated, action: () => setReportCardsGenerated(true) },
-                        { label: "Moderation review complete", sub: flags.length === 0 ? "all clear" : `${flags.length} flagged`, done: flags.length === 0 },
-                      ].map((c, i) => (
-                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
-                          <span style={{
-                            width: 16, height: 16, borderRadius: 4, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
-                            background: c.done ? T.ok : "#fff", border: `1.5px solid ${c.done ? T.ok : T.borderStrong}`,
-                          }}>
-                            {c.done && <Check size={10} color="#fff" strokeWidth={3} />}
-                          </span>
-                          <span style={{ fontSize: 12.5, color: c.done ? T.ink1 : T.ink2, flex: 1 }}>
-                            {c.label} {c.sub && <span style={{ color: T.ink3 }}>({c.sub})</span>}
-                          </span>
-                          {!c.done && c.action && (
-                            <button type="button" onClick={c.action} style={{ height: 26, padding: "0 8px", borderRadius: 6, border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.ink1, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                              Generate
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 14, alignItems: "start" }}>
+                  {/* Readiness checklist */}
+                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: T.ink1, marginBottom: 10 }}>
+                      <Check size={13} color={T.purple} /> Publish readiness — {checksDone}/3 complete
+                    </div>
+                    {readinessLoading && <div style={{ fontSize: 12, color: T.ink3 }}>Loading…</div>}
+                    {[
+                      { label: "Marks entered for all subjects", sub: progress ? `${progress.total_entered}/${progress.total_expected}` : "", done: marksComplete },
+                      { label: "Moderation review complete", sub: moderationClear ? "all clear" : `${readiness?.pending_moderation_count ?? 0} flagged`, done: moderationClear },
+                    ].map((c, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
                         <span style={{
                           width: 16, height: 16, borderRadius: 4, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
-                          background: principalSignoff ? T.ok : "#fff", border: `1.5px solid ${principalSignoff ? T.ok : T.borderStrong}`,
+                          background: c.done ? T.ok : "#fff", border: `1.5px solid ${c.done ? T.ok : T.borderStrong}`,
                         }}>
-                          {principalSignoff && <Check size={10} color="#fff" strokeWidth={3} />}
+                          {c.done && <Check size={10} color="#fff" strokeWidth={3} />}
                         </span>
-                        <span style={{ fontSize: 12.5, color: principalSignoff ? T.ink1 : T.ink2, flex: 1 }}>Principal sign-off</span>
-                        {!principalSignoff && (
-                          <button type="button" onClick={() => setPrincipalSignoff(true)} style={{ height: 26, padding: "0 8px", borderRadius: 6, border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.ink1, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                            Sign off
-                          </button>
-                        )}
+                        <span style={{ fontSize: 12.5, color: c.done ? T.ink1 : T.ink2, flex: 1 }}>
+                          {c.label} {c.sub && <span style={{ color: T.ink3 }}>({c.sub})</span>}
+                        </span>
                       </div>
-                    </div>
-
-                    {/* Moderation queue */}
-                    <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: T.danger, marginBottom: 10 }}>
-                        <AlertTriangle size={13} /> Moderation queue — flagged entries
-                      </div>
-                      {flags.length === 0 ? (
-                        <div style={{ fontSize: 12, color: T.ok, fontWeight: 600 }}>All flagged entries resolved.</div>
-                      ) : (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                          {flags.map((f) => (
-                            <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, background: T.dangerSoft }}>
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <div style={{ fontSize: 12, fontWeight: 700, color: T.ink1 }}>{f.student}</div>
-                                <div style={{ fontSize: 11, color: T.ink2 }}>{f.detail}</div>
-                              </div>
-                              <button
-                                type="button" onClick={() => setFlags((rows) => rows.filter((r) => r.id !== f.id))}
-                                style={{ height: 28, padding: "0 10px", borderRadius: 7, border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.ink1, fontSize: 11.5, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}
-                              >
-                                Approve
-                              </button>
-                            </div>
-                          ))}
-                        </div>
+                    ))}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
+                      <span style={{
+                        width: 16, height: 16, borderRadius: 4, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                        background: signedOff ? T.ok : "#fff", border: `1.5px solid ${signedOff ? T.ok : T.borderStrong}`,
+                      }}>
+                        {signedOff && <Check size={10} color="#fff" strokeWidth={3} />}
+                      </span>
+                      <span style={{ fontSize: 12.5, color: signedOff ? T.ink1 : T.ink2, flex: 1 }}>Principal sign-off</span>
+                      {!signedOff && (
+                        <button type="button" onClick={handleSignoff} disabled={signingOff} style={{ height: 26, padding: "0 8px", borderRadius: 6, border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.ink1, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                          {signingOff ? "Signing…" : "Sign off"}
+                        </button>
                       )}
                     </div>
                   </div>
 
-                  {/* Grade distribution + Merit list */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 14 }}>
-                    <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 700, color: T.ink1, marginBottom: 10 }}>Grade distribution</div>
-                      {[["A1", 9, T.ok], ["A2", 7, T.ok], ["B1", 8, T.info], ["C1", 3, T.warn], ["D", 1, T.danger]].map(([label, count, color]) => (
-                        <div key={label as string} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: T.ink2, width: 22 }}>{label}</span>
-                          <div style={{ flex: 1, height: 8, borderRadius: 999, background: T.hoverSoft, overflow: "hidden" }}>
-                            <div style={{ width: `${(Number(count) / 9) * 100}%`, height: "100%", background: color as string, borderRadius: 999 }} />
-                          </div>
-                          <span style={{ fontSize: 11, color: T.ink3, width: 16, textAlign: "right" }}>{count}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: T.ink1, marginBottom: 10 }}>
-                        <Award size={13} color={T.purple} /> Merit list — top 3
-                      </div>
-                      {MERIT.map((m, i) => (
-                        <div key={m.name} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
-                          <span style={{ width: 20, height: 20, borderRadius: "50%", background: T.purpleSoft, color: T.purple, fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
-                          <span style={{ fontSize: 12.5, color: T.ink1, flex: 1 }}>{m.name} · {m.cls}</span>
-                          <span style={{ fontSize: 12, fontWeight: 700, color: T.ok }}>{m.pct}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Student list */}
+                  {/* Moderation queue */}
                   <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: T.ink1 }}>
-                        <Users size={13} color={T.purple} /> Students in this section
-                      </div>
-                      <button type="button" style={{ display: "flex", alignItems: "center", gap: 6, height: 30, padding: "0 12px", borderRadius: 8, border: `1px solid ${T.purple}`, background: T.purple, color: "#fff", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
-                        <Download size={12} /> Generate all 32 as PDF · download ZIP
-                      </button>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: T.danger, marginBottom: 10 }}>
+                      <AlertTriangle size={13} /> Moderation queue — flagged entries
                     </div>
-                    {STUDENTS.map((s) => (
-                      <div key={s.name} style={{ display: "grid", gridTemplateColumns: "1.5fr 80px 60px 70px", gap: 8, alignItems: "center", padding: "6px 0", borderTop: `1px solid ${T.border}`, fontSize: 12.5, color: T.ink1 }}>
-                        <span>{s.name}</span>
-                        <span style={{ color: T.ink2 }}>{s.pct}</span>
-                        <span><Badge tone={gradeToneFor(s.grade)}>{s.grade}</Badge></span>
-                        <button type="button" style={{ display: "flex", alignItems: "center", gap: 5, height: 26, padding: "0 8px", borderRadius: 6, border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.ink1, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                          <Printer size={11} /> Print
-                        </button>
+                    {flags.length === 0 ? (
+                      <div style={{ fontSize: 12, color: T.ok, fontWeight: 600 }}>All flagged entries resolved.</div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {flags.map((f) => (
+                          <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderRadius: 8, background: T.dangerSoft }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: T.ink1 }}>{f.student_name}</div>
+                              <div style={{ fontSize: 11, color: T.ink2 }}>{f.reason}{f.detail ? ` — ${f.detail}` : ""}</div>
+                            </div>
+                            <button type="button" onClick={() => void handleApprove(f.id)} style={{ height: 28, padding: "0 10px", borderRadius: 7, border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.ink1, fontSize: 11.5, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>
+                              Approve
+                            </button>
+                            <button type="button" onClick={() => void handleReject(f.id)} style={{ height: 28, padding: "0 10px", borderRadius: 7, border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.danger, fontSize: 11.5, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>
+                              Reject
+                            </button>
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                    <div style={{ fontSize: 11.5, color: T.purple, fontWeight: 600, marginTop: 8, cursor: "pointer" }}>View all 32 students & print in bulk</div>
-                  </div>
-
-                  {/* Publish gate */}
-                  <div style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                    borderRadius: 10, padding: "12px 16px",
-                    background: allChecksDone ? T.okSoft : T.warnSoft,
-                  }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 700, color: allChecksDone ? T.ok : T.warn }}>
-                      {allChecksDone
-                        ? "All checks complete — ready to publish."
-                        : `${5 - checksDone + (principalSignoff ? 0 : 1)} check(s) remaining in Grade 8A before this section can publish.`}
-                    </span>
-                    <button
-                      type="button" disabled={!allChecksDone} onClick={() => setPublished(true)}
-                      style={{
-                        height: 38, padding: "0 18px", borderRadius: 9, border: "none",
-                        background: allChecksDone ? T.purple : T.borderStrong,
-                        color: allChecksDone ? "#fff" : T.ink3, fontSize: 12.5, fontWeight: 700,
-                        cursor: allChecksDone ? "pointer" : "not-allowed", whiteSpace: "nowrap",
-                      }}
-                    >
-                      {published ? "Published ✓" : "Publish results"}
-                    </button>
-                  </div>
-
-                  {/* Downstream status cards */}
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-                    {[
-                      { label: "Student Report", ready: published },
-                      { label: "Admit Card", ready: true },
-                      { label: "Seat Plan", ready: true },
-                      { label: "Merit Report", ready: published },
-                    ].map((c) => (
-                      <div key={c.label} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: "12px 10px", textAlign: "center" }}>
-                        <FileText size={16} color={c.ready ? T.ok : T.ink3} style={{ margin: "0 auto 6px" }} />
-                        <div style={{ fontSize: 11.5, fontWeight: 700, color: T.ink1 }}>{c.label}</div>
-                        <div style={{ fontSize: 10.5, color: c.ready ? T.ok : T.ink3, marginTop: 2 }}>{c.ready ? "Ready" : "1 pending"}</div>
-                      </div>
-                    ))}
+                    )}
                   </div>
                 </div>
-              </Accordion>
-              <Accordion title="Grade 9" right={<Badge tone="warn">1 section · attendance pending</Badge>} />
-            </div>
+
+                {/* Merit list + student list */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: T.ink1, marginBottom: 10 }}>
+                      <Award size={13} color={T.purple} /> Merit list — top 3
+                    </div>
+                    {merit.slice(0, 3).map((m) => (
+                      <div key={m.student_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
+                        <span style={{ width: 20, height: 20, borderRadius: "50%", background: T.purpleSoft, color: T.purple, fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{m.position}</span>
+                        <span style={{ fontSize: 12.5, color: T.ink1, flex: 1 }}>{m.student_name} · {m.roll_no}</span>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: T.ok }}>{m.total_marks}</span>
+                      </div>
+                    ))}
+                    {merit.length === 0 && <div style={{ fontSize: 12, color: T.ink3 }}>No marks entered yet.</div>}
+                  </div>
+                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: T.ink1, marginBottom: 10 }}>
+                      <Users size={13} color={T.purple} /> Students in this section ({merit.length})
+                    </div>
+                    <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                      {merit.map((s) => (
+                        <div key={s.student_id} style={{ display: "grid", gridTemplateColumns: "1.5fr 70px 60px", gap: 8, alignItems: "center", padding: "6px 0", borderTop: `1px solid ${T.border}`, fontSize: 12.5, color: T.ink1 }}>
+                          <span>{s.student_name}</span>
+                          <span style={{ color: T.ink2 }}>{s.total_marks}</span>
+                          <span><Badge tone={gradeToneFor(Number(s.average_gpa) >= 8 ? "A" : Number(s.average_gpa) >= 6 ? "B" : "C")}>{s.average_gpa}</Badge></span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Publish gate */}
+                <div style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                  borderRadius: 10, padding: "12px 16px",
+                  background: allChecksDone ? T.okSoft : T.warnSoft,
+                }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 700, color: allChecksDone ? T.ok : T.warn }}>
+                    {readiness?.is_published
+                      ? "Already published."
+                      : allChecksDone
+                        ? "All checks complete — ready to publish."
+                        : `${3 - checksDone} check(s) remaining before this section can publish.`}
+                  </span>
+                  <button
+                    type="button" disabled={!allChecksDone || !!readiness?.is_published || publishing} onClick={handlePublish}
+                    style={{
+                      height: 38, padding: "0 18px", borderRadius: 9, border: "none",
+                      background: allChecksDone && !readiness?.is_published ? T.purple : T.borderStrong,
+                      color: allChecksDone && !readiness?.is_published ? "#fff" : T.ink3, fontSize: 12.5, fontWeight: 700,
+                      cursor: allChecksDone && !readiness?.is_published ? "pointer" : "not-allowed", whiteSpace: "nowrap",
+                    }}
+                  >
+                    {readiness?.is_published ? "Published ✓" : publishing ? "Publishing…" : "Publish results"}
+                  </button>
+                </div>
+
+                {/* Downstream status cards */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                  {[
+                    { label: "Student Report", ready: !!readiness?.is_published },
+                    { label: "Merit Report", ready: !!readiness?.is_published },
+                    { label: "Admit Card & Seat Plan", ready: null },
+                  ].map((c) => (
+                    <div key={c.label} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: "12px 10px", textAlign: "center" }}>
+                      <FileText size={16} color={c.ready ? T.ok : T.ink3} style={{ margin: "0 auto 6px" }} />
+                      <div style={{ fontSize: 11.5, fontWeight: 700, color: T.ink1 }}>{c.label}</div>
+                      <div style={{ fontSize: 10.5, color: c.ready ? T.ok : T.ink3, marginTop: 2 }}>
+                        {c.ready === null ? "Managed in Schedule & Logistics" : c.ready ? "Ready" : "Pending"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Accordion>
           </>
         )}
       </div>
     </div>
   );
-}
-
-function gradeToneFor(g: string): Tone {
-  return g.startsWith("A") ? "ok" : g.startsWith("B") ? "info" : g.startsWith("C") ? "warn" : "danger";
 }
