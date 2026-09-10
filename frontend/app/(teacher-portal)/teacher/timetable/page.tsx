@@ -3,13 +3,19 @@
 /**
  * Teacher Portal — Timetable Screen
  *
- * Displays the teacher's weekly timetable from /teacher/timetable/.
- * Scope-enforced on the backend — only the requesting teacher's slots.
- * Cells are colour-coded by subject (same hash function as TeacherDayPlanner).
+ * Displays the teacher's weekly timetable from /teacher/timetable/. Every
+ * row is a real period from the school's ClassPeriod grid (when configured)
+ * — teaching, break, or genuinely free — not just whichever slots happen to
+ * have data. A day with gaps between classes previously rendered as blank
+ * grid cells with a permanently-0 "free periods" KPI; both are fixed here.
+ *
+ * Falls back to a slots-only view (has_period_grid: false) for schools that
+ * haven't configured periods yet — there, "free" can't be inferred, so we
+ * say so instead of guessing.
  */
 
 import { useEffect, useState } from "react";
-import { AlertCircle, Calendar, Clock, RefreshCw } from "lucide-react";
+import { AlertCircle, Calendar, Clock, Coffee, RefreshCw, Sparkles, LayoutGrid } from "lucide-react";
 import { fetchTeacherTimetable, type TeacherTimetable, type TimetableSlot } from "@/lib/api/teacher";
 
 // ── Subject colour (deterministic hash) ──────────────────────────────────────
@@ -57,16 +63,44 @@ function KpiCard({ label, value, sub, icon }: { label: string; value: number | s
 // ── Timetable cell ────────────────────────────────────────────────────────────
 
 function PeriodCell({ slot }: { slot: TimetableSlot }) {
-  if (slot.is_break) {
+  if (slot.status === 'break') {
     return (
       <div style={{
-        padding: '6px 8px', borderRadius: 8,
+        padding: '7px 9px', borderRadius: 8, minHeight: 52,
         background: 'var(--bg-2, #F5F5FB)',
         border: '1px dashed var(--line, #dbe4f0)',
-        fontSize: 10, color: 'var(--muted, #5B5E72)',
-        textAlign: 'center',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
       }}>
-        Break
+        <Coffee size={11} color="var(--muted,#5B5E72)" />
+        <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--muted, #5B5E72)' }}>Break</span>
+      </div>
+    );
+  }
+
+  if (slot.status === 'free') {
+    return (
+      <div style={{
+        padding: '7px 9px', borderRadius: 8, minHeight: 52,
+        background: '#fff',
+        border: '1px dashed #D6D7E0',
+        outline: slot.is_now ? '2px solid #D6D7E0' : 'none',
+        outlineOffset: 1,
+        position: 'relative',
+      }}>
+        {slot.is_now && (
+          <span style={{
+            position: 'absolute', top: -5, right: 4,
+            width: 7, height: 7, borderRadius: '50%',
+            background: '#22C55E',
+            boxShadow: '0 0 0 2px rgba(34,197,94,0.3)',
+          }} />
+        )}
+        <p style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted,#5B5E72)', margin: 0 }}>Free</p>
+        {slot.from && (
+          <p style={{ fontSize: 9, color: 'var(--muted,#5B5E72)', opacity: 0.75, margin: '2px 0 0' }}>
+            {slot.from}–{slot.to}
+          </p>
+        )}
       </div>
     );
   }
@@ -74,12 +108,13 @@ function PeriodCell({ slot }: { slot: TimetableSlot }) {
   const col = subjectColor(slot.subject);
   return (
     <div style={{
-      padding: '7px 9px', borderRadius: 8,
+      padding: '7px 9px', borderRadius: 8, minHeight: 52,
       background: col.bg,
       border: `1px solid ${col.border}`,
       position: 'relative',
       outline: slot.is_now ? `2px solid ${col.border}` : 'none',
       outlineOffset: 1,
+      opacity: slot.is_done ? 0.6 : 1,
     }}>
       {slot.is_now && (
         <span style={{
@@ -105,7 +140,7 @@ function PeriodCell({ slot }: { slot: TimetableSlot }) {
   );
 }
 
-// ── Empty cell ────────────────────────────────────────────────────────────────
+// ── Empty cell (no data for this day+time at all — fallback mode only) ───────
 
 function EmptyCell() {
   return (
@@ -202,16 +237,19 @@ export default function TeacherTimetablePage() {
     );
   }
 
-  // All unique time slots across the week, sorted by start time. Rows are
-  // keyed by (from, to) rather than `period` — `period`/class_period_id is a
-  // deprecated legacy field (apps/academics/models.py::ClassRoutineSlot) and
-  // is null for any school that hasn't configured ClassPeriod rows, which
-  // would otherwise make every slot invisible despite real data existing.
-  const allTimeSlots = Array.from(
-    new Map(
-      data.days.flatMap(d => d.periods.map(p => [`${p.from}-${p.to}`, { from: p.from, to: p.to }]))
-    ).values()
-  ).sort((a, b) => a.from.localeCompare(b.from));
+  // When the school has a period grid, every day carries an identical set of
+  // period rows (teaching/break/free) — use the first non-empty day as the
+  // row template rather than re-deriving it. Without a grid, fall back to a
+  // union of whatever real times exist anywhere in the week (old behaviour),
+  // since there's nothing else to build rows from.
+  const templateDay = data.days.find(d => d.periods.length > 0);
+  const rows: { from: string; to: string; period_label: string }[] = data.has_period_grid && templateDay
+    ? templateDay.periods.map(p => ({ from: p.from, to: p.to, period_label: p.period_label }))
+    : Array.from(
+        new Map(
+          data.days.flatMap(d => d.periods.map(p => [`${p.from}-${p.to}`, { from: p.from, to: p.to, period_label: p.period_label }]))
+        ).values()
+      ).sort((a, b) => a.from.localeCompare(b.from));
 
   return (
     <div>
@@ -236,12 +274,27 @@ export default function TeacherTimetablePage() {
         </p>
       </div>
 
+      {/* ── No period grid — explain why free periods aren't shown ──────── */}
+      {!data.has_period_grid && rows.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: 8,
+          background: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10,
+          padding: '10px 14px', marginBottom: 16, fontSize: 12, color: '#92400E',
+        }}>
+          <Sparkles size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            Your school hasn&rsquo;t set up period times yet, so only your assigned classes are shown below —
+            free periods between them can&rsquo;t be worked out until periods are configured.
+          </span>
+        </div>
+      )}
+
       {/* ── KPI row ───────────────────────────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 20 }}>
         <KpiCard
-          label="Periods this week"
+          label="Teaching periods"
           value={data.kpis.total_periods}
-          sub="Teaching slots"
+          sub="This week"
           icon={<Clock size={15} />}
         />
         <KpiCard
@@ -252,20 +305,20 @@ export default function TeacherTimetablePage() {
         />
         <KpiCard
           label="Free periods"
-          value={data.kpis.free_periods}
-          sub="For grading & prep"
+          value={data.has_period_grid ? data.kpis.free_periods : '—'}
+          sub={data.has_period_grid ? 'For grading & prep' : 'Needs period setup'}
           icon={<Clock size={15} />}
         />
         <KpiCard
-          label="Cover assignments"
-          value={data.kpis.cover_assignments}
-          sub="This week"
-          icon={<Calendar size={15} />}
+          label="Sections taught"
+          value={data.kpis.sections_taught}
+          sub="Distinct class-sections"
+          icon={<LayoutGrid size={15} />}
         />
       </div>
 
       {/* ── Timetable grid ────────────────────────────────────────────── */}
-      {allTimeSlots.length === 0 ? (
+      {rows.length === 0 ? (
         <div style={{
           background: '#fff', border: '1.5px dashed var(--line,#dbe4f0)',
           borderRadius: 14, padding: '56px 24px', textAlign: 'center',
@@ -284,15 +337,15 @@ export default function TeacherTimetablePage() {
           borderRadius: 14, overflow: 'auto',
           boxShadow: 'var(--shadow,0 4px 12px -4px rgba(15,18,34,0.08))',
         }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 700 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
             <thead>
               <tr style={{ background: 'var(--bg-2,#F5F5FB)', borderBottom: '1px solid var(--line,#dbe4f0)' }}>
                 <th style={{
-                  width: 70, padding: '10px 14px', textAlign: 'left',
+                  width: 90, padding: '10px 14px', textAlign: 'left',
                   fontSize: 10, fontWeight: 800, letterSpacing: '0.08em',
                   textTransform: 'uppercase', color: 'var(--muted,#5B5E72)',
                 }}>
-                  Time
+                  Period
                 </th>
                 {data.days.map(d => (
                   <th key={d.day_key} style={{
@@ -315,28 +368,31 @@ export default function TeacherTimetablePage() {
               </tr>
             </thead>
             <tbody>
-              {allTimeSlots.map((time) => (
-                <tr key={`${time.from}-${time.to}`} style={{ borderBottom: '1px solid var(--line,#dbe4f0)' }}>
-                  {/* Time range */}
+              {rows.map((row) => (
+                <tr key={`${row.from}-${row.to}`} style={{ borderBottom: '1px solid var(--line,#dbe4f0)' }}>
+                  {/* Period + time */}
                   <td style={{
                     padding: '8px 14px',
-                    fontSize: 11, fontWeight: 700,
-                    color: 'var(--muted,#5B5E72)',
                     background: 'var(--bg-2,#F5F5FB)',
                     borderRight: '1px solid var(--line,#dbe4f0)',
                     whiteSpace: 'nowrap',
                   }}>
-                    {time.from}
+                    {row.period_label && (
+                      <p style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink,#15172A)', margin: 0 }}>{row.period_label}</p>
+                    )}
+                    <p style={{ fontSize: 10, fontWeight: row.period_label ? 500 : 700, color: 'var(--muted,#5B5E72)', margin: row.period_label ? '1px 0 0' : 0 }}>
+                      {row.from}
+                    </p>
                   </td>
                   {/* Day cells */}
                   {data.days.map(d => {
-                    const slot = d.periods.find(p => p.from === time.from && p.to === time.to);
+                    const slot = d.periods.find(p => p.from === row.from && p.to === row.to);
                     return (
                       <td key={d.day_key} style={{
                         padding: '6px 8px',
                         background: d.is_today ? 'rgba(238,234,255,0.3)' : 'transparent',
                         verticalAlign: 'top',
-                        minWidth: 110,
+                        minWidth: 118,
                       }}>
                         {slot ? <PeriodCell slot={slot} /> : <EmptyCell />}
                       </td>

@@ -18,9 +18,9 @@
  *  academic      — exam marks table (results.view)
  *  attendance    — 90-day attendance list + summary (attendance.view)
  *  behaviour     — incident log + point total (behaviour.view)
- *  homework      — placeholder until Sprint 6
- *  communication — placeholder until Sprint 7
- *  notes         — always shown (teacher personal notes — future)
+ *  homework      — this student's submission history (homework.view)
+ *  communication — message thread with the student's guardian (messages.view)
+ *  notes         — placeholder (no backing model yet — future work)
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -48,7 +48,9 @@ import {
   type ExamMarkRow,
   type ProfileTab,
   type ResetPasswordResult,
+  type StudentCommunicationRecord,
   type StudentCredentials,
+  type StudentHomeworkRecord,
   type StudentOverview,
   type StudentProfile,
 } from "@/lib/api/teacher";
@@ -426,6 +428,89 @@ function BehaviourTab({
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+const HW_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
+  C: { bg: "#F0FDF4", text: "#15803D", label: "Completed" },
+  I: { bg: "#FFFBEB", text: "#B45309", label: "Incomplete" },
+  P: { bg: "#F5F5FB", text: "#5B5E72", label: "Pending" },
+};
+
+function HomeworkHistoryTab({ records }: { records: StudentHomeworkRecord[] }) {
+  if (records.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "40px 16px" }}>
+        <BookOpen size={28} color="var(--muted,#5B5E72)" style={{ marginBottom: 10, opacity: 0.4 }} />
+        <p style={{ fontSize: 13, color: "var(--muted,#5B5E72)" }}>No homework submissions recorded yet.</p>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {records.map((r, i) => {
+        const s = HW_STATUS_STYLE[r.complete_status] ?? HW_STATUS_STYLE.P;
+        return (
+          <div key={i} style={{
+            padding: "10px 12px", borderRadius: 10,
+            background: "#fff", border: "1px solid var(--line,#dbe4f0)",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--ink,#15172A)" }}>{r.subject || "—"}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: s.bg, color: s.text }}>
+                {s.label}{r.marks != null ? ` · ${r.marks}` : ""}
+              </span>
+            </div>
+            {r.description && (
+              <p style={{ fontSize: 11.5, color: "var(--muted,#5B5E72)", margin: "4px 0 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {r.description}
+              </p>
+            )}
+            {r.note && (
+              <p style={{ fontSize: 11, color: "var(--ink,#15172A)", margin: "4px 0 0", background: "var(--bg-2,#F5F5FB)", borderRadius: 6, padding: "4px 8px" }}>
+                {r.note}
+              </p>
+            )}
+            <p style={{ fontSize: 10, color: "var(--muted,#5B5E72)", margin: "4px 0 0" }}>
+              {r.homework_date ? `Assigned ${r.homework_date}` : ""}{r.submission_date ? ` · Due ${r.submission_date}` : ""}
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function CommunicationTab({ records }: { records: StudentCommunicationRecord[] }) {
+  if (records.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "40px 16px" }}>
+        <MessageSquare size={28} color="var(--muted,#5B5E72)" style={{ marginBottom: 10, opacity: 0.4 }} />
+        <p style={{ fontSize: 13, color: "var(--muted,#5B5E72)" }}>No messages with this guardian yet.</p>
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {records.map((r) => (
+        <div key={r.id} style={{
+          padding: "10px 12px", borderRadius: 10,
+          background: r.from_me ? "var(--soft,#EEEAFF)" : "#fff",
+          border: "1px solid var(--line,#dbe4f0)",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: r.from_me ? "var(--brand,#6D4AFF)" : "var(--ink,#15172A)" }}>
+              {r.from_me ? "You" : "Guardian"}
+            </span>
+            <span style={{ fontSize: 10, color: "var(--muted,#5B5E72)" }}>
+              {new Date(r.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+            </span>
+          </div>
+          <p style={{ fontSize: 13, fontWeight: 600, color: "var(--ink,#15172A)", margin: "4px 0 2px" }}>{r.subject}</p>
+          <p style={{ fontSize: 12, color: "var(--muted,#5B5E72)", margin: 0 }}>{r.body}</p>
+        </div>
+      ))}
     </div>
   );
 }
@@ -866,10 +951,10 @@ export function StudentProfileDrawer({ studentPk, onClose }: StudentProfileDrawe
                 />
               )}
               {activeTab === "homework" && (
-                <PlaceholderTab label="Homework" sprint="Sprint 6" />
+                <HomeworkHistoryTab records={profile.homework} />
               )}
               {activeTab === "communication" && (
-                <PlaceholderTab label="Communication" sprint="Sprint 7" />
+                <CommunicationTab records={profile.communication} />
               )}
               {activeTab === "credentials" && (
                 <CredentialsTab studentPk={studentPk!} />

@@ -38,11 +38,11 @@ export const PARENT_MODULES: ModuleRoute[] = [
     ic: "#0d7a55",
     permission: "academics",
     sub: [
-      { label: "Timetable",  path: "/parent/children", icon: CalendarDays },
-      { label: "Syllabus",   path: "/parent/children", icon: BookOpen     },
-      { label: "Homework",   path: "/parent/children", icon: FileText     },
-      { label: "Grades",     path: "/parent/results",  icon: Star         },
-      { label: "Library",    path: "/parent/home",     icon: BookOpen     },
+      { label: "Timetable",  path: "/parent/timetable", icon: CalendarDays },
+      { label: "Syllabus",   path: "/parent/syllabus",  icon: BookOpen     },
+      { label: "Homework",   path: "/parent/homework",  icon: FileText     },
+      { label: "Grades",     path: "/parent/results",   icon: Star         },
+      { label: "Library",    path: "/parent/home",      icon: BookOpen     },
     ],
   },
   {
@@ -82,10 +82,10 @@ export const PARENT_MODULES: ModuleRoute[] = [
     ic: "var(--info)",
     // Always visible — communication is a core parent feature
     sub: [
-      { label: "Notices",      path: "/parent/notices", icon: Bell          },
-      { label: "Messages",     path: "/parent/notices", icon: MessageCircle },
-      { label: "PTMs",         path: "/parent/notices", icon: Users         },
-      { label: "Permissions",  path: "/parent/notices", icon: FileText      },
+      { label: "Notices",      path: "/parent/notices",  icon: Bell          },
+      { label: "Messages",     path: "/parent/messages", icon: MessageCircle },
+      { label: "PTMs",         path: "/parent/notices",  icon: Users         },
+      { label: "Permissions",  path: "/parent/notices",  icon: FileText      },
     ],
   },
   {
@@ -97,8 +97,8 @@ export const PARENT_MODULES: ModuleRoute[] = [
     ic: "var(--pu-deep)",
     permission: "examination",
     sub: [
-      { label: "Exam Results",   path: "/parent/results", icon: Trophy   },
-      { label: "Report Cards",   path: "/parent/results", icon: FileText },
+      { label: "Exam Results",   path: "/parent/results",             icon: Trophy   },
+      { label: "Report Cards",   path: "/parent/results/report-card", icon: FileText },
     ],
   },
   {
@@ -110,9 +110,9 @@ export const PARENT_MODULES: ModuleRoute[] = [
     ic: "#0369A1",
     // No hard permission — schools generally always show this
     sub: [
-      { label: "Behaviour",      path: "/parent/children", icon: Star     },
-      { label: "Health Log",     path: "/parent/children", icon: Activity },
-      { label: "Sports & Clubs", path: "/parent/children", icon: Trophy   },
+      { label: "Behaviour",      path: "/parent/behaviour", icon: Star     },
+      { label: "Health Log",     path: "/parent/health",    icon: Activity },
+      { label: "Sports & Clubs", path: "/parent/children",  icon: Trophy   },
     ],
   },
   {

@@ -227,3 +227,235 @@ export interface NoticeItem {
 export function fetchParentNotices(): Promise<NoticeItem[]> {
   return parentGet<NoticeItem[]>("/notices/");
 }
+
+// ── Write helpers ─────────────────────────────────────────────────────────────
+
+function parentPost<T>(path: string, body: unknown): Promise<T> {
+  return apiRequestWithRefresh<T>(`/api/v1/parent${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+}
+
+// ── Timetable ─────────────────────────────────────────────────────────────────
+
+export interface TimetableSlotItem {
+  day_of_week: string;
+  period_number: string | number | null;
+  subject: string;
+  teacher: string;
+  start_time: string | null;
+  end_time: string | null;
+  room: string;
+}
+
+export interface ChildTimetable {
+  child_id: number;
+  slots: TimetableSlotItem[];
+}
+
+/**
+ * GET /api/v1/parent/timetable/?child_id=<id>
+ */
+export function fetchChildTimetable(childId: number): Promise<ChildTimetable> {
+  return parentGet<ChildTimetable>(`/timetable/?child_id=${childId}`);
+}
+
+// ── Homework ──────────────────────────────────────────────────────────────────
+
+export interface ChildHomeworkSubmission {
+  complete_status: "C" | "I" | "P";
+  marks: number | null;
+  note: string;
+  file: string | null;
+}
+
+export interface ChildHomeworkItem {
+  id: number;
+  subject: string;
+  section_name: string;
+  homework_date: string;
+  submission_date: string;
+  description: string;
+  file: string | null;
+  marks: number | null;
+  submission: ChildHomeworkSubmission | null;
+}
+
+/**
+ * GET /api/v1/parent/homework/?child_id=<id>
+ */
+export function fetchChildHomework(childId: number): Promise<ChildHomeworkItem[]> {
+  return parentGet<ChildHomeworkItem[]>(`/homework/?child_id=${childId}`);
+}
+
+// ── Syllabus ──────────────────────────────────────────────────────────────────
+
+export interface SyllabusTopicItem {
+  title: string;
+  status: string;
+}
+
+export interface SyllabusGroupItem {
+  id: number;
+  subject: string;
+  lesson_name: string;
+  topics_done: number;
+  topics_total: number;
+  topics: SyllabusTopicItem[];
+}
+
+/**
+ * GET /api/v1/parent/syllabus/?child_id=<id>
+ */
+export function fetchChildSyllabus(childId: number): Promise<SyllabusGroupItem[]> {
+  return parentGet<SyllabusGroupItem[]>(`/syllabus/?child_id=${childId}`);
+}
+
+// ── Exam results (grouped) + Report card ────────────────────────────────────────
+
+export interface TermMarkRow {
+  subject: string;
+  exam_name: string;
+  obtained: number;
+  full_marks: number;
+  pass_marks: number;
+  absent: boolean;
+  exam_date: string | null;
+}
+
+export interface TermGroup {
+  term: string;
+  marks: TermMarkRow[];
+}
+
+export interface ChildResults {
+  child_id: number;
+  terms: TermGroup[];
+}
+
+/**
+ * GET /api/v1/parent/results/?child_id=<id>
+ * Only published exam results.
+ */
+export function fetchChildResults(childId: number): Promise<ChildResults> {
+  return parentGet<ChildResults>(`/results/?child_id=${childId}`);
+}
+
+export interface ReportCardRow {
+  subject: string;
+  term: string;
+  obtained: number;
+  full_marks: number;
+  pass_marks: number;
+  grade: string;
+  pass_fail: "Pass" | "Fail" | "Absent";
+}
+
+export interface ChildReportCard {
+  child_id: number;
+  rows: ReportCardRow[];
+}
+
+/**
+ * GET /api/v1/parent/results/report-card/?child_id=<id>
+ */
+export function fetchChildReportCard(childId: number): Promise<ChildReportCard> {
+  return parentGet<ChildReportCard>(`/results/report-card/?child_id=${childId}`);
+}
+
+// ── Messages ──────────────────────────────────────────────────────────────────
+
+export interface MessageParticipant {
+  id: number;
+  first_name: string;
+  last_name: string;
+  username: string;
+  email: string;
+}
+
+export interface InAppMessageItem {
+  id: number;
+  sender: MessageParticipant;
+  recipient: MessageParticipant;
+  subject: string;
+  body: string;
+  category: "general" | "alert" | "announcement";
+  is_read: boolean;
+  read_at: string | null;
+  delivered_at: string | null;
+  created_at: string;
+}
+
+/**
+ * GET /api/v1/parent/messages/
+ */
+export function fetchParentMessages(): Promise<InAppMessageItem[]> {
+  return parentGet<InAppMessageItem[]>("/messages/");
+}
+
+/**
+ * POST /api/v1/parent/messages/
+ */
+export function sendParentMessage(payload: { recipient_id: number; subject: string; body: string; category?: "general" | "alert" | "announcement" }): Promise<InAppMessageItem> {
+  return parentPost<InAppMessageItem>("/messages/", payload);
+}
+
+// ── Teachers (message recipient directory) ──────────────────────────────────────
+
+export interface ChildTeacherItem {
+  id: number;
+  name: string;
+  role: string;
+}
+
+/**
+ * GET /api/v1/parent/teachers/?child_id=<id>
+ */
+export function fetchChildTeachers(childId: number): Promise<ChildTeacherItem[]> {
+  return parentGet<ChildTeacherItem[]>(`/teachers/?child_id=${childId}`);
+}
+
+// ── Behaviour Log ─────────────────────────────────────────────────────────────
+
+export interface BehaviourEntry {
+  id: number;
+  incident_title: string;
+  point: number;
+  date: string;
+  note: string;
+}
+
+/**
+ * GET /api/v1/parent/behaviour/?child_id=<id>
+ */
+export function fetchChildBehaviour(childId: number): Promise<BehaviourEntry[]> {
+  return parentGet<BehaviourEntry[]>(`/behaviour/?child_id=${childId}`);
+}
+
+// ── Health Log ────────────────────────────────────────────────────────────────
+
+export interface HealthProfile {
+  child_id: number;
+  vision: string;
+  medical_conditions: string[];
+  allergies: string[];
+  current_medications: string;
+  treating_doctor: string;
+  vaccinations: string[];
+  medical_notes: string;
+  is_pwd: boolean;
+  disability_types: string[];
+  disability_percent: number | null;
+  disability_accommodations: string[];
+  disability_notes: string;
+}
+
+/**
+ * GET /api/v1/parent/health/?child_id=<id>
+ */
+export function fetchChildHealth(childId: number): Promise<HealthProfile> {
+  return parentGet<HealthProfile>(`/health/?child_id=${childId}`);
+}

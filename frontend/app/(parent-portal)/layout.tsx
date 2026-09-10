@@ -385,7 +385,7 @@ function ParentSubNav() {
 
   if (!mod || mod.sub.length === 0) return null;
 
-  const activeTab = mod.sub.find((s) => pathname === s.path || pathname.startsWith(s.path + "/"));
+  const activeTab = mod.sub.slice().sort((a, b) => b.path.length - a.path.length).find((s) => pathname === s.path || pathname.startsWith(s.path + "/"));
 
   const arrowBtn = (dir: "left" | "right", enabled: boolean) => (
     <button onClick={() => scrollRef.current?.scrollBy({ left: dir === "left" ? -200 : 200, behavior: "smooth" })} disabled={!enabled}
