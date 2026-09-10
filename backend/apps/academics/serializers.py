@@ -434,6 +434,30 @@ class ClassRoutineSlotSerializer(LegacyAliasMixin):
             if not has_teacher_role:
                 raise serializers.ValidationError({"message": "Selected user is not a teacher"})
 
+        # A slot can only be scheduled for a subject the teacher is actually
+        # assigned to teach (ClassSubjectAssignment) — otherwise the timetable
+        # UI (and the teacher/parent portals reading straight off
+        # ClassRoutineSlot) can end up showing e.g. the Drawing teacher on a
+        # Dance slot just because nothing stopped the admin from picking any
+        # teacher for any subject here. A class-wide assignment (section is
+        # null) covers every section of that class.
+        if not is_break and teacher and subject and school_class:
+            assignment_qs = ClassSubjectAssignment.objects.filter(
+                school_class=school_class,
+                subject=subject,
+                teacher=teacher,
+                active_status=True,
+            ).filter(Q(section=section) | Q(section__isnull=True))
+            if academic_year:
+                assignment_qs = assignment_qs.filter(Q(academic_year=academic_year) | Q(academic_year__isnull=True))
+            if not assignment_qs.exists():
+                raise serializers.ValidationError({
+                    "teacher_id": [
+                        "This teacher is not assigned to teach this subject for this class. "
+                        "Add a Class Subject Assignment for them first."
+                    ],
+                })
+
         if school_class and day and start_time and end_time:
             room_filters = {
                 "school": school,
@@ -1233,10 +1257,9 @@ class LessonPlannerSerializer(LegacyAliasMixin):
             "subject",
             "school_class",
             "section",
-            "class_room",
             "period",
-            "workflow_status",
             "submitted_by",
+            "submitted_at",
             "submitted_at",
             "reviewed_by",
             "reviewed_at",

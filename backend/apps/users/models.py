@@ -84,3 +84,30 @@ class User(AbstractUser):
             return True
         permission_codes = self.get_permission_codes()
         return "*" in permission_codes or code in permission_codes
+
+
+class UserLoginLog(models.Model):
+    LOGIN_STATUS_CHOICES = [
+        ("SUCCESS", "Success"),
+        ("FAILED", "Failed"),
+    ]
+
+    user = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="login_logs"
+    )
+    school = models.ForeignKey(
+        "tenancy.School", on_delete=models.SET_NULL, null=True, blank=True, related_name="login_logs"
+    )
+    
+    attempted_username = models.CharField(max_length=255, blank=True)
+    status = models.CharField(max_length=10, choices=LOGIN_STATUS_CHOICES, default="SUCCESS")
+    portal_type = models.CharField(max_length=50, blank=True, default="")
+    
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, default="")
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "user_login_logs"
+        ordering = ["-created_at"]

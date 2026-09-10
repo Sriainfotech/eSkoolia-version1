@@ -23,6 +23,53 @@ class HealthView(APIView):
 class LoginView(TokenObtainPairView):
     serializer_class = LoginTokenObtainPairSerializer
 
+    def post(self, request, *args, **kwargs):
+        ip_address = request.META.get("HTTP_X_FORWARDED_FOR")
+        if ip_address:
+            ip_address = ip_address.split(",")[0].strip()
+        else:
+            ip_address = request.META.get("REMOTE_ADDR")
+        user_agent = request.META.get("HTTP_USER_AGENT", "")[:1000]
+        login_value = (request.data.get("username") or "").strip()
+
+        try:
+            response = super().post(request, *args, **kwargs)
+            try:
+                # On success, we can pull the resolved user from the serializer context.
+                serializer = self.get_serializer(data=request.data)
+                serializer.is_valid(raise_exception=False)
+                user = getattr(serializer, "authenticated_user", None)
+                
+                from .models import UserLoginLog
+                UserLoginLog.objects.create(
+                    user=user,
+                    school_id=getattr(user, "school_id", None) if user else None,
+                    attempted_username=login_value,
+                    status="SUCCESS",
+                    portal_type=user.resolve_portal_type() if user else "",
+                    ip_address=ip_address,
+                    user_agent=user_agent
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).exception("Failed to log successful login")
+            return response
+        except Exception as e:
+            try:
+                from .models import UserLoginLog
+                UserLoginLog.objects.create(
+                    user=None,
+                    school_id=None,
+                    attempted_username=login_value,
+                    status="FAILED",
+                    portal_type="",
+                    ip_address=ip_address,
+                    user_agent=user_agent
+                )
+            except Exception as inner_e:
+                import logging
+                logging.getLogger(__name__).exception("Failed to log failed login")
+            raise e
 
 class RefreshView(TokenRefreshView):
     pass

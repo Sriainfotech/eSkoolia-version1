@@ -218,6 +218,50 @@ class ClassRoutineSlot(models.Model):
             models.Index(fields=["active_status"], name="idx_crs_active_status"),
         ]
 
+    def clean(self):
+        """
+        A teaching slot's teacher must actually be assigned (via
+        ClassSubjectAssignment) to teach its subject for its class — without
+        this, nothing stops an admin from picking any teacher for any
+        subject on a timetable slot, and the teacher/parent portals (which
+        read straight off this model) end up displaying a subject that
+        teacher doesn't teach, e.g. the Drawing teacher on a Dance slot.
+
+        A class-wide ClassSubjectAssignment (section is null) covers every
+        section of that class. Skipped entirely for break slots, which have
+        no subject/teacher by design (see ClassRoutineSlotSerializer.validate).
+
+        Called from save() below so the rule holds for every write path —
+        the DRF serializer (ClassRoutineSlotSerializer.validate, which has
+        the same check for a friendlier per-field API error), the Django
+        admin, management commands, everything.
+        """
+        super().clean()
+        if self.is_break or not self.teacher_id or not self.subject_id or not self.school_class_id:
+            return
+
+        from django.core.exceptions import ValidationError
+        from django.db.models import Q
+
+        assignment_qs = ClassSubjectAssignment.objects.filter(
+            school_class_id=self.school_class_id,
+            subject_id=self.subject_id,
+            teacher_id=self.teacher_id,
+            active_status=True,
+        ).filter(Q(section_id=self.section_id) | Q(section__isnull=True))
+        if self.academic_year_id:
+            assignment_qs = assignment_qs.filter(Q(academic_year_id=self.academic_year_id) | Q(academic_year__isnull=True))
+
+        if not assignment_qs.exists():
+            raise ValidationError(
+                "This teacher is not assigned to teach this subject for this class "
+                "(no matching ClassSubjectAssignment). Add one before scheduling this slot."
+            )
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
 
 class ClassOptionalSubjectSetup(models.Model):
     school = models.ForeignKey("tenancy.School", on_delete=models.CASCADE, related_name="class_optional_setups")

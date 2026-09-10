@@ -641,9 +641,9 @@ def build_student_profile(user, student_pk: int) -> dict:
       academic     — ExamMark rows for this student (requires results.view)
       attendance   — Last 90 days of StudentAttendance (requires attendance.view)
       behaviour    — AssignedIncident rows (requires behaviour.view)
-      homework     — placeholder [] (no model yet; Sprint 6 will fill this)
-      communication — placeholder [] (Sprint 7)
-      notes        — placeholder null (future)
+      homework     — this student's HomeworkSubmission history (requires homework.view)
+      communication — InAppMessage thread with the student's guardian (requires messages.view)
+      notes        — placeholder null (no backing model yet — future work)
 
     Permission resolution uses user.get_permission_codes() so it honours
     wildcard (*) and multi-role unions automatically.
@@ -721,6 +721,14 @@ def build_student_profile(user, student_pk: int) -> dict:
     if 'behaviour' in sections_available:
         profile['behaviour'] = _build_behaviour(student)
 
+    # ── 8. Homework history (homework.view) ───────────────────────────────────
+    if 'homework' in sections_available:
+        profile['homework'] = _build_homework(student)
+
+    # ── 9. Communication thread with guardian (messages.view) ─────────────────
+    if 'communication' in sections_available:
+        profile['communication'] = _build_communication(user, student)
+
     return profile
 
 
@@ -748,6 +756,7 @@ def build_student_credentials(user, student_pk: int) -> dict:
             return {'has_account': False}
         return {
             'has_account':  True,
+            'id':           u.id,
             'username':     u.username,
             'is_active':    u.is_active and u.access_status,
             'last_login':   u.last_login.isoformat() if u.last_login else None,
@@ -887,21 +896,96 @@ def _build_behaviour(student) -> dict:
     }
 
 
+def _build_homework(student) -> list:
+    """
+    Returns this student's HomeworkSubmission history, newest first —
+    every homework the student has a recorded submission against,
+    regardless of which teacher assigned it (a Hindi teacher can see a
+    Maths submission's grading here, same as the admin-facing profile
+    would — this is read-only history, not a scope boundary; the scope
+    boundary is build_student_profile's own assert_can_view_class call
+    higher up, which already gates the whole profile).
+    """
+    from apps.academics.models import HomeworkSubmission
+
+    submissions_qs = HomeworkSubmission.objects.select_related(
+        'homework', 'homework__subject_id_ref',
+    ).filter(student=student).order_by('-homework__homework_date', '-created_at')
+
+    records = []
+    for sub in submissions_qs:
+        hw = sub.homework
+        records.append({
+            'homework_id':     hw.id if hw else None,
+            'subject':         hw.subject_id_ref.name if (hw and hw.subject_id_ref) else '',
+            'description':     hw.description if hw else '',
+            'homework_date':   hw.homework_date.isoformat() if hw else None,
+            'submission_date': hw.submission_date.isoformat() if hw else None,
+            'marks':           float(sub.marks) if sub.marks is not None else None,
+            'complete_status': sub.complete_status,
+            'note':            sub.note,
+        })
+    return records
+
+
+def _build_communication(user, student) -> list:
+    """
+    Returns the in-app message thread between the requesting teacher and
+    this student's guardian, newest first. Empty if the guardian has no
+    portal account (nothing to message) — not an error, just nothing yet.
+    """
+    from django.db.models import Q
+    from apps.communication.models import InAppMessage
+
+    guardian = student.guardian
+    if not guardian or not guardian.user_id:
+        return []
+
+    messages_qs = InAppMessage.objects.select_related('sender', 'recipient').filter(
+        Q(sender=user, recipient=guardian.user) | Q(sender=guardian.user, recipient=user)
+    ).order_by('-created_at')[:50]
+
+    records = []
+    for m in messages_qs:
+        records.append({
+            'id':         m.id,
+            'from_me':    m.sender_id == user.id,
+            'subject':    m.subject,
+            'body':       m.body,
+            'is_read':    m.is_read,
+            'created_at': m.created_at.isoformat(),
+        })
+    return records
+
+
 # ── Weekly timetable (used by /teacher/timetable/) ────────────────────────────
 
 ORDERED_DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
 
 def build_weekly_timetable(user) -> dict:
     """
-    Returns the teacher's full weekly timetable grouped by day.
-    Also computes KPI counts used by the timetable screen header.
+    Returns the teacher's full weekly timetable grouped by day, plus KPIs.
+
+    When the school has a ClassPeriod grid configured (apps.core.models.ClassPeriod,
+    period_type='class' — the same grid that drives exam routines and lesson
+    planning), every day is built from that full grid: each period is labelled
+    'teaching' (this teacher has a class then), 'break', or 'free' (a real working
+    period the teacher has nothing scheduled in) — not just whichever slots
+    happen to have a ClassRoutineSlot row. free_periods in the KPIs used to be
+    hardcoded to 0 regardless of the teacher's actual schedule; it's now a real
+    count.
+
+    Falls back to the old slots-only behaviour (has_period_grid: False in the
+    response) when the school hasn't configured a period grid — there, "free"
+    periods genuinely can't be known, so none are synthesized.
     """
     from datetime import datetime, timedelta
     from apps.academics.models import ClassRoutineSlot
+    from apps.core.models import ClassPeriod
 
     school = getattr(user, 'school', None)
     if not school:
-        return {'days': [], 'kpis': {}, 'week_of': ''}
+        return {'days': [], 'kpis': {}, 'week_of': '', 'has_period_grid': False}
 
     today     = datetime.now().date()
     today_day = today.strftime('%A').lower()
@@ -914,7 +998,7 @@ def build_weekly_timetable(user) -> dict:
 
     year = get_current_academic_year(school)
     qs = ClassRoutineSlot.objects.select_related(
-        'school_class', 'section', 'subject'
+        'school_class', 'section', 'subject', 'period'
     ).filter(
         teacher=user,
         school=school,
@@ -922,37 +1006,106 @@ def build_weekly_timetable(user) -> dict:
     )
     if year:
         qs = qs.filter(academic_year=year)
-    qs = qs.order_by('day_id', 'start_time')
 
-    # Group by day
-    days_map: dict[str, list] = {d: [] for d in ORDERED_DAYS}
-    total_teaching = 0
-    cover_count    = 0
-
+    # A teacher can only be in one place at a time, so (day, start_time) is an
+    # unambiguous key even across different classes/subjects.
+    slot_map: dict = {}
     for slot in qs:
-        if slot.day not in days_map:
-            continue
-        is_now  = False
-        is_done = False
+        if slot.day in ORDERED_DAYS and slot.start_time:
+            slot_map[(slot.day, slot.start_time)] = slot
+
+    def _teaching_entry(slot) -> dict:
+        is_now = is_done = False
         if slot.day == today_day and slot.start_time and slot.end_time:
             is_now  = slot.start_time <= now_time <= slot.end_time
             is_done = slot.end_time < now_time
-
-        entry = {
+        return {
             'period':       slot.class_period_id,
+            'period_label': slot.period.period if slot.period else '',
             'subject':      slot.subject.name if slot.subject else '',
             'class_name':   slot.school_class.name if slot.school_class else '',
             'section_name': slot.section.name if slot.section else '',
             'room':         slot.room or '',
             'from':         slot.start_time.strftime('%H:%M') if slot.start_time else '',
             'to':           slot.end_time.strftime('%H:%M') if slot.end_time else '',
+            'status':       'break' if slot.is_break else 'teaching',
             'is_break':     slot.is_break,
+            'is_free':      False,
             'is_now':       is_now,
             'is_done':      is_done,
         }
-        days_map[slot.day].append(entry)
-        if not slot.is_break:
-            total_teaching += 1
+
+    def _grid_entry(day: str, p, status: str) -> dict:
+        is_now  = day == today_day and p.start_time <= now_time <= p.end_time
+        is_done = day == today_day and p.end_time < now_time
+        return {
+            'period':       p.id,
+            'period_label': p.period,
+            'subject':      '',
+            'class_name':   '',
+            'section_name': '',
+            'room':         '',
+            'from':         p.start_time.strftime('%H:%M'),
+            'to':           p.end_time.strftime('%H:%M'),
+            'status':       status,
+            'is_break':     status == 'break',
+            'is_free':      status == 'free',
+            'is_now':       is_now,
+            'is_done':      is_done,
+        }
+
+    period_grid = list(
+        ClassPeriod.objects.filter(school=school, period_type='class').order_by('start_time')
+    )
+
+    days_map: dict[str, list] = {d: [] for d in ORDERED_DAYS}
+    total_teaching = 0
+    free_periods   = 0
+    sections_taught: set = set()
+
+    if period_grid:
+        matched_keys: set = set()
+        for day in ORDERED_DAYS:
+            for p in period_grid:
+                key = (day, p.start_time)
+                slot = slot_map.get(key)
+                if slot:
+                    matched_keys.add(key)
+                    entry = _teaching_entry(slot)
+                    if not slot.is_break:
+                        total_teaching += 1
+                        sections_taught.add((slot.school_class_id, slot.section_id))
+                elif p.is_break:
+                    entry = _grid_entry(day, p, 'break')
+                else:
+                    entry = _grid_entry(day, p, 'free')
+                    free_periods += 1
+                days_map[day].append(entry)
+
+        # Safety net: a ClassRoutineSlot whose start_time doesn't exactly match
+        # any configured ClassPeriod (off-grid scheduling, or the grid changed
+        # after the slot was created) would otherwise silently vanish instead
+        # of just not being labelled — surface it rather than lose it.
+        for key, slot in slot_map.items():
+            if key in matched_keys:
+                continue
+            day = key[0]
+            days_map[day].append(_teaching_entry(slot))
+            if not slot.is_break:
+                total_teaching += 1
+                sections_taught.add((slot.school_class_id, slot.section_id))
+        for day in ORDERED_DAYS:
+            days_map[day].sort(key=lambda e: e['from'])
+    else:
+        # No period grid — only what we actually know about (real slots).
+        for (day, _start), slot in slot_map.items():
+            entry = _teaching_entry(slot)
+            days_map[day].append(entry)
+            if not slot.is_break:
+                total_teaching += 1
+                sections_taught.add((slot.school_class_id, slot.section_id))
+        for day in ORDERED_DAYS:
+            days_map[day].sort(key=lambda e: e['from'])
 
     days_out = [
         {
@@ -965,10 +1118,10 @@ def build_weekly_timetable(user) -> dict:
     ]
 
     kpis = {
-        'total_periods': total_teaching,
-        'free_periods':  0,          # calculated after period grid is known
-        'cover_assignments': cover_count,
-        'teaching_days': sum(1 for d in days_out if len(d['periods']) > 0),
+        'total_periods':    total_teaching,
+        'free_periods':     free_periods,
+        'sections_taught':  len(sections_taught),
+        'teaching_days':    sum(1 for d in days_out if any(p['status'] == 'teaching' for p in d['periods'])),
     }
 
-    return {'days': days_out, 'kpis': kpis, 'week_of': week_of}
+    return {'days': days_out, 'kpis': kpis, 'week_of': week_of, 'has_period_grid': bool(period_grid)}

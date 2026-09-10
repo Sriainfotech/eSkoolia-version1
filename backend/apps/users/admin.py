@@ -21,3 +21,13 @@ class UserAdmin(BaseUserAdmin):
             "fields": ("school", "phone", "is_school_admin", "access_status"),
         }),
     )
+
+from .models import UserLoginLog
+
+@admin.register(UserLoginLog)
+class UserLoginLogAdmin(admin.ModelAdmin):
+    list_display = ("attempted_username", "status", "school", "portal_type", "ip_address", "created_at")
+    list_filter = ("status", "portal_type", "school", "created_at")
+    search_fields = ("attempted_username", "ip_address", "user_agent")
+    ordering = ("-created_at",)
+    readonly_fields = ("user", "school", "attempted_username", "status", "portal_type", "ip_address", "user_agent", "created_at")

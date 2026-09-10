@@ -915,6 +915,7 @@ class ParentMessagesView(APIView):
         return Response(InAppMessageSerializer(messages, many=True, context={"request": request}).data)
 
     def post(self, request):
+        from apps.communication.realtime import push_new_message
         from apps.communication.serializers import InAppMessageSerializer
 
         user = request.user
@@ -922,6 +923,7 @@ class ParentMessagesView(APIView):
         serializer = InAppMessageSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         message = serializer.save(sender=user, school=guardian.school)
+        push_new_message(message)
         return Response(
             InAppMessageSerializer(message, context={"request": request}).data, status=201,
         )
@@ -996,3 +998,62 @@ class ParentHealthView(APIView):
             "disability_accommodations": student.disability_accommodations,
             "disability_notes": student.disability_notes,
         })
+
+
+# ── Item 7 support: who can a parent message? ───────────────────────────────────
+
+class ChildTeachersView(APIView):
+    """
+    GET /api/v1/parent/teachers/?child_id=<id>
+
+    Returns the child's teachers — class teacher plus every subject
+    teacher for the child's current class+section — each with their
+    portal user id, so the Messages compose flow has someone to message.
+    Added for the same reason apps.teacher_portal.utils.build_student_credentials
+    now returns account ids: there was no recipient directory endpoint at
+    all, so composing a fresh message had nowhere to source a recipient_id
+    from.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsParentPortalUser]
+
+    def get(self, request):
+        from django.db.models import Q
+        from apps.academics.models import ClassSubjectAssignment, ClassTeacherAssignment
+
+        student = _resolve_child(request)
+        if not student.current_class_id:
+            return Response([])
+
+        teachers: dict = {}
+
+        ct_qs = ClassTeacherAssignment.objects.select_related("teacher").filter(
+            school_class_id=student.current_class_id,
+            section_id=student.current_section_id,
+            school=student.school,
+            active_status=True,
+        )
+        for ct in ct_qs:
+            if ct.teacher_id and ct.teacher_id not in teachers:
+                teachers[ct.teacher_id] = {
+                    "id": ct.teacher_id,
+                    "name": f"{ct.teacher.first_name} {ct.teacher.last_name}".strip() or ct.teacher.username,
+                    "role": "Class Teacher",
+                }
+
+        subj_qs = ClassSubjectAssignment.objects.select_related("teacher", "subject").filter(
+            Q(section_id__isnull=True) | Q(section_id=student.current_section_id),
+            school_class_id=student.current_class_id,
+            school=student.school,
+            active_status=True,
+        )
+        for sa in subj_qs:
+            if sa.teacher_id and sa.teacher_id not in teachers:
+                teachers[sa.teacher_id] = {
+                    "id": sa.teacher_id,
+                    "name": f"{sa.teacher.first_name} {sa.teacher.last_name}".strip() or sa.teacher.username,
+                    "role": sa.subject.name if sa.subject else "Subject Teacher",
+                }
+
+        return Response(list(teachers.values()))

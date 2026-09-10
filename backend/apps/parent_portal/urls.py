@@ -5,6 +5,7 @@ from .views import (
     ChildDetailView,
     ChildFeesView,
     ChildrenListView,
+    ChildTeachersView,
     ParentBehaviourView,
     ParentHealthView,
     ParentHomeworkView,
@@ -33,6 +34,7 @@ urlpatterns = [
     path("results/report-card/", ParentReportCardView.as_view(), name="parent-report-card"),
     # Item 7 — Messages
     path("messages/", ParentMessagesView.as_view(), name="parent-messages"),
+    path("teachers/", ChildTeachersView.as_view(), name="parent-child-teachers"),
     # Item 8 — Behaviour Log
     path("behaviour/", ParentBehaviourView.as_view(), name="parent-behaviour"),
     # Item 9 — Health Log

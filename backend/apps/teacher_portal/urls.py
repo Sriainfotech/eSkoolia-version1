@@ -13,6 +13,7 @@ from .views import (
     HomeworkDetailView,
     HomeworkSubmissionsListView,
     HomeworkSubmissionGradeView,
+    LessonGroupListCreateView,
     LessonPlanListCreateView,
     LessonPlanDetailView,
     LessonTopicListView,
@@ -41,6 +42,7 @@ urlpatterns = [
     path("homework/<int:pk>/submissions/",        HomeworkSubmissionsListView.as_view(),  name="teacher-homework-submissions"),
     path("homework/submissions/<int:pk>/grade/",  HomeworkSubmissionGradeView.as_view(),  name="teacher-homework-submission-grade"),
     # Sprint 6 — Lesson Plans
+    path("lesson-groups/",               LessonGroupListCreateView.as_view(),   name="teacher-lesson-groups-list-create"),
     path("lessons/",                     LessonPlanListCreateView.as_view(),    name="teacher-lessons-list-create"),
     path("lessons/<int:pk>/",            LessonPlanDetailView.as_view(),        name="teacher-lesson-detail"),
     path("lesson-topics/",               LessonTopicListView.as_view(),         name="teacher-lesson-topics"),

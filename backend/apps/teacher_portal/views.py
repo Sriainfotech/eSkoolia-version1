@@ -883,6 +883,95 @@ class HomeworkSubmissionGradeView(APIView):
 
 # ── Sprint 6: Lesson Plans ─────────────────────────────────────────────────────
 
+class LessonGroupListCreateView(APIView):
+    """
+    GET /api/v1/teacher/lesson-groups/
+    Lists Lesson rows ("lesson groups" — e.g. "Grammar Basics" for Class 4
+    English) within the teacher's subject scope. This is the list a lesson
+    plan's lesson_detail_id is picked from — added because
+    LessonPlanListCreateView.post requires that id and nothing previously
+    served it to the teacher portal (only the admin API could list/create
+    Lesson rows).
+    Optional class_id/section_id/subject_id query params narrow further.
+
+    POST /api/v1/teacher/lesson-groups/
+    Creates one or more Lesson rows. Body: class_id, section_id (optional),
+    subject_id, lesson (a string, or a list of strings to bulk-create
+    several titles at once — mirrors the admin's LessonGroupCreateSerializer
+    bulk-create behaviour). school/user/created_by/updated_by are set
+    server-side; scope-checked via assert_can_create_homework exactly like
+    every other create endpoint in this module.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def get(self, request):
+        from apps.academics.models import Lesson
+        from apps.academics.serializers import LessonSerializer
+
+        user = request.user
+        scope_q = build_subject_scope_q(user, 'school_class_id', 'section_id', 'subject_id')
+        qs = Lesson.objects.select_related('school_class', 'section', 'subject').filter(
+            scope_q, school=user.school, active_status=True,
+        )
+
+        class_id = request.query_params.get('class_id')
+        section_id = request.query_params.get('section_id')
+        subject_id = request.query_params.get('subject_id')
+        if class_id:
+            qs = qs.filter(school_class_id=class_id)
+        if section_id:
+            qs = qs.filter(section_id=section_id)
+        if subject_id:
+            qs = qs.filter(subject_id=subject_id)
+
+        serializer = LessonSerializer(qs.order_by('lesson_title'), many=True, context={'request': request})
+        return Response(serializer.data)
+
+    def post(self, request):
+        from apps.academics.models import Lesson
+        from apps.academics.serializers import LessonSerializer
+
+        user = request.user
+        titles = request.data.get('lesson')
+        titles = titles if isinstance(titles, list) else [titles] if titles else []
+        titles = [str(t).strip() for t in titles if str(t).strip()]
+        if not titles:
+            raise ParseError("lesson (a title, or a list of titles) is required.")
+
+        from apps.core.models import Class, Section, Subject
+        from rest_framework.exceptions import NotFound
+
+        try:
+            school_class = Class.objects.get(pk=request.data.get('class_id'), school=user.school)
+            subject = Subject.objects.get(pk=request.data.get('subject_id'), school=user.school)
+        except (Class.DoesNotExist, Subject.DoesNotExist, ValueError, TypeError):
+            raise NotFound("Invalid class or subject.")
+
+        section = None
+        section_id = request.data.get('section_id')
+        if section_id:
+            try:
+                section = Section.objects.get(pk=section_id, school_class=school_class)
+            except (Section.DoesNotExist, ValueError, TypeError):
+                raise NotFound("Invalid section.")
+
+        assert_can_create_homework(user, school_class.id, section.id if section else None, subject.id)
+
+        academic_year = get_current_academic_year(user.school)
+        created_rows = [
+            Lesson.objects.create(
+                school=user.school, academic_year=academic_year, school_class=school_class,
+                section=section, subject=subject, lesson_title=title,
+                user=user, created_by=user, updated_by=user,
+            )
+            for title in titles
+        ]
+        serializer = LessonSerializer(created_rows, many=True, context={'request': request})
+        return Response(serializer.data, status=http_status.HTTP_201_CREATED)
+
+
 class LessonPlanListCreateView(APIView):
     """
     GET /api/v1/teacher/lessons/
@@ -1102,12 +1191,14 @@ class TeacherMessagesView(APIView):
         return Response(InAppMessageSerializer(messages, many=True, context={'request': request}).data)
 
     def post(self, request):
+        from apps.communication.realtime import push_new_message
         from apps.communication.serializers import InAppMessageSerializer
 
         user = request.user
         serializer = InAppMessageSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         message = serializer.save(sender=user, school=user.school)
+        push_new_message(message)
         return Response(
             InAppMessageSerializer(message, context={'request': request}).data, status=http_status.HTTP_201_CREATED,
         )
