@@ -40,6 +40,8 @@ export interface SubjectAssignment {
 
 export interface PendingItems {
   homework_to_review: number;
+  lesson_plans_pending: number;
+  unread_messages: number;
   attendance_pending: boolean;
 }
 
@@ -55,8 +57,15 @@ export interface TodayPeriod {
   is_done: boolean;
 }
 
+export type TimetablePeriodStatus = 'teaching' | 'break' | 'free';
+
 export interface TimetableSlot extends TodayPeriod {
+  /** ClassPeriod label, e.g. "Period 3" — '' when the school has no period grid configured. */
+  period_label: string;
+  status: TimetablePeriodStatus;
   is_break: boolean;
+  /** A real, working period with nothing scheduled — only ever true when has_period_grid is true. */
+  is_free: boolean;
 }
 
 export interface TimetableDay {
@@ -68,8 +77,10 @@ export interface TimetableDay {
 
 export interface TimetableKpis {
   total_periods: number;
+  /** Real count of unscheduled working periods this week — 0 when has_period_grid is false, not "no free time." */
   free_periods: number;
-  cover_assignments: number;
+  /** Distinct (class, section) pairs taught this week. */
+  sections_taught: number;
   teaching_days: number;
 }
 
@@ -77,6 +88,8 @@ export interface TeacherTimetable {
   week_of: string;
   days: TimetableDay[];
   kpis: TimetableKpis;
+  /** false when the school hasn't configured ClassPeriod rows — free/break periods can't be inferred then. */
+  has_period_grid: boolean;
 }
 
 export interface TeacherMe {
@@ -247,25 +260,62 @@ export interface BehaviourRecord {
   date: string;
 }
 
+export interface StudentHomeworkRecord {
+  homework_id: number | null;
+  subject: string;
+  description: string;
+  homework_date: string | null;
+  submission_date: string | null;
+  marks: number | null;
+  complete_status: 'C' | 'I' | 'P';
+  note: string;
+}
+
+export interface StudentCommunicationRecord {
+  id: number;
+  from_me: boolean;
+  subject: string;
+  body: string;
+  is_read: boolean;
+  created_at: string;
+}
+
 export interface StudentProfile {
   sections_available: ProfileTab[];
   overview: StudentOverview;
   academic: { marks: ExamMarkRow[] } | null;
   attendance: { records: AttendanceRecord[]; summary: AttendanceSummary } | null;
   behaviour: { records: BehaviourRecord[]; total_points: number } | null;
-  homework: unknown[];
-  communication: unknown[];
+  homework: StudentHomeworkRecord[];
+  communication: StudentCommunicationRecord[];
   notes: null;
 }
 
 // ── API functions ─────────────────────────────────────────────────────────────
 
+// ── /me/ cache ────────────────────────────────────────────────────────────────
+// Home, Homework, Lessons, and Messages each call fetchTeacherMe() independently
+// on mount (for subject_assignments / pending_items) — without this, navigating
+// between them refetches the same payload every time. Short TTL (not the 5-minute
+// one usePermissions uses) because pending_items.unread_messages / homework_to_review
+// are notification counts that should catch up quickly, not just on next login.
+const TEACHER_ME_CACHE_TTL_MS = 30 * 1000;
+let _teacherMeCache: { data: TeacherMe; at: number } | null = null;
+
 /**
  * GET /api/v1/teacher/me/
  * Returns the authenticated teacher's profile, assigned classes, and today's periods.
+ * Cached for 30s — pass { force: true } to bypass (e.g. right after an action
+ * that changes pending_items, like grading a submission).
  */
-export function fetchTeacherMe(): Promise<TeacherMe> {
-  return teacherGet<TeacherMe>('/me/');
+export function fetchTeacherMe(options?: { force?: boolean }): Promise<TeacherMe> {
+  if (!options?.force && _teacherMeCache && Date.now() - _teacherMeCache.at < TEACHER_ME_CACHE_TTL_MS) {
+    return Promise.resolve(_teacherMeCache.data);
+  }
+  return teacherGet<TeacherMe>('/me/').then((data) => {
+    _teacherMeCache = { data, at: Date.now() };
+    return data;
+  });
 }
 
 /**
@@ -309,6 +359,8 @@ export function fetchStudentProfile(studentPk: number): Promise<StudentProfile> 
 
 export interface PortalAccountInfo {
   has_account: boolean;
+  /** Numeric portal user id — the value to pass as recipient_id when messaging this person. */
+  id?: number;
   username?: string;
   is_active?: boolean;
   last_login?: string | null;
@@ -356,4 +408,274 @@ export function resetStudentPortalPassword(
       cache: 'no-store',
     },
   );
+}
+
+// ── Sprint 6 — write helpers ──────────────────────────────────────────────────
+
+function teacherPost<T>(path: string, body: unknown): Promise<T> {
+  return apiRequestWithRefresh<T>(`/api/v1/teacher${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+}
+
+function teacherPatch<T>(path: string, body: unknown): Promise<T> {
+  return apiRequestWithRefresh<T>(`/api/v1/teacher${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  });
+}
+
+function teacherDelete(path: string): Promise<void> {
+  return apiRequestWithRefresh<void>(`/api/v1/teacher${path}`, {
+    method: 'DELETE',
+    cache: 'no-store',
+  });
+}
+
+function qs(params: Record<string, string | number | undefined>): string {
+  const parts = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== '')
+    .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`);
+  return parts.length ? `?${parts.join('&')}` : '';
+}
+
+// ── Sprint 6 — Homework ───────────────────────────────────────────────────────
+
+export interface HomeworkSubmissionItem {
+  id: number;
+  student: number;
+  marks: number;
+  complete_status: 'C' | 'I' | 'P';
+  note: string;
+  file: string | null;
+}
+
+export interface HomeworkItem {
+  id: number;
+  /** class_id/section_id/subject_id only — HomeworkSerializer returns raw FK ids,
+   *  not names. Resolve display names client-side via resolveScopeName() against
+   *  TeacherMe.subject_assignments, since a homework row's triplet is always
+   *  inside the requesting teacher's own scope. */
+  class_id: number;
+  section_id: number | null;
+  subject_id: number;
+  homework_date: string;
+  submission_date: string;
+  evaluation_date: string | null;
+  marks: number;
+  description: string;
+  file: string | null;
+  evaluations: HomeworkSubmissionItem[];
+}
+
+export interface HomeworkFormInput {
+  class_id: number;
+  section_id?: number | null;
+  subject_id: number;
+  homework_date: string;
+  submission_date: string;
+  evaluation_date?: string | null;
+  marks?: number;
+  description: string;
+  file?: string;
+}
+
+/** GET /api/v1/teacher/homework/ — homework in the teacher's subject scope. */
+export function fetchHomeworkList(params?: { class_id?: number; section_id?: number; subject_id?: number }): Promise<HomeworkItem[]> {
+  return teacherGet<HomeworkItem[]>(`/homework/${qs(params ?? {})}`);
+}
+
+/** GET /api/v1/teacher/homework/<id>/ */
+export function fetchHomeworkDetail(id: number): Promise<HomeworkItem> {
+  return teacherGet<HomeworkItem>(`/homework/${id}/`);
+}
+
+/** POST /api/v1/teacher/homework/ */
+export function createHomework(payload: HomeworkFormInput): Promise<HomeworkItem> {
+  return teacherPost<HomeworkItem>('/homework/', payload);
+}
+
+/** PATCH /api/v1/teacher/homework/<id>/ */
+export function updateHomework(id: number, payload: Partial<HomeworkFormInput>): Promise<HomeworkItem> {
+  return teacherPatch<HomeworkItem>(`/homework/${id}/`, payload);
+}
+
+/** DELETE /api/v1/teacher/homework/<id>/ — soft delete. */
+export function deleteHomework(id: number): Promise<void> {
+  return teacherDelete(`/homework/${id}/`);
+}
+
+/**
+ * GET /api/v1/teacher/homework/<id>/submissions/
+ * Returns raw student ids only (no nested name/roll_no) — resolve display
+ * names client-side via fetchStudentList(classId, sectionId) for the
+ * parent homework's class+section, same as the Homework list resolves
+ * class/subject names via subject_assignments.
+ */
+export function fetchHomeworkSubmissions(homeworkId: number): Promise<HomeworkSubmissionItem[]> {
+  return teacherGet<HomeworkSubmissionItem[]>(`/homework/${homeworkId}/submissions/`);
+}
+
+/** PATCH /api/v1/teacher/homework/submissions/<id>/grade/ */
+export function gradeSubmission(
+  submissionId: number,
+  payload: { marks?: number; complete_status?: 'C' | 'I' | 'P'; note?: string },
+): Promise<HomeworkSubmissionItem> {
+  return teacherPatch<HomeworkSubmissionItem>(`/homework/submissions/${submissionId}/grade/`, payload);
+}
+
+// ── Sprint 6 — Lesson groups (the "Lesson" a plan belongs to) ────────────────
+
+export interface LessonGroupItem {
+  id: number;
+  class_id: number;
+  section_id: number | null;
+  subject_id: number;
+  class_name: string;
+  section_name: string;
+  subject_name: string;
+  lesson_name: string;
+  topics_done: number;
+  topics_total: number;
+}
+
+/** GET /api/v1/teacher/lesson-groups/ */
+export function fetchLessonGroups(params?: { class_id?: number; section_id?: number; subject_id?: number }): Promise<LessonGroupItem[]> {
+  return teacherGet<LessonGroupItem[]>(`/lesson-groups/${qs(params ?? {})}`);
+}
+
+/** POST /api/v1/teacher/lesson-groups/ — titles: one or several new lesson-group names to create at once. */
+export function createLessonGroups(payload: { class_id: number; section_id?: number | null; subject_id: number; lesson: string | string[] }): Promise<LessonGroupItem[]> {
+  return teacherPost<LessonGroupItem[]>('/lesson-groups/', payload);
+}
+
+// ── Sprint 6 — Lesson plans ────────────────────────────────────────────────────
+
+export type LessonWorkflowStatus = 'draft' | 'submitted' | 'under_review' | 'approved' | 'revision_requested';
+
+export interface LessonPlanTopicItem {
+  id: number;
+  sub_topic_title: string;
+}
+
+export interface LessonPlanItem {
+  id: number;
+  class_id: number;
+  section_id: number | null;
+  subject_id: number;
+  class_name: string;
+  section_name: string;
+  subject_name: string;
+  lesson_detail_id: number;
+  lesson_detail_name: string;
+  sub_topic: string;
+  teaching_method: string;
+  general_objectives: string;
+  previous_knowledge: string;
+  video_url: string;
+  note: string;
+  lesson_date: string;
+  completed_date: string | null;
+  completed_status: string;
+  workflow_status: LessonWorkflowStatus;
+  teacher_name: string;
+  topics: LessonPlanTopicItem[];
+}
+
+export interface LessonPlanFormInput {
+  class_id: number;
+  section_id?: number | null;
+  subject_id: number;
+  lesson_detail_id: number;
+  lesson_date: string;
+  sub_topic?: string;
+  teaching_method?: string;
+  general_objectives?: string;
+  previous_knowledge?: string;
+  note?: string;
+  workflow_status?: LessonWorkflowStatus;
+}
+
+/** GET /api/v1/teacher/lessons/ */
+export function fetchLessonPlans(params?: { class_id?: number; section_id?: number; subject_id?: number; workflow_status?: LessonWorkflowStatus }): Promise<LessonPlanItem[]> {
+  return teacherGet<LessonPlanItem[]>(`/lessons/${qs(params ?? {})}`);
+}
+
+/** GET /api/v1/teacher/lessons/<id>/ */
+export function fetchLessonPlanDetail(id: number): Promise<LessonPlanItem> {
+  return teacherGet<LessonPlanItem>(`/lessons/${id}/`);
+}
+
+/** POST /api/v1/teacher/lessons/ */
+export function createLessonPlan(payload: LessonPlanFormInput): Promise<LessonPlanItem> {
+  return teacherPost<LessonPlanItem>('/lessons/', payload);
+}
+
+/** PATCH /api/v1/teacher/lessons/<id>/ */
+export function updateLessonPlan(id: number, payload: Partial<LessonPlanFormInput>): Promise<LessonPlanItem> {
+  return teacherPatch<LessonPlanItem>(`/lessons/${id}/`, payload);
+}
+
+// ── Sprint 7 — Notices ────────────────────────────────────────────────────────
+
+export interface NoticeItem {
+  id: number;
+  title: string;
+  message: string;
+  notice_date: string;
+  publish_on: string;
+}
+
+/** GET /api/v1/teacher/notices/ */
+export function fetchTeacherNotices(): Promise<NoticeItem[]> {
+  return teacherGet<NoticeItem[]>('/notices/');
+}
+
+// ── Sprint 7 — Messages ────────────────────────────────────────────────────────
+
+export interface MessageParticipant {
+  id: number;
+  first_name: string;
+  last_name: string;
+  username: string;
+  email: string;
+}
+
+export interface InAppMessageItem {
+  id: number;
+  sender: MessageParticipant;
+  recipient: MessageParticipant;
+  subject: string;
+  body: string;
+  category: 'general' | 'alert' | 'announcement';
+  is_read: boolean;
+  read_at: string | null;
+  delivered_at: string | null;
+  created_at: string;
+}
+
+/** GET /api/v1/teacher/messages/ */
+export function fetchTeacherMessages(): Promise<InAppMessageItem[]> {
+  return teacherGet<InAppMessageItem[]>('/messages/');
+}
+
+/** POST /api/v1/teacher/messages/ */
+export function sendTeacherMessage(payload: { recipient_id: number; subject: string; body: string; category?: 'general' | 'alert' | 'announcement' }): Promise<InAppMessageItem> {
+  return teacherPost<InAppMessageItem>('/messages/', payload);
+}
+
+// ── Sprint 6 — Student Results tab ────────────────────────────────────────────
+
+export interface StudentResultsData {
+  marks: ExamMarkRow[];
+}
+
+/** GET /api/v1/teacher/students/<id>/results/ */
+export function fetchStudentResults(studentPk: number): Promise<StudentResultsData> {
+  return teacherGet<StudentResultsData>(`/students/${studentPk}/results/`);
 }

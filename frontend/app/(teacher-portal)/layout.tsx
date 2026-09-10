@@ -295,7 +295,7 @@ function TeacherSubNav() {
 
   if (!mod || mod.sub.length === 0) return null;
 
-  const activeTab = mod.sub.find(
+  const activeTab = mod.sub.slice().sort((a, b) => b.path.length - a.path.length).find(
     (s) => pathname === s.path || pathname.startsWith(s.path + "/")
   );
 

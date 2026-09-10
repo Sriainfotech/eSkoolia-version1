@@ -30,6 +30,17 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def chat_message(self, event):
         await self.send_json({"type": "chat_message", "message": event.get("message", {})})
 
+    async def portal_notification(self, event):
+        """
+        Separate from chat_message on purpose: apps.communication.realtime
+        (teacher/parent portal InAppMessage) pushes over this same per-user
+        group but with a different payload shape than a Conversation message
+        — routing it through a distinct event type means ChatWindow's
+        chat_message handler never has to guess whether an incoming payload
+        is a real conversation message or a portal notification.
+        """
+        await self.send_json({"type": "portal_notification", "notification": event.get("notification", {})})
+
     @database_sync_to_async
     def _get_user_from_token(self, token):
         try:

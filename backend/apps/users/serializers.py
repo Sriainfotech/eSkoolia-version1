@@ -198,6 +198,8 @@ class LoginTokenObtainPairSerializer(TokenObtainPairSerializer):
 
         portal_type = user.resolve_portal_type()
 
+        self.authenticated_user = user
+
         return {
             "refresh": str(refresh),
             "access": str(refresh.access_token),

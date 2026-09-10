@@ -164,8 +164,11 @@ function Skeleton({ w = "100%", h = 16 }: { w?: string | number; h?: number }) {
 // ── Center content ────────────────────────────────────────────────────────────
 
 function TeacherCenter({ me }: { me: TeacherMe }) {
+  const router = useRouter();
   const hasAttendancePending = me.pending_items.attendance_pending;
   const homeworkPending = me.pending_items.homework_to_review;
+  const lessonPlansPending = me.pending_items.lesson_plans_pending;
+  const unreadMessages = me.pending_items.unread_messages;
   // Dynamically built by the portal registry: teacher-specific modules +
   // any admin modules granted via Roles & Permissions
   const visibleModules = useVisibleModules();
@@ -178,7 +181,7 @@ function TeacherCenter({ me }: { me: TeacherMe }) {
       <Greeting />
 
       {/* Pending action chips */}
-      {(hasAttendancePending || homeworkPending > 0) && (
+      {(hasAttendancePending || homeworkPending > 0 || lessonPlansPending > 0 || unreadMessages > 0) && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18 }}>
           {hasAttendancePending && (
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: "var(--warn)", background: "var(--warn-soft)", border: "1px solid #fde68a" }}>
@@ -186,8 +189,18 @@ function TeacherCenter({ me }: { me: TeacherMe }) {
             </span>
           )}
           {homeworkPending > 0 && (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: "var(--info)", background: "var(--info-soft)", border: "1px solid #bfdbfe" }}>
+            <span onClick={() => router.push("/teacher/homework/submissions")} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: "var(--info)", background: "var(--info-soft)", border: "1px solid #bfdbfe", cursor: "pointer" }}>
               <ClipboardList size={12} /> {homeworkPending} homework to review
+            </span>
+          )}
+          {lessonPlansPending > 0 && (
+            <span onClick={() => router.push("/teacher/lessons?workflow_status=draft")} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: "#A21CAF", background: "#FDF4FF", border: "1px solid #f5d0fe", cursor: "pointer" }}>
+              <FileText size={12} /> {lessonPlansPending} lesson plan{lessonPlansPending !== 1 ? "s" : ""} in draft
+            </span>
+          )}
+          {unreadMessages > 0 && (
+            <span onClick={() => router.push("/teacher/messages")} style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "4px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700, color: "#0369A1", background: "#F0F9FF", border: "1px solid #bae6fd", cursor: "pointer" }}>
+              <MessageSquare size={12} /> {unreadMessages} unread message{unreadMessages !== 1 ? "s" : ""}
             </span>
           )}
         </div>

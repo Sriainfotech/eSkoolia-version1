@@ -27,6 +27,7 @@ import {
   MessageSquare,
   User,
   ClipboardList,
+  Bell,
 } from 'lucide-react';
 import type { ModuleRoute } from '@/lib/routes';
 
@@ -110,6 +111,19 @@ export const TEACHER_MODULES: ModuleRoute[] = [
     permission: 'utilities', // backend prefix: utilities.*
     sub: [
       { label: 'Parent Messages', path: '/teacher/messages', icon: MessageSquare },
+    ],
+  },
+  {
+    id: 'teacher-notices',
+    name: 'Notices',
+    path: '/teacher/notices',
+    icon: Bell,
+    bg: '#FFFBEB',
+    ic: '#B45309',
+    // No permission guard — every teacher can always see school notices,
+    // same as the parent and student portals.
+    sub: [
+      { label: 'School Notices', path: '/teacher/notices', icon: Bell },
     ],
   },
   {
