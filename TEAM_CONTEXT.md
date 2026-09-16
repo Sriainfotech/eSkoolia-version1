@@ -1,5 +1,41 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Swetha D (10/09/2026)
+
+**Area:** Examination module — Exam Configuration grade-scale save bug, Admit Card/Seat Plan generation always failing, and a documentation-gap audit of the module's undocumented build history
+
+### 1. Grade-scale band save failing with "Grade ranges cannot overlap within the same scale."
+- `frontend/app/(dashboard)/exams/exam-type/page.tsx`'s `handleSave` updated existing grade-scale bands one at a time via sequential `PATCH` calls. The backend's overlap check (`apps/exams/serializers.py::ExamGradeScaleSerializer.validate()`) validates a band's new range against siblings' *currently-saved* range — so editing two boundary-adjacent bands in the same save (shrinking one while growing the other into the gap) spuriously failed: whichever band got PATCHed second still saw the other band's stale, not-yet-updated range and looked like it overlapped, even though the final set being saved didn't overlap at all.
+- **Fixed**: changed the save to delete all existing bands for the group and recreate them fresh from the current form rows, instead of updating in place. Bands aren't referenced by ID anywhere else (looked up by percentage at read time in `parent_portal/views.py` and `exams/views.py`), so this is safe. Wired `refetchBands()` into the post-save refetch so local state picks up the new server-assigned IDs.
+- Also added a client-side pre-flight check (`findOverlappingBandPair`) that mirrors the backend's inclusive-range overlap logic and, before any network call, names the two specific conflicting bands instead of surfacing the backend's generic message. Widened the save's `catch` to show any `Error`'s own message (not just `ExamsApiError`) so this new check's message actually reaches the UI.
+- **Root cause of the specific report turned out to be genuine bad data, not just the sequential-update bug**: queried the live dev DB directly and found the GPA Scale group (school_id 1) had band `"0.0"` (0–39%) and band `"1.0"` (30–39%) truly overlapping — `"1.0"`'s entire range sat inside `"0.0"`'s. Per the user's choice, this was left for them to correct by hand in the UI (change `"0.0"`'s Max % from 39 to 29) rather than a direct DB fix — ⚠️ not confirmed corrected as of this entry.
+
+### 2. Admit Card & Seat Plan generation: "Exam schedule is not ready." even when a schedule visibly existed
+- `ExamPlanAdmitCardSearchAPIView` and `ExamPlanSeatPlanSearchAPIView` (`apps/exams/views.py`) both checked readiness against `ExamSchedule` — a model with an `exam` FK to the separate `Exam` model, which had **zero rows in the database** and no current UI path to populate it. Meanwhile, the "Schedule & Logistics" → Timetable step (the thing users actually use to schedule an exam) writes to a completely different model, `ExamRoutine` (FK'd to `ExamType` via `exam_term`, not to `Exam`). The two models were never connected, so admit cards/seat plans could never generate for *any* school regardless of how many exams were scheduled.
+- **Fixed** both views' readiness check to query `ExamRoutine` by `exam_term_id` instead of `ExamSchedule` by `exam_id`. Also added a `Q(section_id=...) | Q(section__isnull=True)` fallback since the Timetable form allows creating a class-wide routine with no specific section ("All sections"), which a per-section admit-card/seat-plan search would otherwise never match.
+- Verified directly against the live dev DB (not pytest): confirmed the existing Grade 10-A / Mid-Term Exam routine (id 3) now matches the new query. Not yet live-browser-verified — user was mid-troubleshooting this when the session's context turned to a status-update request; worth confirming the actual "Generate Admit Cards" click-through next session.
+
+### 3. Documentation-gap audit: Examination module's build history is largely missing from this file
+- User asked for a build status on the Examination module; a dedicated search agent found the module's history is barely logged here, unlike Leave Management. Findings, for the record:
+  - The entire backend data model (`ExamType`, `Exam`, `ExamRoutine`, mark registers, `OnlineExam`, `SeatPlan`, `AdmitCard`, etc.) was scaffolded 18–21 March 2026, before this changelog's convention started — no entry covers it.
+  - As of 05/08/2026 this file's last explicit status check-in said the module frontend was "entirely unbuilt ('Coming Soon' placeholder)".
+  - A substantial backend extension (`ExamGradeScaleGroup`, `ExamResultModerationFlag`, migration `0012`) landed 08/09/2026 with no changelog entry, despite two unrelated HR entries being logged that same week.
+  - On disk right now (also undocumented anywhere in this file): 6 of 15 frontend pages under `app/(dashboard)/exams/` are fully built (Command Center, Exam Configuration, Schedule & Logistics, Exam Setup, Marks Register Create, Result Publish) — the other 9 are still ~300-byte stubs.
+  - A 13/07/2026 automated API audit flagged `ExamType.academic_year` silently dropped on save, and exam schedule/exam-type endpoints 404ing — neither was ever marked resolved in this file, though the endpoints clearly work now. **Worth a dedicated verification pass on `ExamType.academic_year` next session** — it's the one open item from that audit with no confirmed fix anywhere.
+
+### Files changed
+- `frontend/app/(dashboard)/exams/exam-type/page.tsx` (grade-scale band save: delete-and-recreate instead of update-in-place, client-side overlap precheck, `refetchBands` wiring, widened error catch)
+- `backend/apps/exams/views.py` (`ExamPlanAdmitCardSearchAPIView`, `ExamPlanSeatPlanSearchAPIView` — readiness check switched from `ExamSchedule` to `ExamRoutine`, added class-wide-section fallback)
+
+### Status
+✅ Both backend fixes verified directly against the live dev DB via Django shell queries (not pytest — matches this project's established pytest/multi-tenancy test-DB limitation). `tsc --noEmit` clean on the touched frontend file. `manage.py` syntax-checked clean on the touched backend file.
+
+⚠️ **Not yet live-verified in the browser** — per this project's convention I don't start dev servers. The grade-scale fix's actual effect was still pending a browser hard-refresh/dev-server-restart as of this entry (an earlier attempt showed stale IDs unchanged, indicating the running frontend bundle hadn't picked up the code change yet). The admit-card fix was verified against DB data only, not clicked through end-to-end yet.
+
+⚠️ **Still open**: the GPA grade-scale's overlapping band data (`"0.0"` 0–39 vs `"1.0"` 30–39) — user chose to fix it by hand in the UI, not confirmed done. `ExamType.academic_year` field-drop bug from the 13/07 audit — never confirmed fixed, not re-tested this session. The broader Examination-module documentation gap (items in §3) — worth deciding whether to backfill a summary entry or just treat this entry as the starting point going forward.
+
+---
+
 ## Update — Swetha D (03/09/2026)
 
 **Area:** Login lockout for non-superuser accounts (tenancy config), HR → Leave page crash, HR Leave approval-chain Designation/Role-matching gaps, and HR Staff onboarding's spouse-name validation
