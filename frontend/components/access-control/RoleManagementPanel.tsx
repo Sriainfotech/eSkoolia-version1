@@ -316,7 +316,7 @@ export function RoleManagementPanel() {
                     key={role.id}
                     style={{
                       border: `1.5px solid ${isSelected ? "var(--pu)" : "var(--bd)"}`,
-                      borderRadius: 10, padding: "10px 12px",
+                      borderRadius: 10, padding: "10px 108px 10px 12px",
                       background: isSelected ? "#FAFAFF" : "var(--bg-1)",
                       cursor: "pointer", position: "relative",
                       display: "flex", alignItems: "center", gap: 10,
@@ -324,13 +324,9 @@ export function RoleManagementPanel() {
                     }}
                     onMouseEnter={(e) => {
                       if (!isSelected) e.currentTarget.style.borderColor = "#C4B5FD";
-                      const actions = e.currentTarget.querySelector<HTMLElement>(".role-hover-actions");
-                      if (actions) actions.style.opacity = "1";
                     }}
                     onMouseLeave={(e) => {
                       if (!isSelected) e.currentTarget.style.borderColor = "var(--bd)";
-                      const actions = e.currentTarget.querySelector<HTMLElement>(".role-hover-actions");
-                      if (actions) actions.style.opacity = "0";
                     }}
                   >
                     {/* Inactive overlay badge */}
@@ -375,10 +371,10 @@ export function RoleManagementPanel() {
                       </div>
                     </div>
 
-                    {/* Hover actions */}
+                    {/* Row actions */}
                     <div
-                      className="role-hover-actions"
-                      style={{ position: "absolute", top: 6, right: 6, display: "flex", gap: 4, opacity: 0, transition: "opacity 0.15s" }}
+                      className="role-row-actions"
+                      style={{ position: "absolute", top: 6, right: 6, display: "flex", gap: 4 }}
                     >
                       <button
                         type="button"
@@ -439,7 +435,7 @@ export function RoleManagementPanel() {
           )}
 
           <div style={{ marginTop: 12, fontSize: 11, color: "var(--ink-2)", background: "var(--bg-2)", borderRadius: 8, padding: "8px 12px" }}>
-            Hover any card → <strong style={{ color: "var(--ink-1)" }}>🔑 assign permissions</strong> · <strong style={{ color: "var(--ink-1)" }}>✏ edit</strong> · <strong style={{ color: "var(--ink-1)" }}>🗑 delete</strong>
+            <strong style={{ color: "var(--ink-1)" }}>🔑 assign permissions</strong> · <strong style={{ color: "var(--ink-1)" }}>✏ edit</strong> · <strong style={{ color: "var(--ink-1)" }}>🗑 delete</strong>
           </div>
 
           {/* Pagination — only shown when there are multiple pages */}
