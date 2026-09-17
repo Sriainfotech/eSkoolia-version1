@@ -638,9 +638,14 @@ class StaffLookupSerializer(serializers.ModelSerializer):
 
 class ComplaintEntrySerializer(serializers.ModelSerializer):
     created_by_name = serializers.SerializerMethodField(read_only=True)
-    complaint_type = serializers.IntegerField(required=False, allow_null=True)  # Optional
-    complaint_source = serializers.IntegerField(required=False, allow_null=True)  # Optional
-    assigned_to = serializers.IntegerField(required=False, allow_null=True)  # Optional
+    # write_only: these accept a plain id on input, but the model attribute is
+    # the related object (a ComplaintType/ComplaintSource/User instance), which
+    # IntegerField.to_representation() can't int()-coerce for output. Marking
+    # them write_only keeps the base to_representation() from touching them at
+    # all; to_representation() below re-adds them as plain ids afterward.
+    complaint_type = serializers.IntegerField(required=False, allow_null=True, write_only=True)  # Optional
+    complaint_source = serializers.IntegerField(required=False, allow_null=True, write_only=True)  # Optional
+    assigned_to = serializers.IntegerField(required=False, allow_null=True, write_only=True)  # Optional
     file_upload = serializers.FileField(write_only=True, required=False, allow_null=True)
     file_url = serializers.SerializerMethodField(read_only=True)
 
@@ -731,12 +736,12 @@ class ComplaintEntrySerializer(serializers.ModelSerializer):
         complaint_by = _sanitize_text(str(value or "")).strip()
         if not complaint_by:
             raise serializers.ValidationError("Complaint By is required.")
-        if len(complaint_by) < 3:
-            raise serializers.ValidationError("Minimum 3 characters required.")
+        if len(complaint_by) < 2:
+            raise serializers.ValidationError("Minimum 2 characters required.")
         if len(complaint_by) > 100:
             raise serializers.ValidationError("Complaint By must not exceed 100 characters.")
-        if not re.match(r"^[A-Za-z0-9\s\-]+$", complaint_by):
-            raise serializers.ValidationError("Only alphanumeric characters, spaces, and hyphens allowed.")
+        if not re.match(r"^[A-Za-z\s\-']+$", complaint_by):
+            raise serializers.ValidationError("Only letters, spaces, hyphens, apostrophes allowed.")
         if not _is_meaningful_text(complaint_by):
             raise serializers.ValidationError("Please enter meaningful text.")
         return complaint_by
