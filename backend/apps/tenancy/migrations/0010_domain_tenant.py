@@ -10,14 +10,13 @@
 # migration itself was already marked applied and the real `tenant_domains`
 # table has existed correctly in the live database the whole time.
 #
-# This CreateModel below is a state-only correction — verified against the
-# actual live `tenant_domains` columns (id, domain, is_primary, tenant_id)
-# and the current apps/tenancy/models.py::Domain + django_tenants
-# DomainMixin field definitions. Since this migration is already recorded
-# as applied, Django will not re-run it or emit any SQL for it — this only
-# fixes how the migration graph reconstructs project state from here on.
+# This migration is intentionally state-only now. The table
+# `tenant_domains` is already created by `0002_add_tenant_models`, so this
+# file must not issue any CreateModel SQL. It only teaches Django's
+# migration graph that the Domain model exists in the project state, matching
+# the real tenant domain table shape and the current apps/tenancy/models.py
+# Domain model definitions.
 
-import django.db.models.deletion
 from django.db import migrations, models
 
 
@@ -28,24 +27,29 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
-            name="Domain",
-            fields=[
-                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
-                ("domain", models.CharField(db_index=True, max_length=255, unique=True)),
-                ("is_primary", models.BooleanField(db_index=True, default=False)),
-                (
-                    "tenant",
-                    models.ForeignKey(
-                        db_index=True,
-                        on_delete=django.db.models.deletion.CASCADE,
-                        related_name="domains",
-                        to="tenancy.schooltenant",
-                    ),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[],
+            state_operations=[
+                migrations.CreateModel(
+                    name="Domain",
+                    fields=[
+                        ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
+                        ("domain", models.CharField(db_index=True, max_length=255, unique=True)),
+                        ("is_primary", models.BooleanField(db_index=True, default=False)),
+                        (
+                            "tenant",
+                            models.ForeignKey(
+                                db_index=True,
+                                on_delete=models.CASCADE,
+                                related_name="domains",
+                                to="tenancy.schooltenant",
+                            ),
+                        ),
+                    ],
+                    options={
+                        "db_table": "tenant_domains",
+                    },
                 ),
             ],
-            options={
-                "db_table": "tenant_domains",
-            },
         ),
     ]

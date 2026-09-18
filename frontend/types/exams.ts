@@ -175,6 +175,20 @@ export interface ExamPlanStudentRecord {
   last_name: string;
 }
 
+// Distinct from ExamPlanStudentRecord above — /exam-report/index/ (backing
+// exam-report/student-search) returns a plain student roster keyed by `id`
+// and carrying class_id/section_id for client-side scoping, not the
+// student_record_id shape the admit-card/seat-plan search endpoints use.
+export interface ExamReportStudentOption {
+  id: number;
+  admission_no: string;
+  first_name: string;
+  last_name: string;
+  roll_no: string;
+  class_id: number;
+  section_id: number | null;
+}
+
 // ─── Conduct & Marks ──────────────────────────────────────────────────────────
 export interface ExamAttendanceCriteria {
   exams: ExamTypeOption[];
@@ -244,8 +258,37 @@ export interface ExamMarkRegisterRow {
   parts: ExamMarkRegisterPart[];
 }
 
+export interface ExamMarksEntryComponent { id: number; exam_title: string; exam_mark: string }
+
+export interface ExamMarksCreateStudentRow {
+  student_record_id: number;
+  student: number;
+  class: number;
+  section: number | null;
+  admission_no: string;
+  first_name: string;
+  last_name: string;
+  roll_no: string;
+  marks: Record<string, string>;
+  teacher_remarks: string;
+  is_absent: boolean;
+  total_marks: string;
+  total_gpa_point: string;
+  total_gpa_grade: string;
+}
+
+export interface ExamMarksCreateSearchResponse {
+  students: ExamMarksCreateStudentRow[];
+  marks_entry_form: ExamMarksEntryComponent[];
+  search_info: { exam_name: string; class_name: string; section_name: string };
+  exam_id: number;
+  subject_id: number;
+  class_id: number;
+  section_id: number | null;
+}
+
 // ─── Results & Reports ────────────────────────────────────────────────────────
-export type ReportCardTemplate = "cbse" | "icse" | "cambridge" | "ib";
+export type ReportCardTemplate = "cbse" | "icse" | "cambridge" | "ib" | "ssc" | "other";
 export type ModerationWorkflow = "as_you_go" | "bulk" | "custom";
 
 export interface ReportCardSetting {
@@ -349,4 +392,37 @@ export interface CommandCenterSummary {
   ready_to_publish_count: number;
   pending_moderation_count: number;
   needs_attention: CommandCenterAttentionItem[];
+  exams_scheduled_count: number;
+  invigilators_assigned_count: number;
+  teachers_submitted_marks_count: number;
+  total_marks_teachers_count: number;
+}
+
+// ─── Online Exam (Schedule & Logistics · Step 4) ──────────────────────────────
+export const ONLINE_EXAM_STATUS = { DRAFT: 0, PUBLISHED: 1, ARCHIVED: 2 } as const;
+
+export interface OnlineExamRow {
+  id: number;
+  title: string;
+  school_class: number;
+  class_name: string;
+  section: number;
+  section_name: string;
+  subject: number;
+  subject_name: string;
+  date: string;
+  start_time: string;
+  end_time: string;
+  end_date_time: string;
+  percentage: string;
+  instruction: string;
+  status: number;
+  auto_mark: boolean;
+}
+
+export interface OnlineExamIndexResponse {
+  classes: ClassOption[];
+  sections: SectionOption[];
+  subjects: SubjectOption[];
+  online_exams: OnlineExamRow[];
 }

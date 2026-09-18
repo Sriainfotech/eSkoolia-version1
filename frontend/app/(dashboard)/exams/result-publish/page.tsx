@@ -12,8 +12,11 @@ import Link from "next/link";
 import {
   ArrowLeft, ClipboardList, Users, FileText, Check, AlertTriangle, Award,
 } from "lucide-react";
+import { jsPDF } from "jspdf";
 import { examTheme as T } from "@/lib/examTheme";
-import { Accordion, Badge, ExamPicker, StepPills, type Tone } from "@/components/exams/ExamUi";
+import { Accordion, Badge, StepPills, type Tone } from "@/components/exams/ExamUi";
+import { useExamFocus } from "@/contexts/ExamFocusContext";
+import { ExamContextBar } from "@/components/exams/ExamContextBar";
 import {
   approveModerationFlag,
   ExamsApiError,
@@ -21,15 +24,17 @@ import {
   saveReportCardSetting,
   searchExamMerit,
   searchExamResultPublish,
+  searchExamStudentReport,
   signoffExamResultPublish,
   storeExamResultPublish,
   useExamGradeScaleGroups,
   useExamMarksProgress,
+  useExamReportIndex,
   useExamResultPublishCriteria,
   useModerationFlags,
   useReportCardSetting,
 } from "@/hooks/useExamsApi";
-import type { MeritListRow, ReportCardSetting } from "@/types/exams";
+import type { MeritListRow, ReportCardSetting, StudentReportResponse } from "@/types/exams";
 
 function Eyebrow({ children }: { children: React.ReactNode }) {
   return (
@@ -71,13 +76,14 @@ function gradeToneFor(g: string): Tone {
 
 export default function ResultsAndReportsPage() {
   const { data: criteria } = useExamResultPublishCriteria();
-  const [examTitle, setExamTitle] = useState("");
+  const { examTypeId: examId, setExamTypeId, hydrated: examFocusHydrated } = useExamFocus();
   const [step, setStep] = useState(1);
 
   useEffect(() => {
-    if (!examTitle && criteria?.exams.length) setExamTitle(criteria.exams[0].title);
-  }, [criteria, examTitle]);
-  const examId = criteria?.exams.find((e) => e.title === examTitle)?.id ?? null;
+    if (!examFocusHydrated) return;
+    if (examId === null && criteria?.exams.length) setExamTypeId(criteria.exams[0].id);
+  }, [criteria, examFocusHydrated, examId, setExamTypeId]);
+  const examTitle = criteria?.exams.find((e) => e.id === examId)?.title ?? "";
 
   // ─── Step 1: report card setup ────────────────────────────────────────────
   const { data: settingData, refetch: refetchSetting } = useReportCardSetting();
@@ -132,10 +138,126 @@ export default function ResultsAndReportsPage() {
       .then((res) => setMerit(res.merit_list))
       .catch(() => setMerit([]));
   }, [examId, classId, sectionId]);
+  const [meritExpanded, setMeritExpanded] = useState(false);
+
+  // ─── Downstream: Student Report ────────────────────────────────────────────
+  // Both downstream cards used to be dead ends (no href/onClick at all) even
+  // though the search these need already exists — searchExamMerit above for
+  // Merit Report, searchExamStudentReport here for Student Report.
+  const { data: reportIndex } = useExamReportIndex();
+  const studentsInScope = useMemo(
+    () => (reportIndex?.students ?? []).filter((s) => s.class_id === classId && (sectionId === null || s.section_id === sectionId)),
+    [reportIndex, classId, sectionId],
+  );
+  const [studentReportOpen, setStudentReportOpen] = useState(false);
+  const [studentReportStudentId, setStudentReportStudentId] = useState<number | null>(null);
+  const [studentReportData, setStudentReportData] = useState<StudentReportResponse | null>(null);
+  const [studentReportLoading, setStudentReportLoading] = useState(false);
+  const [studentReportError, setStudentReportError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!studentReportOpen || !examId || !classId || !studentReportStudentId) { setStudentReportData(null); return; }
+    setStudentReportLoading(true);
+    setStudentReportError(null);
+    searchExamStudentReport({ exam: examId, class_id: classId, section: sectionId ?? undefined, student: studentReportStudentId })
+      .then((res) => setStudentReportData(res))
+      .catch((e) => setStudentReportError(e instanceof ExamsApiError ? e.message : "Failed to load student report."))
+      .finally(() => setStudentReportLoading(false));
+  }, [studentReportOpen, examId, classId, sectionId, studentReportStudentId]);
+
+  // Report card PDF — same client-side approach as the admit card download in
+  // Schedule & Logistics, so the traditional "print it" path exists here too,
+  // not just the on-screen preview.
+  const downloadReportCardPdf = (data: StudentReportResponse) => {
+    const doc = new jsPDF({ format: "a4", orientation: "portrait" });
+    const cx = doc.internal.pageSize.width / 2;
+    const templateLabel: Record<string, string> = {
+      cbse: "CBSE Style", icse: "ICSE Style", cambridge: "Cambridge Style", ib: "IB Style", ssc: "SSC", other: "Other Style",
+    };
+
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Eskoolia Academy", cx, 20, { align: "center" });
+    doc.setFontSize(13);
+    doc.text("Report Card", cx, 29, { align: "center" });
+    if (setting?.template) {
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      doc.text(templateLabel[setting.template] ?? setting.template, cx, 35, { align: "center" });
+    }
+    doc.setLineWidth(0.5);
+    doc.line(20, 40, 190, 40);
+
+    doc.setFontSize(11);
+    let y = 50;
+    const field = (label: string, value: string) => {
+      doc.setFont("helvetica", "bold");
+      doc.text(label, 20, y);
+      doc.setFont("helvetica", "normal");
+      doc.text(value || "N/A", 65, y);
+      y += 8;
+    };
+    field("Examination:", data.search_info.exam_name || examTitle || "N/A");
+    field("Student Name:", data.student.name);
+    field("Roll No:", data.student.roll_no);
+    field("Admission No:", data.student.admission_no);
+    field("Class/Section:", data.search_info.class_name && data.search_info.section_name
+      ? `${data.search_info.class_name}-${data.search_info.section_name}` : `${className}-${sectionName}`);
+
+    if (setting?.include_photo) {
+      doc.rect(155, 45, 30, 35);
+      doc.setFontSize(8);
+      doc.text("Photo", 170, 62, { align: "center" });
+    }
+
+    y += 4;
+    const tableTop = y;
+    const cols = [20, 90, 120, 145, 170];
+    const headers = ["Subject", "Marks", "Grade", "GPA", "Status"];
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    headers.forEach((h, i) => doc.text(h, cols[i], tableTop));
+    doc.line(20, tableTop + 2, 190, tableTop + 2);
+
+    doc.setFont("helvetica", "normal");
+    let rowY = tableTop + 9;
+    data.subjects.forEach((s) => {
+      doc.text(s.subject_name, cols[0], rowY);
+      doc.text(s.is_absent ? "-" : s.total_marks, cols[1], rowY);
+      doc.text(s.grade || "-", cols[2], rowY);
+      doc.text(s.gpa, cols[3], rowY);
+      doc.text(s.is_absent ? "Absent" : "Present", cols[4], rowY);
+      rowY += 8;
+    });
+    doc.line(20, rowY, 190, rowY);
+    rowY += 8;
+
+    doc.setFont("helvetica", "bold");
+    doc.text(`Grand Total: ${data.grand_total}`, 20, rowY);
+    doc.text(`Average GPA: ${data.average_gpa}`, 110, rowY);
+
+    if (setting?.include_overall_notes) {
+      rowY += 14;
+      doc.setFont("helvetica", "bold");
+      doc.text("Overall Performance Notes:", 20, rowY);
+      doc.setFont("helvetica", "normal");
+      doc.line(20, rowY + 14, 190, rowY + 14);
+    }
+
+    doc.save(`Report_Card_${data.student.admission_no}.pdf`);
+  };
 
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [signingOff, setSigningOff] = useState(false);
+  const [settingSaved, setSettingSaved] = useState(false);
+
+  const handleSaveReportCardSetup = (e: React.FormEvent) => {
+    e.preventDefault();
+    console.log("Report card setup saved", setting);
+    setSettingSaved(true);
+    window.setTimeout(() => setSettingSaved(false), 2500);
+  };
 
   const marksComplete = !!progress && progress.total_expected > 0 && progress.percent >= 100;
   const moderationClear = (readiness?.pending_moderation_count ?? 0) === 0;
@@ -211,10 +333,10 @@ export default function ResultsAndReportsPage() {
           </p>
         </div>
 
-        <ExamPicker
-          icon={ClipboardList} value={examTitle} onChange={setExamTitle}
-          options={(criteria?.exams ?? []).map((e) => e.title)}
-          note="Switching here switches Conduct & Marks too — one exam in focus at a time, everywhere."
+        <ExamContextBar
+          icon={ClipboardList}
+          options={criteria?.exams ?? []}
+          note="Shared with Conduct & Marks — one exam in focus at a time, everywhere."
         />
 
         <div style={{ marginBottom: 16 }}>
@@ -222,7 +344,7 @@ export default function ResultsAndReportsPage() {
         </div>
 
         {step === 1 ? (
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 0.8fr) minmax(360px, 1.6fr)", gap: 18, alignItems: "start" }}>
+          <form onSubmit={handleSaveReportCardSetup} style={{ display: "grid", gridTemplateColumns: "minmax(260px, 0.8fr) minmax(360px, 1.6fr)", gap: 18, alignItems: "start" }}>
             <div style={{ background: "#fff", border: `1px solid ${T.border}`, borderRadius: 14, padding: 18 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: T.ink1, marginBottom: 4 }}>Who can see report cards?</div>
               {setting && (
@@ -241,7 +363,7 @@ export default function ResultsAndReportsPage() {
                 <>
                   <div style={{ fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Template</div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-                    {([["cbse", "CBSE style"], ["icse", "ICSE style"], ["cambridge", "Cambridge style"], ["ib", "IB style"]] as const).map(([key, label]) => (
+                    {([["cbse", "CBSE style"], ["icse", "ICSE style"], ["cambridge", "Cambridge style"], ["ib", "IB style"], ["ssc", "SSC"], ["other", "Other Style"]] as const).map(([key, label]) => (
                       <button
                         key={key} type="button" onClick={() => patchSetting({ template: key })}
                         style={{
@@ -314,8 +436,23 @@ export default function ResultsAndReportsPage() {
                   </div>
                 </>
               )}
+
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 10, marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}` }}>
+                {settingSaved && (
+                  <span style={{ fontSize: 12, fontWeight: 600, color: T.ok }}>Saved.</span>
+                )}
+                <button
+                  type="submit"
+                  style={{
+                    height: 38, padding: "0 20px", borderRadius: 9, border: "none",
+                    background: T.purple, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                  }}
+                >
+                  Save
+                </button>
+              </div>
             </div>
-          </div>
+          </form>
         ) : (
           <>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 16 }}>
@@ -467,22 +604,114 @@ export default function ResultsAndReportsPage() {
                   </button>
                 </div>
 
-                {/* Downstream status cards */}
+                {/* Downstream status cards — each one now actually opens the report it names,
+                    using searchExamStudentReport / searchExamMerit, instead of just showing
+                    a Ready/Pending label with nothing behind it to click. */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
-                  {[
-                    { label: "Student Report", ready: !!readiness?.is_published },
-                    { label: "Merit Report", ready: !!readiness?.is_published },
-                    { label: "Admit Card & Seat Plan", ready: null },
-                  ].map((c) => (
-                    <div key={c.label} style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: "12px 10px", textAlign: "center" }}>
-                      <FileText size={16} color={c.ready ? T.ok : T.ink3} style={{ margin: "0 auto 6px" }} />
-                      <div style={{ fontSize: 11.5, fontWeight: 700, color: T.ink1 }}>{c.label}</div>
-                      <div style={{ fontSize: 10.5, color: c.ready ? T.ok : T.ink3, marginTop: 2 }}>
-                        {c.ready === null ? "Managed in Schedule & Logistics" : c.ready ? "Ready" : "Pending"}
-                      </div>
+                  <button
+                    type="button" onClick={() => setStudentReportOpen((v) => !v)}
+                    style={{ border: `1px solid ${studentReportOpen ? T.purple : T.border}`, background: studentReportOpen ? T.purpleSoft : "#fff", borderRadius: 10, padding: "12px 10px", textAlign: "center", cursor: "pointer" }}
+                  >
+                    <FileText size={16} color={readiness?.is_published ? T.ok : T.ink3} style={{ margin: "0 auto 6px" }} />
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: T.ink1 }}>Student Report</div>
+                    <div style={{ fontSize: 10.5, color: readiness?.is_published ? T.ok : T.ink3, marginTop: 2 }}>
+                      {readiness?.is_published ? "Ready — tap to open" : "Pending — tap for a preview"}
                     </div>
-                  ))}
+                  </button>
+                  <button
+                    type="button" onClick={() => setMeritExpanded((v) => !v)}
+                    style={{ border: `1px solid ${meritExpanded ? T.purple : T.border}`, background: meritExpanded ? T.purpleSoft : "#fff", borderRadius: 10, padding: "12px 10px", textAlign: "center", cursor: "pointer" }}
+                  >
+                    <FileText size={16} color={readiness?.is_published ? T.ok : T.ink3} style={{ margin: "0 auto 6px" }} />
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: T.ink1 }}>Merit Report</div>
+                    <div style={{ fontSize: 10.5, color: readiness?.is_published ? T.ok : T.ink3, marginTop: 2 }}>
+                      {readiness?.is_published ? "Ready — tap to open" : "Pending — tap for a preview"}
+                    </div>
+                  </button>
+                  <Link
+                    href="/exams/schedule"
+                    style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: "12px 10px", textAlign: "center", textDecoration: "none", display: "block" }}
+                  >
+                    <FileText size={16} color={T.ink3} style={{ margin: "0 auto 6px" }} />
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: T.ink1 }}>Admit Card & Seat Plan</div>
+                    <div style={{ fontSize: 10.5, color: T.ink3, marginTop: 2 }}>Managed in Schedule & Logistics →</div>
+                  </Link>
                 </div>
+
+                {meritExpanded && (
+                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "50px 1.4fr 1fr 1fr", gap: 8, padding: "10px 14px", fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em", borderBottom: `1px solid ${T.border}`, background: T.hoverSoft }}>
+                      <span>#</span><span>Student</span><span>Total marks</span><span>Avg. GPA</span>
+                    </div>
+                    {merit.length === 0 && <div style={{ padding: 14, fontSize: 12.5, color: T.ink3 }}>No marks entered yet for {className}-{sectionName || "All"}.</div>}
+                    {merit.map((m) => (
+                      <div key={m.student_id} style={{ display: "grid", gridTemplateColumns: "50px 1.4fr 1fr 1fr", gap: 8, alignItems: "center", padding: "8px 14px", fontSize: 12.5, color: T.ink1, borderBottom: `1px solid ${T.border}` }}>
+                        <span style={{ fontWeight: 700, color: T.purple }}>{m.position}</span>
+                        <span>{m.student_name} · <span style={{ color: T.ink3, fontFamily: "monospace" }}>{m.roll_no}</span></span>
+                        <span style={{ fontWeight: 700, color: T.ok }}>{m.total_marks}</span>
+                        <span><Badge tone={gradeToneFor(Number(m.average_gpa) >= 8 ? "A" : Number(m.average_gpa) >= 6 ? "B" : "C")}>{m.average_gpa}</Badge></span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {studentReportOpen && (
+                  <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, padding: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 700, color: T.ink1 }}>Student:</span>
+                      <select style={selectSx} value={studentReportStudentId ?? ""} onChange={(e) => setStudentReportStudentId(Number(e.target.value) || null)}>
+                        <option value="">Select a student</option>
+                        {studentsInScope.map((s) => <option key={s.id} value={s.id}>{s.first_name} {s.last_name} · {s.roll_no}</option>)}
+                      </select>
+                      {studentsInScope.length === 0 && <span style={{ fontSize: 12, color: T.ink3 }}>No students found for {className}-{sectionName || "All"}.</span>}
+                    </div>
+
+                    {studentReportLoading && <div style={{ fontSize: 12.5, color: T.ink3 }}>Loading…</div>}
+                    {studentReportError && <div style={{ background: T.dangerSoft, color: T.danger, borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 600 }}>{studentReportError}</div>}
+
+                    {studentReportData && !studentReportLoading && (
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: T.ink1 }}>
+                            {studentReportData.student.name} <span style={{ color: T.ink3, fontWeight: 500 }}>· Roll {studentReportData.student.roll_no}</span>
+                          </div>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <Badge tone={studentReportData.result_published ? "ok" : "warn"}>{studentReportData.result_published ? "Published" : "Not published yet"}</Badge>
+                            {studentReportData.subjects.length > 0 && (
+                              <button
+                                type="button" onClick={() => downloadReportCardPdf(studentReportData)}
+                                style={{ height: 28, padding: "0 10px", borderRadius: 7, border: `1px solid ${T.borderStrong}`, background: "#fff", color: T.ink1, fontSize: 11.5, fontWeight: 600, cursor: "pointer" }}
+                              >
+                                Download PDF
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.6fr 0.6fr 1fr", gap: 8, padding: "0 4px 8px", fontSize: 10, fontWeight: 700, color: T.ink3, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                          <span>Subject</span><span>Marks</span><span>Grade</span><span>GPA</span><span>Remarks</span>
+                        </div>
+                        {studentReportData.subjects.map((s) => (
+                          <div key={s.subject_id} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.8fr 0.6fr 0.6fr 1fr", gap: 8, alignItems: "center", padding: "6px 4px", fontSize: 12.5, color: T.ink1, borderTop: `1px solid ${T.border}` }}>
+                            <span>{s.subject_name}</span>
+                            <span>{s.is_absent ? <span style={{ color: T.danger, fontWeight: 600 }}>Absent</span> : s.total_marks}</span>
+                            <span>{s.grade || "—"}</span>
+                            <span>{s.gpa}</span>
+                            <span style={{ color: T.ink3 }}>{s.remarks || "—"}</span>
+                          </div>
+                        ))}
+                        {studentReportData.subjects.length === 0 && (
+                          <div style={{ padding: "8px 4px", fontSize: 12.5, color: T.ink3 }}>No marks recorded for this student yet.</div>
+                        )}
+                        {studentReportData.subjects.length > 0 && (
+                          <div style={{ display: "flex", justifyContent: "flex-end", gap: 18, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}`, fontSize: 12.5 }}>
+                            <span><b style={{ color: T.ink1 }}>{studentReportData.grand_total}</b> <span style={{ color: T.ink3 }}>grand total</span></span>
+                            <span><b style={{ color: T.ink1 }}>{studentReportData.average_gpa}</b> <span style={{ color: T.ink3 }}>avg. GPA</span></span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </Accordion>
           </>

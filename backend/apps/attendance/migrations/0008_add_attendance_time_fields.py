@@ -12,18 +12,18 @@ class Migration(migrations.Migration):
             database_operations=[
                 migrations.RunSQL(
                     sql=(
-                        "ALTER TABLE student_attendances ADD COLUMN IF NOT EXISTS arrival_time time NULL;"
-                        "ALTER TABLE student_attendances ADD COLUMN IF NOT EXISTS sign_in_time time NULL;"
-                        "ALTER TABLE student_attendances ADD COLUMN IF NOT EXISTS sign_out_time time NULL;"
-                        "ALTER TABLE student_attendances ADD COLUMN IF NOT EXISTS pickup_time time NULL;"
-                        "ALTER TABLE student_attendances ADD COLUMN IF NOT EXISTS pickup_by varchar(120) NOT NULL DEFAULT '';"
+                        "ALTER TABLE student_attendances ADD COLUMN arrival_time time NULL;"
+                        "ALTER TABLE student_attendances ADD COLUMN sign_in_time time NULL;"
+                        "ALTER TABLE student_attendances ADD COLUMN sign_out_time time NULL;"
+                        "ALTER TABLE student_attendances ADD COLUMN pickup_time time NULL;"
+                        "ALTER TABLE student_attendances ADD COLUMN pickup_by varchar(120) NOT NULL DEFAULT '';"
                     ),
                     reverse_sql=(
-                        "ALTER TABLE student_attendances DROP COLUMN IF EXISTS arrival_time;"
-                        "ALTER TABLE student_attendances DROP COLUMN IF EXISTS sign_in_time;"
-                        "ALTER TABLE student_attendances DROP COLUMN IF EXISTS sign_out_time;"
-                        "ALTER TABLE student_attendances DROP COLUMN IF EXISTS pickup_time;"
-                        "ALTER TABLE student_attendances DROP COLUMN IF EXISTS pickup_by;"
+                        "ALTER TABLE student_attendances DROP COLUMN arrival_time;"
+                        "ALTER TABLE student_attendances DROP COLUMN sign_in_time;"
+                        "ALTER TABLE student_attendances DROP COLUMN sign_out_time;"
+                        "ALTER TABLE student_attendances DROP COLUMN pickup_time;"
+                        "ALTER TABLE student_attendances DROP COLUMN pickup_by;"
                     ),
                 )
             ],

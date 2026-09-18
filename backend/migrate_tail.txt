@@ -1,0 +1,17 @@
+C:\Users\darla\AppData\Roaming\Python\Python314\site-packages\rest_framework\fields.py:992: UserWarning: min_value should be an integer or Decimal instance.
+  warnings.warn("min_value should be an integer or Decimal instance.")
+System check identified some issues:
+
+WARNINGS:
+?: (tenancy.W001) TenantMainMiddleware is missing from MIDDLEWARE.
+?: (tenancy.W004) DATABASE_ROUTERS is empty; tenant routing remains inactive until a router is configured.
+?: (tenancy.W008) SHARED_APPS/TENANT_APPS separation is missing or incomplete.
+?: (tenancy.W008) SHARED_APPS/TENANT_APPS separation is missing or incomplete.
+?: (tenancy.W008) SHARED_APPS/TENANT_APPS separation is missing or incomplete.
+?: (urls.W005) URL namespace 'fees' isn't unique. You may not be able to reverse all URLs in this namespace
+access_control.Role: (models.W047) SQLite does not support unique constraints with nulls distinct.
+	HINT: A constraint won't be created. Silence this warning if you don't care about it.
+Operations to perform:
+  Apply all migrations: academics, access_control, admin, admissions, assistant, attendance, auditlog, auth, behaviour, calls_queue, chat, communication, competitions, contenttypes, core, exams, fees, finance, hr, library, notes, sessions, settings, students, tenancy, todos, token_blacklist, users
+Running migrations:
+  No migrations to apply.

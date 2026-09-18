@@ -42,10 +42,12 @@ class ExamType(models.Model):
 class Exam(models.Model):
     STATUS_DRAFT = "draft"
     STATUS_PUBLISHED = "published"
+    STATUS_MARKS_OPEN = "marks_open"
     STATUS_CLOSED = "closed"
     STATUS_CHOICES = [
         (STATUS_DRAFT, "Draft"),
         (STATUS_PUBLISHED, "Published"),
+        (STATUS_MARKS_OPEN, "Marks Open"),
         (STATUS_CLOSED, "Closed"),
     ]
 
@@ -478,6 +480,16 @@ class ExamMarkRegister(models.Model):
     total_gpa_point = models.DecimalField(max_digits=4, decimal_places=2, default=Decimal("0.00"))
     total_gpa_grade = models.CharField(max_length=10, blank=True)
     teacher_remarks = models.CharField(max_length=255, blank=True)
+    # Lock / submission tracking
+    is_locked = models.BooleanField(default=False, help_text="Set True when teacher submits. Admin can unlock.")
+    locked_at = models.DateTimeField(null=True, blank=True)
+    submitted_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="submitted_mark_registers",
+    )
     created_by = models.ForeignKey(
         "users.User",
         on_delete=models.SET_NULL,
@@ -846,3 +858,70 @@ class ExamResultModerationFlag(models.Model):
     class Meta:
         db_table = "exam_result_moderation_flags"
         ordering = ["-id"]
+
+
+class ExamFeeGate(models.Model):
+    """School-level toggle for the fee-dues gate on admit card generation.
+    OFF by default — a school must explicitly enable this. Cannot accidentally
+    block any student on merge.
+    """
+    school = models.OneToOneField(
+        "tenancy.School", on_delete=models.CASCADE, related_name="exam_fee_gate"
+    )
+    academic_year = models.ForeignKey(
+        "core.AcademicYear", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="exam_fee_gates"
+    )
+    is_enabled = models.BooleanField(
+        default=False,
+        help_text="When True, admit card generation is blocked for students with outstanding dues."
+    )
+    enabled_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="exam_fee_gates_enabled"
+    )
+    enabled_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "exam_fee_gates"
+
+    def __str__(self):
+        return f"FeeGate(school={self.school_id}, enabled={self.is_enabled})"
+
+
+class ExamAdmitCardFeeOverride(models.Model):
+    """Audit record when a Principal overrides the fee-dues block for a student.
+    Immutable — rows are never updated after creation.
+    """
+    school = models.ForeignKey(
+        "tenancy.School", on_delete=models.CASCADE, related_name="admit_card_fee_overrides"
+    )
+    exam_term = models.ForeignKey(
+        ExamType, on_delete=models.CASCADE, related_name="admit_card_fee_overrides"
+    )
+    student = models.ForeignKey(
+        "students.Student", on_delete=models.CASCADE, related_name="admit_card_fee_overrides"
+    )
+    overridden_by = models.ForeignKey(
+        "users.User", on_delete=models.PROTECT, related_name="admit_card_fee_overrides"
+    )
+    reason = models.TextField(help_text="Mandatory reason provided by the Principal.")
+    outstanding_balance = models.DecimalField(
+        max_digits=12, decimal_places=2,
+        help_text="Outstanding balance at the time of override."
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "exam_admit_card_fee_overrides"
+        ordering = ["-created_at"]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Fee override audit records cannot be modified.")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Override({self.student_id}) by {self.overridden_by_id} for {self.exam_term_id}"

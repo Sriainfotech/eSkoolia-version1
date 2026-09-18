@@ -11,7 +11,7 @@
 import Link from "next/link";
 import {
   Star, Copy, Calendar, User, Smartphone, AlertTriangle, AlertCircle,
-  CheckSquare, CheckCircle2, Sparkles, Plus, Info,
+  CheckSquare, CheckCircle2, Sparkles, Plus, Info, CalendarDays, Users, Edit3,
 } from "lucide-react";
 import { useExamCommandCenterSummary, useExamTypes } from "@/hooks/useExamsApi";
 import type { CommandCenterAttentionItem } from "@/types/exams";
@@ -175,6 +175,11 @@ export default function ExamCommandCenterPage() {
   const marksPercent = summary?.marks_entered_percent ?? 0;
   const readyCount = summary?.ready_to_publish_count ?? 0;
   const pendingModeration = summary?.pending_moderation_count ?? 0;
+  
+  const examsScheduledCount = summary?.exams_scheduled_count ?? 0;
+  const invigilatorsAssignedCount = summary?.invigilators_assigned_count ?? 0;
+  const teachersSubmittedMarksCount = summary?.teachers_submitted_marks_count ?? 0;
+  const totalMarksTeachersCount = summary?.total_marks_teachers_count ?? 0;
 
   return (
     <div style={{ minHeight: "100%", background: L.page, padding: "12px 20px 40px" }}>
@@ -210,6 +215,25 @@ export default function ExamCommandCenterPage() {
             label="Needs your action" value={loading ? "…" : String(summary?.needs_action_count ?? 0)} valueColor={L.danger}
             note={conflictCount > 0 ? `${conflictCount} conflict${conflictCount > 1 ? "s" : ""} in Schedule & Logistics` : "No conflicts detected"} noteColor={L.danger}
           />
+          
+          <StatTile
+            icon={CalendarDays} iconColor={L.purple} iconBg={L.purpleSoft}
+            label="Exams scheduled" value={loading ? "…" : String(examsScheduledCount)} valueColor={L.ink1}
+            note={`${examsScheduledCount} active schedule blocks`} noteColor={L.ink2}
+          />
+
+          <StatTile
+            icon={Users} iconColor={L.info} iconBg={L.infoSoft}
+            label="Invigilators assigned" value={loading ? "…" : String(invigilatorsAssignedCount)} valueColor={L.ink1}
+            note="unique teachers assigned" noteColor={L.ink2}
+          />
+
+          <StatTile
+            icon={Edit3} iconColor={L.ok} iconBg={L.okSoft}
+            label="Marks Submission" value={loading ? "…" : `${teachersSubmittedMarksCount}/${totalMarksTeachersCount}`} valueColor={L.ink1}
+            note="teachers submitted vs assigned" noteColor={L.ink2}
+          />
+
           <StatTile
             icon={CheckSquare} iconColor={L.ok} iconBg={L.okSoft}
             label="Marks entered" value={loading ? "…" : `${marksPercent}%`} valueColor={L.ok}

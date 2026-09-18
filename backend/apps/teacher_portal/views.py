@@ -1221,3 +1221,540 @@ class StudentResultsView(APIView):
     def get(self, request, pk):
         results = build_student_results(request.user, pk)
         return Response(results)
+
+
+# ── Sprint 8: Marks Entry ──────────────────────────────────────────────────────
+
+class TeacherExamListView(APIView):
+    """
+    GET /api/v1/teacher/exam-marks/
+
+    Returns all ExamTypes (exam terms) where marks_open status is set AND
+    the teacher has at least one ClassSubjectAssignment in those classes.
+    Used to populate the Marks Entry landing screen.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def get(self, request):
+        from apps.exams.models import Exam, ExamSetup
+        from apps.academics.models import ClassSubjectAssignment
+
+        user = request.user
+        school = getattr(user, 'school', None)
+        if not school:
+            return Response([])
+
+        year = get_current_academic_year(school)
+
+        # Get all (class_id, section_id, subject_id) triplets for this teacher
+        subj_qs = ClassSubjectAssignment.objects.filter(
+            teacher=user, school=school, active_status=True,
+        )
+        if year:
+            subj_qs = subj_qs.filter(academic_year=year)
+
+        teacher_scope = list(subj_qs.values('school_class_id', 'section_id', 'subject_id'))
+        if not teacher_scope:
+            return Response([])
+
+        class_ids = list({s['school_class_id'] for s in teacher_scope})
+
+        # Find exams that are open for marks entry
+        open_exams = Exam.objects.filter(
+            school=school,
+            status=Exam.STATUS_MARKS_OPEN,
+        )
+        if year:
+            open_exams = open_exams.filter(academic_year=year)
+
+        results = []
+        for exam in open_exams.select_related('exam_type'):
+            # Find ExamSetups relevant to this teacher's scope
+            setups = ExamSetup.objects.filter(
+                school=school,
+                exam_term=exam.exam_type,
+                school_class_id__in=class_ids,
+            ).select_related('school_class', 'section', 'subject')
+
+            # Filter to teacher's exact scope
+            scoped_setups = [
+                s for s in setups
+                if any(
+                    t['school_class_id'] == s.school_class_id
+                    and t['section_id'] == s.section_id
+                    and t['subject_id'] == s.subject_id
+                    for t in teacher_scope
+                )
+            ]
+
+            if not scoped_setups:
+                continue
+
+            # Group by class+section+subject
+            scope_summary = {}
+            for s in scoped_setups:
+                key = (s.school_class_id, s.section_id, s.subject_id)
+                if key not in scope_summary:
+                    scope_summary[key] = {
+                        'class_id': s.school_class_id,
+                        'class_name': s.school_class.name if s.school_class else '',
+                        'section_id': s.section_id,
+                        'section_name': s.section.name if s.section else '',
+                        'subject_id': s.subject_id,
+                        'subject_name': s.subject.name if s.subject else '',
+                    }
+            
+            # Determine status by checking ExamMarkRegister
+            from apps.exams.models import ExamMarkRegister
+            for scope in scope_summary.values():
+                registers = ExamMarkRegister.objects.filter(
+                    school=school,
+                    exam_term_id=exam.exam_type_id,
+                    school_class_id=scope['class_id'],
+                    section_id=scope['section_id'],
+                    subject_id=scope['subject_id'],
+                )
+                
+                status = 'pending'
+                if registers.exists():
+                    if registers.filter(is_locked=True).exists():
+                        status = 'locked'
+                    else:
+                        status = 'submitted'
+                        
+                results.append({
+                    'exam_id': exam.id,
+                    'exam_name': exam.name,
+                    'exam_type': exam.exam_type.title if exam.exam_type else '',
+                    'class_id': scope['class_id'],
+                    'class_name': scope['class_name'],
+                    'section_id': scope['section_id'],
+                    'section_name': scope['section_name'],
+                    'subject_id': scope['subject_id'],
+                    'subject_name': scope['subject_name'],
+                    'status': status,
+                    'end_date': str(exam.end_date) if exam.end_date else None,
+                })
+
+        return Response(results)
+
+
+class TeacherExamStudentsView(APIView):
+    """
+    GET /api/v1/teacher/exam-marks/students/
+        ?exam_type_id=<int>&class_id=<int>&section_id=<int>&subject_id=<int>
+
+    Returns the student list + existing mark register rows for a given
+    exam scope. Used to populate the marks entry grid.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def post(self, request):
+        from apps.exams.models import ExamMarkRegister, ExamMarkRegisterPart, ExamSetup, Exam
+        from apps.students.models import Student
+        from apps.core.models import Class as SchoolClass, Section, Subject
+
+        user = request.user
+        data = request.data
+
+        try:
+            exam_id      = int(data['exam_id'])
+            class_id     = int(data['class_id'])
+            section_id   = int(data['section_id']) if data.get('section_id') else 0
+            subject_id   = int(data['subject_id'])
+        except (KeyError, ValueError, TypeError):
+            return Response(
+                {'detail': 'exam_id, class_id, section_id and subject_id are required.'},
+                status=400,
+            )
+            
+        exam = Exam.objects.get(id=exam_id)
+        exam_type_id = exam.exam_type_id
+
+        # Scope check — teacher must be assigned to this class+section+subject
+        from .utils import get_subject_scope
+        scope = get_subject_scope(user)
+        if (class_id, section_id, subject_id) not in scope:
+            return Response(
+                {'detail': 'You are not assigned to teach this subject in this class and section.'},
+                status=403,
+            )
+
+        school = user.school
+
+        # Get mark components (ExamSetup rows)
+        components = list(ExamSetup.objects.filter(
+            school=school,
+            exam_term_id=exam_type_id,
+            school_class_id=class_id,
+            section_id=section_id,
+            subject_id=subject_id,
+        ).order_by('id').values('id', 'exam_title', 'exam_mark'))
+
+        # Get students
+        students_qs = Student.objects.filter(
+            school=school,
+            current_class_id=class_id,
+            current_section_id=section_id,
+            is_active=True,
+            is_deleted=False,
+        ).order_by('roll_no', 'first_name')
+
+        # Get existing marks
+        register_map = {}
+        for reg in ExamMarkRegister.objects.filter(
+            school=school,
+            exam_term_id=exam_type_id,
+            school_class_id=class_id,
+            section_id=section_id,
+            subject_id=subject_id,
+            student__in=students_qs,
+        ).prefetch_related('parts'):
+            parts_data = {p.exam_setup_id: float(p.marks) for p in reg.parts.all()}
+            register_map[reg.student_id] = {
+                'register_id': reg.id,
+                'total_marks': float(reg.total_marks),
+                'is_absent': reg.is_absent,
+                'is_locked': reg.is_locked,
+                'teacher_remarks': reg.teacher_remarks,
+                'parts': parts_data,
+            }
+
+        student_rows = []
+        for s in students_qs:
+            existing = register_map.get(s.id, {})
+            student_rows.append({
+                'student_id': s.id,
+                'name': f'{s.first_name} {s.last_name}'.strip(),
+                'roll_no': s.roll_no or '',
+                'admission_no': s.admission_no or '',
+                'register_id': existing.get('register_id'),
+                'total_marks': existing.get('total_marks', 0),
+                'is_absent': existing.get('is_absent', False),
+                'is_locked': existing.get('is_locked', False),
+                'teacher_remarks': existing.get('teacher_remarks', ''),
+                'parts': existing.get('parts', {}),
+            })
+
+        is_any_locked = any(r.get('is_locked') for r in register_map.values())
+
+        search_info = {
+            'exam_name': exam.name,
+            'class_name': SchoolClass.objects.get(id=class_id).name if SchoolClass.objects.filter(id=class_id).exists() else '',
+            'section_name': Section.objects.get(id=section_id).name if section_id and Section.objects.filter(id=section_id).exists() else '',
+            'subject_name': Subject.objects.get(id=subject_id).name if Subject.objects.filter(id=subject_id).exists() else '',
+        }
+        
+        # Format student rows to match frontend StudentMarkRow precisely
+        formatted_students = []
+        for r in student_rows:
+            r['student_record_id'] = r['student_id']
+            r['student'] = r['student_id']
+            r['class'] = class_id
+            r['section'] = section_id
+            r['marks'] = {str(k): str(v) for k, v in r.get('parts', {}).items()}
+            r['first_name'] = r['name'].split()[0] if r['name'] else ''
+            r['last_name'] = ' '.join(r['name'].split()[1:]) if r['name'] else ''
+            r['total_marks'] = str(r['total_marks'])
+            r['total_gpa_point'] = "0"
+            r['total_gpa_grade'] = ""
+            formatted_students.append(r)
+
+        return Response({
+            'exam_id': exam_id,
+            'class_id': class_id,
+            'section_id': section_id,
+            'subject_id': subject_id,
+            'search_info': search_info,
+            'marks_entry_form': components,
+            'students': formatted_students,
+            'is_locked': is_any_locked,
+        })
+
+
+class TeacherExamMarksSaveView(APIView):
+    """
+    POST /api/v1/teacher/exam-marks/save/
+
+    Bulk-saves or updates ExamMarkRegister + ExamMarkRegisterPart rows.
+    Only allowed while marks are not locked.
+
+    Body:
+    {
+      "exam_type_id": int,
+      "class_id": int,
+      "section_id": int,
+      "subject_id": int,
+      "rows": [
+        {
+          "student_id": int,
+          "is_absent": bool,
+          "teacher_remarks": str,
+          "parts": { "<setup_id>": marks_float }
+        }
+      ]
+    }
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def post(self, request):
+        from apps.exams.models import ExamMarkRegister, ExamMarkRegisterPart, ExamSetup, Exam
+        from apps.students.models import Student
+        from decimal import Decimal, InvalidOperation
+
+        user = request.user
+        data = request.data
+
+        try:
+            exam_id      = int(data['exam_id'])
+            class_id     = int(data['class_id'])
+            section_id   = int(data['section_id']) if data.get('section_id') else 0
+            subject_id   = int(data['subject_id'])
+        except (KeyError, ValueError, TypeError):
+            return Response({'detail': 'Missing required fields.'}, status=400)
+
+        exam = Exam.objects.get(id=exam_id)
+        exam_type_id = exam.exam_type_id
+
+        rows = data.get('students', [])
+        if not rows:
+            return Response({'detail': 'No students provided.'}, status=400)
+
+        # Scope check
+        from .utils import get_subject_scope
+        scope = get_subject_scope(user)
+        if (class_id, section_id, subject_id) not in scope:
+            return Response({'detail': 'Not in your scope.'}, status=403)
+
+        school = user.school
+
+        # Verify no existing rows are locked
+        locked_count = ExamMarkRegister.objects.filter(
+            school=school,
+            exam_term_id=exam_type_id,
+            school_class_id=class_id,
+            section_id=section_id,
+            subject_id=subject_id,
+            is_locked=True,
+        ).count()
+        if locked_count > 0:
+            return Response(
+                {'detail': 'Marks are locked. Contact admin to unlock.'},
+                status=403,
+            )
+
+        year = get_current_academic_year(school)
+        valid_student_ids = set(
+            Student.objects.filter(
+                school=school,
+                current_class_id=class_id,
+                current_section_id=section_id,
+                is_active=True,
+                is_deleted=False,
+            ).values_list('id', flat=True)
+        )
+        valid_setup_ids = set(
+            ExamSetup.objects.filter(
+                school=school,
+                exam_term_id=exam_type_id,
+                school_class_id=class_id,
+                section_id=section_id,
+                subject_id=subject_id,
+            ).values_list('id', flat=True)
+        )
+
+        saved_count = 0
+        with transaction.atomic():
+            for row in rows:
+                try:
+                    student_id = int(row['student_record_id'])
+                except (KeyError, ValueError, TypeError):
+                    continue
+                if student_id not in valid_student_ids:
+                    continue
+
+                is_absent = bool(row.get('is_absent', False))
+                teacher_remarks = str(row.get('teacher_remarks', ''))[:255]
+                parts_data: dict = row.get('marks', {})
+
+                # Compute total marks from parts
+                total = Decimal('0.00')
+                for setup_id_str, marks_val in parts_data.items():
+                    try:
+                        setup_id = int(setup_id_str)
+                        m = Decimal(str(marks_val))
+                        if setup_id in valid_setup_ids:
+                            total += m
+                    except (InvalidOperation, ValueError):
+                        pass
+
+                register, _ = ExamMarkRegister.objects.update_or_create(
+                    school=school,
+                    exam_term_id=exam_type_id,
+                    school_class_id=class_id,
+                    section_id=section_id,
+                    subject_id=subject_id,
+                    student_id=student_id,
+                    defaults={
+                        'academic_year': year,
+                        'is_absent': is_absent,
+                        'total_marks': total,
+                        'teacher_remarks': teacher_remarks,
+                        'created_by': user,
+                    },
+                )
+
+                # Update ExamMarkRegisterParts
+                for setup_id_str, marks_val in parts_data.items():
+                    try:
+                        setup_id = int(setup_id_str)
+                        m = Decimal(str(marks_val))
+                    except (InvalidOperation, ValueError):
+                        continue
+                    if setup_id not in valid_setup_ids:
+                        continue
+                    ExamMarkRegisterPart.objects.update_or_create(
+                        register=register,
+                        exam_setup_id=setup_id,
+                        defaults={'marks': m},
+                    )
+
+                saved_count += 1
+
+        return Response({'saved': saved_count, 'success': True})
+
+
+class TeacherExamMarksLockView(APIView):
+    """
+    POST /api/v1/teacher/exam-marks/lock/
+
+    Locks all ExamMarkRegister rows for a given scope.
+    After locking, teacher cannot edit. Admin must unlock.
+
+    Body: { "exam_type_id": int, "class_id": int, "section_id": int, "subject_id": int }
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def post(self, request):
+        from apps.exams.models import ExamMarkRegister
+        from django.utils import timezone
+
+        user = request.user
+        data = request.data
+
+        from apps.exams.models import Exam
+        try:
+            exam_id      = int(data['exam_id'])
+            class_id     = int(data['class_id'])
+            section_id   = int(data['section_id']) if data.get('section_id') else 0
+            subject_id   = int(data['subject_id'])
+        except (KeyError, ValueError, TypeError):
+            return Response({'detail': 'Missing required fields.'}, status=400)
+            
+        exam = Exam.objects.get(id=exam_id)
+        exam_type_id = exam.exam_type_id
+
+        # Scope check
+        from .utils import get_subject_scope
+        scope = get_subject_scope(user)
+        if (class_id, section_id, subject_id) not in scope:
+            return Response({'detail': 'Not in your scope.'}, status=403)
+
+        school = user.school
+
+        qs = ExamMarkRegister.objects.filter(
+            school=school,
+            exam_term_id=exam_type_id,
+            school_class_id=class_id,
+            section_id=section_id,
+            subject_id=subject_id,
+        )
+
+        if not qs.exists():
+            return Response({'detail': 'No marks found to lock. Save marks first.'}, status=400)
+
+        locked_count = qs.update(
+            is_locked=True,
+            locked_at=timezone.now(),
+            submitted_by=user,
+        )
+
+        return Response({'locked': locked_count, 'success': True})
+
+
+# ── Sprint 8: Notification Bell ──────────────────────────────────────────────
+
+class TeacherNotificationListView(APIView):
+    """
+    GET /api/v1/teacher/notifications/
+    Returns in-app CommunicationNotification records for this teacher.
+    Newest first. Unread count included in meta.
+
+    PATCH /api/v1/teacher/notifications/<id>/read/
+    Marks a single notification as read.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def get(self, request):
+        from apps.communication.models import CommunicationNotification
+        from django.utils import timezone
+
+        user = request.user
+        qs = CommunicationNotification.objects.filter(
+            recipient=user,
+        ).order_by('-created_at')[:50]
+
+        notifications = []
+        unread_count = 0
+        for n in qs:
+            if not n.is_read:
+                unread_count += 1
+            notifications.append({
+                'id': n.id,
+                'title': n.title,
+                'body': n.body,
+                'notification_type': n.notification_type,
+                'link_url': n.link_url,
+                'is_read': n.is_read,
+                'read_at': n.read_at.isoformat() if n.read_at else None,
+                'created_at': n.created_at.isoformat(),
+            })
+
+        return Response({'unread_count': unread_count, 'notifications': notifications})
+
+
+class TeacherNotificationMarkReadView(APIView):
+    """
+    PATCH /api/v1/teacher/notifications/<int:pk>/read/
+    Marks a single notification as read.
+    """
+
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsTeacherPortalUser]
+
+    def patch(self, request, pk):
+        from apps.communication.models import CommunicationNotification
+        from django.utils import timezone
+
+        try:
+            notif = CommunicationNotification.objects.get(pk=pk, recipient=request.user)
+        except CommunicationNotification.DoesNotExist:
+            return Response({'detail': 'Not found.'}, status=404)
+
+        if not notif.is_read:
+            notif.is_read = True
+            notif.read_at = timezone.now()
+            notif.save(update_fields=['is_read', 'read_at'])
+
+        return Response({'success': True, 'id': pk})
+

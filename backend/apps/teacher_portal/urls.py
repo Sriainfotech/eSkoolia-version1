@@ -20,6 +20,14 @@ from .views import (
     TeacherNoticesView,
     TeacherMessagesView,
     StudentResultsView,
+    # Sprint 8 — Marks Entry
+    TeacherExamListView,
+    TeacherExamStudentsView,
+    TeacherExamMarksSaveView,
+    TeacherExamMarksLockView,
+    # Sprint 8 — Notification Bell
+    TeacherNotificationListView,
+    TeacherNotificationMarkReadView,
 )
 
 urlpatterns = [
@@ -51,4 +59,13 @@ urlpatterns = [
     # Sprint 7 — Notices & Messages
     path("notices/",                     TeacherNoticesView.as_view(),          name="teacher-notices"),
     path("messages/",                    TeacherMessagesView.as_view(),         name="teacher-messages"),
+    # Sprint 8 — Marks Entry
+    path("exam-marks/",                  TeacherExamListView.as_view(),         name="teacher-exam-marks-list"),
+    path("exam-marks/students/",         TeacherExamStudentsView.as_view(),     name="teacher-exam-marks-students"),
+    path("exam-marks/save/",             TeacherExamMarksSaveView.as_view(),    name="teacher-exam-marks-save"),
+    path("exam-marks/lock/",             TeacherExamMarksLockView.as_view(),    name="teacher-exam-marks-lock"),
+    # Sprint 8 — Notification Bell
+    path("notifications/",               TeacherNotificationListView.as_view(),         name="teacher-notifications"),
+    path("notifications/<int:pk>/read/", TeacherNotificationMarkReadView.as_view(),     name="teacher-notification-read"),
 ]
+
