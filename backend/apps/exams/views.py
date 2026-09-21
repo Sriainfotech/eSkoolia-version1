@@ -362,6 +362,94 @@ class ExamTypeDeleteAPIView(ExamTenantMixin, APIView):
         return Response({"message": "Operation successful"}, status=status.HTTP_200_OK)
 
 
+class ExamSetupAnalyticsAPIView(ExamTenantMixin, APIView):
+    """Returns class and section analytics to prevent setup for empty sections."""
+    def get(self, request):
+        from django.db.models import Count
+        from apps.core.models import Section
+        from apps.students.models import Student
+        from apps.academics.models import ClassTeacherAssignment
+        
+        school = self.get_school(request)
+        year = self.get_current_academic_year(school.id)
+        
+        sections = Section.objects.filter(school_class__school=school).select_related("school_class").order_by("school_class__numeric_order", "name")
+        
+        student_counts = Student.objects.filter(
+            school=school, 
+            academic_year=year,
+            is_active=True
+        ).values("current_class_id", "current_section_id").annotate(count=Count("id"))
+        student_map = {(sc["current_class_id"], sc["current_section_id"]): sc["count"] for sc in student_counts}
+        
+        teachers = ClassTeacherAssignment.objects.filter(
+            school=school, 
+            academic_year=year,
+            active_status=True
+        ).values_list("school_class_id", "section_id")
+        teacher_map = {(t[0], t[1]): True for t in teachers}
+        
+        analytics = []
+        for sec in sections:
+            count = student_map.get((sec.school_class_id, sec.id), 0)
+            has_teacher = teacher_map.get((sec.school_class_id, sec.id), False)
+            analytics.append({
+                "class_id": sec.school_class_id,
+                "class_name": sec.school_class.name,
+                "section_id": sec.id,
+                "section_name": sec.name,
+                "student_count": count,
+                "has_teacher": has_teacher
+            })
+            
+        return Response(analytics)
+
+
+class ExamSetupListAPIView(ExamTenantMixin, APIView):
+    """Returns a list of grouped configured exams for the UI table."""
+    def get(self, request):
+        exam_types = ExamType.objects.filter(
+            setup_items__isnull=False, **self.school_filter(request)
+        ).distinct().order_by("-id")
+
+        items = []
+        for et in exam_types:
+            setups = ExamSetup.objects.filter(exam_term_id=et.id).select_related("school_class", "section")
+            class_section_map = {}
+            for setup in setups:
+                class_name = setup.school_class.name
+                section_name = setup.section.name if setup.section else "All"
+                if class_name not in class_section_map:
+                    class_section_map[class_name] = set()
+                class_section_map[class_name].add(section_name)
+            
+            formatted_classes = []
+            # Order by numeric order (or just by insertion order if python 3.7+ which is fine, but we can re-query if needed. We'll stick to string dict)
+            for class_name, sections in class_section_map.items():
+                sections_sorted = sorted(list(sections))
+                if sections_sorted:
+                    formatted_classes.append(f"{class_name} ({', '.join(sections_sorted)})")
+                else:
+                    formatted_classes.append(class_name)
+            
+            items.append({
+                "id": et.id,
+                "exam_name": et.title,
+                "classes": " | ".join(formatted_classes) or "No classes",
+                "status": "Active" if et.active_status else "Draft",
+                "class_ids": list(set(setup.school_class_id for setup in setups))
+            })
+
+        return Response({"items": items})
+
+class ExamSetupDeleteAPIView(ExamTenantMixin, APIView):
+    """Deletes all ExamSetup configuration for a specific ExamType."""
+    def delete(self, request, exam_term_id):
+        ExamSetup.objects.filter(
+            exam_term_id=exam_term_id, **self.school_filter(request)
+        ).delete()
+        return Response({"detail": "Exam setup deleted successfully."}, status=status.HTTP_200_OK)
+
 class ExamSetupIndexAPIView(ExamTenantMixin, APIView):
     """Parity for exam setup criteria screen data."""
 
@@ -427,6 +515,12 @@ class ExamSetupStoreAPIView(ExamTenantMixin, APIView):
 
         school = self.get_school(request)
         current_year = self.get_current_academic_year(school.id)
+
+        if current_year is None:
+            return Response(
+                {"message": "No active academic year found for this school."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         class_id = data["class"]
         section_id = data["section"]
@@ -922,8 +1016,29 @@ class ExamCommandCenterSummaryAPIView(ExamTenantMixin, APIView):
         pending_moderation_count = 0
         ready_to_publish_count = 0
         term_payload = None
+        exams_scheduled_count = 0
+        invigilators_assigned_count = 0
+        teachers_submitted_marks_count = 0
+        total_marks_teachers_count = 0
 
         if current_term:
+            exams_scheduled_count = ExamRoutine.objects.filter(school_id=school_id, exam_term=current_term).count()
+            invigilators_assigned_count = ExamRoutine.objects.filter(
+                school_id=school_id, exam_term=current_term, teacher__isnull=False
+            ).values("teacher_id").distinct().count()
+
+            # Find how many unique teachers have submitted marks
+            teachers_submitted_marks_count = ExamMarkRegister.objects.filter(
+                school_id=school_id, exam_term=current_term, is_locked=True, submitted_by__isnull=False
+            ).values("submitted_by_id").distinct().count()
+
+            # Find total unique teachers assigned to teach the subjects configured in this exam setup
+            from apps.academics.models import ClassSubjectAssignment
+            exam_class_ids = ExamSetup.objects.filter(school=school_id, exam_term=current_term).values_list("school_class_id", flat=True)
+            total_marks_teachers_count = ClassSubjectAssignment.objects.filter(
+                school_id=school_id, school_class_id__in=exam_class_ids, active_status=True
+            ).values("teacher_id").distinct().count()
+
             scopes = (
                 ExamRoutine.objects.filter(school_id=school_id, exam_term=current_term)
                 .values("school_class_id", "section_id")
@@ -1018,6 +1133,10 @@ class ExamCommandCenterSummaryAPIView(ExamTenantMixin, APIView):
                 "ready_to_publish_count": ready_to_publish_count,
                 "pending_moderation_count": pending_moderation_count,
                 "needs_attention": needs_attention[:6],
+                "exams_scheduled_count": exams_scheduled_count,
+                "invigilators_assigned_count": invigilators_assigned_count,
+                "teachers_submitted_marks_count": teachers_submitted_marks_count,
+                "total_marks_teachers_count": total_marks_teachers_count,
             }
         )
 
@@ -2976,6 +3095,38 @@ class ExamPlanAdmitCardGenerateAPIView(ExamTenantMixin, APIView):
 
         school = self.get_school(request)
         year = self.get_current_academic_year(school.id)
+        
+        # --- Fee Gate Check ---
+        from apps.fees.models import StudentFeeDues
+        from .models import ExamFeeGate, ExamAdmitCardFeeOverride
+        
+        fee_gate_enabled = ExamFeeGate.objects.filter(school=school, is_enabled=True).exists()
+        
+        if fee_gate_enabled:
+            # Check for students with pending dues
+            blocked_student_ids = []
+            for student_id in selected_ids:
+                has_dues = StudentFeeDues.objects.filter(student_id=student_id, amount_due__gt=0).exists()
+                if has_dues:
+                    # Check if there is an override
+                    has_override = ExamAdmitCardFeeOverride.objects.filter(
+                        school=school,
+                        exam_term_id=exam_type_id,
+                        student_id=student_id
+                    ).exists()
+                    if not has_override:
+                        blocked_student_ids.append(student_id)
+            
+            if blocked_student_ids:
+                return Response(
+                    {
+                        "message": "Fee gate is active. Some selected students have pending dues and require a Principal override before their admit cards can be generated.",
+                        "blocked_students": blocked_student_ids
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        # --- End Fee Gate Check ---
+
         created_rows = []
         for student_id in selected_ids:
             row, created = AdmitCard.objects.get_or_create(
@@ -3116,3 +3267,337 @@ class ExamPlanSeatPlanGenerateAPIView(ExamTenantMixin, APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+# ── Exam Marks Workflow: New Admin Endpoints ─────────────────────────────────
+
+
+class ExamOpenForMarksEntryAPIView(ExamTenantMixin, APIView):
+    """
+    POST /api/v1/exams/exam-open-marks-entry/
+
+    Sets the Exam status to 'marks_open' and creates CommunicationNotification
+    for every teacher assigned to classes in this exam's scope.
+
+    Body: { "exam_term_id": <int> }
+    """
+
+    def post(self, request):
+        from apps.academics.models import ClassSubjectAssignment
+        from apps.communication.models import CommunicationNotification
+        from apps.core.models import AcademicYear
+
+        school = self.get_school(request)
+        exam_term_id = request.data.get("exam_term_id")
+        if not exam_term_id:
+            return Response({"detail": "exam_term_id is required."}, status=400)
+
+        try:
+            exam_type = ExamType.objects.get(id=exam_term_id, school=school)
+        except ExamType.DoesNotExist:
+            return Response({"detail": "Exam term not found."}, status=404)
+
+        academic_year = AcademicYear.objects.filter(school=school, is_current=True).first()
+        
+        # Get or create the active Exam for this term/year
+        exam, _ = Exam.objects.get_or_create(
+            school=school,
+            exam_type=exam_type,
+            academic_year=academic_year,
+            defaults={"title": exam_type.title, "status": Exam.STATUS_DRAFT}
+        )
+
+        if exam.status == Exam.STATUS_MARKS_OPEN:
+            return Response({"detail": "Exam is already open for marks entry."}, status=400)
+
+        # Get all class IDs configured in ExamSetup for this exam_type
+        exam_class_ids = ExamSetup.objects.filter(
+            school=school,
+            exam_term=exam_type,
+        ).values_list("school_class_id", flat=True).distinct()
+
+        # Find teachers assigned to those classes
+        teacher_assignments = ClassSubjectAssignment.objects.filter(
+            school=school,
+            school_class_id__in=exam_class_ids,
+            active_status=True,
+        ).select_related("teacher", "school_class", "section", "subject").distinct()
+
+        # Update exam status
+        exam.status = Exam.STATUS_MARKS_OPEN
+        exam.save(update_fields=["status"])
+
+        # Create in-app bell notifications for each unique teacher
+        notified_teachers = set()
+        notifications_to_create = []
+        for assignment in teacher_assignments:
+            teacher_user = assignment.teacher
+            if not teacher_user or teacher_user.id in notified_teachers:
+                continue
+            notified_teachers.add(teacher_user.id)
+
+            body_parts = []
+            if assignment.school_class:
+                body_parts.append(assignment.school_class.name)
+            if assignment.subject:
+                body_parts.append(assignment.subject.name)
+            body_text = " – ".join(body_parts) if body_parts else "See Teacher Portal"
+            if exam.end_date:
+                body_text += f". Deadline: {exam.end_date.strftime('%d %b %Y')}."
+
+            notifications_to_create.append(
+                CommunicationNotification(
+                    recipient=teacher_user,
+                    school=school,
+                    title=f"Marks entry open: {exam.name}",
+                    body=body_text,
+                    notification_type="system",
+                    link_url="/teacher/exams/",
+                )
+            )
+
+        if notifications_to_create:
+            CommunicationNotification.objects.bulk_create(notifications_to_create)
+
+        return Response({
+            "success": True,
+            "exam_id": exam.id,
+            "exam_name": exam.name,
+            "status": exam.status,
+            "teachers_notified": len(notified_teachers),
+        })
+
+
+class ExamMarksSubmissionStatusAPIView(ExamTenantMixin, APIView):
+    """
+    GET /api/v1/exams/marks-submission-status/?exam_type_id=<int>
+
+    Returns per-class, per-section, per-subject submission status:
+      - 'pending'   : no ExamMarkRegister rows yet
+      - 'submitted' : marks exist but not locked
+      - 'locked'    : marks are locked (teacher submitted)
+
+    Replaces crashes in Conduct & Marks when registers don't exist yet.
+    """
+
+    def get(self, request):
+        school = self.get_school(request)
+        exam_type_id = request.query_params.get("exam_type_id")
+        if not exam_type_id:
+            return Response({"detail": "exam_type_id is required."}, status=400)
+
+        # All ExamSetup rows for this exam term
+        setups = ExamSetup.objects.filter(
+            school=school,
+            exam_term_id=exam_type_id,
+        ).select_related("school_class", "section", "subject")
+
+        # Aggregate registered marks per (class, section, subject)
+        from django.db.models import Count
+        register_counts = {}
+        locked_counts = {}
+        for reg in ExamMarkRegister.objects.filter(
+            school=school,
+            exam_term_id=exam_type_id,
+        ).values("school_class_id", "section_id", "subject_id", "is_locked"):
+            key = (reg["school_class_id"], reg["section_id"], reg["subject_id"])
+            register_counts[key] = register_counts.get(key, 0) + 1
+            if reg["is_locked"]:
+                locked_counts[key] = locked_counts.get(key, 0) + 1
+
+        # Group setups by (class, section, subject)
+        seen = set()
+        rows = []
+        for s in setups:
+            key = (s.school_class_id, s.section_id, s.subject_id)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            count = register_counts.get(key, 0)
+            locked = locked_counts.get(key, 0)
+
+            if count == 0:
+                submission_status = "pending"
+                status_label = "Pending teacher entry"
+            elif locked > 0:
+                submission_status = "locked"
+                status_label = "Locked"
+            else:
+                submission_status = "submitted"
+                status_label = "Submitted"
+
+            rows.append({
+                "class_id": s.school_class_id,
+                "class_name": s.school_class.name if s.school_class else "",
+                "section_id": s.section_id,
+                "section_name": s.section.name if s.section else "",
+                "subject_id": s.subject_id,
+                "subject_name": s.subject.name if s.subject else "",
+                "status": submission_status,
+                "status_label": status_label,
+                "register_count": count,
+            })
+
+        return Response({"results": rows, "exam_type_id": exam_type_id})
+
+
+class ExamFeeGateSettingAPIView(ExamTenantMixin, APIView):
+    """
+    GET  /api/v1/exams/fee-gate/        — returns current fee gate setting
+    POST /api/v1/exams/fee-gate/        — enable/disable fee gate
+    Body: { "is_enabled": true|false }
+    """
+
+    def get(self, request):
+        from .models import ExamFeeGate
+        school = self.get_school(request)
+        gate = ExamFeeGate.objects.filter(school=school).first()
+        return Response({
+            "is_enabled": gate.is_enabled if gate else False,
+            "enabled_at": gate.enabled_at.isoformat() if (gate and gate.enabled_at) else None,
+        })
+
+    def post(self, request):
+        from .models import ExamFeeGate
+
+        school = self.get_school(request)
+        is_enabled = bool(request.data.get("is_enabled", False))
+
+        gate, created = ExamFeeGate.objects.get_or_create(school=school)
+        gate.is_enabled = is_enabled
+        if is_enabled:
+            gate.enabled_by = request.user
+            gate.enabled_at = timezone.now()
+        gate.save()
+
+        return Response({
+            "success": True,
+            "is_enabled": gate.is_enabled,
+        })
+
+
+class ExamAdmitCardFeeCheckAPIView(ExamTenantMixin, APIView):
+    """
+    POST /api/v1/exams/admit-card-fee-check/
+
+    Checks whether any selected students have outstanding dues (if fee gate is enabled).
+    Returns a list of blocked students and their balances.
+
+    Body: { "exam_type_id": int, "student_ids": [int, ...] }
+    """
+
+    def post(self, request):
+        from .models import ExamFeeGate
+        from django.db.models import Sum
+
+        school = self.get_school(request)
+        gate = ExamFeeGate.objects.filter(school=school).first()
+
+        if not gate or not gate.is_enabled:
+            return Response({"fee_gate_enabled": False, "blocked": []})
+
+        student_ids = request.data.get("student_ids", [])
+        if not student_ids:
+            return Response({"fee_gate_enabled": True, "blocked": []})
+
+        # Compute balance per student using LedgerEntry
+        # positive = outstanding, negative = credit
+        try:
+            from apps.fees.models import LedgerEntry
+        except ImportError:
+            return Response({"fee_gate_enabled": False, "blocked": [], "detail": "Fees module not available."})
+
+        blocked = []
+        for student_id in student_ids:
+            balance = LedgerEntry.objects.filter(
+                student_id=student_id,
+                school=school,
+            ).aggregate(total=Sum("amount"))["total"] or 0
+
+            if balance > 0:
+                student_obj = Student.objects.filter(id=student_id, school=school).first()
+                blocked.append({
+                    "student_id": student_id,
+                    "student_name": f"{student_obj.first_name} {student_obj.last_name}".strip() if student_obj else str(student_id),
+                    "balance": float(balance),
+                })
+
+        return Response({
+            "fee_gate_enabled": True,
+            "blocked": blocked,
+            "clear_count": len(student_ids) - len(blocked),
+        })
+
+
+class ExamAdmitCardFeeOverrideAPIView(ExamTenantMixin, APIView):
+    """
+    POST /api/v1/exams/admit-card-fee-override/
+
+    Principal override: records the override audit entry and then generates the admit card.
+
+    Body: {
+        "exam_type_id": int,
+        "student_id": int,
+        "reason": str (mandatory)
+    }
+    """
+
+    def post(self, request):
+        from .models import ExamFeeGate, ExamAdmitCardFeeOverride
+        from django.db.models import Sum
+
+        school = self.get_school(request)
+
+        exam_type_id = request.data.get("exam_type_id")
+        student_id = request.data.get("student_id")
+        reason = (request.data.get("reason") or "").strip()
+
+        if not exam_type_id or not student_id or not reason:
+            return Response({"detail": "exam_type_id, student_id and reason are required."}, status=400)
+
+        try:
+            exam_type = ExamType.objects.get(id=exam_type_id, school=school)
+            student = Student.objects.get(id=student_id, school=school)
+        except (ExamType.DoesNotExist, Student.DoesNotExist):
+            return Response({"detail": "ExamType or Student not found."}, status=404)
+
+        # Current outstanding balance
+        try:
+            from apps.fees.models import LedgerEntry
+            balance = LedgerEntry.objects.filter(
+                student_id=student_id, school=school
+            ).aggregate(total=Sum("amount"))["total"] or 0
+        except ImportError:
+            balance = 0
+
+        with transaction.atomic():
+            # Create audit record (immutable)
+            ExamAdmitCardFeeOverride.objects.create(
+                school=school,
+                exam_term=exam_type,
+                student=student,
+                overridden_by=request.user,
+                reason=reason,
+                outstanding_balance=balance,
+            )
+
+            # Generate the admit card
+            year = self.get_current_academic_year(school.id)
+            card, created = AdmitCard.objects.get_or_create(
+                school=school,
+                academic_year=year,
+                exam_term_id=exam_type_id,
+                student_id=student_id,
+                defaults={"created_by": request.user, "student_record_id": student_id},
+            )
+
+        return Response({
+            "success": True,
+            "overridden": True,
+            "admit_card_id": card.id,
+            "created": created,
+            "student_id": student_id,
+            "outstanding_balance": float(balance),
+        })
+

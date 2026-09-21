@@ -679,3 +679,119 @@ export interface StudentResultsData {
 export function fetchStudentResults(studentPk: number): Promise<StudentResultsData> {
   return teacherGet<StudentResultsData>(`/students/${studentPk}/results/`);
 }
+
+// ── Sprint 8 — Exam Marks Entry ───────────────────────────────────────────────
+
+/** One exam the teacher can enter marks for */
+export interface TeacherExamItem {
+  exam_id: number;
+  exam_name: string;
+  exam_type: string;
+  class_id: number;
+  class_name: string;
+  section_id: number | null;
+  section_name: string;
+  subject_id: number;
+  subject_name: string;
+  status: 'pending' | 'submitted' | 'locked';
+  /** ISO date string */
+  end_date: string | null;
+}
+
+/** Mark setup column (each exam_title = one component like "Theory", "Practical") */
+export interface MarkColumn {
+  id: number;
+  exam_title: string;
+  exam_mark: string;
+}
+
+/** Per-student row for mark entry */
+export interface StudentMarkRow {
+  student_record_id: number;
+  student: number;
+  admission_no: string;
+  first_name: string;
+  last_name: string;
+  roll_no: string;
+  class: number;
+  section: number | null;
+  marks: Record<string, string>;
+  teacher_remarks: string;
+  is_absent: boolean;
+  total_marks: string;
+  total_gpa_point: string;
+  total_gpa_grade: string;
+}
+
+export interface ExamMarksPayload {
+  students: StudentMarkRow[];
+  marks_entry_form: MarkColumn[];
+  search_info: { exam_name: string; class_name: string; section_name: string };
+  exam_id: number;
+  subject_id: number;
+  class_id: number;
+  section_id: number | null;
+}
+
+/** GET /api/v1/teacher/exam-marks/ — exams available for mark entry */
+export function fetchTeacherExamList(): Promise<TeacherExamItem[]> {
+  return teacherGet<TeacherExamItem[]>('/exam-marks/');
+}
+
+/** POST /api/v1/teacher/exam-marks/students/ — load the student+marks grid */
+export function fetchExamStudents(payload: {
+  exam_id: number;
+  class_id: number;
+  section_id?: number | null;
+  subject_id: number;
+}): Promise<ExamMarksPayload> {
+  return teacherPost<ExamMarksPayload>('/exam-marks/students/', payload);
+}
+
+/** POST /api/v1/teacher/exam-marks/save/ — save (draft) marks */
+export function saveExamMarks(payload: {
+  exam_id: number;
+  class_id: number;
+  section_id?: number | null;
+  subject_id: number;
+  students: Array<{
+    student_record_id: number;
+    marks: Record<string, string>;
+    teacher_remarks?: string;
+    is_absent?: boolean;
+  }>;
+}): Promise<{ success: boolean; saved_count: number }> {
+  return teacherPost('/exam-marks/save/', payload);
+}
+
+/** POST /api/v1/teacher/exam-marks/lock/ — lock (final submit) */
+export function lockExamMarks(payload: {
+  exam_id: number;
+  class_id: number;
+  section_id?: number | null;
+  subject_id: number;
+}): Promise<{ success: boolean; locked_count: number }> {
+  return teacherPost('/exam-marks/lock/', payload);
+}
+
+// ── Sprint 8 — Notification Bell ─────────────────────────────────────────────
+
+export interface TeacherNotification {
+  id: number;
+  title: string;
+  body: string;
+  is_read: boolean;
+  notification_type: string;
+  link_url: string;
+  created_at: string;
+}
+
+/** GET /api/v1/teacher/notifications/ */
+export function fetchTeacherNotifications(): Promise<TeacherNotification[]> {
+  return teacherGet<TeacherNotification[]>('/notifications/');
+}
+
+/** POST /api/v1/teacher/notifications/<id>/read/ */
+export function markNotificationRead(id: number): Promise<{ success: boolean }> {
+  return teacherPost(`/notifications/${id}/read/`, {});
+}

@@ -11,6 +11,10 @@ class Migration(migrations.Migration):
     with a NOT NULL violation. Giving both columns a default of '' (matching
     how they're already defined in the school_victory schema) unblocks
     inserts without reintroducing the fields into the model.
+
+    This version is intentionally backend-safe for SQLite, the default repo
+    test environment in this workspace, while keeping the PostgreSQL repair
+    path guarded through introspection rather than PL/pgSQL `DO $$` blocks.
     """
 
     dependencies = [
@@ -18,71 +22,69 @@ class Migration(migrations.Migration):
     ]
 
     def forward(apps, schema_editor):
-        if schema_editor.connection.vendor != 'sqlite':
+        if schema_editor.connection.vendor == "sqlite":
+            return
+
+        with schema_editor.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'fees_payment'
+                  AND column_name = 'collected_by_note'
+                """
+            )
+            has_collected_by_note = cursor.fetchone() is not None
+
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'fees_payment'
+                  AND column_name = 'counter'
+                """
+            )
+            has_counter = cursor.fetchone() is not None
+
+        if has_collected_by_note:
             schema_editor.execute("ALTER TABLE fees_payment ALTER COLUMN collected_by_note SET DEFAULT '';")
+        if has_counter:
             schema_editor.execute("ALTER TABLE fees_payment ALTER COLUMN counter SET DEFAULT '';")
 
     def reverse(apps, schema_editor):
-        if schema_editor.connection.vendor != 'sqlite':
+        if schema_editor.connection.vendor == "sqlite":
+            return
+
+        with schema_editor.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'fees_payment'
+                  AND column_name = 'collected_by_note'
+                """
+            )
+            has_collected_by_note = cursor.fetchone() is not None
+
+            cursor.execute(
+                """
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'fees_payment'
+                  AND column_name = 'counter'
+                """
+            )
+            has_counter = cursor.fetchone() is not None
+
+        if has_collected_by_note:
             schema_editor.execute("ALTER TABLE fees_payment ALTER COLUMN collected_by_note DROP DEFAULT;")
+        if has_counter:
             schema_editor.execute("ALTER TABLE fees_payment ALTER COLUMN counter DROP DEFAULT;")
 
     operations = [
-        # Conditional: only school_victory (and any other tenant schema that
-        # picked up the same manual drift) actually has these columns. A
-        # brand-new tenant schema, provisioned cleanly through
-        # apps.tenancy.provisioning.provision_tenant(), never has them - a
-        # bare ALTER COLUMN there fails outright since the column doesn't
-        # exist, breaking tenant provisioning for every new school. Guard on
-        # existence (scoped to the current schema specifically, since
-        # information_schema.columns is not search_path-scoped by itself)
-        # so this stays a no-op wherever there's no drift to fix.
-        migrations.RunSQL(
-            sql=[
-                """
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = current_schema()
-                          AND table_name = 'fees_payment'
-                          AND column_name = 'collected_by_note'
-                    ) THEN
-                        ALTER TABLE fees_payment ALTER COLUMN collected_by_note SET DEFAULT '';
-                    END IF;
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = current_schema()
-                          AND table_name = 'fees_payment'
-                          AND column_name = 'counter'
-                    ) THEN
-                        ALTER TABLE fees_payment ALTER COLUMN counter SET DEFAULT '';
-                    END IF;
-                END $$;
-                """,
-            ],
-            reverse_sql=[
-                """
-                DO $$
-                BEGIN
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = current_schema()
-                          AND table_name = 'fees_payment'
-                          AND column_name = 'collected_by_note'
-                    ) THEN
-                        ALTER TABLE fees_payment ALTER COLUMN collected_by_note DROP DEFAULT;
-                    END IF;
-                    IF EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = current_schema()
-                          AND table_name = 'fees_payment'
-                          AND column_name = 'counter'
-                    ) THEN
-                        ALTER TABLE fees_payment ALTER COLUMN counter DROP DEFAULT;
-                    END IF;
-                END $$;
-                """,
-            ],
-        ),
+        migrations.RunPython(forward, reverse),
     ]

@@ -45,6 +45,9 @@ from .views import (
 	ExamScheduleStoreAPIView,
 	ExamSetupCloneAPIView,
 	ExamSetupIndexAPIView,
+	ExamSetupListAPIView,
+	ExamSetupAnalyticsAPIView,
+	ExamSetupDeleteAPIView,
 	ExamSetupSearchAPIView,
 	ExamSetupStoreAPIView,
 	ExamSetupSubjectByClassAPIView,
@@ -64,6 +67,12 @@ from .views import (
 	OnlineExamResultAPIView,
 	OnlineExamStoreAPIView,
 	OnlineExamUpdateAPIView,
+	# Marks workflow
+	ExamOpenForMarksEntryAPIView,
+	ExamMarksSubmissionStatusAPIView,
+	ExamFeeGateSettingAPIView,
+	ExamAdmitCardFeeCheckAPIView,
+	ExamAdmitCardFeeOverrideAPIView,
 )
 
 router = DefaultRouter()
@@ -82,6 +91,9 @@ urlpatterns = [
 	path("exam-type/update/", ExamTypeUpdateAPIView.as_view(), name="exam-type-update"),
 	path("exam-type/delete/<int:exam_type_id>/", ExamTypeDeleteAPIView.as_view(), name="exam-type-delete"),
 	path("exam-setup/index/", ExamSetupIndexAPIView.as_view(), name="exam-setup-index"),
+	path("exam-setup/list/", ExamSetupListAPIView.as_view(), name="exam-setup-list"),
+	path("exam-setup/analytics/", ExamSetupAnalyticsAPIView.as_view(), name="exam-setup-analytics"),
+	path("exam-setup/delete/<int:exam_term_id>/", ExamSetupDeleteAPIView.as_view(), name="exam-setup-delete"),
 	path("exam-setup/search/", ExamSetupSearchAPIView.as_view(), name="exam-setup-search"),
 	path("exam-setup/store/", ExamSetupStoreAPIView.as_view(), name="exam-setup-store"),
 	path("exam-setup/subjects/", ExamSetupSubjectByClassAPIView.as_view(), name="exam-setup-subjects"),
@@ -137,5 +149,11 @@ urlpatterns = [
 	path("exam-plan/seat-plan/", ExamPlanSeatPlanIndexAPIView.as_view(), name="exam-plan-seat-plan-index"),
 	path("exam-plan/seat-plan/search/", ExamPlanSeatPlanSearchAPIView.as_view(), name="exam-plan-seat-plan-search"),
 	path("exam-plan/seat-plan/generate/", ExamPlanSeatPlanGenerateAPIView.as_view(), name="exam-plan-seat-plan-generate"),
+	# Marks Workflow — Admin triggers
+	path("exam-open-marks-entry/", ExamOpenForMarksEntryAPIView.as_view(), name="exam-open-marks-entry"),
+	path("marks-submission-status/", ExamMarksSubmissionStatusAPIView.as_view(), name="exam-marks-submission-status"),
+	path("fee-gate/", ExamFeeGateSettingAPIView.as_view(), name="exam-fee-gate"),
+	path("admit-card-fee-check/", ExamAdmitCardFeeCheckAPIView.as_view(), name="exam-admit-card-fee-check"),
+	path("admit-card-fee-override/", ExamAdmitCardFeeOverrideAPIView.as_view(), name="exam-admit-card-fee-override"),
 ]
 urlpatterns += router.urls

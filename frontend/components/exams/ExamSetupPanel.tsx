@@ -15,6 +15,21 @@ type SetupRow = {
   exam_mark: string;
 };
 
+type ConfiguredExamRow = {
+  id: number;
+  exam_name: string;
+  classes: string;
+  status: "Active" | "Draft";
+};
+
+// Mock data — the exam-setup list endpoint isn't wired up yet, so this table
+// renders sample rows to show the intended layout (Exam Name, Classes, Status, Actions).
+const MOCK_CONFIGURED_EXAMS: ConfiguredExamRow[] = [
+  { id: 1, exam_name: "Mid Term Examination", classes: "Class 5, Class 6", status: "Active" },
+  { id: 2, exam_name: "Final Examination", classes: "Class 5-A, Class 5-B, Class 6-A", status: "Draft" },
+  { id: 3, exam_name: "Unit Test 1", classes: "Class 7", status: "Active" },
+];
+
 function authHeaders(): Record<string, string> {
   const token = getAccessToken();
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -92,8 +107,10 @@ export default function ExamSetupPanel() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [examTypes, setExamTypes] = useState<ExamType[]>([]);
 
-  const [classId, setClassId] = useState("");
-  const [sectionId, setSectionId] = useState("");
+  const [classIds, setClassIds] = useState<string[]>([]);
+  const [classMenuOpen, setClassMenuOpen] = useState(false);
+  const [sectionIds, setSectionIds] = useState<string[]>([]);
+  const [sectionMenuOpen, setSectionMenuOpen] = useState(false);
   const [subjectIds, setSubjectIds] = useState<string[]>([]);
   const [subjectMenuOpen, setSubjectMenuOpen] = useState(false);
   const [subjectQuery, setSubjectQuery] = useState("");
@@ -108,14 +125,23 @@ export default function ExamSetupPanel() {
   const [success, setSuccess] = useState("");
   const subjectMenuRef = useRef<HTMLDivElement | null>(null);
   const examTermMenuRef = useRef<HTMLDivElement | null>(null);
+  const classMenuRef = useRef<HTMLDivElement | null>(null);
+  const sectionMenuRef = useRef<HTMLDivElement | null>(null);
 
   const filteredSections = useMemo(() => {
-    if (!classId) return [];
-    const id = Number(classId);
-    return sections.filter((s) => (s.class_id ?? s.school_class) === id);
-  }, [classId, sections]);
+    if (classIds.length === 0) return [];
+    const ids = classIds.map(Number);
+    return sections.filter((s) => ids.includes((s.class_id ?? s.school_class) as number));
+  }, [classIds, sections]);
 
-  const criteriaReady = Boolean(classId && sectionId && subjectIds.length > 0 && examTermIds.length > 0);
+  // Drop any selected sections that no longer belong to the selected class(es).
+  useEffect(() => {
+    setSectionIds((prev) => prev.filter((value) => filteredSections.some((s) => String(s.id) === value)));
+  }, [filteredSections]);
+
+  const criteriaReady = Boolean(classIds.length > 0 && sectionIds.length > 0 && subjectIds.length > 0 && examTermIds.length > 0);
+  const primaryClassId = classIds[0] || "";
+  const primarySectionId = sectionIds[0] || "";
   const primarySubjectId = subjectIds[0] || "";
   const primaryExamTermId = examTermIds[0] || "";
   const filteredSubjects = useMemo(() => {
@@ -200,13 +226,15 @@ export default function ExamSetupPanel() {
   }, []);
 
   const searchExisting = async () => {
-    if (!classId || !sectionId || !primarySubjectId || !primaryExamTermId) return;
+    if (!primaryClassId || !primarySectionId || !primarySubjectId || !primaryExamTermId) return;
+    if (classIds.length !== 1) return;
+    if (sectionIds.length !== 1) return;
     if (subjectIds.length !== 1) return;
     if (examTermIds.length !== 1) return;
 
     try {
       const data = await apiGet<{ items: Array<{ exam_title: string; exam_mark: string }>; totalMark: string }>(
-        `/api/v1/exams/exam-setup/search/?class=${classId}&section=${sectionId}&subject=${primarySubjectId}&exam_term_id=${primaryExamTermId}`
+        `/api/v1/exams/exam-setup/search/?class=${primaryClassId}&section=${primarySectionId}&subject=${primarySubjectId}&exam_term_id=${primaryExamTermId}`
       );
       if ((data.items || []).length > 0) {
         setRows(data.items.map((item) => ({ exam_title: item.exam_title, exam_mark: item.exam_mark })));
@@ -217,9 +245,20 @@ export default function ExamSetupPanel() {
     }
   };
 
-  const onCriteriaChange = (next: Partial<{ classId: string; sectionId: string }>) => {
-    setClassId(next.classId ?? classId);
-    setSectionId(next.sectionId ?? sectionId);
+  const onClassesChange = (values: string[]) => {
+    setClassIds(values);
+  };
+
+  const toggleClass = (classValue: string) => {
+    setClassIds((prev) => (prev.includes(classValue) ? prev.filter((id) => id !== classValue) : [...prev, classValue]));
+  };
+
+  const onSectionsChange = (values: string[]) => {
+    setSectionIds(values);
+  };
+
+  const toggleSection = (sectionValue: string) => {
+    setSectionIds((prev) => (prev.includes(sectionValue) ? prev.filter((id) => id !== sectionValue) : [...prev, sectionValue]));
   };
 
   const onExamTermsChange = (values: string[]) => {
@@ -240,18 +279,24 @@ export default function ExamSetupPanel() {
 
   useEffect(() => {
     void searchExisting();
-  }, [classId, sectionId, primarySubjectId, subjectIds.length, primaryExamTermId, examTermIds.length]);
+  }, [primaryClassId, classIds.length, primarySectionId, sectionIds.length, primarySubjectId, subjectIds.length, primaryExamTermId, examTermIds.length]);
 
   useEffect(() => {
     const handleOutsideClick = (event: MouseEvent) => {
-      if (!subjectMenuRef.current) return;
-      if (!subjectMenuRef.current.contains(event.target as Node)) {
+      if (subjectMenuRef.current && !subjectMenuRef.current.contains(event.target as Node)) {
         setSubjectMenuOpen(false);
       }
 
-      if (!examTermMenuRef.current) return;
-      if (!examTermMenuRef.current.contains(event.target as Node)) {
+      if (examTermMenuRef.current && !examTermMenuRef.current.contains(event.target as Node)) {
         setExamTermMenuOpen(false);
+      }
+
+      if (classMenuRef.current && !classMenuRef.current.contains(event.target as Node)) {
+        setClassMenuOpen(false);
+      }
+
+      if (sectionMenuRef.current && !sectionMenuRef.current.contains(event.target as Node)) {
+        setSectionMenuOpen(false);
       }
     };
 
@@ -277,8 +322,8 @@ export default function ExamSetupPanel() {
     setError("");
     setSuccess("");
 
-    if (!classId || !sectionId || subjectIds.length === 0 || examTermIds.length === 0) {
-      setError("Class, section, subject(s) and exam term(s) are required.");
+    if (classIds.length === 0 || sectionIds.length === 0 || subjectIds.length === 0 || examTermIds.length === 0) {
+      setError("Class(es), section(s), subject(s) and exam term(s) are required.");
       return;
     }
 
@@ -300,8 +345,6 @@ export default function ExamSetupPanel() {
     try {
       setLoading(true);
       const payloadBase = {
-        class: Number(classId),
-        section: Number(sectionId),
         total_exam_mark: Number(totalExamMark || 0).toFixed(2),
         totalMark: Number(totalMark || 0).toFixed(2),
         exam_title: rows.map((row) => row.exam_title.trim()),
@@ -309,13 +352,19 @@ export default function ExamSetupPanel() {
       };
 
       const results = await Promise.allSettled(
-        subjectIds.flatMap((subjectValue) =>
-          examTermIds.map((examTermValue) =>
-          apiPost("/api/v1/exams/exam-setup/store/", {
-            ...payloadBase,
-            subject: Number(subjectValue),
-            exam_term_id: Number(examTermValue),
-          })
+        classIds.flatMap((classValue) =>
+          sectionIds.flatMap((sectionValue) =>
+            subjectIds.flatMap((subjectValue) =>
+              examTermIds.map((examTermValue) =>
+                apiPost("/api/v1/exams/exam-setup/store/", {
+                  ...payloadBase,
+                  class: Number(classValue),
+                  section: Number(sectionValue),
+                  subject: Number(subjectValue),
+                  exam_term_id: Number(examTermValue),
+                })
+              )
+            )
           )
         )
       );
@@ -488,33 +537,220 @@ export default function ExamSetupPanel() {
                   </div>
 
                   <div>
-                    <label style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Class *</label>
-                    <select
-                      value={classId}
-                      onChange={(e) => onCriteriaChange({ classId: e.target.value, sectionId: "" })}
-                      style={fieldStyle()}
-                    >
-                      <option value="">Select class</option>
-                      {classes.map((item) => (
-                        <option key={item.id} value={item.id}>{item.class_name || item.name || `Class ${item.id}`}</option>
-                      ))}
-                    </select>
-                    <p style={{ margin: "6px 0 0", fontSize: 12, color: "#64748b" }}>Sections are filtered based on selected class.</p>
+                    <label style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Class(es) *</label>
+                    <div ref={classMenuRef} style={{ position: "relative" }}>
+                      <button
+                        type="button"
+                        onClick={() => setClassMenuOpen((prev) => !prev)}
+                        style={{
+                          ...fieldStyle(),
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          textAlign: "left",
+                          borderColor: classIds.length === 0 ? "#ef4444" : "#cbd5e1",
+                        }}
+                      >
+                        <span style={{ color: classIds.length ? "#0f172a" : "#94a3b8", fontWeight: 500 }}>
+                          {classIds.length ? `${classIds.length} class(es) selected` : "Select class(es)"}
+                        </span>
+                        <span style={{ color: "#64748b" }}>{classMenuOpen ? "▲" : "▼"}</span>
+                      </button>
+
+                      {classMenuOpen && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            zIndex: 30,
+                            top: "calc(100% + 6px)",
+                            left: 0,
+                            width: "100%",
+                            border: "1px solid #cbd5e1",
+                            borderRadius: 12,
+                            background: "#fff",
+                            boxShadow: "0 10px 28px rgba(15, 23, 42, 0.14)",
+                            padding: 10,
+                          }}
+                        >
+                          <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 8, padding: 6 }}>
+                            {classes.map((item) => {
+                              const value = String(item.id);
+                              const checked = classIds.includes(value);
+                              const label = item.class_name || item.name || `Class ${item.id}`;
+                              return (
+                                <label
+                                  key={item.id}
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    padding: "6px 4px",
+                                    borderRadius: 6,
+                                    cursor: "pointer",
+                                    background: checked ? "#eff6ff" : "transparent",
+                                  }}
+                                >
+                                  <input type="checkbox" checked={checked} onChange={() => toggleClass(value)} />
+                                  <span style={{ fontSize: 13 }}>{label}</span>
+                                </label>
+                              );
+                            })}
+                            {classes.length === 0 && (
+                              <p style={{ margin: 0, fontSize: 12, color: "#64748b", padding: "4px 2px" }}>No class found.</p>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+                            <button
+                              type="button"
+                              style={{ ...buttonStyle("#64748b"), height: 30, fontSize: 12, padding: "0 10px" }}
+                              onClick={() => onClassesChange(classes.map((item) => String(item.id)))}
+                            >
+                              Select All
+                            </button>
+                            <button
+                              type="button"
+                              style={{ ...buttonStyle("#dc2626"), height: 30, fontSize: 12, padding: "0 10px" }}
+                              onClick={() => onClassesChange([])}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {classIds.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                        {classIds.slice(0, 4).map((value) => {
+                          const item = classes.find((row) => String(row.id) === value);
+                          const label = item ? item.class_name || item.name || `Class ${item.id}` : value;
+                          return (
+                            <span key={value} style={{ background: "#dbeafe", color: "#1d4ed8", borderRadius: 999, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>
+                              {label}
+                            </span>
+                          );
+                        })}
+                        {classIds.length > 4 && (
+                          <span style={{ background: "#e2e8f0", color: "#334155", borderRadius: 999, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>
+                            +{classIds.length - 4} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <p style={{ margin: "6px 0 0", fontSize: 12, color: "#64748b" }}>
+                      Select one or many classes. Sections are filtered based on selected class(es).
+                    </p>
                   </div>
 
                   <div>
-                    <label style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Section *</label>
-                    <select
-                      value={sectionId}
-                      onChange={(e) => onCriteriaChange({ sectionId: e.target.value })}
-                      style={fieldStyle()}
-                    >
-                      <option value="">Select section</option>
-                      {filteredSections.map((item) => (
-                        <option key={item.id} value={item.id}>{item.section_name || item.name || `Section ${item.id}`}</option>
-                      ))}
-                    </select>
-                    <p style={{ margin: "6px 0 0", fontSize: 12, color: "#64748b" }}>Pick the exact section receiving this exam setup.</p>
+                    <label style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Section(s) *</label>
+                    <div ref={sectionMenuRef} style={{ position: "relative" }}>
+                      <button
+                        type="button"
+                        onClick={() => setSectionMenuOpen((prev) => !prev)}
+                        disabled={classIds.length === 0}
+                        style={{
+                          ...fieldStyle(),
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          textAlign: "left",
+                          borderColor: sectionIds.length === 0 ? "#ef4444" : "#cbd5e1",
+                          opacity: classIds.length === 0 ? 0.6 : 1,
+                          cursor: classIds.length === 0 ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        <span style={{ color: sectionIds.length ? "#0f172a" : "#94a3b8", fontWeight: 500 }}>
+                          {sectionIds.length ? `${sectionIds.length} section(s) selected` : "Select section(s)"}
+                        </span>
+                        <span style={{ color: "#64748b" }}>{sectionMenuOpen ? "▲" : "▼"}</span>
+                      </button>
+
+                      {sectionMenuOpen && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            zIndex: 30,
+                            top: "calc(100% + 6px)",
+                            left: 0,
+                            width: "100%",
+                            border: "1px solid #cbd5e1",
+                            borderRadius: 12,
+                            background: "#fff",
+                            boxShadow: "0 10px 28px rgba(15, 23, 42, 0.14)",
+                            padding: 10,
+                          }}
+                        >
+                          <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: 8, padding: 6 }}>
+                            {filteredSections.map((item) => {
+                              const value = String(item.id);
+                              const checked = sectionIds.includes(value);
+                              const label = item.section_name || item.name || `Section ${item.id}`;
+                              return (
+                                <label
+                                  key={item.id}
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    padding: "6px 4px",
+                                    borderRadius: 6,
+                                    cursor: "pointer",
+                                    background: checked ? "#eff6ff" : "transparent",
+                                  }}
+                                >
+                                  <input type="checkbox" checked={checked} onChange={() => toggleSection(value)} />
+                                  <span style={{ fontSize: 13 }}>{label}</span>
+                                </label>
+                              );
+                            })}
+                            {filteredSections.length === 0 && (
+                              <p style={{ margin: 0, fontSize: 12, color: "#64748b", padding: "4px 2px" }}>Select a class first.</p>
+                            )}
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+                            <button
+                              type="button"
+                              style={{ ...buttonStyle("#64748b"), height: 30, fontSize: 12, padding: "0 10px" }}
+                              onClick={() => onSectionsChange(filteredSections.map((item) => String(item.id)))}
+                            >
+                              Select All
+                            </button>
+                            <button
+                              type="button"
+                              style={{ ...buttonStyle("#dc2626"), height: 30, fontSize: 12, padding: "0 10px" }}
+                              onClick={() => onSectionsChange([])}
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {sectionIds.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                        {sectionIds.slice(0, 4).map((value) => {
+                          const item = filteredSections.find((row) => String(row.id) === value);
+                          const label = item ? item.section_name || item.name || `Section ${item.id}` : value;
+                          return (
+                            <span key={value} style={{ background: "#dbeafe", color: "#1d4ed8", borderRadius: 999, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>
+                              {label}
+                            </span>
+                          );
+                        })}
+                        {sectionIds.length > 4 && (
+                          <span style={{ background: "#e2e8f0", color: "#334155", borderRadius: 999, padding: "2px 8px", fontSize: 12, fontWeight: 600 }}>
+                            +{sectionIds.length - 4} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <p style={{ margin: "6px 0 0", fontSize: 12, color: "#64748b" }}>
+                      Select one or many sections to assign this exam to multiple cohorts at once.
+                    </p>
                   </div>
 
                   <div>
@@ -748,6 +984,56 @@ export default function ExamSetupPanel() {
               </div>
             </div>
           </form>
+
+          <div className="white-box" style={{ ...boxStyle(), marginTop: 16 }}>
+            <h3 style={{ marginTop: 0, marginBottom: 12, color: "#0f172a" }}>Configured Exams</h3>
+            <div style={{ width: "100%", overflowX: "auto" }}>
+              <table style={{ width: "100%", minWidth: 680, borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ background: "var(--surface-muted)", textAlign: "left" }}>
+                    <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Exam Name</th>
+                    <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Classes</th>
+                    <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Status</th>
+                    <th style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {MOCK_CONFIGURED_EXAMS.map((row) => (
+                    <tr key={row.id}>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.exam_name}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>{row.classes}</td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)" }}>
+                        <span
+                          style={{
+                            display: "inline-block",
+                            padding: "2px 10px",
+                            borderRadius: 999,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            background: row.status === "Active" ? "#dcfce7" : "#e2e8f0",
+                            color: row.status === "Active" ? "#166534" : "#475569",
+                          }}
+                        >
+                          {row.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: 8, borderBottom: "1px solid var(--line)", whiteSpace: "nowrap" }}>
+                        <div style={{ display: "inline-flex", gap: 6 }}>
+                          <button type="button" onClick={() => console.log("Edit exam setup", row)} style={buttonStyle("#2563eb")}>Edit</button>
+                          <button type="button" onClick={() => console.log("Delete exam setup", row)} style={buttonStyle("#dc2626")}>Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {MOCK_CONFIGURED_EXAMS.length === 0 && (
+                    <tr>
+                      <td colSpan={4} style={{ padding: 8, color: "var(--text-muted)" }}>No exams configured yet.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </section>
     </div>

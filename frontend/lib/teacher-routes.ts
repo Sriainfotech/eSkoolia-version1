@@ -28,6 +28,7 @@ import {
   User,
   ClipboardList,
   Bell,
+  Award,
 } from 'lucide-react';
 import type { ModuleRoute } from '@/lib/routes';
 
@@ -111,6 +112,18 @@ export const TEACHER_MODULES: ModuleRoute[] = [
     permission: 'utilities', // backend prefix: utilities.*
     sub: [
       { label: 'Parent Messages', path: '/teacher/messages', icon: MessageSquare },
+    ],
+  },
+  {
+    id: 'teacher-exams',
+    name: 'Exams',
+    path: '/teacher/exams',
+    icon: Award,
+    bg: '#EEF2FF',
+    ic: '#4F46E5',
+    permission: 'academics', // backend prefix: academics.* or exams.*
+    sub: [
+      { label: 'Marks Entry', path: '/teacher/exams', icon: ClipboardList },
     ],
   },
   {
