@@ -296,8 +296,7 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Book Issues', path: '/library/issues', icon: BookmarkCheck },
     ],
   }, */
-  // HIDDEN - no backend yet
-  /* {
+  {
     id: 'transport',
     name: 'Transport',
     path: '/transport',
@@ -315,7 +314,7 @@ export const MODULES: ModuleRoute[] = [
       { label: 'Route Builder', path: '/transport/tracking/route-builder', icon: Route },
       { label: 'Student Report', path: '/transport/student-report', icon: FileBarChart },
     ],
-  }, */
+  },
   // HIDDEN - no backend yet
   /* {
     id: 'inventory',
