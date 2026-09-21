@@ -1,5 +1,39 @@
 ﻿# TEAM_CONTEXT — Eskoolia ERP (Combined)
 
+## Update — Swetha D (17/09/2026)
+
+**Area:** Admissions → Complaints module — per-school Complaint Source dropdown empty, Admin Setup UI not wired to the real model, and complaint creation completely broken end to end (three stacked bugs, found one at a time as each fix exposed the next)
+
+### 1. Complaint Source dropdown empty for every school except one
+- Reported as an OPTIONS-request/CORS-looking symptom in the browser; turned out unrelated to CORS or auth. Queried `ComplaintSource` directly across every school in the DB: only "Default School" (id 1) had any rows (6, all seeded directly rather than through any UI); all 18 other schools had zero. `ComplaintSourceListView` (`apps/admissions/views.py`) was already correctly scoped by `request.user.school_id` the whole time — not a backend bug, just missing per-school data with no working UI path to create it.
+
+### 2. Root cause of #1: Admin Setup UI only had "Complaint Type" wired to its real model, not "Complaint Source"
+- `AdminSetupPanel.tsx` already special-cased type "2" (Complaint Type) to route to `/api/v1/admissions/complaint-types/` instead of the generic `AdminSetupEntry` table — but "Source" (type 3) still only wrote to `AdminSetupEntry`, which is genuinely still the real FK target of `AdmissionInquiry.source`, not `ComplaintEntry.complaint_source` (that FKs to the separate `ComplaintSource` model). So there was no admin-facing way for any school to create its own complaint sources at all.
+- **Fixed**: added a new "Complaint Source" option (virtual type "5") that routes to `/api/v1/admissions/complaint-sources/`, mirroring the existing Complaint Type pattern exactly (generalized the old single `isComplaintType` special-case into a `VIRTUAL_TYPE_ENDPOINTS` map covering both). Relabeled the existing "Source" to "Admission Source" to avoid confusion now that two source-like options exist side by side.
+
+### 3. Complaint creation (`POST /api/v1/admissions/complaints/`) was broken for every school, not just the ones missing sources
+- **3a. Frontend/backend validation mismatch on `complaint_by`**: backend required 3+ chars and rejected apostrophes (`^[A-Za-z0-9\s\-]+$`); frontend promised 2+ chars and allows apostrophes (`^[A-Za-z\s\-']+$`). A 2-char name or any name like `O'Brien` passed frontend validation and then got a backend 400. Aligned backend to the frontend's stated rules.
+- **3b. Real schema drift** — `complaint_entries` has had two independent columns per field ever since migration 0014: correct nullable `complaint_type_id`/`complaint_source_id` (what the model and every query actually use, with proper FK constraints/indexes) *and* orphaned `complaint_type`/`complaint_source varchar(120) NOT NULL` columns from the original 0004 migration that were never actually dropped. Mechanism: migration 0014's `AddField` reused the field name "complaint_type" while a same-named CharField still existed in migration state — `AddField.state_forwards()` just overwrites the state dict entry instead of erroring, so migration state "forgot" the old column existed; 0015's later `RemoveField`+`AddField` pair then operated on the *new* FK column (a no-op drop-and-readd), never touching the true orphan. Every complaint `INSERT` failed the leftover NOT NULL constraint — and `DuplicateSafeWriteMixin._raise_integrity_validation_error` (`apps/admissions/views.py`) silently discarded the real Postgres error, surfacing only a generic "Invalid request data." with no field detail, which is why this took direct DB/shell reproduction (not the browser response) to actually diagnose. Verified via `pg_constraint`/`pg_indexes` that nothing referenced the orphaned columns before writing migration `0016_drop_orphaned_complaint_text_columns.py` (`RunSQL DROP COLUMN`, with a reverse migration). User applied it themselves against the live Neon DB.
+- **3c. After 3b, creation succeeded but the response crashed anyway**: `complaint_type`/`complaint_source`/`assigned_to` are declared as plain `serializers.IntegerField(...)`, used for both input and output. On the success-response serialization step, DRF's default `IntegerField.to_representation()` tried `int()`-coercing the actual related model instance (the FK descriptor returns a `ComplaintType`/`ComplaintSource`/`User` object, not an int) and crashed with `TypeError: int() argument must be ... not 'ComplaintType'` — *after* `perform_create` had already committed the row. The serializer already had correct manual id-conversion logic in its own `to_representation` override, but it ran after `super().to_representation()`, too late to prevent the crash. This only reproduced through the real view (`APIRequestFactory` + `force_authenticate`), not by calling the serializer directly, which is why it wasn't caught immediately after fixing 3b. **Fixed** by marking those three fields `write_only=True` so the base serializer skips them entirely and the existing custom override supplies the correct output.
+- **Side finding**: because of 3c, the user's own in-browser test complaint ("Rahul", Sri Usha Educational School) had actually already been saved to the database despite the browser showing a 400 — confirmed and left in place (not a duplicate-risk cleanup item, just noted so it isn't resubmitted).
+
+### 4. Not fixed, flagged for the team
+- While diagnosing 3b, found this dev DB has 10+ leftover `school_*` Postgres schemas (`school_abc`, `school_victory`, `school_vivekanada`, etc.) each with their own stale copy of `complaint_entries` (and presumably other tables) from old tenant experiments — consistent with the ~70-schema cleanup already flagged as open in the 31/08/2026 entry below. Not touched this session; the live app only ever reads/writes `public` (confirmed via `current_schema()`), so these are inert but still worth a dedicated cleanup pass.
+
+### Files changed
+- `frontend/components/administration/AdminSetupPanel.tsx` (new "Complaint Source" virtual type routed to the real model, "Source" relabeled "Admission Source", `isComplaintType` generalized to `VIRTUAL_TYPE_ENDPOINTS`)
+- `backend/apps/admissions/serializers.py` (`complaint_by` validation aligned with frontend; `complaint_type`/`complaint_source`/`assigned_to` marked `write_only=True`)
+- `backend/apps/admissions/migrations/0016_drop_orphaned_complaint_text_columns.py` (new — drops the two orphaned NOT NULL legacy columns)
+
+### Status
+✅ Verified directly against the live dev DB and through the real view — not pytest (matches this project's documented pytest/tenancy limitation, see 31/08/2026 entry). Used Django shell for the serializer/DB-level checks and `rest_framework.test.APIRequestFactory` + `force_authenticate` (a standard DRF test utility, not a real auth token) to invoke `ComplaintEntryViewSet.create`/`list` end to end: both now return correct 200/201 bodies with proper ids and `_name` fields. `tsc --noEmit` clean on the touched frontend file. All test rows created during verification were cleaned up; pre-existing data (including the "Rahul" row from §3c) left untouched.
+
+⚠️ **Not live-browser-verified by me** — per this project's convention I don't start dev servers. The user was mid-testing via the browser when the last fix (3c) landed; worth a quick click-through confirmation (create + list) next session if not already confirmed.
+
+⚠️ **Still open**: the leftover `school_*` orphan-schema cleanup (§4) — same item already flagged 31/08/2026, still not actioned.
+
+---
+
 ## Update — Swetha D (10/09/2026)
 
 **Area:** Examination module — Exam Configuration grade-scale save bug, Admit Card/Seat Plan generation always failing, and a documentation-gap audit of the module's undocumented build history

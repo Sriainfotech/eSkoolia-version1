@@ -17,7 +17,7 @@ type ApiList<T> = T[] | { results?: T[]; count?: number; next?: string | null; p
 
 type AdminSetupRow = {
   id: number;
-  type: "1" | "2" | "3" | "4";
+  type: "1" | "2" | "3" | "4" | "5";
   name: string;
   description?: string;
 };
@@ -25,8 +25,9 @@ type AdminSetupRow = {
 const TYPE_OPTIONS: Array<{ value: AdminSetupRow["type"]; label: string }> = [
   { value: "1", label: "Purpose" },
   { value: "2", label: "Complaint Type" },
-  { value: "3", label: "Source" },
+  { value: "3", label: "Admission Source" },
   { value: "4", label: "Reference" },
+  { value: "5", label: "Complaint Source" },
 ];
 
 const CATEGORY_CLASS: Record<AdminSetupRow["type"], string> = {
@@ -34,6 +35,20 @@ const CATEGORY_CLASS: Record<AdminSetupRow["type"], string> = {
   "2": "cat-complaint",
   "3": "cat-source",
   "4": "cat-reference",
+  "5": "cat-complaint-source",
+};
+
+// Types "2" (Complaint Type) and "5" (Complaint Source) are backed by their
+// own real models (read by the Communication Hub -> Complaints dropdowns at
+// /api/v1/admissions/complaint-types/ and /complaint-sources/), not the
+// generic AdminSetupEntry table. Routing them through admin-setups silently
+// wrote to a table nothing else reads, so entries created here never showed
+// up in the Complaints form for any school but the one seeded directly in
+// the database. Purpose/Admission Source/Reference (1/3/4) still use
+// admin-setups since no dedicated model exists for them yet.
+const VIRTUAL_TYPE_ENDPOINTS: Partial<Record<AdminSetupRow["type"], string>> = {
+  "2": "complaint-types",
+  "5": "complaint-sources",
 };
 
 type GroupRowsMap = Record<AdminSetupRow["type"], AdminSetupRow[]>;
@@ -84,11 +99,11 @@ async function apiDelete(path: string): Promise<void> {
 }
 
 export function AdminSetupPanel() {
-  const [groupRows, setGroupRows] = useState<GroupRowsMap>({ "1": [], "2": [], "3": [], "4": [] });
-  const [groupPage, setGroupPage] = useState<GroupNumberMap>({ "1": 1, "2": 1, "3": 1, "4": 1 });
-  const [groupPageSize, setGroupPageSize] = useState<GroupNumberMap>({ "1": 5, "2": 5, "3": 5, "4": 5 });
-  const [groupTotalRecords, setGroupTotalRecords] = useState<GroupNumberMap>({ "1": 0, "2": 0, "3": 0, "4": 0 });
-  const [groupTotalPages, setGroupTotalPages] = useState<GroupNumberMap>({ "1": 1, "2": 1, "3": 1, "4": 1 });
+  const [groupRows, setGroupRows] = useState<GroupRowsMap>({ "1": [], "2": [], "3": [], "4": [], "5": [] });
+  const [groupPage, setGroupPage] = useState<GroupNumberMap>({ "1": 1, "2": 1, "3": 1, "4": 1, "5": 1 });
+  const [groupPageSize, setGroupPageSize] = useState<GroupNumberMap>({ "1": 5, "2": 5, "3": 5, "4": 5, "5": 5 });
+  const [groupTotalRecords, setGroupTotalRecords] = useState<GroupNumberMap>({ "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 });
+  const [groupTotalPages, setGroupTotalPages] = useState<GroupNumberMap>({ "1": 1, "2": 1, "3": 1, "4": 1, "5": 1 });
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -109,17 +124,10 @@ export function AdminSetupPanel() {
     if (el) setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
   };
 
-  // "Complaint Type" is backed by the real ComplaintType model (read by the
-  // Communication Hub → Complaints dropdown at /api/v1/admissions/complaint-types/),
-  // not the generic AdminSetupEntry table. Routing type "2" through admin-setups
-  // silently wrote to a table nothing else reads, so entries created here never
-  // appeared in the Complaints form. Purpose/Source/Reference (1/3/4) still use
-  // admin-setups since no dedicated model exists for them yet.
-  const isComplaintType = (groupType: AdminSetupRow["type"]) => groupType === "2";
-
   const loadTypePage = async (groupType: AdminSetupRow["type"], targetPage: number, targetPageSize: number) => {
-    const path = isComplaintType(groupType)
-      ? `/api/v1/admissions/complaint-types/?page=${targetPage}&page_size=${targetPageSize}`
+    const endpoint = VIRTUAL_TYPE_ENDPOINTS[groupType];
+    const path = endpoint
+      ? `/api/v1/admissions/${endpoint}/?page=${targetPage}&page_size=${targetPageSize}`
       : `/api/v1/admissions/admin-setups/?type=${groupType}&page=${targetPage}&page_size=${targetPageSize}`;
     const data = await apiGet<ApiList<{ id: number; name: string; description?: string }>>(path);
     const rows: AdminSetupRow[] = listData(data).map((row) => ({ ...row, type: groupType }));
@@ -170,13 +178,14 @@ export function AdminSetupPanel() {
     try {
       setSaving(true);
       setFormBanner("");
-      if (isComplaintType(type)) {
+      const endpoint = VIRTUAL_TYPE_ENDPOINTS[type];
+      if (endpoint) {
         const payload = { name: name.trim(), description: description.trim() };
         if (editingId) {
-          await apiMutate(`/api/v1/admissions/complaint-types/${editingId}/`, "PATCH", payload);
+          await apiMutate(`/api/v1/admissions/${endpoint}/${editingId}/`, "PATCH", payload);
           toast.success("Record updated successfully.");
         } else {
-          await apiMutate("/api/v1/admissions/complaint-types/", "POST", payload);
+          await apiMutate(`/api/v1/admissions/${endpoint}/`, "POST", payload);
           toast.success("Record created successfully.");
         }
       } else {
@@ -204,8 +213,9 @@ export function AdminSetupPanel() {
     if (!window.confirm("Are you sure to delete this admin setup entry?")) return;
     try {
       setBusyId(row.id);
-      const path = isComplaintType(row.type)
-        ? `/api/v1/admissions/complaint-types/${row.id}/`
+      const endpoint = VIRTUAL_TYPE_ENDPOINTS[row.type];
+      const path = endpoint
+        ? `/api/v1/admissions/${endpoint}/${row.id}/`
         : `/api/v1/admissions/admin-setups/${row.id}/`;
       await apiDelete(path);
       toast.success("Record deleted successfully.");
@@ -240,6 +250,9 @@ export function AdminSetupPanel() {
         .category-accordion.cat-reference::before { background: #d4a54a; }
         .category-accordion.cat-reference > summary { color: #8b6a24; }
         .category-accordion.cat-reference .cat-badge { background: #faf0da; color: #9e7a30; }
+        .category-accordion.cat-complaint-source::before { background: #4a90d4; }
+        .category-accordion.cat-complaint-source > summary { color: #2a629e; }
+        .category-accordion.cat-complaint-source .cat-badge { background: #e6f0fa; color: #35709e; }
         .category-accordion > summary {
           padding: 13px 16px 13px 20px; cursor: pointer; font-weight: 650; font-size: 0.9rem; display: flex; align-items: center; justify-content: space-between; list-style: none; user-select: none; outline: none;
         }
