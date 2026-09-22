@@ -432,6 +432,16 @@ if MULTI_TENANCY_ENABLED:
         DATABASES["default"].setdefault("OPTIONS", {})
         DATABASES["default"]["OPTIONS"].setdefault("options", "-c search_path=public")
 
+# Fail fast instead of hanging forever on a stalled connection: cap how long a
+# single query may run server-side. ``connect_timeout`` above only bounds the
+# initial TCP handshake — once connected, a Neon cold-start or network stall
+# would otherwise hang a query indefinitely with no client-side timeout.
+if "postgresql" in DATABASES.get("default", {}).get("ENGINE", ""):
+    _pg_options = DATABASES["default"].setdefault("OPTIONS", {})
+    _statement_timeout_ms = os.getenv("DB_STATEMENT_TIMEOUT_MS", "30000")
+    _existing_pg_options = _pg_options.get("options", "")
+    _pg_options["options"] = f"{_existing_pg_options} -c statement_timeout={_statement_timeout_ms}".strip()
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},

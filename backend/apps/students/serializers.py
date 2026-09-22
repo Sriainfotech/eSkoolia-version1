@@ -874,12 +874,16 @@ class StudentSerializer(serializers.ModelSerializer):
             request = self.context.get("request")
             school_id = getattr(getattr(request, "user", None), "school_id", None) or getattr(getattr(self.instance, "school", None), "id", None)
             duplicate_roll_qs = Student.objects.filter(current_class_id=selected_class.id, roll_no=roll_no, is_deleted=False)
+            if selected_section:
+                duplicate_roll_qs = duplicate_roll_qs.filter(current_section_id=selected_section.id)
+            else:
+                duplicate_roll_qs = duplicate_roll_qs.filter(current_section_id__isnull=True)
             if school_id:
                 duplicate_roll_qs = duplicate_roll_qs.filter(school_id=school_id)
             if self.instance:
                 duplicate_roll_qs = duplicate_roll_qs.exclude(id=self.instance.id)
             if duplicate_roll_qs.exists():
-                errors["roll_no"] = "Roll number must be unique within the selected class"
+                errors["roll_no"] = "Roll number must be unique within the selected section"
 
         if selected_section:
             students_in_section = Student.objects.filter(
@@ -926,13 +930,17 @@ class StudentSerializer(serializers.ModelSerializer):
             mutable["date_of_birth"] = mutable.get("dob")
         return super().to_internal_value(mutable)
 
-    def _next_roll_number(self, school_id, class_id):
+    def _next_roll_number(self, school_id, class_id, section_id=None):
         queryset = Student.objects.filter(
             school_id=school_id,
             current_class_id=class_id,
             roll_no__regex=r"^\d+$",
             is_deleted=False,
         )
+        if section_id:
+            queryset = queryset.filter(current_section_id=section_id)
+        else:
+            queryset = queryset.filter(current_section_id__isnull=True)
         max_roll = 0
         for roll in queryset.values_list("roll_no", flat=True):
             max_roll = max(max_roll, int(roll))
@@ -992,9 +1000,10 @@ class StudentSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         school_id = getattr(getattr(request, "user", None), "school_id", None)
         class_id = validated_data.get("current_class").id if validated_data.get("current_class") else None
+        section_id = validated_data.get("current_section").id if validated_data.get("current_section") else None
 
         if not validated_data.get("roll_no") and school_id and class_id:
-            validated_data["roll_no"] = self._next_roll_number(school_id, class_id)
+            validated_data["roll_no"] = self._next_roll_number(school_id, class_id, section_id)
 
         status_value = (validated_data.get("status") or "active").lower()
         validated_data["is_active"] = status_value == "active"

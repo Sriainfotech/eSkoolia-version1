@@ -2113,7 +2113,12 @@ export function StudentAddPanel() {
   }, [validAcademicYears, academicYearId]);
 
   useEffect(() => {
-    if (!classId || !sectionId || !academicYearId || rollNo.trim()) return;
+    if (isExistingStudentMode) return;
+    if (!classId || !sectionId || !academicYearId) return;
+    // Re-suggest on every class/section change, not just the first time: only
+    // skip when the field already holds a value we did NOT put there
+    // ourselves (i.e. leave a manually-entered or restored-draft value alone).
+    if (rollNo.trim() && !autoFilledFields.has("roll_no")) return;
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
@@ -2132,7 +2137,10 @@ export function StudentAddPanel() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [classId, sectionId, academicYearId, rollNo]);
+    // rollNo/autoFilledFields are read for the skip-guard only; including them
+    // would refire this effect on every fetch it triggers (infinite loop).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classId, sectionId, academicYearId, isExistingStudentMode]);
 
   useEffect(() => {
     if (!classId || !academicYearId) {

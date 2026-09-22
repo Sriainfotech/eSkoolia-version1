@@ -1872,10 +1872,13 @@ class StudentViewSet(TenantScopedModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Scoped to class + section only, matching the uniqueness check in
+        # StudentSerializer.validate() — academic_year is intentionally excluded
+        # here so this never suggests a roll_no that the backend will reject
+        # (e.g. legacy students with academic_year=None still hold their roll_no).
         qs = self.get_queryset().filter(
             current_class_id=int(class_id),
             current_section_id=int(section_id),
-            academic_year_id=int(academic_year_id),
             is_deleted=False,
         )
         roll_nos = []
